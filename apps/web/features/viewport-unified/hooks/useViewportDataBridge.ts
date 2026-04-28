@@ -16,6 +16,13 @@ import {
 } from "@/src/hooks/resources/useMeshResources";
 import { useSlice2DModel } from "@/src/hooks/resources/useSliceResource";
 import { useSlice2DToolbarStore } from "@/src/features/slice2d";
+import {
+  positionPercentFromSliceIndex,
+  resolveEffectiveSlicePlane,
+  resolveSliceAxisSelection,
+  sliceIndexFromPositionPercent,
+  sliceAxisFromPlane,
+} from "@/src/features/slice2d/axisMapping";
 import { selectionFromControlRoomState } from "@/src/features/workspaceSync";
 import type { MeshWorkspaceModel } from "@/src/features/meshWorkspace";
 import type { Slice2DModel } from "@/src/features/slice2d";
@@ -134,18 +141,6 @@ function toDisplayFieldComponent(
 ): DisplaySelection["field_component"] {
   if (component === "x" || component === "y" || component === "z") return component;
   return "magnitude";
-}
-
-function sliceAxisFromPlane(plane: "xy" | "xz" | "yz"): "x" | "y" | "z" {
-  if (plane === "yz") return "x";
-  if (plane === "xz") return "y";
-  return "z";
-}
-
-function planeFromSliceAxis(axis: "x" | "y" | "z"): "xy" | "xz" | "yz" {
-  if (axis === "x") return "yz";
-  if (axis === "y") return "xz";
-  return "xy";
 }
 
 function numericRevision(value: number | string | null | undefined): number | null {
@@ -283,6 +278,11 @@ export function useViewportDataBridge() {
 
   /* ── FEM discretization ── */
   const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
+  const effectiveSlicePlane = resolveEffectiveSlicePlane({
+    plane: ctx.plane,
+    clipAxis: ctx.meshClipAxis,
+    preferClipAxis: Boolean(femDiscretization),
+  });
 
   /* ── Mesh workspace resource ── */
   const meshWorkspaceResource = useMeshWorkspaceModel({
@@ -857,13 +857,39 @@ export function useViewportDataBridge() {
       patchSlice2DToolbar(patch);
       if (patch.quantityId) requestDisplayQuantity(patch.quantityId);
       if (patch.component) handleFemSliceComponentChange(patch.component);
-      if (patch.axis) setPlane(planeFromSliceAxis(patch.axis));
+      if (patch.axis) {
+        const nextSliceAxis = resolveSliceAxisSelection({
+          axis: patch.axis,
+          syncClipAxis: Boolean(femDiscretization),
+        });
+        setPlane(nextSliceAxis.plane);
+        if (nextSliceAxis.clipAxis) setMeshClipAxis(nextSliceAxis.clipAxis);
+      }
       if (patch.mode) {
         void patchDisplay({ slice_mode: patch.mode === "all_layers" ? "all" : patch.mode });
       }
       if (typeof patch.layerIndex === "number") {
         setSliceIndex(patch.layerIndex);
         void patchDisplay({ slice_layer: patch.layerIndex });
+        if (femDiscretization) {
+          setMeshClipPos(
+            positionPercentFromSliceIndex({
+              grid: ctx.previewGrid,
+              plane: effectiveSlicePlane,
+              sliceIndex: patch.layerIndex,
+            }),
+          );
+        }
+      }
+      if (typeof patch.positionPercent === "number") {
+        const nextSliceIndex = sliceIndexFromPositionPercent({
+          grid: ctx.previewGrid,
+          plane: effectiveSlicePlane,
+          positionPercent: patch.positionPercent,
+        });
+        setMeshClipPos(patch.positionPercent);
+        setSliceIndex(nextSliceIndex);
+        void patchDisplay({ slice_layer: nextSliceIndex });
       }
       if (patch.colormap) void patchDisplay({ colormap: patch.colormap });
       if (typeof patch.autoContrast === "boolean") {
@@ -901,9 +927,13 @@ export function useViewportDataBridge() {
       patchDisplay,
       patchSlice2DToolbar,
       requestDisplayQuantity,
+      setMeshClipPos,
+      setMeshClipAxis,
       setMeshShowArrows,
       setPlane,
       setSliceIndex,
+      femDiscretization,
+      effectiveSlicePlane,
     ],
   );
 
@@ -983,8 +1013,8 @@ export function useViewportDataBridge() {
   const shouldUseSliceApi2D =
     ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady;
   const sliceSampling = useMemo(
-    () => deriveSliceSampling(ctx.previewGrid, ctx.plane, ctx.sliceIndex),
-    [ctx.plane, ctx.previewGrid, ctx.sliceIndex],
+    () => deriveSliceSampling(ctx.previewGrid, effectiveSlicePlane, ctx.sliceIndex),
+    [ctx.previewGrid, ctx.sliceIndex, effectiveSlicePlane],
   );
   const sliceFieldRevision = ctx.liveFieldSourceStep ?? ctx.effectiveStep ?? null;
   const sliceQuantityId = scaledSpatialPreview?.quantity ?? ctx.selectedQuantity;
@@ -994,7 +1024,7 @@ export function useViewportDataBridge() {
     () =>
       shouldUseSliceApi2D
         ? {
-            plane: ctx.plane,
+            plane: effectiveSlicePlane,
             component: sliceComponent,
             cut_norm: sliceSampling.cutNorm,
             x_size:
@@ -1013,11 +1043,11 @@ export function useViewportDataBridge() {
           }
         : null,
     [
-      ctx.plane,
       ctx.requestedPreviewEveryN,
       ctx.requestedPreviewMaxPoints,
       ctx.requestedPreviewXChosenSize,
       ctx.requestedPreviewYChosenSize,
+      effectiveSlicePlane,
       shouldUseSliceApi2D,
       sliceComponent,
       sliceSampling.cutNorm,
@@ -1060,10 +1090,12 @@ export function useViewportDataBridge() {
 
   const slice2DPlaneOptions = useMemo(
     () => ({
-      axis: sliceAxisFromPlane(ctx.plane),
-      positionPercent: sliceSampling.cutNorm * 100,
+      axis: sliceAxisFromPlane(effectiveSlicePlane),
+      positionPercent: femDiscretization
+        ? (ctx.meshClipPos ?? 50)
+        : sliceSampling.cutNorm * 100,
     }),
-    [ctx.plane, sliceSampling.cutNorm],
+    [ctx.meshClipPos, effectiveSlicePlane, femDiscretization, sliceSampling.cutNorm],
   );
 
   const slice2DBaseModel = useSlice2DModel({

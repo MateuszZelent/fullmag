@@ -43,6 +43,7 @@ describe("meshSemanticsResourceToView", () => {
       },
       mesh_build_diagnostics: {
         mesh_quality_summary: { min_quality: 0.82 },
+        mesh_statistics: { global: { element_count: 24 } },
         last_build_summary: { elements: 24 },
         mesh_pipeline_status: [{ id: "meshing", status: "active" }],
         last_build_error: "quality threshold not met",
@@ -60,6 +61,7 @@ describe("meshSemanticsResourceToView", () => {
     expect(view?.objects[0].hmax).toBe(2e-9);
     expect(view?.solver_mesh?.mesh_name).toBe("mesh-a");
     expect(view?.diagnostics?.min_quality).toBe(0.82);
+    expect(view?.diagnostics?.raw_mesh_statistics?.global).toEqual({ element_count: 24 });
     expect(view?.diagnostics?.pipeline_phase_count).toBe(1);
     expect(view?.render_only_controls_do_not_change_solver_domain).toBe(true);
   });

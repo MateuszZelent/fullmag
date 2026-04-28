@@ -29,6 +29,7 @@ import {
   buildScriptBuilderFromSceneDocument,
 } from "./sceneDocument";
 import { ensureObjectPhysicsStack } from "./magneticPhysics";
+import { normalizeScriptBuilderMagnetization } from "./magnetizationCanonical";
 
 const ENABLE_LIVE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
@@ -1079,15 +1080,41 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
             geo?.physics_stack,
             geo?.material?.Dind != null ? Number(geo.material.Dind) : null,
           ),
-          magnetization: {
-            kind: String(geo?.magnetization?.kind ?? "uniform"),
+          magnetization: normalizeScriptBuilderMagnetization({
+            kind: String(geo?.magnetization?.kind ?? "preset_texture"),
             value: Array.isArray(geo?.magnetization?.value) ? geo.magnetization.value.map(Number) : null,
             seed: geo?.magnetization?.seed != null ? Number(geo.magnetization.seed) : null,
             source_path: typeof geo?.magnetization?.source_path === "string" ? geo.magnetization.source_path : null,
             source_format: typeof geo?.magnetization?.source_format === "string" ? geo.magnetization.source_format : null,
             dataset: typeof geo?.magnetization?.dataset === "string" ? geo.magnetization.dataset : null,
             sample_index: geo?.magnetization?.sample_index != null ? Number(geo.magnetization.sample_index) : null,
-          },
+            mapping:
+              geo?.magnetization?.mapping && typeof geo.magnetization.mapping === "object"
+                ? geo.magnetization.mapping
+                : null,
+            texture_transform:
+              geo?.magnetization?.texture_transform &&
+              typeof geo.magnetization.texture_transform === "object"
+                ? geo.magnetization.texture_transform
+                : null,
+            preset_kind:
+              typeof geo?.magnetization?.preset_kind === "string"
+                ? geo.magnetization.preset_kind
+                : null,
+            preset_params:
+              geo?.magnetization?.preset_params &&
+              typeof geo.magnetization.preset_params === "object"
+                ? geo.magnetization.preset_params
+                : null,
+            preset_version:
+              geo?.magnetization?.preset_version != null
+                ? Number(geo.magnetization.preset_version)
+                : null,
+            ui_label:
+              typeof geo?.magnetization?.ui_label === "string"
+                ? geo.magnetization.ui_label
+                : null,
+          }),
           mesh: geo?.mesh && typeof geo.mesh === "object" ? {
             mode: geo.mesh.mode === "custom" ? "custom" : "inherit",
             size_mode: geo.mesh.size_mode === "custom" ? "custom" : "predefined",
@@ -1657,6 +1684,7 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
   }
   const meshSummaryRaw = raw.mesh_summary;
   const qualityRaw = raw.mesh_quality_summary;
+  const statisticsRaw = raw.mesh_statistics;
   return {
     mesh_summary:
       meshSummaryRaw && typeof meshSummaryRaw === "object"
@@ -1708,6 +1736,10 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
             gamma_mean: Number(qualityRaw.gamma_mean ?? 0),
             avg_quality: Number(qualityRaw.avg_quality ?? 0),
           }
+        : null,
+    mesh_statistics:
+      statisticsRaw && typeof statisticsRaw === "object"
+        ? statisticsRaw
         : null,
     shared_domain_manifest:
       raw.shared_domain_manifest && typeof raw.shared_domain_manifest === "object"

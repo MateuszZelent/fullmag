@@ -205,6 +205,12 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
 
   const renderNodeContent = () => {
     // Shared mesh‐settings props (reused by composite panels)
+    const meshSettingsFocus: "all" | "size" | "transition" | "method" | "optimization" =
+      nodeId.includes("transition") ? "transition"
+      : nodeId.includes("algorithm") ? "method"
+      : nodeId.includes("quality") ? "optimization"
+      : nodeId.includes("size") || nodeId.includes("airbox-mesh") ? "size"
+      : "all";
     const meshSettingsProps = {
       options: model.meshOptions,
       onChange: model.setMeshOptions,
@@ -212,6 +218,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       nodeCount: model.effectiveFemMesh?.nodes.length,
       disabled: model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute),
       waitMode: cmd.isWaitingForCompute,
+      focus: meshSettingsFocus,
     };
 
     return (

@@ -554,6 +554,7 @@ export interface MeshSolverMeshResource {
 
 export interface MeshBuildDiagnosticsResource {
   mesh_quality_summary?: MeshQualityRecord | null;
+  mesh_statistics?: MeshReportRecord | null;
   last_build_summary?: MeshWorkspaceRecord | null;
   mesh_pipeline_status?: unknown;
   last_build_error?: string | null;

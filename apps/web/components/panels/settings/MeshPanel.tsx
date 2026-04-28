@@ -480,7 +480,7 @@ export default function MeshPanel() {
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.75rem] text-muted-foreground">
-            Quality metrics are not loaded yet. Use the `Optimize` preset or enable `Extract quality metrics` before remeshing.
+            Backend quality metrics are not loaded for this artifact. Open Mesh Statistics for topology fallback diagnostics, then rebuild the solver mesh to persist Gmsh quality metrics.
           </div>
         )}
       </SidebarSection>

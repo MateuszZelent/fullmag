@@ -188,6 +188,7 @@ const RULES: RegistryRule[] = [
       "universe.mesh.view",
       "universe.mesh.pipeline",
       "universe.mesh.algorithm",
+      "universe.mesh.transition",
     ],
     panelKey: PanelKey.MESH,
     props: noProps,
@@ -199,7 +200,7 @@ const RULES: RegistryRule[] = [
     props: passNodeId,
   },
   {
-    kinds: ["universe.mesh.size", "universe.mesh.quality"],
+    kinds: ["universe.mesh.size", "universe.mesh.transition", "universe.mesh.quality"],
     panelKey: PanelKey.MESH_INFO,
     props: noProps,
     compositeKeys: [PanelKey.MESH_SETTINGS],
@@ -230,7 +231,7 @@ const RULES: RegistryRule[] = [
     props: passNodeId,
   },
   {
-    kinds: ["mesh.size", "mesh.algorithm", "mesh.quality"],
+    kinds: ["mesh.size", "mesh.algorithm", "mesh.transition", "mesh.quality"],
     panelKey: PanelKey.MESH_INFO,
     props: noProps,
     compositeKeys: [PanelKey.MESH_SETTINGS],

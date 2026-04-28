@@ -15,7 +15,7 @@ Usage::
     layer.Ms    = 800e3
     layer.Aex   = 13e-12
     layer.alpha = 0.5
-    layer.m     = fm.uniform(1, 0, 0)
+    layer.m     = fm.texture.uniform(1, 0, 0)
 
     fm.save("m", every=50e-12)
     fm.run(5e-10)
@@ -211,7 +211,7 @@ class MagnetHandle:
         layer.Ms    = 800e3
         layer.Aex   = 13e-12
         layer.alpha = 0.5
-        layer.m     = fm.uniform(1, 0, 0)
+        layer.m     = fm.texture.uniform(1, 0, 0)
     """
 
     def __init__(self, shape: object, name: str = "body") -> None:
@@ -380,6 +380,10 @@ class _MeshSpecState:
     growth_rate: float | None = None
     narrow_regions: int = 0
     narrow_region_resolution: float | None = None
+    interface_hmax: float | None = None
+    interface_thickness: float | None = None
+    transition_distance: float | None = None
+    transition_growth: float | None = None
     size_fields: list[dict[str, object]] = field(default_factory=list)
     # Quality
     compute_quality: bool = False
@@ -411,6 +415,10 @@ class _MeshSpecState:
             or self.growth_rate is not None
             or self.narrow_regions != 0
             or self.narrow_region_resolution is not None
+            or self.interface_hmax is not None
+            or self.interface_thickness is not None
+            or self.transition_distance is not None
+            or self.transition_growth is not None
             or self.compute_quality
             or self.per_element_quality
             or bool(self.size_fields)
@@ -456,6 +464,10 @@ class GeometryMeshHandle:
         maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
+        interface_hmax: float | None = None,
+        interface_thickness: float | None = None,
+        transition_distance: float | None = None,
+        transition_growth: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -480,6 +492,10 @@ class GeometryMeshHandle:
             maximum_element_growth_rate=maximum_element_growth_rate,
             narrow_regions=narrow_regions,
             narrow_region_resolution=narrow_region_resolution,
+            interface_hmax=interface_hmax,
+            interface_thickness=interface_thickness,
+            transition_distance=transition_distance,
+            transition_growth=transition_growth,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
@@ -513,6 +529,10 @@ class GeometryMeshHandle:
         maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
+        interface_hmax: float | None = None,
+        interface_thickness: float | None = None,
+        transition_distance: float | None = None,
+        transition_growth: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -619,6 +639,18 @@ class GeometryMeshHandle:
             spec.narrow_regions = narrow_regions
         if narrow_region_resolution is not None:
             spec.narrow_region_resolution = float(narrow_region_resolution)
+        if interface_hmax is not None:
+            require_positive(float(interface_hmax), f"{self._owner._name}.mesh.interface_hmax")
+            spec.interface_hmax = float(interface_hmax)
+        if interface_thickness is not None:
+            require_positive(float(interface_thickness), f"{self._owner._name}.mesh.interface_thickness")
+            spec.interface_thickness = float(interface_thickness)
+        if transition_distance is not None:
+            require_positive(float(transition_distance), f"{self._owner._name}.mesh.transition_distance")
+            spec.transition_distance = float(transition_distance)
+        if transition_growth is not None:
+            require_positive(float(transition_growth), f"{self._owner._name}.mesh.transition_growth")
+            spec.transition_growth = float(transition_growth)
         if compute_quality is not None:
             spec.compute_quality = compute_quality
         if per_element_quality is not None:
@@ -2542,6 +2574,10 @@ def _configure_object_mesh_defaults(
     maximum_element_growth_rate: float | None = None,
     narrow_regions: int | None = None,
     narrow_region_resolution: float | None = None,
+    interface_hmax: float | None = None,
+    interface_thickness: float | None = None,
+    transition_distance: float | None = None,
+    transition_growth: float | None = None,
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
 ) -> None:
@@ -2598,6 +2634,18 @@ def _configure_object_mesh_defaults(
         _state._default_mesh_spec.narrow_regions = narrow_regions
     if narrow_region_resolution is not None:
         _state._default_mesh_spec.narrow_region_resolution = float(narrow_region_resolution)
+    if interface_hmax is not None:
+        require_positive(float(interface_hmax), "study.objects.mesh.defaults.interface_hmax")
+        _state._default_mesh_spec.interface_hmax = float(interface_hmax)
+    if interface_thickness is not None:
+        require_positive(float(interface_thickness), "study.objects.mesh.defaults.interface_thickness")
+        _state._default_mesh_spec.interface_thickness = float(interface_thickness)
+    if transition_distance is not None:
+        require_positive(float(transition_distance), "study.objects.mesh.defaults.transition_distance")
+        _state._default_mesh_spec.transition_distance = float(transition_distance)
+    if transition_growth is not None:
+        require_positive(float(transition_growth), "study.objects.mesh.defaults.transition_growth")
+        _state._default_mesh_spec.transition_growth = float(transition_growth)
     if compute_quality is not None:
         _state._default_mesh_spec.compute_quality = compute_quality
     if per_element_quality is not None:
@@ -3030,6 +3078,14 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["narrow_regions"] = spec.narrow_regions
     if spec.narrow_region_resolution is not None:
         payload["narrow_region_resolution"] = spec.narrow_region_resolution
+    if spec.interface_hmax is not None:
+        payload["interface_hmax"] = spec.interface_hmax
+    if spec.interface_thickness is not None:
+        payload["interface_thickness"] = spec.interface_thickness
+    if spec.transition_distance is not None:
+        payload["transition_distance"] = spec.transition_distance
+    if spec.transition_growth is not None:
+        payload["transition_growth"] = spec.transition_growth
     if spec.compute_quality:
         payload["compute_quality"] = True
     if spec.per_element_quality:

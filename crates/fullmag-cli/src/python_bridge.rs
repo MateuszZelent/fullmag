@@ -90,6 +90,8 @@ pub(crate) struct RemeshCliResponse {
     #[serde(default)]
     pub mesh_provenance: Option<serde_json::Value>,
     #[serde(default)]
+    pub mesh_statistics: Option<serde_json::Value>,
+    #[serde(default)]
     pub size_field_stats: Option<serde_json::Value>,
     #[serde(default)]
     pub region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,

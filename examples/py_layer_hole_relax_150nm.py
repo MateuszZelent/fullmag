@@ -27,7 +27,7 @@ layer = study.geometry(
 layer.Ms = 800e3       # saturation magnetisation [A/m]
 layer.Aex = 13e-12     # exchange stiffness [J/m]
 layer.alpha = 0.5      # Gilbert damping
-layer.m = fm.uniform(1, 0, 0)
+layer.m = fm.texture.uniform(1, 0, 0)
 layer.mesh(hmax=10e-9, order=1)
 study.build_domain_mesh()
 

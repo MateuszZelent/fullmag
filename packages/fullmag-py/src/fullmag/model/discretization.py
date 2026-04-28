@@ -393,16 +393,14 @@ class FEM:
             raise ValueError("mesh must not be empty when provided")
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        ir: dict[str, object] = {
             "order": self.order,
             "hmax": self.hmax,
             "mesh": self.mesh,
-            "demag_solver_policy": (
-                self.demag_solver_policy.to_ir()
-                if self.demag_solver_policy is not None
-                else None
-            ),
         }
+        if self.demag_solver_policy is not None:
+            ir["demag_solver_policy"] = self.demag_solver_policy.to_ir()
+        return ir
 
 
 # ---------------------------------------------------------------------------

@@ -124,7 +124,7 @@ def _mesh_options_from_dict(opts: dict[str, Any]) -> MeshOptions:
         optimize_iters=opts.get("optimize_iterations", 1),
         size_fields=opts.get("size_fields", []),
         compute_quality=opts.get("compute_quality", True),
-        per_element_quality=opts.get("per_element_quality", False),
+        per_element_quality=opts.get("per_element_quality", True),
     )
 
 
@@ -156,6 +156,7 @@ def _mesh_result_payload(
         "boundary_markers": mesh_data.boundary_markers.tolist(),
         "periodic_boundary_pairs": list(mesh_ir.get("periodic_boundary_pairs", [])),
         "periodic_node_pairs": list(mesh_ir.get("periodic_node_pairs", [])),
+        "mesh_statistics": mesh_ir.get("mesh_statistics"),
         "generation_mode": generation_mode,
         "mesh_provenance": mesh_provenance,
     }
@@ -249,7 +250,7 @@ def main() -> None:
         mesh_opts = _mesh_options_from_dict(mesh_opts_dict)
         if mode == "adaptive_size_field":
             mesh_opts.compute_quality = bool(mesh_opts_dict.get("compute_quality", True))
-            mesh_opts.per_element_quality = bool(mesh_opts_dict.get("per_element_quality", False))
+            mesh_opts.per_element_quality = bool(mesh_opts_dict.get("per_element_quality", True))
         emit_progress(
             _describe_remesh_job(
                 mode,
@@ -346,6 +347,12 @@ def main() -> None:
                 "h_mean": float(np.mean(size_field.h_values)),
             }
 
+        shared_domain_report_payload = (
+            shared_domain_report.to_dict()
+            if shared_domain_report is not None
+            else None
+        )
+
         result = _mesh_result_payload(
             mesh_data,
             mesh_name=config.get("mesh_name", "remeshed"),
@@ -365,25 +372,36 @@ def main() -> None:
                     else None
                 ),
                 "fallbacks_triggered": (
-                    shared_domain_report.fallbacks_triggered
-                    if shared_domain_report is not None
+                    shared_domain_report_payload["fallbacks_triggered"]
+                    if shared_domain_report_payload is not None
                     else []
                 ),
                 "effective_airbox_target": (
-                    shared_domain_report.to_dict()["effective_airbox_target"]
-                    if shared_domain_report is not None
+                    shared_domain_report_payload["effective_airbox_target"]
+                    if shared_domain_report_payload is not None
                     else None
                 ),
                 "effective_per_object_targets": (
-                    shared_domain_report.to_dict()["effective_per_object_targets"]
-                    if shared_domain_report is not None
+                    shared_domain_report_payload["effective_per_object_targets"]
+                    if shared_domain_report_payload is not None
                     else None
                 ),
                 "used_size_field_kinds": (
-                    shared_domain_report.used_size_field_kinds
-                    if shared_domain_report is not None
+                    shared_domain_report_payload["used_size_field_kinds"]
+                    if shared_domain_report_payload is not None
                     else []
                 ),
+                "operation_statuses": (
+                    shared_domain_report_payload["operation_statuses"]
+                    if shared_domain_report_payload is not None
+                    else []
+                ),
+                "thin_film_diagnostics": (
+                    shared_domain_report_payload["thin_film_diagnostics"]
+                    if shared_domain_report_payload is not None
+                    else []
+                ),
+                "shared_domain_build_report": shared_domain_report_payload,
             },
             size_field_stats=size_field_stats,
             region_markers=region_markers,

@@ -678,6 +678,11 @@ export function useMeshWorkspaceResourceState(options?: {
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
   });
+  const sharedDomainReport = useMeshSharedDomainReport({
+    enabled: options?.enabled,
+    sessionKey: options?.sessionKey,
+    revision: options?.meshRevision,
+  });
   const builds = useMeshBuilds({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
@@ -689,6 +694,7 @@ export function useMeshWorkspaceResourceState(options?: {
       !summary.summary &&
       !capabilities.capabilities &&
       !manifest.manifest &&
+      !sharedDomainReport.report &&
       !builds.activeBuild &&
       !builds.history &&
       !builds.lastSuccess
@@ -698,6 +704,11 @@ export function useMeshWorkspaceResourceState(options?: {
     return {
       mesh_summary: summary.summary?.mesh_summary ?? null,
       mesh_quality_summary: summary.summary?.mesh_quality_summary ?? null,
+      mesh_statistics:
+        (sharedDomainReport.report?.report as Record<string, unknown> | null | undefined)?.mesh_statistics ??
+        (builds.activeBuild?.last_build_summary as Record<string, unknown> | null | undefined)?.mesh_statistics ??
+        (builds.lastSuccess?.last_success as Record<string, unknown> | null | undefined)?.mesh_statistics ??
+        null,
       shared_domain_manifest: manifest.manifest
         ? {
             source_scene_revision: manifest.manifest.source_scene_revision ?? null,
@@ -742,6 +753,7 @@ export function useMeshWorkspaceResourceState(options?: {
     builds.lastSuccess,
     capabilities.capabilities,
     manifest.manifest,
+    sharedDomainReport.report,
     summary.summary,
   ]);
 
@@ -755,9 +767,10 @@ export function useMeshWorkspaceResourceState(options?: {
       summary.refresh(),
       capabilities.refresh(),
       manifest.refresh(),
+      sharedDomainReport.refresh(),
       builds.refresh(),
     ]);
-  }, [builds, capabilities, manifest, summary]);
+  }, [builds, capabilities, manifest, sharedDomainReport, summary]);
 
   return {
     meshWorkspace,
@@ -766,8 +779,18 @@ export function useMeshWorkspaceResourceState(options?: {
     activeBuild: builds.activeBuild,
     buildHistory: builds.history,
     lastSuccessfulBuild: builds.lastSuccess,
-    loading: summary.loading || capabilities.loading || manifest.loading || builds.loading,
-    error: summary.error ?? capabilities.error ?? manifest.error ?? builds.error,
+    loading:
+      summary.loading ||
+      capabilities.loading ||
+      manifest.loading ||
+      sharedDomainReport.loading ||
+      builds.loading,
+    error:
+      summary.error ??
+      capabilities.error ??
+      manifest.error ??
+      sharedDomainReport.error ??
+      builds.error,
     refresh,
   };
 }

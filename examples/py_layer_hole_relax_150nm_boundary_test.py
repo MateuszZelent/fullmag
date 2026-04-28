@@ -29,7 +29,7 @@ layer = fm.geometry(fm.Box(1000e-9, 1000e-9, 10e-9) - fm.Cylinder(radius=75e-9, 
 layer.Ms    = 800e3       # saturation magnetisation [A/m]
 layer.Aex   = 13e-12      # exchange stiffness [J/m]
 layer.alpha = 0.5         # Gilbert damping
-layer.m     = fm.uniform(1, 0, 0)
+layer.m     = fm.texture.uniform(1, 0, 0)
 
 # ── Solver ──────────────────────────────────────────────────
 fm.solver(dt=1e-13)

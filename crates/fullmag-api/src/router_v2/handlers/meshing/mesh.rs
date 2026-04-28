@@ -146,6 +146,7 @@ pub async fn get_mesh_semantics(
             .as_ref()
             .map(|workspace| MeshBuildDiagnosticsResource {
                 mesh_quality_summary: workspace.get("mesh_quality_summary").cloned(),
+                mesh_statistics: workspace.get("mesh_statistics").cloned(),
                 last_build_summary: workspace.get("last_build_summary").cloned(),
                 mesh_pipeline_status: workspace.get("mesh_pipeline_status").cloned(),
                 last_build_error: workspace
@@ -454,6 +455,7 @@ pub async fn get_mesh_shared_domain_report(
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
     let report = Some(json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
+        "mesh_statistics": mesh_workspace.get("mesh_statistics").cloned().unwrap_or(Value::Null),
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
     }));

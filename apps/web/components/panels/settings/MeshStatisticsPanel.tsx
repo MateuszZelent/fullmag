@@ -1,18 +1,18 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { AlertTriangle, BarChart3, CheckCircle2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { fmtSI } from "@/lib/format";
-import type { FemMeshPart, MeshQualityStats } from "@/lib/session/types";
+import type { FemLiveMesh, FemMeshPart, MeshQualityStats } from "@/lib/session/types";
 
 import { useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { SidebarSection } from "./primitives";
 
 type QualityMetric = "gamma" | "sicn";
 
-interface DomainStatisticsRow {
+export interface DomainStatisticsRow {
   id: string;
   marker: number;
   label: string;
@@ -23,6 +23,59 @@ interface DomainStatisticsRow {
   quality: MeshQualityStats;
   status: "ok" | "warn" | "error";
   warnings: string[];
+}
+
+export interface WorstElementView {
+  id: string;
+  elementIndex: number;
+  marker: number | null;
+  gamma: number | null;
+  sicn: number | null;
+  volume: number | null;
+  centroid: number[] | null;
+}
+
+export interface MeshOperationStatusView {
+  kind: string;
+  scope: string;
+  requested: boolean;
+  status: "applied" | "skipped" | "fallback" | "failed" | string;
+  requestedMethod: string | null;
+  actualMethod: string | null;
+  reason: string | null;
+}
+
+export interface ThinFilmDiagnosticView {
+  geometryName: string;
+  isThinFilm: boolean;
+  thickness: number | null;
+  lateralSize: number | null;
+  aspectRatio: number | null;
+  requestedLayers: number | null;
+  estimatedLayersFromHmax: number | null;
+  hmaxToThicknessRatio: number | null;
+  requestedMethod: string | null;
+  actualMethod: string;
+  warnings: string[];
+}
+
+interface ComputedTetraMetric {
+  elementIndex: number;
+  marker: number | null;
+  gamma: number;
+  sicn: number;
+  volume: number;
+  signedVolume: number;
+  centroid: [number, number, number];
+}
+
+interface ComputedMeshQualityFallback {
+  globalQuality: MeshQualityStats;
+  rows: DomainStatisticsRow[];
+  worstElements: WorstElementView[];
+  volumeTotal: number;
+  invertedCount: number;
+  degenerateCount: number;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -87,6 +140,27 @@ function volumeRatio(quality: MeshQualityStats): number | null {
   return max / min;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function statisticMetricValue(
+  globalScope: Record<string, unknown> | null,
+  metric: "gamma" | "sicn",
+  key: "min" | "p05" | "mean" | "max",
+): number | null {
+  const metricRecord = asRecord(globalScope?.[metric]);
+  return finiteNumber(metricRecord?.[key]);
+}
+
+function statisticVolumeValue(
+  globalScope: Record<string, unknown> | null,
+  key: "min" | "max" | "mean" | "std" | "ratio" | "total",
+): number | null {
+  const volumeRecord = asRecord(globalScope?.volume);
+  return finiteNumber(volumeRecord?.[key]);
+}
+
 function formatQuality(value: number | null): string {
   return value == null ? "-" : value.toFixed(3);
 }
@@ -97,10 +171,430 @@ function formatRatio(value: number | null): string {
   return value.toFixed(1);
 }
 
+function formatInteger(value: number | null): string {
+  return value == null ? "-" : Math.round(value).toLocaleString();
+}
+
 function optionMeters(value: string | undefined): number | null {
   if (!value) return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function histogramCounts(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => {
+    if (typeof entry === "number") return Number.isFinite(entry) ? entry : 0;
+    const record = asRecord(entry);
+    return finiteNumber(record?.count) ?? 0;
+  });
+}
+
+function metricRecordValue(record: Record<string, unknown> | null, key: "min" | "p05" | "mean" | "max"): number {
+  return finiteNumber(record?.[key]) ?? 0;
+}
+
+function qualityFromStatisticsScope(scope: Record<string, unknown>): MeshQualityStats {
+  const sicn = asRecord(scope.sicn);
+  const gamma = asRecord(scope.gamma);
+  const volume = asRecord(scope.volume);
+  const elementCount = finiteNumber(scope.element_count) ?? 0;
+  const gammaMin = metricRecordValue(gamma, "min");
+  const gammaMean = metricRecordValue(gamma, "mean");
+  const sicnMean = metricRecordValue(sicn, "mean");
+  return {
+    n_elements: elementCount,
+    sicn_min: metricRecordValue(sicn, "min"),
+    sicn_max: metricRecordValue(sicn, "max"),
+    sicn_mean: sicnMean,
+    sicn_p5: metricRecordValue(sicn, "p05"),
+    sicn_histogram: histogramCounts(sicn?.histogram),
+    gamma_min: gammaMin,
+    gamma_mean: gammaMean,
+    gamma_histogram: histogramCounts(gamma?.histogram),
+    volume_min: finiteNumber(volume?.min) ?? 0,
+    volume_max: finiteNumber(volume?.max) ?? 0,
+    volume_mean: finiteNumber(volume?.mean) ?? 0,
+    volume_std: finiteNumber(volume?.std) ?? 0,
+    avg_quality: gammaMean || sicnMean || gammaMin,
+  };
+}
+
+function percentile(sortedValues: readonly number[], p: number): number {
+  if (sortedValues.length === 0) return 0;
+  const index = Math.max(0, Math.min(sortedValues.length - 1, (sortedValues.length - 1) * p));
+  const lo = Math.floor(index);
+  const hi = Math.ceil(index);
+  if (lo === hi) return sortedValues[lo] ?? 0;
+  const frac = index - lo;
+  return (sortedValues[lo] ?? 0) * (1 - frac) + (sortedValues[hi] ?? 0) * frac;
+}
+
+function histogram(values: readonly number[], bins: number, min: number, max: number): number[] {
+  const counts = Array.from({ length: bins }, () => 0);
+  const width = max - min || 1;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    const raw = Math.floor(((value - min) / width) * bins);
+    const index = Math.max(0, Math.min(bins - 1, raw));
+    counts[index] += 1;
+  }
+  return counts;
+}
+
+function meshNode(mesh: FemLiveMesh, index: number): [number, number, number] | null {
+  const flat = mesh.topology_buffers?.nodes;
+  if (flat && index >= 0 && index * 3 + 2 < flat.length) {
+    return [Number(flat[index * 3]), Number(flat[index * 3 + 1]), Number(flat[index * 3 + 2])];
+  }
+  const node = mesh.nodes[index];
+  return node ? [Number(node[0]), Number(node[1]), Number(node[2])] : null;
+}
+
+function meshElementNode(mesh: FemLiveMesh, elementIndex: number, localIndex: number): number | null {
+  const flat = mesh.topology_buffers?.elements;
+  if (flat && elementIndex >= 0 && elementIndex * 4 + localIndex < flat.length) {
+    return Number(flat[elementIndex * 4 + localIndex]);
+  }
+  const element = mesh.elements[elementIndex];
+  return element ? Number(element[localIndex]) : null;
+}
+
+function meshElementMarker(mesh: FemLiveMesh, elementIndex: number): number | null {
+  const flat = mesh.topology_buffers?.element_markers;
+  if (flat && elementIndex >= 0 && elementIndex < flat.length) return Number(flat[elementIndex]);
+  const markers = mesh.element_markers;
+  if (markers && elementIndex >= 0 && elementIndex < markers.length) return Number(markers[elementIndex]);
+  return null;
+}
+
+function sub(a: readonly number[], b: readonly number[]): [number, number, number] {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot(a: readonly number[], b: readonly number[]): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a: readonly number[], b: readonly number[]): [number, number, number] {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+}
+
+function norm(a: readonly number[]): number {
+  return Math.sqrt(dot(a, a));
+}
+
+function triangleArea(a: readonly number[], b: readonly number[], c: readonly number[]): number {
+  return 0.5 * norm(cross(sub(b, a), sub(c, a)));
+}
+
+function solve3x3(
+  rows: [[number, number, number], [number, number, number], [number, number, number]],
+  rhs: [number, number, number],
+): [number, number, number] | null {
+  const [a, b, c] = rows;
+  const det = dot(a, cross(b, c));
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-300) return null;
+  return [
+    dot(rhs, cross(b, c)) / det,
+    dot(a, cross(rhs, c)) / det,
+    dot(a, cross(b, rhs)) / det,
+  ];
+}
+
+function squaredNorm(a: readonly number[]): number {
+  return dot(a, a);
+}
+
+function tetraCircumradius(
+  a: readonly number[],
+  b: readonly number[],
+  c: readonly number[],
+  d: readonly number[],
+): number {
+  const center = solve3x3(
+    [
+      [2 * (b[0] - a[0]), 2 * (b[1] - a[1]), 2 * (b[2] - a[2])],
+      [2 * (c[0] - a[0]), 2 * (c[1] - a[1]), 2 * (c[2] - a[2])],
+      [2 * (d[0] - a[0]), 2 * (d[1] - a[1]), 2 * (d[2] - a[2])],
+    ],
+    [
+      squaredNorm(b) - squaredNorm(a),
+      squaredNorm(c) - squaredNorm(a),
+      squaredNorm(d) - squaredNorm(a),
+    ],
+  );
+  return center ? norm(sub(center, a)) : 0;
+}
+
+function statsFromTetraMetrics(metrics: readonly ComputedTetraMetric[]): MeshQualityStats {
+  if (metrics.length === 0) {
+    return {
+      n_elements: 0,
+      sicn_min: 0,
+      sicn_max: 0,
+      sicn_mean: 0,
+      sicn_p5: 0,
+      sicn_histogram: Array.from({ length: 20 }, () => 0),
+      gamma_min: 0,
+      gamma_mean: 0,
+      gamma_histogram: Array.from({ length: 20 }, () => 0),
+      volume_min: 0,
+      volume_max: 0,
+      volume_mean: 0,
+      volume_std: 0,
+      avg_quality: 0,
+    };
+  }
+  const gamma = metrics.map((entry) => entry.gamma);
+  const sicn = metrics.map((entry) => entry.sicn);
+  const volumes = metrics.map((entry) => entry.volume);
+  const gammaMean = gamma.reduce((sum, value) => sum + value, 0) / gamma.length;
+  const sicnMean = sicn.reduce((sum, value) => sum + value, 0) / sicn.length;
+  const volumeMean = volumes.reduce((sum, value) => sum + value, 0) / volumes.length;
+  const volumeStd = Math.sqrt(
+    volumes.reduce((sum, value) => sum + (value - volumeMean) ** 2, 0) / volumes.length,
+  );
+  const sortedSicn = [...sicn].sort((a, b) => a - b);
+  return {
+    n_elements: metrics.length,
+    sicn_min: Math.min(...sicn),
+    sicn_max: Math.max(...sicn),
+    sicn_mean: sicnMean,
+    sicn_p5: percentile(sortedSicn, 0.05),
+    sicn_histogram: histogram(sicn, 20, -1, 1),
+    gamma_min: Math.min(...gamma),
+    gamma_mean: gammaMean,
+    gamma_histogram: histogram(gamma, 20, 0, 1),
+    volume_min: Math.min(...volumes),
+    volume_max: Math.max(...volumes),
+    volume_mean: volumeMean,
+    volume_std: volumeStd,
+    avg_quality: gammaMean,
+  };
+}
+
+function partForComputedGroup(
+  parts: readonly FemMeshPart[],
+  usedPartIds: Set<string>,
+  marker: number | null,
+  metrics: readonly ComputedTetraMetric[],
+): FemMeshPart | null {
+  if (marker === 0) {
+    const air = parts.find((part) => !usedPartIds.has(part.id) && part.role === "air");
+    if (air) return air;
+  }
+  const first = metrics[0]?.elementIndex ?? -1;
+  const last = metrics[metrics.length - 1]?.elementIndex ?? -1;
+  return (
+    parts.find((part) =>
+      !usedPartIds.has(part.id) &&
+      part.element_count === metrics.length &&
+      first >= part.element_start &&
+      last < part.element_start + part.element_count,
+    ) ??
+    parts.find((part) => !usedPartIds.has(part.id) && part.element_count === metrics.length) ??
+    null
+  );
+}
+
+function computeMeshQualityFallback(mesh: FemLiveMesh | null | undefined): ComputedMeshQualityFallback | null {
+  if (!mesh) return null;
+  const elementCount = mesh.topology_buffers?.elements
+    ? Math.floor(mesh.topology_buffers.elements.length / 4)
+    : mesh.elements.length;
+  if (elementCount <= 0) return null;
+  const metrics: ComputedTetraMetric[] = [];
+  for (let elementIndex = 0; elementIndex < elementCount; elementIndex += 1) {
+    const indices = [0, 1, 2, 3].map((localIndex) => meshElementNode(mesh, elementIndex, localIndex));
+    if (indices.some((index) => index == null)) continue;
+    const a = meshNode(mesh, indices[0]!);
+    const b = meshNode(mesh, indices[1]!);
+    const c = meshNode(mesh, indices[2]!);
+    const d = meshNode(mesh, indices[3]!);
+    if (!a || !b || !c || !d) continue;
+    const signedVolume = dot(sub(b, a), cross(sub(c, a), sub(d, a))) / 6;
+    const volume = Math.abs(signedVolume);
+    const surfaceArea =
+      triangleArea(a, b, c) +
+      triangleArea(a, b, d) +
+      triangleArea(a, c, d) +
+      triangleArea(b, c, d);
+    const inradius = surfaceArea > 0 ? (3 * volume) / surfaceArea : 0;
+    const circumradius = tetraCircumradius(a, b, c, d);
+    const gamma = circumradius > 0
+      ? Math.max(0, Math.min(1, (3 * inradius) / circumradius))
+      : 0;
+    const orientation = signedVolume < 0 ? -1 : 1;
+    metrics.push({
+      elementIndex,
+      marker: meshElementMarker(mesh, elementIndex),
+      gamma,
+      sicn: orientation * gamma,
+      volume,
+      signedVolume,
+      centroid: [
+        (a[0] + b[0] + c[0] + d[0]) / 4,
+        (a[1] + b[1] + c[1] + d[1]) / 4,
+        (a[2] + b[2] + c[2] + d[2]) / 4,
+      ],
+    });
+  }
+  if (metrics.length === 0) return null;
+  const groups = new Map<number, ComputedTetraMetric[]>();
+  for (const metric of metrics) {
+    const marker = metric.marker ?? -1;
+    const group = groups.get(marker);
+    if (group) group.push(metric);
+    else groups.set(marker, [metric]);
+  }
+  const usedPartIds = new Set<string>();
+  const parts = mesh.mesh_parts ?? [];
+  const rows = Array.from(groups.entries()).map(([marker, group]) => {
+    const quality = statsFromTetraMetrics(group);
+    const markerValue = marker === -1 ? 0 : marker;
+    const part = partForComputedGroup(parts, usedPartIds, marker === -1 ? null : marker, group);
+    if (part) usedPartIds.add(part.id);
+    const role = part?.role ?? (marker === 0 ? "air" : "domain");
+    const label = part?.label ?? part?.object_id ?? (marker === 0 ? "Airbox" : marker === -1 ? "Unclassified domain" : `Domain ${marker}`);
+    return {
+      id: part?.id ?? `computed:${marker}`,
+      marker: markerValue,
+      label,
+      role,
+      objectId: part?.object_id ?? null,
+      elementCount: quality.n_elements,
+      boundaryFaceCount: part?.boundary_face_count ?? null,
+      quality,
+      status: qualityStatus(quality),
+      warnings: warningsFor(quality, role),
+    } satisfies DomainStatisticsRow;
+  }).sort((a, b) => {
+    const roleRank = (row: DomainStatisticsRow) => row.role === "air" ? 0 : row.role === "magnetic_object" ? 1 : 2;
+    return roleRank(a) - roleRank(b) || a.marker - b.marker;
+  });
+  const worstElements = [...metrics]
+    .sort((a, b) => a.gamma - b.gamma)
+    .slice(0, 12)
+    .map((entry) => ({
+      id: `computed-worst:${entry.elementIndex}`,
+      elementIndex: entry.elementIndex,
+      marker: entry.marker,
+      gamma: entry.gamma,
+      sicn: entry.sicn,
+      volume: entry.volume,
+      centroid: entry.centroid,
+    }));
+  return {
+    globalQuality: statsFromTetraMetrics(metrics),
+    rows,
+    worstElements,
+    volumeTotal: metrics.reduce((sum, entry) => sum + entry.volume, 0),
+    invertedCount: metrics.filter((entry) => entry.signedVolume < 0).length,
+    degenerateCount: metrics.filter((entry) => entry.volume <= 0 || entry.gamma <= 0).length,
+  };
+}
+
+export function buildRowsFromMeshStatisticsReport(report: Record<string, unknown> | null | undefined): DomainStatisticsRow[] {
+  const scopes = Array.isArray(report?.scopes) ? report.scopes : [];
+  return scopes.flatMap((entry, index) => {
+    const scope = asRecord(entry);
+    if (!scope) return [];
+    const quality = qualityFromStatisticsScope(scope);
+    const role = stringOrNull(scope.role) ?? stringOrNull(scope.kind) ?? "domain";
+    const label = stringOrNull(scope.label) ?? (role === "air" ? "Airbox" : `Scope ${index + 1}`);
+    const marker = finiteNumber(scope.marker);
+    return [{
+      id: stringOrNull(scope.id) ?? `scope:${index}`,
+      marker: marker == null ? index : marker,
+      label,
+      role,
+      objectId: stringOrNull(scope.object_id),
+      elementCount: quality.n_elements,
+      boundaryFaceCount: finiteNumber(scope.boundary_face_count),
+      quality,
+      status: qualityStatus(quality),
+      warnings: [
+        ...warningsFor(quality, role),
+        ...(Array.isArray(scope.warnings) ? scope.warnings.filter((warning): warning is string => typeof warning === "string") : []),
+      ],
+    }];
+  });
+}
+
+export function parseWorstElements(report: Record<string, unknown> | null | undefined): WorstElementView[] {
+  const raw = Array.isArray(report?.worst_elements) ? report.worst_elements : [];
+  return raw.flatMap((entry, index) => {
+    const record = asRecord(entry);
+    if (!record) return [];
+    const elementIndex = finiteNumber(record.element_index);
+    if (elementIndex == null) return [];
+    const centroid = Array.isArray(record.centroid)
+      ? record.centroid.map((value) => finiteNumber(value)).filter((value): value is number => value != null)
+      : null;
+    return [{
+      id: `worst:${elementIndex}:${index}`,
+      elementIndex,
+      marker: finiteNumber(record.marker),
+      gamma: finiteNumber(record.gamma),
+      sicn: finiteNumber(record.sicn),
+      volume: finiteNumber(record.volume),
+      centroid: centroid && centroid.length === 3 ? centroid : null,
+    }];
+  });
+}
+
+export function parseOperationStatuses(summary: Record<string, unknown> | null | undefined): MeshOperationStatusView[] {
+  const raw = Array.isArray(summary?.operation_statuses) ? summary.operation_statuses : [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const kind = stringOrNull(record.kind);
+    const status = stringOrNull(record.status);
+    if (!kind || !status) return [];
+    return [{
+      kind,
+      scope: stringOrNull(record.scope) ?? "global",
+      requested: Boolean(record.requested),
+      status,
+      requestedMethod: stringOrNull(record.requested_method),
+      actualMethod: stringOrNull(record.actual_method),
+      reason: stringOrNull(record.reason),
+    }];
+  });
+}
+
+export function parseThinFilmDiagnostics(summary: Record<string, unknown> | null | undefined): ThinFilmDiagnosticView[] {
+  const raw = Array.isArray(summary?.thin_film_diagnostics) ? summary.thin_film_diagnostics : [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const geometryName = stringOrNull(record.geometry_name);
+    if (!geometryName) return [];
+    return [{
+      geometryName,
+      isThinFilm: Boolean(record.is_thin_film),
+      thickness: finiteNumber(record.thickness),
+      lateralSize: finiteNumber(record.lateral_size),
+      aspectRatio: finiteNumber(record.aspect_ratio),
+      requestedLayers: finiteNumber(record.requested_layers),
+      estimatedLayersFromHmax: finiteNumber(record.estimated_layers_from_hmax),
+      hmaxToThicknessRatio: finiteNumber(record.hmax_to_thickness_ratio),
+      requestedMethod: stringOrNull(record.requested_method),
+      actualMethod: stringOrNull(record.actual_method) ?? "free_tetrahedral",
+      warnings: Array.isArray(record.warnings)
+        ? record.warnings.filter((warning): warning is string => typeof warning === "string")
+        : [],
+    }];
+  });
 }
 
 function thinFilmWarnings(parts: FemMeshPart[], hmin: number | null, hmax: number | null): string[] {
@@ -130,6 +624,40 @@ function roleLabel(role: string): string {
     case "global": return "Global";
     default: return role.replaceAll("_", " ");
   }
+}
+
+function verdictFromQuality(quality: MeshQualityStats | null, qualitySource: string | null): { label: string; tone: DomainStatisticsRow["status"]; detail: string } {
+  if (!quality || qualitySource === "topology") {
+    return {
+      label: "Missing quality",
+      tone: "warn",
+      detail: "Mesh topology is available, but Gmsh tetrahedral quality metrics were not extracted for this build.",
+    };
+  }
+  const sourcePrefix = qualitySource === "frontend-topology"
+    ? "Frontend topology fallback quality"
+    : "Extracted tetrahedral quality metrics";
+  const gammaMin = finiteNumber(quality.gamma_min);
+  const sicnP5 = finiteNumber(quality.sicn_p5);
+  if ((gammaMin != null && gammaMin < 0.03) || (sicnP5 != null && sicnP5 < 0.05)) {
+    return {
+      label: "Poor",
+      tone: "error",
+      detail: `${sourcePrefix} shows worst tetrahedra below the FEM quality target; inspect worst elements before trusting physics.`,
+    };
+  }
+  if ((gammaMin != null && gammaMin < 0.08) || (sicnP5 != null && sicnP5 < 0.1)) {
+    return {
+      label: "Check",
+      tone: "warn",
+      detail: `${sourcePrefix} shows a low quality tail. Results may still run, but the mesh should be refined or optimized.`,
+    };
+  }
+  return {
+    label: "Usable",
+    tone: "ok",
+    detail: `${sourcePrefix} is above the current warning thresholds.`,
+  };
 }
 
 function uniquePartMatch(parts: FemMeshPart[], usedPartIds: Set<string>, predicate: (part: FemMeshPart) => boolean): FemMeshPart | null {
@@ -230,6 +758,23 @@ function StatusBadge({ status }: { status: DomainStatisticsRow["status"] }) {
   );
 }
 
+function OperationStatusBadge({ status }: { status: string }) {
+  const normalized = status.toLowerCase();
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[0.58rem] font-bold uppercase tracking-wider",
+        normalized === "applied" && "bg-success/15 text-success",
+        normalized === "skipped" && "bg-muted/40 text-muted-foreground",
+        normalized === "fallback" && "bg-warning/15 text-warning",
+        normalized === "failed" && "bg-error/15 text-error",
+      )}
+    >
+      {status}
+    </span>
+  );
+}
+
 export default function MeshStatisticsPanel() {
   const model = useModel();
   const cmd = useCommand();
@@ -237,9 +782,31 @@ export default function MeshStatisticsPanel() {
   const mesh = model.effectiveFemMesh;
   const meshWorkspace = model.meshWorkspace;
   const meshQualityData = model.meshQualityData;
+  const meshStatistics = asRecord(meshWorkspace?.mesh_statistics);
+  const meshStatisticsGlobal = asRecord(meshStatistics?.global);
+  const reportQualitySource = stringOrNull(meshStatistics?.quality_source);
+  const reportHasExtractedQuality = Boolean(reportQualitySource && reportQualitySource !== "topology");
+  const computedQualityFallback = useMemo(
+    () => reportHasExtractedQuality ? null : computeMeshQualityFallback(mesh),
+    [mesh, reportHasExtractedQuality],
+  );
   const perDomainRows = useMemo(
-    () => buildDomainRows(mesh?.per_domain_quality ?? null, mesh?.mesh_parts ?? []),
-    [mesh?.mesh_parts, mesh?.per_domain_quality],
+    () => {
+      const reportRows = reportHasExtractedQuality ? buildRowsFromMeshStatisticsReport(meshStatistics) : [];
+      return reportRows.length > 0
+        ? reportRows
+        : computedQualityFallback?.rows.length
+          ? computedQualityFallback.rows
+          : buildDomainRows(mesh?.per_domain_quality ?? null, mesh?.mesh_parts ?? []);
+    },
+    [computedQualityFallback, mesh?.mesh_parts, mesh?.per_domain_quality, meshStatistics, reportHasExtractedQuality],
+  );
+  const worstElements = useMemo(
+    () => {
+      const reportWorst = reportHasExtractedQuality ? parseWorstElements(meshStatistics) : [];
+      return reportWorst.length > 0 ? reportWorst : computedQualityFallback?.worstElements ?? [];
+    },
+    [computedQualityFallback?.worstElements, meshStatistics, reportHasExtractedQuality],
   );
 
   const globalQuality = meshQualityData
@@ -262,8 +829,40 @@ export default function MeshStatisticsPanel() {
     : null;
 
   const structuredSummary = meshWorkspace?.mesh_quality_summary ?? null;
+  const operationStatuses = useMemo(
+    () => parseOperationStatuses(meshWorkspace?.last_build_summary),
+    [meshWorkspace?.last_build_summary],
+  );
+  const thinFilmDiagnostics = useMemo(
+    () => parseThinFilmDiagnostics(meshWorkspace?.last_build_summary),
+    [meshWorkspace?.last_build_summary],
+  );
+  const statisticsGlobalQuality = reportHasExtractedQuality && meshStatisticsGlobal
+    ? qualityFromStatisticsScope(meshStatisticsGlobal)
+    : null;
+  const primaryHistogramQuality = statisticsGlobalQuality ?? globalQuality ?? computedQualityFallback?.globalQuality ?? perDomainRows[0]?.quality ?? null;
+  const qualitySource = reportHasExtractedQuality
+    ? reportQualitySource
+    : computedQualityFallback
+      ? "frontend-topology"
+      : reportQualitySource;
+  const qualityVerdict = verdictFromQuality(primaryHistogramQuality, qualitySource);
+  const missingTetraQualityWarning = !primaryHistogramQuality || qualitySource === "topology"
+    ? "This mesh artifact was built without tetrahedral quality metrics. New builds compute these metrics automatically; rebuild the solver mesh before using it for physics validation."
+    : null;
+  const frontendFallbackWarning = computedQualityFallback && !reportHasExtractedQuality
+    ? "Tetra quality was computed in the browser from mesh topology because the current artifact lacks backend Gmsh quality metrics; rebuild to persist backend statistics."
+    : null;
+  const backendWarnings = [
+    ...operationStatuses
+      .filter((status) => status.status === "fallback" || status.status === "failed" || status.status === "skipped")
+      .map((status) => `${status.kind} (${status.scope}) ${status.status}${status.reason ? `: ${status.reason}` : ""}`),
+    ...thinFilmDiagnostics.flatMap((diagnostic) =>
+      diagnostic.warnings.map((warning) => `${diagnostic.geometryName}: ${warning}`),
+    ),
+  ];
   const globalWarnings = [
-    ...(model.meshConfigDirty ? ["Displayed mesh is stale relative to current mesh-affecting settings."] : []),
+    ...(model.meshConfigDirty ? ["Displayed mesh is stale relative to current mesh-affecting settings; rebuild the solver mesh to refresh statistics."] : []),
     ...(model.meshOptions.optimizeIters > 1 && !model.meshOptions.optimize.trim()
       ? ["Optimize iterations are configured but no optimizer method is selected; iterations will be ignored."]
       : []),
@@ -272,15 +871,93 @@ export default function MeshStatisticsPanel() {
       optionMeters(model.meshOptions.minimumElementSize || model.meshOptions.hmin),
       optionMeters(model.meshOptions.maximumElementSize || model.meshOptions.hmax),
     ),
+    ...backendWarnings,
+    ...(frontendFallbackWarning ? [frontendFallbackWarning] : []),
+    ...(missingTetraQualityWarning ? [missingTetraQualityWarning] : []),
     ...(globalQuality ? warningsFor(globalQuality, "global") : []),
     ...perDomainRows.flatMap((row) => row.warnings.map((warning) => `${row.label}: ${warning}`)),
   ];
 
-  const primaryHistogramQuality = globalQuality ?? perDomainRows[0]?.quality ?? null;
-  const elementCount = mesh?.elements.length ?? structuredSummary?.n_elements ?? globalQuality?.n_elements ?? 0;
-  const nodeCount = mesh?.nodes.length ?? 0;
-  const boundaryFaceCount = mesh?.boundary_faces.length ?? 0;
+  const elementCount =
+    mesh?.elements.length ??
+    finiteNumber(meshStatisticsGlobal?.element_count) ??
+    structuredSummary?.n_elements ??
+    globalQuality?.n_elements ??
+    0;
+  const nodeCount =
+    mesh?.nodes.length ??
+    finiteNumber(meshStatisticsGlobal?.node_count) ??
+    0;
+  const boundaryFaceCount =
+    mesh?.boundary_faces.length ??
+    finiteNumber(meshStatisticsGlobal?.boundary_face_count) ??
+    0;
   const meshName = mesh?.mesh_name ?? meshWorkspace?.mesh_summary?.mesh_name ?? "study_domain";
+  const volumeRatioValue = globalQuality
+    ? volumeRatio(globalQuality)
+    : computedQualityFallback
+      ? volumeRatio(computedQualityFallback.globalQuality)
+      : statisticVolumeValue(meshStatisticsGlobal, "ratio");
+  const exportPayload = reportHasExtractedQuality && meshStatistics ? meshStatistics : {
+    mesh_name: meshName,
+    quality_source: computedQualityFallback ? "frontend-topology" : qualitySource ?? "topology",
+    global: computedQualityFallback
+      ? {
+          element_count: computedQualityFallback.globalQuality.n_elements,
+          node_count: nodeCount,
+          boundary_face_count: boundaryFaceCount,
+          gamma: {
+            min: computedQualityFallback.globalQuality.gamma_min,
+            mean: computedQualityFallback.globalQuality.gamma_mean,
+            histogram: computedQualityFallback.globalQuality.gamma_histogram,
+          },
+          sicn: {
+            min: computedQualityFallback.globalQuality.sicn_min,
+            p05: computedQualityFallback.globalQuality.sicn_p5,
+            mean: computedQualityFallback.globalQuality.sicn_mean,
+            max: computedQualityFallback.globalQuality.sicn_max,
+            histogram: computedQualityFallback.globalQuality.sicn_histogram,
+          },
+          volume: {
+            min: computedQualityFallback.globalQuality.volume_min,
+            max: computedQualityFallback.globalQuality.volume_max,
+            mean: computedQualityFallback.globalQuality.volume_mean,
+            std: computedQualityFallback.globalQuality.volume_std,
+            ratio: volumeRatio(computedQualityFallback.globalQuality),
+            total: computedQualityFallback.volumeTotal,
+          },
+          inverted_count: computedQualityFallback.invertedCount,
+          degenerate_count: computedQualityFallback.degenerateCount,
+        }
+      : structuredSummary,
+    scopes: perDomainRows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      role: row.role,
+      marker: row.marker,
+      element_count: row.elementCount,
+      boundary_face_count: row.boundaryFaceCount,
+      quality: row.quality,
+      warnings: row.warnings,
+    })),
+    worst_elements: worstElements,
+  };
+  const handleExportStatistics = useCallback(() => {
+    const blob = new Blob([`${JSON.stringify(exportPayload, null, 2)}\n`], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${meshName || "mesh"}-statistics.json`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, [exportPayload, meshName]);
+  const handleRebuildStatisticsMesh = useCallback(() => {
+    void model.handleStudyDomainMeshGenerate("mesh_statistics_refresh");
+  }, [model]);
 
   return (
     <div className="flex flex-col px-2 pt-4">
@@ -297,12 +974,29 @@ export default function MeshStatisticsPanel() {
                 <span>{meshName}</span>
               </div>
               <div className="text-[0.68rem] leading-relaxed text-muted-foreground">
-                COMSOL-like statistics for the realized shared-domain solver mesh. Surface-only aspect ratio diagnostics are kept separate from tetrahedral volume quality.
+                COMSOL-like statistics for the realized shared-domain solver mesh. Tetrahedral quality is computed automatically during new mesh builds; surface-only diagnostics remain separate.
               </div>
             </div>
             <div className="text-right text-[0.62rem] font-mono text-muted-foreground">
               {cmd.workspaceStatus.replaceAll("_", " ")}
             </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-primary/35 bg-primary/10 px-2.5 py-1.5 text-[0.68rem] font-semibold text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={handleRebuildStatisticsMesh}
+              disabled={model.meshGenerating}
+            >
+              {model.meshGenerating ? "Building..." : "Rebuild Solver Mesh"}
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border border-border/35 bg-background/60 px-2.5 py-1.5 text-[0.68rem] font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              onClick={handleExportStatistics}
+            >
+              Export Stats JSON
+            </button>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -310,10 +1004,29 @@ export default function MeshStatisticsPanel() {
             <StatTile label="Tetrahedra" value={Number(elementCount).toLocaleString()} />
             <StatTile label="Boundary faces" value={boundaryFaceCount.toLocaleString()} />
             <StatTile label="Domains" value={perDomainRows.length.toLocaleString()} />
-            <StatTile label="Gamma min" value={formatQuality(globalQuality ? qualityValue(globalQuality, "gamma", "min") : finiteNumber(structuredSummary?.gamma_min))} />
-            <StatTile label="SICN p5" value={formatQuality(globalQuality ? qualityValue(globalQuality, "sicn", "p5") : finiteNumber(structuredSummary?.sicn_p5))} />
-            <StatTile label="Avg quality" value={formatQuality(globalQuality?.avg_quality ?? finiteNumber(structuredSummary?.avg_quality))} />
-            <StatTile label="Volume ratio" value={formatRatio(globalQuality ? volumeRatio(globalQuality) : null)} />
+            <StatTile label="Gamma min" value={formatQuality(statisticMetricValue(meshStatisticsGlobal, "gamma", "min") ?? (primaryHistogramQuality ? qualityValue(primaryHistogramQuality, "gamma", "min") : finiteNumber(structuredSummary?.gamma_min)))} />
+            <StatTile label="SICN p5" value={formatQuality(statisticMetricValue(meshStatisticsGlobal, "sicn", "p05") ?? (primaryHistogramQuality ? qualityValue(primaryHistogramQuality, "sicn", "p5") : finiteNumber(structuredSummary?.sicn_p5)))} />
+            <StatTile label="Avg quality" value={formatQuality(statisticsGlobalQuality?.avg_quality ?? globalQuality?.avg_quality ?? computedQualityFallback?.globalQuality.avg_quality ?? finiteNumber(structuredSummary?.avg_quality))} />
+            <StatTile label="Volume ratio" value={formatRatio(volumeRatioValue)} />
+          </div>
+          <div className="rounded-lg border border-border/35 bg-background/45 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[0.72rem] font-semibold text-foreground/90">Quality Verdict</div>
+                <div className="mt-0.5 text-[0.66rem] leading-relaxed text-muted-foreground">
+                  {qualityVerdict.detail}
+                </div>
+              </div>
+              <StatusBadge status={qualityVerdict.tone} />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <StatTile label="Source" value={qualitySource ?? (primaryHistogramQuality ? "gmsh" : "topology")} />
+              <StatTile label="Verdict" value={qualityVerdict.label} />
+              <StatTile label="Inverted" value={formatInteger(finiteNumber(meshStatisticsGlobal?.inverted_count) ?? computedQualityFallback?.invertedCount ?? null)} />
+              <StatTile label="Degenerate" value={formatInteger(finiteNumber(meshStatisticsGlobal?.degenerate_count) ?? computedQualityFallback?.degenerateCount ?? null)} />
+              <StatTile label="Volume total" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "total") ?? computedQualityFallback?.volumeTotal ?? 0, "m^3")} />
+              <StatTile label="Volume mean" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "mean") ?? primaryHistogramQuality?.volume_mean ?? 0, "m^3")} />
+            </div>
           </div>
         </div>
       </SidebarSection>
@@ -325,22 +1038,23 @@ export default function MeshStatisticsPanel() {
             <HistogramBars bins={histogramFor(primaryHistogramQuality, "sicn")} metric="sicn" />
           </div>
         ) : (
-          <EmptyStats message="No tetrahedral quality histogram is available. Enable Extract quality metrics and rebuild the solver mesh." />
+          <EmptyStats message="No tetrahedral quality histogram is available on this existing artifact. Rebuild the solver mesh to generate Gmsh quality metrics automatically." />
         )}
       </SidebarSection>
 
       <SidebarSection title="Global / Airbox / Objects" defaultOpen={true}>
         {perDomainRows.length > 0 ? (
           <div className="overflow-hidden rounded-lg border border-border/35">
-            <div className="grid grid-cols-[1.25fr_0.65fr_0.65fr_0.65fr_0.65fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
+            <div className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
               <span>Scope</span>
               <span>Elems</span>
               <span>Gamma min</span>
               <span>SICN p5</span>
+              <span>Vol ratio</span>
               <span>Status</span>
             </div>
             {perDomainRows.map((row) => (
-              <div key={row.id} className="grid grid-cols-[1.25fr_0.65fr_0.65fr_0.65fr_0.65fr] gap-2 border-b border-border/20 px-2.5 py-2.5 last:border-b-0">
+              <div key={row.id} className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/20 px-2.5 py-2.5 last:border-b-0">
                 <div className="min-w-0">
                   <div className="truncate text-[0.72rem] font-semibold text-foreground/90" title={row.label}>{row.label}</div>
                   <div className="font-mono text-[0.6rem] text-muted-foreground">
@@ -350,6 +1064,7 @@ export default function MeshStatisticsPanel() {
                 <MetricCell value={row.elementCount.toLocaleString()} />
                 <MetricCell value={formatQuality(qualityValue(row.quality, "gamma", "min"))} />
                 <MetricCell value={formatQuality(qualityValue(row.quality, "sicn", "p5"))} />
+                <MetricCell value={formatRatio(volumeRatio(row.quality))} />
                 <div className="flex items-center justify-end">
                   <StatusBadge status={row.status} />
                 </div>
@@ -358,6 +1073,102 @@ export default function MeshStatisticsPanel() {
           </div>
         ) : (
           <EmptyStats message="Per-domain quality is not available for this mesh. Rebuild with per-element quality enabled to classify airbox and object scopes." />
+        )}
+      </SidebarSection>
+
+      <SidebarSection title="Worst Elements" defaultOpen={worstElements.length > 0}>
+        {worstElements.length > 0 ? (
+          <div className="overflow-hidden rounded-lg border border-border/35">
+            <div className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
+              <span>Element</span>
+              <span>Marker</span>
+              <span>Gamma</span>
+              <span>Volume</span>
+            </div>
+            {worstElements.map((element) => (
+              <div key={element.id} className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/20 px-2.5 py-2 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="font-mono text-[0.68rem] font-semibold text-foreground/90">
+                    #{element.elementIndex}
+                  </div>
+                  {element.centroid ? (
+                    <div className="truncate font-mono text-[0.56rem] text-muted-foreground" title={element.centroid.map((value) => fmtSI(value, "m")).join(", ")}>
+                      centroid {element.centroid.map((value) => fmtSI(value, "m")).join(", ")}
+                    </div>
+                  ) : null}
+                </div>
+                <MetricCell value={element.marker == null ? "-" : String(element.marker)} />
+                <MetricCell value={formatQuality(element.gamma)} />
+                <MetricCell value={element.volume == null ? "-" : fmtSI(element.volume, "m^3")} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyStats message="Worst-element diagnostics are unavailable. Rebuild with per-element quality enabled to inspect low-quality tetrahedra." />
+        )}
+      </SidebarSection>
+
+      <SidebarSection title="Backend Operations" defaultOpen={operationStatuses.length > 0 || thinFilmDiagnostics.length > 0}>
+        {operationStatuses.length > 0 || thinFilmDiagnostics.length > 0 ? (
+          <div className="grid gap-3">
+            {operationStatuses.length > 0 ? (
+              <div className="grid gap-2">
+                {operationStatuses.map((operation, index) => (
+                  <div key={`${operation.kind}:${operation.scope}:${index}`} className="rounded-lg border border-border/35 bg-background/45 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-[0.72rem] font-semibold text-foreground/90">
+                          {operation.kind.replaceAll("_", " ")} · {operation.scope}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[0.62rem] text-muted-foreground">
+                          {operation.requestedMethod ?? "auto"} → {operation.actualMethod ?? "none"}
+                        </div>
+                      </div>
+                      <OperationStatusBadge status={operation.status} />
+                    </div>
+                    {operation.reason ? (
+                      <div className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">
+                        {operation.reason}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {thinFilmDiagnostics.length > 0 ? (
+              <div className="grid gap-2">
+                {thinFilmDiagnostics.map((diagnostic) => (
+                  <div key={diagnostic.geometryName} className="rounded-lg border border-border/35 bg-background/45 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="truncate text-[0.72rem] font-semibold text-foreground/90">
+                        Thin-film · {diagnostic.geometryName}
+                      </div>
+                      <span className="font-mono text-[0.6rem] uppercase tracking-wider text-muted-foreground">
+                        {diagnostic.actualMethod}
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-2 text-[0.66rem]">
+                      <InfoLine label="Thickness" value={diagnostic.thickness != null ? fmtSI(diagnostic.thickness, "m") : "-"} />
+                      <InfoLine label="Aspect" value={diagnostic.aspectRatio != null ? diagnostic.aspectRatio.toFixed(1) : "-"} />
+                      <InfoLine label="Req layers" value={diagnostic.requestedLayers != null ? String(Math.round(diagnostic.requestedLayers)) : "-"} />
+                      <InfoLine label="Est layers" value={diagnostic.estimatedLayersFromHmax != null ? String(Math.round(diagnostic.estimatedLayersFromHmax)) : "-"} />
+                    </div>
+                    {diagnostic.warnings.length > 0 ? (
+                      <div className="mt-2 grid gap-1">
+                        {diagnostic.warnings.map((warning) => (
+                          <div key={warning} className="text-[0.68rem] leading-relaxed text-warning">
+                            {warning}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyStats message="No backend operation statuses are available yet. Rebuild the shared-domain mesh to capture actual methods and fallbacks." />
         )}
       </SidebarSection>
 
@@ -379,13 +1190,13 @@ export default function MeshStatisticsPanel() {
         )}
       </SidebarSection>
 
-      {globalQuality ? (
+      {globalQuality || meshStatisticsGlobal ? (
         <SidebarSection title="Volume Statistics" defaultOpen={false}>
           <div className="grid gap-1.5 rounded-lg border border-border/30 bg-background/45 p-2.5 text-xs">
-            <InfoLine label="Volume min" value={fmtSI(globalQuality.volume_min, "m^3")} />
-            <InfoLine label="Volume max" value={fmtSI(globalQuality.volume_max, "m^3")} />
-            <InfoLine label="Volume mean" value={fmtSI(globalQuality.volume_mean, "m^3")} />
-            <InfoLine label="Volume std" value={fmtSI(globalQuality.volume_std, "m^3")} />
+            <InfoLine label="Volume min" value={fmtSI(globalQuality?.volume_min ?? statisticVolumeValue(meshStatisticsGlobal, "min") ?? 0, "m^3")} />
+            <InfoLine label="Volume max" value={fmtSI(globalQuality?.volume_max ?? statisticVolumeValue(meshStatisticsGlobal, "max") ?? 0, "m^3")} />
+            <InfoLine label="Volume mean" value={fmtSI(globalQuality?.volume_mean ?? statisticVolumeValue(meshStatisticsGlobal, "mean") ?? 0, "m^3")} />
+            <InfoLine label="Volume std" value={fmtSI(globalQuality?.volume_std ?? statisticVolumeValue(meshStatisticsGlobal, "std") ?? 0, "m^3")} />
           </div>
         </SidebarSection>
       ) : null}

@@ -16,6 +16,12 @@ pub struct SceneProblemProjection {
     pub rewrite_overrides: Value,
 }
 
+pub fn normalize_scene_document_magnetization_assets(scene: &mut SceneDocument) {
+    for asset in &mut scene.magnetization_assets {
+        *asset = canonicalize_magnetization_asset(asset);
+    }
+}
+
 pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> SceneDocument {
     let objects = builder
         .geometries
@@ -859,36 +865,30 @@ fn magnetization_asset_from_geometry(
     name: &str,
     magnetization: &ScriptBuilderMagnetizationState,
 ) -> MagnetizationAsset {
-    let kind = if magnetization.kind == "file"
-        && (magnetization.dataset.is_some() || magnetization.sample_index.is_some())
-    {
-        "sampled".to_string()
-    } else {
-        magnetization.kind.clone()
-    };
+    let normalized = canonicalize_script_builder_magnetization(magnetization);
     MagnetizationAsset {
         id: magnetization_id_for_geometry(name),
         name: format!("{} magnetization", name),
-        kind,
-        value: magnetization.value.clone(),
-        seed: magnetization.seed,
-        source_path: magnetization.source_path.clone(),
-        source_format: magnetization.source_format.clone(),
-        dataset: magnetization.dataset.clone(),
-        sample_index: magnetization.sample_index,
-        mapping: magnetization.mapping.clone().unwrap_or_default(),
-        texture_transform: magnetization.texture_transform.clone().unwrap_or_default(),
-        preset_kind: magnetization.preset_kind.clone(),
-        preset_params: magnetization.preset_params.clone(),
-        preset_version: magnetization.preset_version,
-        ui_label: magnetization.ui_label.clone(),
+        kind: normalized.kind,
+        value: normalized.value,
+        seed: normalized.seed,
+        source_path: normalized.source_path,
+        source_format: normalized.source_format,
+        dataset: normalized.dataset,
+        sample_index: normalized.sample_index,
+        mapping: normalized.mapping.unwrap_or_default(),
+        texture_transform: normalized.texture_transform.unwrap_or_default(),
+        preset_kind: normalized.preset_kind,
+        preset_params: normalized.preset_params,
+        preset_version: normalized.preset_version,
+        ui_label: normalized.ui_label,
     }
 }
 
 fn script_builder_magnetization_from_asset(
     asset: &MagnetizationAsset,
 ) -> ScriptBuilderMagnetizationState {
-    ScriptBuilderMagnetizationState {
+    canonicalize_script_builder_magnetization(&ScriptBuilderMagnetizationState {
         kind: asset.kind.clone(),
         value: asset.value.clone(),
         seed: asset.seed,
@@ -902,6 +902,210 @@ fn script_builder_magnetization_from_asset(
         preset_params: asset.preset_params.clone(),
         preset_version: asset.preset_version,
         ui_label: asset.ui_label.clone(),
+    })
+}
+
+fn normalize_vec3(value: Option<&Vec<f64>>, fallback: [f64; 3]) -> Vec<f64> {
+    let values = value.filter(|values| values.len() >= 3);
+    vec![
+        values
+            .and_then(|values| values.first().copied())
+            .unwrap_or(fallback[0]),
+        values
+            .and_then(|values| values.get(1).copied())
+            .unwrap_or(fallback[1]),
+        values
+            .and_then(|values| values.get(2).copied())
+            .unwrap_or(fallback[2]),
+    ]
+}
+
+fn preset_params_object(value: Option<&Value>) -> Option<&Map<String, Value>> {
+    value.and_then(Value::as_object)
+}
+
+fn preset_direction_params(
+    preset_params: Option<&Value>,
+    legacy_value: Option<&Vec<f64>>,
+) -> Value {
+    let direction = preset_params_object(preset_params)
+        .and_then(|params| params.get("direction"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .take(3)
+                .map(|value| value.as_f64().unwrap_or(0.0))
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| values.len() == 3);
+    serde_json::json!({
+        "direction": direction.unwrap_or_else(|| normalize_vec3(legacy_value, [1.0, 0.0, 0.0])),
+    })
+}
+
+fn preset_random_seed_params(preset_params: Option<&Value>, legacy_seed: Option<u64>) -> Value {
+    let seed = preset_params_object(preset_params)
+        .and_then(|params| params.get("seed"))
+        .and_then(Value::as_u64)
+        .or(legacy_seed)
+        .unwrap_or(1);
+    serde_json::json!({ "seed": seed })
+}
+
+fn canonicalize_script_builder_magnetization(
+    magnetization: &ScriptBuilderMagnetizationState,
+) -> ScriptBuilderMagnetizationState {
+    let normalized_kind = if magnetization.kind == "file"
+        && (magnetization.dataset.is_some() || magnetization.sample_index.is_some())
+    {
+        "sampled"
+    } else {
+        magnetization.kind.as_str()
+    };
+    match normalized_kind {
+        "uniform" => ScriptBuilderMagnetizationState {
+            kind: "preset_texture".to_string(),
+            value: None,
+            seed: None,
+            source_path: None,
+            source_format: None,
+            dataset: None,
+            sample_index: None,
+            mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
+            texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
+            preset_kind: Some("uniform".to_string()),
+            preset_params: Some(preset_direction_params(
+                magnetization.preset_params.as_ref(),
+                magnetization.value.as_ref(),
+            )),
+            preset_version: Some(magnetization.preset_version.unwrap_or(1)),
+            ui_label: Some(
+                magnetization
+                    .ui_label
+                    .clone()
+                    .unwrap_or_else(|| "Uniform".to_string()),
+            ),
+        },
+        "random" | "random_seeded" => ScriptBuilderMagnetizationState {
+            kind: "preset_texture".to_string(),
+            value: None,
+            seed: None,
+            source_path: None,
+            source_format: None,
+            dataset: None,
+            sample_index: None,
+            mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
+            texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
+            preset_kind: Some("random_seeded".to_string()),
+            preset_params: Some(preset_random_seed_params(
+                magnetization.preset_params.as_ref(),
+                magnetization.seed,
+            )),
+            preset_version: Some(magnetization.preset_version.unwrap_or(1)),
+            ui_label: Some(
+                magnetization
+                    .ui_label
+                    .clone()
+                    .unwrap_or_else(|| "Random".to_string()),
+            ),
+        },
+        "preset_texture" => {
+            let preset_kind = magnetization
+                .preset_kind
+                .clone()
+                .unwrap_or_else(|| "uniform".to_string());
+            let preset_params = match preset_kind.as_str() {
+                "uniform" => preset_direction_params(
+                    magnetization.preset_params.as_ref(),
+                    magnetization.value.as_ref(),
+                ),
+                "random_seeded" => preset_random_seed_params(
+                    magnetization.preset_params.as_ref(),
+                    magnetization.seed,
+                ),
+                _ => magnetization
+                    .preset_params
+                    .clone()
+                    .unwrap_or_else(|| Value::Object(Map::new())),
+            };
+            ScriptBuilderMagnetizationState {
+                kind: "preset_texture".to_string(),
+                value: None,
+                seed: None,
+                source_path: None,
+                source_format: None,
+                dataset: None,
+                sample_index: None,
+                mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
+                texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
+                preset_kind: Some(preset_kind.clone()),
+                preset_params: Some(preset_params),
+                preset_version: Some(magnetization.preset_version.unwrap_or(1)),
+                ui_label: Some(
+                    magnetization.ui_label.clone().unwrap_or_else(|| {
+                        if preset_kind == "uniform" {
+                            "Uniform".to_string()
+                        } else if preset_kind == "random_seeded" {
+                            "Random".to_string()
+                        } else {
+                            preset_kind.clone()
+                        }
+                    }),
+                ),
+            }
+        }
+        "file" | "sampled" => ScriptBuilderMagnetizationState {
+            kind: "sampled".to_string(),
+            value: None,
+            seed: None,
+            source_path: magnetization.source_path.clone(),
+            source_format: magnetization.source_format.clone(),
+            dataset: magnetization.dataset.clone(),
+            sample_index: magnetization.sample_index,
+            mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
+            texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
+            preset_kind: None,
+            preset_params: None,
+            preset_version: None,
+            ui_label: magnetization.ui_label.clone(),
+        },
+        _ => magnetization.clone(),
+    }
+}
+
+fn canonicalize_magnetization_asset(asset: &MagnetizationAsset) -> MagnetizationAsset {
+    let normalized = canonicalize_script_builder_magnetization(&ScriptBuilderMagnetizationState {
+        kind: asset.kind.clone(),
+        value: asset.value.clone(),
+        seed: asset.seed,
+        source_path: asset.source_path.clone(),
+        source_format: asset.source_format.clone(),
+        dataset: asset.dataset.clone(),
+        sample_index: asset.sample_index,
+        mapping: Some(asset.mapping.clone()),
+        texture_transform: Some(asset.texture_transform.clone()),
+        preset_kind: asset.preset_kind.clone(),
+        preset_params: asset.preset_params.clone(),
+        preset_version: asset.preset_version,
+        ui_label: asset.ui_label.clone(),
+    });
+    MagnetizationAsset {
+        id: asset.id.clone(),
+        name: asset.name.clone(),
+        kind: normalized.kind,
+        value: normalized.value,
+        seed: normalized.seed,
+        source_path: normalized.source_path,
+        source_format: normalized.source_format,
+        dataset: normalized.dataset,
+        sample_index: normalized.sample_index,
+        mapping: normalized.mapping.unwrap_or_default(),
+        texture_transform: normalized.texture_transform.unwrap_or_default(),
+        preset_kind: normalized.preset_kind,
+        preset_params: normalized.preset_params,
+        preset_version: normalized.preset_version,
+        ui_label: normalized.ui_label,
     }
 }
 

@@ -23,13 +23,13 @@ def build() -> fm.Problem:
         name="free",
         geometry=free_geom,
         material=py,
-        m0=fm.uniform((1, 0, 0)),
+        m0=fm.texture.uniform((1, 0, 0)),
     )
     ref = fm.Ferromagnet(
         name="ref",
         geometry=ref_geom,
         material=py,
-        m0=fm.uniform((0, 1, 0)),
+        m0=fm.texture.uniform((0, 1, 0)),
     )
 
     return fm.Problem(

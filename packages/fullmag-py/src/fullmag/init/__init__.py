@@ -4,8 +4,6 @@ from .magnetization import (
     SampledMagnetization,
     UniformMagnetization,
     from_function,
-    random,
-    uniform,
 )
 from .textures import (
     PresetTexture,
@@ -37,8 +35,6 @@ __all__ = [
     "from_function",
     "infer_magnetization_state_format",
     "load_magnetization",
-    "random",
     "save_magnetization",
     "texture",
-    "uniform",
 ]

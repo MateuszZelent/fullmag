@@ -79,6 +79,9 @@ describe("mergeScalarRowsDelta", () => {
 
 function makeSessionState(args: {
   sceneRevision: number;
+  sceneDocument?: Record<string, unknown>;
+  scriptBuilder?: Record<string, unknown> | null;
+  modelBuilderGraph?: Record<string, unknown> | null;
   latestMagnetization?: number[];
   liveMagnetization?: number[];
 }): SessionState {
@@ -139,9 +142,9 @@ function makeSessionState(args: {
     metadata: null,
     mesh_workspace: null,
     stage_execution: null,
-    scene_document: { revision: args.sceneRevision } as any,
-    script_builder: null,
-    model_builder_graph: null,
+    scene_document: { revision: args.sceneRevision, ...(args.sceneDocument ?? {}) } as any,
+    script_builder: args.scriptBuilder as any ?? null,
+    model_builder_graph: args.modelBuilderGraph as any ?? null,
     scalar_rows: [],
     scalar_rows_total: 0,
     engine_log: [],
@@ -194,5 +197,42 @@ describe("mergeSessionState", () => {
     ]);
     expect(merged.latest_fields.frames.m?.values).toBe(merged.live_state?.magnetization);
     expect(merged.latest_fields.frames.m?.domain).toBe("magnetic_only");
+  });
+
+  it("does not keep stale scene/model content when revision is reused", () => {
+    const prev = makeSessionState({
+      sceneRevision: 1,
+      sceneDocument: {
+        magnetization_assets: [{ id: "mag:free", preset_kind: "random_seeded" }],
+      },
+      scriptBuilder: {
+        revision: 1,
+        geometries: [{ name: "free", magnetization: { preset_kind: "random_seeded" } }],
+      },
+      modelBuilderGraph: {
+        revision: 1,
+        geometries: [{ name: "free", magnetization: { preset_kind: "random_seeded" } }],
+      },
+    });
+    const next = makeSessionState({
+      sceneRevision: 1,
+      sceneDocument: {
+        magnetization_assets: [{ id: "mag:free", preset_kind: "vortex" }],
+      },
+      scriptBuilder: {
+        revision: 1,
+        geometries: [{ name: "free", magnetization: { preset_kind: "vortex" } }],
+      },
+      modelBuilderGraph: {
+        revision: 1,
+        geometries: [{ name: "free", magnetization: { preset_kind: "vortex" } }],
+      },
+    });
+
+    const merged = mergeSessionState(prev, next);
+
+    expect((merged.scene_document as any).magnetization_assets[0].preset_kind).toBe("vortex");
+    expect((merged.script_builder as any).geometries[0].magnetization.preset_kind).toBe("vortex");
+    expect((merged.model_builder_graph as any).geometries[0].magnetization.preset_kind).toBe("vortex");
   });
 });

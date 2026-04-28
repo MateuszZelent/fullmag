@@ -511,7 +511,10 @@ export default function UniversePanel() {
                   Shared-Domain Mesher Policy
                 </div>
                 <div className="mb-3 text-[0.68rem] leading-relaxed text-muted-foreground">
-                  `Airbox Hmax` above controls only the air region. The settings below come from the active runtime mesher policy and affect the conformal shared-domain rebuild for airbox plus magnetic bodies.
+                  These settings constrain the final shared-domain FEM solver mesh. `Airbox Hmax`
+                  above controls only the air region, while the settings below come from the active
+                  runtime mesher policy and affect the conformal rebuild for airbox plus magnetic
+                  bodies.
                 </div>
                 <MeshSettingsPanel
                   options={ctx.meshOptions}

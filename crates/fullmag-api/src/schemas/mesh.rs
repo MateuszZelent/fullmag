@@ -66,6 +66,10 @@ pub struct MeshBuildDiagnosticsResource {
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_quality_summary: Option<Value>,
+    /// Full mesh statistics report for realized solver mesh diagnostics.
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_statistics: Option<Value>,
     /// Detailed latest build summary for diagnostics and inspectors.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]

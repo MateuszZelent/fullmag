@@ -116,7 +116,7 @@ class CurrentTransportTests(unittest.TestCase):
             layer.Ms = 800e3
             layer.Aex = 13e-12
             layer.alpha = 0.01
-            layer.m = fm.uniform(1, 0, 0)
+            layer.m = fm.texture.uniform(1, 0, 0)
 
             fm.current_transport(name="drive", current_density=(0.0, 0.0, 5e10))
             fm.tableautosave(10e-12, ["E_total"])

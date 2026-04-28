@@ -172,8 +172,8 @@ class MeshOptions:
     optimize: str | None = None
     optimize_iters: int = 1
     size_fields: list[dict[str, Any]] = field(default_factory=list)
-    compute_quality: bool = False
-    per_element_quality: bool = False
+    compute_quality: bool = True
+    per_element_quality: bool = True
     # Boundary-layer extrusion settings (None = disabled)
     boundary_layer_count: int | None = None
     boundary_layer_thickness: float | None = None   # target first-layer thickness (SI)

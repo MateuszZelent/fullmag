@@ -20,7 +20,7 @@ def build() -> fm.Problem:
         name="py_layer",
         geometry=layer,
         material=mat,
-        m0=fm.init.random(seed=7),
+        m0=fm.texture.random_seeded(seed=7),
     )
 
     return fm.Problem(

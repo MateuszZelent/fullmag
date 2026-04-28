@@ -76,7 +76,7 @@ class ProblemApiTests(unittest.TestCase):
             name="track",
             geometry=geometry,
             material=material,
-            m0=fm.init.uniform((1.0, 0.0, 0.0)),
+            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
         )
         return fm.Problem(
             name="dw_track",
@@ -180,6 +180,56 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(initial["kind"], "sampled_field")
         self.assertGreater(len(initial["values"]), 0)
         self.assertNotIn("preset_kind", initial)
+
+    def test_problem_to_ir_keeps_preset_texture_for_shared_domain_fem_mesh(self) -> None:
+        geometry = fm.Box(size=(40e-9, 20e-9, 10e-9), name="film")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        magnet = fm.Ferromagnet(
+            name="film",
+            geometry=geometry,
+            material=material,
+            m0=fm.texture.vortex(core_polarity=1, circulation=1),
+        )
+        problem = fm.Problem(
+            name="preset_shared_domain_fem",
+            magnets=[magnet],
+            energy=[fm.Exchange()],
+            study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=10e-9)),
+        )
+
+        with patch(
+            "fullmag.model.problem.build_geometry_assets_for_request",
+            return_value={
+                "fdm_grid_assets": [],
+                "fem_mesh_assets": [],
+                "fem_domain_mesh_asset": {
+                    "mesh_source": None,
+                    "mesh": {
+                        "mesh_name": "study_domain",
+                        "nodes": [
+                            [0.0, 0.0, 0.0],
+                            [10e-9, 0.0, 0.0],
+                            [0.0, 10e-9, 0.0],
+                            [0.0, 0.0, 10e-9],
+                            [20e-9, 20e-9, 20e-9],
+                        ],
+                        "elements": [[0, 1, 2, 3]],
+                        "element_markers": [1],
+                        "boundary_faces": [[0, 1, 2]],
+                        "boundary_markers": [1],
+                    },
+                    "region_markers": [{"geometry_name": "film", "marker": 1}],
+                    "build_report": None,
+                },
+            },
+        ):
+            ir = problem.to_ir(requested_backend=fm.BackendTarget.FEM)
+        initial = ir["magnets"][0]["initial_magnetization"]
+
+        self.assertEqual(initial["kind"], "preset_texture")
+        self.assertEqual(initial["preset_kind"], "vortex")
+        self.assertNotIn("values", initial)
 
     def test_problem_to_ir_materializes_preset_texture_in_object_space_for_translated_geometry(self) -> None:
         geometry = fm.Box(size=(40e-9, 20e-9, 10e-9), name="film").translate((10e-9, 0.0, 0.0))
@@ -334,9 +384,28 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["cpu_threads"], 8)
 
     def test_random_initializer_serializes_to_ir(self) -> None:
-        initializer = fm.init.random(seed=42)
-
-        self.assertEqual(initializer.to_ir(), {"kind": "random_seeded", "seed": 42})
+        initializer = fm.texture.random_seeded(seed=42)
+        self.assertEqual(
+            initializer.to_ir(),
+            {
+                "kind": "preset_texture",
+                "preset_kind": "random_seeded",
+                "preset_params": {"seed": 42},
+                "mapping": {
+                    "space": "object",
+                    "projection": "object_local",
+                    "clamp_mode": "none",
+                },
+                "texture_transform": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                    "pivot": [0.0, 0.0, 0.0],
+                },
+                "ui_label": None,
+                "preview_proxy": "none",
+            },
+        )
 
     def test_magnetization_state_roundtrip_across_formats(self) -> None:
         values = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -430,7 +499,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1.0, 0.0, 0.0)
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         problem = flat_world._build_problem()
         self.assertEqual(problem.name, "study_builder_metadata")
@@ -582,7 +651,7 @@ class ProblemApiTests(unittest.TestCase):
                         "body.Ms = 800e3",
                         "body.Aex = 13e-12",
                         "body.alpha = 0.1",
-                        "body.m = fm.uniform(1, 0, 0)",
+                        "body.m = fm.texture.uniform(1, 0, 0)",
                         "study.run(1e-12)",
                         "",
                     ]
@@ -592,10 +661,10 @@ class ProblemApiTests(unittest.TestCase):
 
             loaded = fm.load_problem_from_script(path)
             draft = export_builder_draft(loaded)
-            self.assertEqual(draft["demag_realization"], "airbox_robin")
+            self.assertEqual(draft["demag_realization"], "poisson_robin")
 
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-            self.assertIn('study.demag(realization="airbox_robin")', rewritten)
+            self.assertIn('study.demag(realization="poisson_robin")', rewritten)
 
     def test_study_shared_domain_mesh_rewrite_uses_build_domain_mesh(self) -> None:
         script = """
@@ -610,7 +679,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.build_mesh()
         study.run(1e-12)
         """
@@ -642,7 +711,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -717,7 +786,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=8e-9, order=1)
         study.build_domain_mesh()
         body.mesh(maximum_element_size=4e-9, order=2)
@@ -765,7 +834,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
@@ -791,12 +860,12 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
         right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
         left.mesh(maximum_element_size=25e-9, order=1)
         right.mesh(maximum_element_size=40e-9, order=1)
         study.build_domain_mesh()
@@ -821,12 +890,12 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
         right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
         left.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
@@ -851,12 +920,12 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
         right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
         left.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
@@ -885,12 +954,12 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
         right = study.geometry(fm.Box(20e-9, 20e-9, 10e-9).translate((30e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
         study.run(1e-12)
         """
 
@@ -966,7 +1035,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1.0, 0.0, 0.0)
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         problem = flat_world._build_problem()
         ir = problem.to_ir(requested_backend=fm.BackendTarget.FDM)
@@ -992,7 +1061,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1.0, 0.0, 0.0)
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         problem = flat_world._build_problem()
         ir = problem.to_ir(requested_backend=fm.BackendTarget.FDM)
@@ -1251,7 +1320,7 @@ class ProblemApiTests(unittest.TestCase):
         track.Ms = 800e3
         track.Aex = 13e-12
         track.alpha = 0.1
-        track.m = fm.uniform(1.0, 0.0, 0.0)
+        track.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         fm.tableautosave(5e-12)
         problem = flat_world._build_problem()
@@ -1273,7 +1342,7 @@ class ProblemApiTests(unittest.TestCase):
         track.Ms = 800e3
         track.Aex = 13e-12
         track.alpha = 0.1
-        track.m = fm.uniform(1.0, 0.0, 0.0)
+        track.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         fm.tableautosave(5e-12, quantities=("time", "mx", "E_total"))
         problem = flat_world._build_problem()
@@ -1448,8 +1517,8 @@ class ProblemApiTests(unittest.TestCase):
 
         assets = ir["geometry_assets"]["fdm_grid_assets"]
         self.assertEqual(len(assets), 1)
-        self.assertEqual(assets[0]["cells"], [66, 66, 23])
-        self.assertEqual(len(assets[0]["active_mask"]), 66 * 66 * 23)
+        self.assertEqual(assets[0]["cells"], [67, 67, 23])
+        self.assertEqual(len(assets[0]["active_mask"]), 67 * 67 * 23)
 
     def test_imported_geometry_supports_anisotropic_scale_in_ir(self) -> None:
         geometry = fm.ImportedGeometry(
@@ -1553,7 +1622,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1.0, 0.0, 0.0)
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         mesh = MeshData(
             nodes=np.asarray(
@@ -1606,7 +1675,7 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1.0, 0.0, 0.0)
+        left.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         right = study.geometry(
             fm.Box(size=(10e-9, 10e-9, 10e-9), name="right").translate((20e-9, 0.0, 0.0)),
@@ -1615,7 +1684,7 @@ class ProblemApiTests(unittest.TestCase):
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1.0, 0.0, 0.0)
+        right.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
         mesh = MeshData(
             nodes=np.asarray(
@@ -1671,8 +1740,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(
             domain_asset["region_markers"],
             [
-                {"geometry_name": "left", "marker": 1},
-                {"geometry_name": "right", "marker": 2},
+                {"geometry_name": "left_geom", "marker": 1},
+                {"geometry_name": "right_geom", "marker": 2},
             ],
         )
 
@@ -1915,7 +1984,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
 
         study.run(1e-12)
         """
@@ -1947,7 +2016,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
 
         study.run(1e-12)
         """
@@ -1984,7 +2053,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
 
         study.run(1e-12)
         """
@@ -2020,7 +2089,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
@@ -2058,7 +2127,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.save("m", every=1e-12)
         study.stages.add_stage(fm.relax_stage(max_steps=25, tol=1e-5, algorithm="llg_overdamped"))
         study.stages.add_run(4e-12)
@@ -2094,7 +2163,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_relax(max_steps=25, solver="rk45", dt=2e-13)
         """
 
@@ -2117,7 +2186,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_minimize(method="ncg", max_steps=30)
         """
 
@@ -2139,7 +2208,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-20e-3, 0.0, 20e-3],
             direction=(1.0, 0.0, 0.0),
@@ -2184,7 +2253,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-10e-3, 10e-3],
             direction=(0.0, 0.0, 1.0),
@@ -2232,7 +2301,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
@@ -2267,7 +2336,7 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
 
         right = study.geometry(
             fm.Box(80e-9, 20e-9, 5e-9).translate((140e-9, 0.0, 0.0)),
@@ -2276,7 +2345,7 @@ class ProblemApiTests(unittest.TestCase):
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
 
         study.run(1e-12)
         """
@@ -2306,7 +2375,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
@@ -2336,7 +2405,7 @@ class ProblemApiTests(unittest.TestCase):
             },
         )["rendered_source"]
 
-        self.assertIn('fm.relax(tol=2e-06, max_steps=250, algorithm="nonlinear_cg", energy_tolerance=3e-12)', rewritten)
+        self.assertIn('fm.relax(algorithm="nonlinear_cg", tol=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
         self.assertIn("fm.run(9e-12)", rewritten)
 
     def test_relaxation_stop_and_field_refresh_serialize_to_ir(self) -> None:
@@ -2383,7 +2452,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.save("m", every=1e-12)
         fm.relax(
             algorithm="llg_overdamped",
@@ -2417,7 +2486,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.run(2.5e-12)
@@ -2442,7 +2511,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=2e-13)
         fm.save("m", every=1e-12)
         fm.relax(tol=1e-4, max_steps=250)
@@ -2470,7 +2539,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.relax(max_steps=250, solver="rk45", dt=2e-13)
         """
 
@@ -2493,7 +2562,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.relax(max_steps=250, algorithm="nonlinear_cg", solver="rk23")
         """
 
@@ -2513,7 +2582,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.minimize(max_steps=100)
         """
 
@@ -2537,7 +2606,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.minimize(method="ncg", max_steps=120)
         """
 
@@ -2558,7 +2627,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.minimize(method="ncg", max_steps=55)
         """
 
@@ -2579,7 +2648,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.minimize(method="bogus")
         """
 
@@ -2599,7 +2668,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=2e-15, max_error=1e-6, integrator="rk23")
         fm.save("m", every=1e-12)
         fm.run(2.5e-12)
@@ -2626,7 +2695,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
@@ -2659,7 +2728,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
@@ -2707,7 +2776,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.relax(max_steps=25)
         fm.run(4e-12)
         """
@@ -2737,7 +2806,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=2).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
@@ -2857,14 +2926,14 @@ class ProblemApiTests(unittest.TestCase):
         left.Ms = 800e3
         left.Aex = 13e-12
         left.alpha = 0.1
-        left.m = fm.uniform(1, 0, 0)
+        left.m = fm.texture.uniform(1, 0, 0)
         left.mesh(maximum_element_size=4e-9, order=1).build()
 
         right = fm.geometry(fm.Box(80e-9, 20e-9, 5e-9).translate((120e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
-        right.m = fm.uniform(1, 0, 0)
+        right.m = fm.texture.uniform(1, 0, 0)
         right.mesh(maximum_element_size=4e-9, order=1).build()
 
         fm.run(1e-12)
@@ -2894,13 +2963,13 @@ class ProblemApiTests(unittest.TestCase):
         a.Ms = 800e3
         a.Aex = 13e-12
         a.alpha = 0.1
-        a.m = fm.uniform(1, 0, 0)
+        a.m = fm.texture.uniform(1, 0, 0)
 
         b = study.geometry(fm.Box(80e-9, 20e-9, 5e-9), name="b")
         b.Ms = 800e3
         b.Aex = 13e-12
         b.alpha = 0.1
-        b.m = fm.uniform(1, 0, 0)
+        b.m = fm.texture.uniform(1, 0, 0)
         b.mesh(maximum_element_size=20e-9, order=2)
 
         study.run(1e-12)
@@ -2936,7 +3005,7 @@ class ProblemApiTests(unittest.TestCase):
         a.Ms = 800e3
         a.Aex = 13e-12
         a.alpha = 0.1
-        a.m = fm.uniform(1, 0, 0)
+        a.m = fm.texture.uniform(1, 0, 0)
         a.mesh(maximum_element_size=4e-9, order=1)
 
         study.run(1e-12)
@@ -2971,7 +3040,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh.build()
 
         study.run(1e-12)
@@ -3005,7 +3074,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
             hmax=20e-9,
             hmin=5e-9,
@@ -3016,6 +3085,10 @@ class ProblemApiTests(unittest.TestCase):
             size_from_curvature=24,
             growth_rate=1.4,
             narrow_regions=3,
+            interface_hmax=3e-9,
+            interface_thickness=6e-9,
+            transition_distance=24e-9,
+            transition_growth=1.2,
             smoothing_steps=4,
             optimize="Netgen",
             optimize_iterations=3,
@@ -3047,6 +3120,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_entry["size_from_curvature"], 24)
         self.assertEqual(mesh_entry["growth_rate"], "1.4")
         self.assertEqual(mesh_entry["narrow_regions"], 3)
+        self.assertEqual(mesh_entry["interface_hmax"], "3e-09")
+        self.assertEqual(mesh_entry["interface_thickness"], "6e-09")
+        self.assertEqual(mesh_entry["transition_distance"], "2.4e-08")
+        self.assertEqual(mesh_entry["transition_growth"], 1.2)
         self.assertEqual(mesh_entry["smoothing_steps"], 4)
         self.assertEqual(mesh_entry["optimize"], "Netgen")
         self.assertEqual(mesh_entry["optimize_iterations"], 3)
@@ -3067,6 +3144,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("optimize_iterations=3", rewritten)
         self.assertIn("maximum_element_growth_rate=1.4", rewritten)
         self.assertIn("narrow_regions=3", rewritten)
+        self.assertIn("interface_hmax=3e-09", rewritten)
+        self.assertIn("interface_thickness=6e-09", rewritten)
+        self.assertIn("transition_distance=2.4e-08", rewritten)
+        self.assertIn("transition_growth=1.2", rewritten)
         self.assertIn('optimize="Netgen"', rewritten)
         self.assertIn("compute_quality=True", rewritten)
         self.assertIn("per_element_quality=True", rewritten)
@@ -3092,7 +3173,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
             hmax=20e-9,
             calibrate_for="general_physics",
@@ -3155,7 +3236,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
 
         study.run(1e-12)
         """
@@ -3185,7 +3266,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.run(1e-12)
         """
 
@@ -3217,7 +3298,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.adaptive_mesh(
             policy="auto",
@@ -3253,7 +3334,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.adaptive_mesh(policy="auto", theta=0.25, max_passes=4, error_tolerance=1e-3)
         fm.run(2e-12)
@@ -3266,7 +3347,7 @@ class ProblemApiTests(unittest.TestCase):
                 loaded = fm.load_problem_from_script(path)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("fm.adaptive_mesh(True, policy=\"auto\", theta=0.25, max_passes=4, error_tolerance=0.001)", rewritten)
+        self.assertIn('fm.adaptive_mesh(True, policy="auto", indicator="geometric_only", target_quantity="auto", convergence_metric="energy_delta", theta=0.25, max_passes=4, error_tolerance=0.001)', rewritten)
 
     def test_flat_solver_accepts_g_factor(self) -> None:
         script = """
@@ -3278,7 +3359,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=1e-13, g=2.115)
         fm.run(1e-12)
         """
@@ -3302,7 +3383,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.run(4e-12)
@@ -3340,7 +3421,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         """
@@ -3377,7 +3458,7 @@ class ProblemApiTests(unittest.TestCase):
                 name="track",
                 geometry=geom,
                 material=material,
-                m0=fm.init.uniform((1.0, 0.0, 0.0)),
+                m0=fm.texture.uniform((1.0, 0.0, 0.0)),
             )
             return fm.Problem(
                 name="cli_problem",
@@ -3457,7 +3538,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.run(4e-12)
@@ -3498,7 +3579,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
@@ -3909,7 +3990,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
@@ -3972,7 +4053,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
+        body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-5e-3, 5e-3],
             settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=20),

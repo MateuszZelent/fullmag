@@ -4,9 +4,58 @@ Source: stno_vortex_mtj_workflow.py
 Entrypoint: flat_relax
 """
 
+import os
+
 import fullmag as fm
 
 study = fm.study("stno_vortex_mtj_workflow")
+
+mesh_profile = os.getenv("FULLMAG_STNO_MESH_PROFILE", "interactive").strip().lower()
+if mesh_profile in {"validation", "fine"}:
+    universe_mesh = dict(
+        maximum_element_size=1.8e-08,
+        minimum_element_size=1.2e-09,
+        growth_rate=1.14,
+    )
+    body_mesh = dict(
+        maximum_element_size=2.2e-09,
+        minimum_element_size=1.2e-09,
+        size_from_curvature=24,
+        smoothing_steps=10,
+        optimize_iterations=8,
+        curvature_factor=0.6,
+        maximum_element_growth_rate=1.14,
+        narrow_regions=4,
+        narrow_region_resolution=1.0,
+        interface_hmax=2.2e-09,
+        interface_thickness=4.5e-09,
+        transition_distance=36e-09,
+        transition_growth=1.14,
+    )
+else:
+    # Interactive STNO default: keep interface refinement, but avoid spreading
+    # isotropic 2 nm tetrahedra through the full shared airbox. The dense FEM
+    # demag path scales roughly as O(nodes^2) in memory.
+    universe_mesh = dict(
+        maximum_element_size=5.5e-08,
+        minimum_element_size=3.0e-09,
+        growth_rate=1.18,
+    )
+    body_mesh = dict(
+        maximum_element_size=8.0e-09,
+        minimum_element_size=2.5e-09,
+        size_from_curvature=24,
+        smoothing_steps=5,
+        optimize_iterations=5,
+        curvature_factor=1.0,
+        maximum_element_growth_rate=1.22,
+        narrow_regions=0,
+        narrow_region_resolution=0.7,
+        interface_hmax=3.0e-09,
+        interface_thickness=6.0e-09,
+        transition_distance=24.0e-09,
+        transition_growth=1.2,
+    )
 
 # Engine
 study.engine("fem")
@@ -18,9 +67,9 @@ study.universe(
     padding=(0, 0, 0),
 )
 study.universe.mesh(
-    maximum_element_size=5.5e-08,
-    minimum_element_size=3e-09,
-    growth_rate=1.18,
+    maximum_element_size=universe_mesh["maximum_element_size"],
+    minimum_element_size=universe_mesh["minimum_element_size"],
+    growth_rate=universe_mesh["growth_rate"],
     grading="geometric",
 )
 study.interactive(True)
@@ -31,7 +80,7 @@ body = study.geometry(fm.Cylinder(radius=5e-08, height=9e-09, name="free"), name
 body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
-body.m = fm.random(seed=2)
+body.m = fm.texture.vortex(circulation=1, core_polarity=1)
 
 # External field
 study.b_ext(0, 0, 1.02)
@@ -41,8 +90,8 @@ study.demag(realization="poisson_robin")
 
 # Mesh
 body.mesh(
-    maximum_element_size=8e-09,
-    minimum_element_size=2.5e-09,
+    maximum_element_size=body_mesh["maximum_element_size"],
+    minimum_element_size=body_mesh["minimum_element_size"],
     order=1,
     # Surface mesher for CAD faces; Gmsh values include 1 MeshAdapt, 2 Automatic,
     # 5 Delaunay, 6 Frontal-Delaunay, 7 BAMG, and 8 Frontal-Quad.
@@ -57,30 +106,30 @@ body.mesh(
     size_factor=1,
     # Curvature sampling density in points per full turn; 0 disables this direct
     # Gmsh control, practical positive values are about 6-64, higher refines curves.
-    size_from_curvature=24,
+    size_from_curvature=body_mesh["size_from_curvature"],
     # Laplacian smoothing passes after meshing; non-negative integer, commonly 0-20.
     # Higher values can improve regularity but may distort small or thin features.
-    smoothing_steps=5,
+    smoothing_steps=body_mesh["smoothing_steps"],
     # Mesh optimizer iteration budget; non-negative integer, commonly 1-10.
     # Used only when an optimizer mode is enabled by the lower meshing layer.
     optimize="Netgen",
-    optimize_iterations=5,
+    optimize_iterations=body_mesh["optimize_iterations"],
     # COMSOL-style curvature factor used when size_from_curvature is 0.
     # Effective range is clamped to 0.05-2.0; smaller values mean stronger refinement.
-    curvature_factor=1.0,
+    curvature_factor=body_mesh["curvature_factor"],
     # Maximum growth ratio between neighboring size targets; positive float,
     # practical range is about 1.1-2.5. Closer to 1 gives smoother/finer transitions.
-    maximum_element_growth_rate=1.22,
+    maximum_element_growth_rate=body_mesh["maximum_element_growth_rate"],
     # Minimum number of elements across narrow gaps; 0 disables explicit narrow-gap
     # refinement. Positive integers are direct counts, usually 1-12.
-    narrow_regions=0,
+    narrow_regions=body_mesh["narrow_regions"],
     # Heuristic narrow-gap refinement strength used when narrow_regions is 0.
     # Positive float clamped to 0.1-2.0; higher requests more elements through gaps.
-    narrow_region_resolution=0.7,
-    interface_hmax=3e-09,
-    interface_thickness=6e-09,
-    transition_distance=24e-09,
-    transition_growth=1.2,
+    narrow_region_resolution=body_mesh["narrow_region_resolution"],
+    interface_hmax=body_mesh["interface_hmax"],
+    interface_thickness=body_mesh["interface_thickness"],
+    transition_distance=body_mesh["transition_distance"],
+    transition_growth=body_mesh["transition_growth"],
     # Enables global mesh quality metrics in the realized mesh report.
     compute_quality=True,
     # Stores per-element quality arrays; useful for diagnostics, heavier than summary

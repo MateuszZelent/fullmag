@@ -83,6 +83,96 @@ fn remap_segment_object_ids(
         .collect()
 }
 
+fn segment_node_indices_from_parts(
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segment: &fullmag_ir::FemObjectSegmentIR,
+) -> Option<Vec<usize>> {
+    mesh_parts
+        .iter()
+        .find(|part| {
+            part.role == fullmag_ir::FemMeshPartRole::MagneticObject
+                && (part.object_id.as_deref() == Some(segment.object_id.as_str())
+                    || part.geometry_id.as_deref() == segment.geometry_id.as_deref())
+                && !part.node_indices.is_empty()
+        })
+        .map(|part| {
+            part.node_indices
+                .iter()
+                .map(|index| *index as usize)
+                .collect()
+        })
+}
+
+fn segment_node_indices(
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segment: &fullmag_ir::FemObjectSegmentIR,
+    total_nodes: usize,
+) -> Result<Vec<usize>, PlanError> {
+    if let Some(indices) = segment_node_indices_from_parts(mesh_parts, segment) {
+        if let Some(index) = indices.iter().copied().find(|index| *index >= total_nodes) {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM object segment '{}' references node index {} outside mesh node count {}",
+                    segment.object_id, index, total_nodes
+                )],
+            });
+        }
+        return Ok(indices);
+    }
+
+    let start = segment.node_start as usize;
+    let end = start.saturating_add(segment.node_count as usize);
+    if end > total_nodes {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM object segment '{}' node range {}..{} exceeds mesh node count {}",
+                segment.object_id, start, end, total_nodes
+            )],
+        });
+    }
+    Ok((start..end).collect())
+}
+
+pub(crate) fn assign_domain_initial_for_segment(
+    target: &mut [[f64; 3]],
+    mesh: &fullmag_ir::MeshIR,
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+    segment: &fullmag_ir::FemObjectSegmentIR,
+    entry: &MagnetPlanningEntry,
+) -> Result<(), PlanError> {
+    let node_indices = segment_node_indices(mesh_parts, segment, mesh.nodes.len())?;
+    if let Some(fullmag_ir::InitialMagnetizationIR::SampledField { values }) =
+        entry.initial_magnetization.as_ref()
+    {
+        if values.len() == mesh.nodes.len() {
+            for node_index in node_indices {
+                target[node_index] = values[node_index];
+            }
+            return Ok(());
+        }
+    }
+
+    let sample_points = node_indices
+        .iter()
+        .map(|index| mesh.nodes[*index])
+        .collect::<Vec<_>>();
+    let values = initial_vectors_for_magnet(
+        &entry.magnet_name,
+        &mesh.mesh_name,
+        entry.initial_magnetization.as_ref(),
+        sample_points.len(),
+        Some(&sample_points),
+        Some(&sample_points),
+    )
+    .map_err(|message| PlanError {
+        reasons: vec![message],
+    })?;
+    for (node_index, value) in node_indices.into_iter().zip(values.into_iter()) {
+        target[node_index] = value;
+    }
+    Ok(())
+}
+
 fn assign_material_ids_to_mesh_parts(
     mesh_parts: &mut [fullmag_ir::FemMeshPartIR],
     magnet_entries: &[MagnetPlanningEntry],
@@ -605,8 +695,7 @@ pub(crate) fn plan_fem(
     let geometry_to_object_id = geometry_to_object_id_map(&magnet_entries);
     let (mesh, raw_object_segments, mesh_source, initial_magnetization) =
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
-            let total_domain_nodes = domain_asset.mesh.nodes.len();
-            let mut initial = vec![[0.0, 0.0, 0.0]; total_domain_nodes];
+            let mut initial = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
                 let Some(segment) = domain_asset
                     .object_segments
@@ -620,45 +709,13 @@ pub(crate) fn plan_fem(
                         )],
                     });
                 };
-                // If initial_magnetization is a full-domain snapshot (values.len() ==
-                // total_domain_nodes), slice out this segment's range so that continuation
-                // state from a SharedDomainMeshWithAir solve can be used as per-body
-                // initial conditions without a length-mismatch error.
-                let sliced_sampled_field;
-                let effective_initial = match entry.initial_magnetization.as_ref() {
-                    Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
-                        if values.len() == total_domain_nodes
-                            && total_domain_nodes != segment.node_count as usize =>
-                    {
-                        let seg_start = segment.node_start as usize;
-                        let seg_end = seg_start + segment.node_count as usize;
-                        sliced_sampled_field = fullmag_ir::InitialMagnetizationIR::SampledField {
-                            values: values[seg_start..seg_end].to_vec(),
-                        };
-                        Some(&sliced_sampled_field)
-                    }
-                    other => other,
-                };
-                let values = initial_vectors_for_magnet(
-                    &entry.magnet_name,
-                    &domain_asset.mesh.mesh_name,
-                    effective_initial,
-                    segment.node_count as usize,
-                    Some(
-                        &domain_asset.mesh.nodes[segment.node_start as usize
-                            ..(segment.node_start + segment.node_count) as usize],
-                    ),
-                    Some(
-                        &domain_asset.mesh.nodes[segment.node_start as usize
-                            ..(segment.node_start + segment.node_count) as usize],
-                    ),
-                )
-                .map_err(|message| PlanError {
-                    reasons: vec![message],
-                })?;
-                let start = segment.node_start as usize;
-                let end = start + values.len();
-                initial[start..end].copy_from_slice(&values);
+                assign_domain_initial_for_segment(
+                    &mut initial,
+                    &domain_asset.mesh,
+                    &domain_asset.mesh_parts,
+                    segment,
+                    entry,
+                )?;
             }
             (
                 domain_asset.mesh.clone(),
@@ -1418,8 +1475,7 @@ pub(crate) fn plan_fem_eigen(
     let geometry_to_object_id = geometry_to_object_id_map(&magnet_entries);
     let (mesh, raw_object_segments, mesh_source, equilibrium_magnetization) =
         if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
-            let total_domain_nodes = domain_asset.mesh.nodes.len();
-            let mut equilibrium = vec![[0.0, 0.0, 0.0]; total_domain_nodes];
+            let mut equilibrium = vec![[0.0, 0.0, 0.0]; domain_asset.mesh.nodes.len()];
             for entry in &magnet_entries {
                 let Some(segment) = domain_asset
                     .object_segments
@@ -1433,42 +1489,13 @@ pub(crate) fn plan_fem_eigen(
                         )],
                     });
                 };
-                // If initial_magnetization is a full-domain snapshot, slice this segment's range.
-                let sliced_sampled_field;
-                let effective_initial = match entry.initial_magnetization.as_ref() {
-                    Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
-                        if values.len() == total_domain_nodes
-                            && total_domain_nodes != segment.node_count as usize =>
-                    {
-                        let seg_start = segment.node_start as usize;
-                        let seg_end = seg_start + segment.node_count as usize;
-                        sliced_sampled_field = fullmag_ir::InitialMagnetizationIR::SampledField {
-                            values: values[seg_start..seg_end].to_vec(),
-                        };
-                        Some(&sliced_sampled_field)
-                    }
-                    other => other,
-                };
-                let values = initial_vectors_for_magnet(
-                    &entry.magnet_name,
-                    &domain_asset.mesh.mesh_name,
-                    effective_initial,
-                    segment.node_count as usize,
-                    Some(
-                        &domain_asset.mesh.nodes[segment.node_start as usize
-                            ..(segment.node_start + segment.node_count) as usize],
-                    ),
-                    Some(
-                        &domain_asset.mesh.nodes[segment.node_start as usize
-                            ..(segment.node_start + segment.node_count) as usize],
-                    ),
-                )
-                .map_err(|message| PlanError {
-                    reasons: vec![message],
-                })?;
-                let start = segment.node_start as usize;
-                let end = start + values.len();
-                equilibrium[start..end].copy_from_slice(&values);
+                assign_domain_initial_for_segment(
+                    &mut equilibrium,
+                    &domain_asset.mesh,
+                    &domain_asset.mesh_parts,
+                    segment,
+                    entry,
+                )?;
             }
             (
                 domain_asset.mesh.clone(),

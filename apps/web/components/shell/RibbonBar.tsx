@@ -137,7 +137,9 @@ interface RibbonBarProps {
   onOpenMeshStatistics?: () => void;
   onOpenMeshQuality?: () => void;
   onOpenMeshSizeSettings?: () => void;
+  onOpenMeshTransitionSettings?: () => void;
   onOpenMeshMethodSettings?: () => void;
+  onOpenMeshOptimizationSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   selectedObjectId?: string | null;
   sceneObjectCount?: number;

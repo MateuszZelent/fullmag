@@ -59,7 +59,7 @@ class QuantityApiTests(unittest.TestCase):
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.01
-        body.m = fm.uniform(1.0, 0.0, 0.0)
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
     def test_result_series_and_last_support_global_and_region_scalars(self) -> None:
         result = _result(

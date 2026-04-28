@@ -23,6 +23,7 @@ except ImportError:
 from fullmag import _core as fullmag_core
 from fullmag.meshing.asset_pipeline import (
     SharedDomainBuildReport,
+    _build_shared_domain_build_report,
     _build_field_stack,
     _build_interface_fields,
     _build_object_bulk_fields,
@@ -37,9 +38,11 @@ from fullmag.meshing.asset_pipeline import (
     realize_fem_mesh_asset,
 )
 from fullmag.meshing._mesh_targets import (
+    MeshOperationStatus,
     ResolvedAirboxTarget,
     ResolvedSharedDomainTargets,
     ResolvedSharedObjectTarget,
+    ThinFilmDiagnostic,
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
@@ -351,6 +354,143 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(stats["scopes"][0]["role"], "air")
         self.assertEqual(stats["scopes"][0]["label"], "Airbox")
         self.assertAlmostEqual(stats["global"]["volume"]["ratio"], 1.0)
+        self.assertEqual(
+            {
+                "global_elements": stats["global"]["element_count"],
+                "airbox_elements": stats["scopes"][0]["element_count"],
+                "worst_element_count": len(stats["worst_elements"]),
+                "worst_element_marker": stats["worst_elements"][0]["marker"],
+                "worst_element_gamma": stats["worst_elements"][0]["gamma"],
+            },
+            {
+                "global_elements": 1,
+                "airbox_elements": 1,
+                "worst_element_count": 1,
+                "worst_element_marker": 0,
+                "worst_element_gamma": 0.25,
+            },
+        )
+
+    def test_remesh_cli_payload_carries_build_truth_and_mesh_statistics(self) -> None:
+        mesh = self._unit_tet_mesh()
+        report = SharedDomainBuildReport(
+            build_mode="component_aware",
+            fallbacks_triggered=["swept_prism_fallback"],
+            effective_airbox_target=ResolvedAirboxTarget(
+                hmax=40e-9,
+                hmin=4e-9,
+                growth_rate=1.3,
+            ),
+            effective_per_object_targets={
+                "free_layer": ResolvedSharedObjectTarget(
+                    geometry_name="free_layer",
+                    marker=1,
+                    hmax=8e-9,
+                    source="recipe_override",
+                )
+            },
+            used_size_field_kinds=["Box"],
+            operation_statuses=[
+                MeshOperationStatus(
+                    kind="swept_prism",
+                    scope="free_layer",
+                    requested=True,
+                    status="fallback",
+                    requested_method="swept_prism",
+                    actual_method="free_tetrahedral",
+                    reason="airbox combined-domain swept workflow is not implemented",
+                )
+            ],
+            thin_film_diagnostics=[
+                ThinFilmDiagnostic(
+                    geometry_name="free_layer",
+                    scope="free_layer",
+                    is_thin_film=True,
+                    thickness=9e-9,
+                    lateral_size=100e-9,
+                    aspect_ratio=11.1,
+                    requested_layers=3,
+                    estimated_layers_from_hmax=1,
+                    hmax_to_thickness_ratio=0.89,
+                    requested_method="swept_prism",
+                    actual_method="free_tetrahedral",
+                    warnings=["requested swept/prism meshing fell back to free tetrahedral"],
+                )
+            ],
+        )
+        report_payload = report.to_dict()
+
+        payload = _mesh_result_payload(
+            mesh,
+            mesh_name="shared-domain",
+            generation_mode="shared_domain_manual_remesh",
+            mesh_provenance={
+                "shared_domain_build_report": report_payload,
+                "operation_statuses": report_payload["operation_statuses"],
+                "thin_film_diagnostics": report_payload["thin_film_diagnostics"],
+            },
+        )
+
+        self.assertEqual(payload["mesh_statistics"]["global"]["element_count"], 1)
+        self.assertEqual(
+            payload["mesh_provenance"]["operation_statuses"][0]["status"],
+            "fallback",
+        )
+        self.assertEqual(
+            payload["mesh_provenance"]["thin_film_diagnostics"][0]["actual_method"],
+            "free_tetrahedral",
+        )
+
+    def test_shared_domain_report_includes_truth_first_operation_statuses(self) -> None:
+        geometry = fm.Cylinder(radius=50e-9, height=9e-9, name="free_layer")
+        mesh_options = MeshOptions(
+            algorithm_3d=ALGO_3D_MMG3D,
+            size_fields=[{"kind": "Box", "params": {"VIn": 8e-9}}],
+            smoothing_steps=0,
+            optimize=None,
+            optimize_iters=3,
+            mesh_strategy="swept_prism",
+            through_thickness_elements=3,
+        )
+
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=AirboxOptions(maximum_element_size=100e-9),
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=list(mesh_options.size_fields),
+            region_markers=[{"geometry_name": "free_layer", "marker": 1}],
+            build_mode="single_geometry_occ",
+            fallbacks_triggered=[],
+            mesh_options=mesh_options,
+        )
+        payload = report.to_dict()
+        statuses = {
+            (entry["kind"], entry["scope"]): entry
+            for entry in payload["operation_statuses"]  # type: ignore[index]
+        }
+
+        self.assertEqual(statuses[("optimizer", "global")]["status"], "skipped")
+        self.assertEqual(statuses[("optimizer", "global")]["details"]["optimize_iters"], 3)
+        self.assertEqual(statuses[("algorithm_3d", "global")]["status"], "fallback")
+        self.assertEqual(statuses[("algorithm_3d", "global")]["requested_method"], "MMG3D")
+        self.assertEqual(statuses[("algorithm_3d", "global")]["actual_method"], "HXT")
+        self.assertEqual(statuses[("swept_prism", "free_layer")]["status"], "fallback")
+        self.assertIn("airbox", statuses[("swept_prism", "free_layer")]["reason"])
+
+        diagnostics = payload["thin_film_diagnostics"]  # type: ignore[index]
+        self.assertEqual(len(diagnostics), 1)
+        diagnostic = diagnostics[0]
+        self.assertEqual(diagnostic["geometry_name"], "free_layer")
+        self.assertTrue(diagnostic["is_thin_film"])
+        self.assertEqual(diagnostic["requested_layers"], 3)
+        self.assertEqual(diagnostic["estimated_layers_from_hmax"], 1)
+        self.assertEqual(diagnostic["actual_method"], "free_tetrahedral")
+        warning_text = "\n".join(diagnostic["warnings"])
+        self.assertIn("below 4", warning_text)
+        self.assertIn("smoothing is disabled", warning_text)
+        self.assertIn("fell back", warning_text)
 
     def test_remesh_cli_size_field_parser_builds_canonical_arrays(self) -> None:
         size_field = _size_field_from_dict(

@@ -8,9 +8,11 @@ use axum::{
     Json, Router,
 };
 use base64::Engine;
-use fullmag_authoring::{MagnetizationAsset, SceneDocument};
+use fullmag_authoring::{
+    normalize_scene_document_magnetization_assets, MagnetizationAsset, SceneDocument,
+};
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{generate_random_unit_vectors, sample_preset_texture, TextureSamplePoint};
+use fullmag_plan::{sample_preset_texture, TextureSamplePoint};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
@@ -811,7 +813,8 @@ where
             &state.current_workspace_root,
             Path::new(next.session.script_path.trim()),
         ) {
-            Ok(scene_document) => {
+            Ok(mut scene_document) => {
+                normalize_scene_document_magnetization_assets(&mut scene_document);
                 next.builder_adapter = scene_document_builder_projection(&scene_document).ok();
                 next.scene_document = Some(scene_document);
             }
@@ -1291,11 +1294,12 @@ pub(crate) async fn get_or_load_current_live_scene_document(
         .as_mut()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
-        let current_scene = load_scene_document_state(
+        let mut current_scene = load_scene_document_state(
             &state.repo_root,
             &state.current_workspace_root,
             Path::new(snapshot.session.script_path.trim()),
         )?;
+        normalize_scene_document_magnetization_assets(&mut current_scene);
         snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
         snapshot.scene_document = Some(current_scene);
     }
@@ -1309,6 +1313,7 @@ pub(crate) async fn commit_current_live_scene_document(
     state: &Arc<AppState>,
     mut scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
+    normalize_scene_document_magnetization_assets(&mut scene_document);
     let preset_texture_count = scene_document
         .magnetization_assets
         .iter()
@@ -1337,11 +1342,12 @@ pub(crate) async fn commit_current_live_scene_document(
             .as_mut()
             .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         if snapshot.scene_document.is_none() && !snapshot.session.script_path.trim().is_empty() {
-            let current_scene = load_scene_document_state(
+            let mut current_scene = load_scene_document_state(
                 &state.repo_root,
                 &state.current_workspace_root,
                 Path::new(snapshot.session.script_path.trim()),
             )?;
+            normalize_scene_document_magnetization_assets(&mut current_scene);
             snapshot.builder_adapter = scene_document_builder_projection(&current_scene).ok();
             snapshot.scene_document = Some(current_scene);
         }
@@ -1645,23 +1651,6 @@ fn apply_live_scene_magnetization_asset(
     stats: &mut LiveSceneMagnetizationRebuildStats,
 ) -> bool {
     match asset.kind.as_str() {
-        "uniform" => {
-            let value = parse_uniform_value(asset).unwrap_or([1.0, 0.0, 0.0]);
-            for &node in node_indices {
-                vectors[node] = value;
-            }
-            stats.rewritten_nodes += node_indices.len();
-            true
-        }
-        "random" | "random_seeded" => {
-            let seed = asset.seed.unwrap_or(1);
-            let random = generate_random_unit_vectors(seed, node_indices.len());
-            for (slot, value) in node_indices.iter().zip(random.iter()) {
-                vectors[*slot] = *value;
-            }
-            stats.rewritten_nodes += node_indices.len();
-            true
-        }
         "preset_texture" => {
             let preset_kind = asset.preset_kind.as_deref().unwrap_or("uniform");
             let params = asset
@@ -1727,14 +1716,6 @@ fn apply_live_scene_magnetization_asset(
             false
         }
     }
-}
-
-fn parse_uniform_value(asset: &MagnetizationAsset) -> Option<[f64; 3]> {
-    let value = asset.value.as_ref()?;
-    if value.len() < 3 {
-        return None;
-    }
-    Some([value[0], value[1], value[2]])
 }
 
 fn existing_live_magnetization_vectors(
@@ -1829,7 +1810,7 @@ fn scene_magnetization_summary(scene: &SceneDocument) -> String {
     let mut interesting = Vec::new();
     for asset in &scene.magnetization_assets {
         *counts.entry(asset.kind.clone()).or_insert(0) += 1;
-        if asset.kind == "preset_texture" || asset.kind == "random" || asset.kind == "uniform" {
+        if asset.kind == "preset_texture" {
             let preset_param_keys = asset
                 .preset_params
                 .as_ref()

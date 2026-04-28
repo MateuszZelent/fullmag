@@ -105,6 +105,9 @@ function adaptDiagnostics(
   const rawQualitySummary = (diagnostics.mesh_quality_summary ?? null) as
     | Record<string, unknown>
     | null;
+  const rawMeshStatistics = (diagnostics.mesh_statistics ?? null) as
+    | Record<string, unknown>
+    | null;
   const rawLastBuildSummary = (diagnostics.last_build_summary ?? null) as
     | Record<string, unknown>
     | null;
@@ -119,6 +122,7 @@ function adaptDiagnostics(
     last_build_error: diagnostics.last_build_error ?? null,
     pipeline_phase_count: pipelinePhaseCount,
     raw_quality_summary: rawQualitySummary,
+    raw_mesh_statistics: rawMeshStatistics,
     raw_last_build_summary: rawLastBuildSummary,
     raw_pipeline_status: rawPipelineStatus,
   };

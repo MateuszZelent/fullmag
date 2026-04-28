@@ -2079,6 +2079,8 @@ export interface components {
             mesh_pipeline_status?: Record<string, never> | null;
             /** @description Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only. */
             mesh_quality_summary?: Record<string, never> | null;
+            /** @description Full mesh statistics report for realized solver mesh diagnostics. */
+            mesh_statistics?: Record<string, never> | null;
         };
         MeshBuildHistoryResource: {
             history: Record<string, never>[];

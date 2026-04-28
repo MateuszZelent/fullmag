@@ -23,6 +23,7 @@ import {
   ensureObjectPhysicsStack,
   magneticInteractionLabel,
 } from "@/lib/session/magneticPhysics";
+import { buildDefaultScriptBuilderMagnetization } from "@/lib/session/magnetizationCanonical";
 import {
   buildPhysicsCapabilityView,
   type PhysicsCapabilityViewEntry,
@@ -951,15 +952,7 @@ export function buildFullmagModelTree(opts: {
                 Dind: null,
               },
               physics_stack: ensureObjectPhysicsStack(null),
-              magnetization: {
-                kind: "uniform",
-                value: [0, 0, 1],
-                seed: null,
-                source_path: null,
-                source_format: null,
-                dataset: null,
-                sample_index: null,
-              },
+              magnetization: buildDefaultScriptBuilderMagnetization(),
               mesh: object.mesh_override,
             },
           tree: {
@@ -2388,15 +2381,24 @@ function _magnetizationLabel(
   mag: ScriptBuilderMagnetizationEntry,
 ): string {
   if (mag.kind === "preset_texture") {
+    if (mag.preset_kind === "uniform") {
+      const direction = Array.isArray(mag.preset_params?.direction)
+        ? mag.preset_params.direction
+        : mag.value;
+      if (Array.isArray(direction) && direction.length >= 3) {
+        return `(${direction.slice(0, 3).map((v) => Number(v).toFixed(2)).join(", ")})`;
+      }
+    }
+    if (mag.preset_kind === "random_seeded") {
+      const seed =
+        typeof mag.preset_params?.seed === "number"
+          ? mag.preset_params.seed
+          : mag.seed;
+      return seed != null ? `random(seed=${seed})` : "random";
+    }
     return mag.ui_label ?? mag.preset_kind ?? "preset_texture";
   }
-  if (mag.kind === "uniform" && mag.value) {
-    return `(${mag.value.map((v) => v.toFixed(2)).join(", ")})`;
-  }
-  if (mag.kind === "random") {
-    return mag.seed != null ? `random(seed=${mag.seed})` : "random";
-  }
-  if (mag.kind === "file" && mag.source_path) {
+  if (mag.kind === "sampled" && mag.source_path) {
     const basename = mag.source_path.split("/").pop() ?? mag.source_path;
     return basename;
   }

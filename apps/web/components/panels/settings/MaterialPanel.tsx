@@ -39,6 +39,10 @@ import {
   fitTextureToObject,
   resetTextureTransform,
 } from "../../../lib/session/magnetizationAssetActions";
+import {
+  buildDefaultMagnetizationAsset,
+  normalizeMagnetizationAsset,
+} from "../../../lib/session/magnetizationCanonical";
 import { textureScaleSemantics } from "../../../lib/textureTransform";
 import { findSceneObjectByNodeId } from "./objectSelection";
 import {
@@ -67,32 +71,7 @@ function fallbackMaterial(name: string): SceneMaterialAsset {
 }
 
 function fallbackMagnetization(name: string): MagnetizationAsset {
-  return {
-    id: `mag:${name}`,
-    name: `${name} magnetization`,
-    kind: "uniform",
-    value: [0, 0, 1],
-    seed: null,
-    source_path: null,
-    source_format: null,
-    dataset: null,
-    sample_index: null,
-    mapping: {
-      space: "object",
-      projection: "object_local",
-      clamp_mode: "none",
-    },
-    texture_transform: {
-      translation: [0, 0, 0],
-      rotation_quat: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-      pivot: [0, 0, 0],
-    },
-    preset_kind: null,
-    preset_params: null,
-    preset_version: null,
-    ui_label: null,
-  };
+  return buildDefaultMagnetizationAsset(name);
 }
 
 type NumericTransformMode = "translate" | "rotate" | "scale";
@@ -216,7 +195,11 @@ export default function MaterialPanel({
 
   const materialAsset = material ?? (sceneObject ? fallbackMaterial(sceneObject.name) : null);
   const magnetizationAsset =
-    magnetization ?? (sceneObject ? fallbackMagnetization(sceneObject.name) : null);
+    magnetization
+      ? normalizeMagnetizationAsset(magnetization)
+      : sceneObject
+        ? fallbackMagnetization(sceneObject.name)
+        : null;
   const pivotLockedToVortexCore =
     magnetizationAsset?.kind === "preset_texture" &&
     magnetizationAsset?.preset_kind === "vortex";
@@ -257,7 +240,9 @@ export default function MaterialPanel({
         return {
           ...prev,
           magnetization_assets: prev.magnetization_assets.map((entry) =>
-            entry.id === sceneObject.magnetization_ref ? updater(entry) : entry,
+            entry.id === sceneObject.magnetization_ref
+              ? normalizeMagnetizationAsset(updater(normalizeMagnetizationAsset(entry)))
+              : entry,
           ),
         };
       });
@@ -571,9 +556,22 @@ export default function MaterialPanel({
     const val = parseFloat(valStr);
     if (Number.isNaN(val)) return;
     updateMagnetization((asset) => {
-      const value = Array.isArray(asset.value) ? [...asset.value] : [0, 0, 1];
-      value[idx] = val;
-      return { ...asset, value };
+      const current = Array.isArray(asset.preset_params?.direction)
+        ? [...asset.preset_params.direction]
+        : [0, 0, 1];
+      const direction = [Number(current[0] ?? 0), Number(current[1] ?? 0), Number(current[2] ?? 1)] as [number, number, number];
+      direction[idx] = val;
+      return {
+        ...asset,
+        kind: "preset_texture",
+        preset_kind: "uniform",
+        preset_params: {
+          ...(asset.preset_params ?? {}),
+          direction,
+        },
+        preset_version: asset.preset_version ?? 1,
+        ui_label: asset.ui_label ?? "Uniform",
+      };
     });
   };
 
@@ -591,12 +589,28 @@ export default function MaterialPanel({
     }));
   };
 
-  const handleMagNum = (key: "sample_index" | "seed", valStr: string) => {
+  const handleMagNum = (key: "sample_index", valStr: string) => {
     const val = Number.parseInt(valStr, 10);
     const parsed = Number.isNaN(val) ? null : val;
     updateMagnetization((asset) => ({
       ...asset,
       [key]: parsed,
+    }));
+  };
+
+  const handleRandomSeed = (valStr: string) => {
+    const val = Number.parseInt(valStr, 10);
+    const parsed = Number.isNaN(val) ? 1 : val;
+    updateMagnetization((asset) => ({
+      ...asset,
+      kind: "preset_texture",
+      preset_kind: "random_seeded",
+      preset_params: {
+        ...(asset.preset_params ?? {}),
+        seed: parsed,
+      },
+      preset_version: asset.preset_version ?? 1,
+      ui_label: asset.ui_label ?? "Random",
     }));
   };
 
@@ -1030,7 +1044,6 @@ export default function MaterialPanel({
 
   const mat = materialAsset.properties;
   const mag = magnetizationAsset;
-  const value = Array.isArray(mag.value) ? mag.value : [0, 0, 1];
   const presetParams = mag.preset_params ?? selectedPresetDescriptor?.defaultParams ?? {};
   const textureTransform = mag.texture_transform ?? {
     ...DEFAULT_TEXTURE_TRANSFORM,
@@ -1401,15 +1414,15 @@ export default function MaterialPanel({
               </div>
               <SelectField
                 label="Texture Kind"
-                value={mag.kind}
+                value={mag.kind === "sampled" ? "sampled" : "preset_texture"}
                 onchange={(val) =>
                   updateMagnetization((asset) => ({
                     ...asset,
                     kind: val,
-                    value: val === "uniform" ? (asset.value ?? [0, 0, 1]) : null,
-                    seed: val === "random" ? (asset.seed ?? 1) : null,
-                    source_path: val === "file" || val === "sampled" ? asset.source_path : null,
-                    source_format: val === "file" || val === "sampled" ? asset.source_format ?? null : null,
+                    value: null,
+                    seed: null,
+                    source_path: val === "sampled" ? asset.source_path : null,
+                    source_format: val === "sampled" ? asset.source_format ?? null : null,
                     dataset: val === "sampled" ? asset.dataset ?? null : null,
                     sample_index: val === "sampled" ? asset.sample_index ?? null : null,
                     preset_kind: val === "preset_texture" ? asset.preset_kind ?? "uniform" : null,
@@ -1433,38 +1446,33 @@ export default function MaterialPanel({
                   }))
                 }
                 options={[
-                  { label: "Uniform (Vector)", value: "uniform" },
-                  { label: "Random", value: "random" },
-                  { label: "File Source", value: "file" },
-                  { label: "Sampled Dataset", value: "sampled" },
                   { label: "Preset Texture", value: "preset_texture" },
+                  { label: "Sampled Dataset", value: "sampled" },
                 ]}
                 tooltip="Spatial distribution of the starting magnetization vectors."
               />
 
-              {mag.kind === "uniform" ? (
+              {mag.kind === "preset_texture" && selectedPresetKind === "uniform" ? (
                 <div className="grid grid-cols-3 gap-3">
-                  <TextField label="m_x" defaultValue={value[0]} onchange={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
-                  <TextField label="m_y" defaultValue={value[1]} onchange={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
-                  <TextField label="m_z" defaultValue={value[2]} onchange={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
+                  <TextField label="m_x" defaultValue={String(Number((presetParams.direction as number[] | undefined)?.[0] ?? 0))} onchange={(e) => handleMagUniform(0, e.target.value)} mono tooltip="Normalized X component." />
+                  <TextField label="m_y" defaultValue={String(Number((presetParams.direction as number[] | undefined)?.[1] ?? 0))} onchange={(e) => handleMagUniform(1, e.target.value)} mono tooltip="Normalized Y component." />
+                  <TextField label="m_z" defaultValue={String(Number((presetParams.direction as number[] | undefined)?.[2] ?? 1))} onchange={(e) => handleMagUniform(2, e.target.value)} mono tooltip="Normalized Z component." />
                 </div>
               ) : null}
 
-              {(mag.kind === "file" || mag.kind === "sampled") ? (
+              {mag.kind === "sampled" ? (
                 <div className="flex flex-col gap-3">
                   <TextField label="Source File Path" placeholder="e.g., m0.ovf or ground_state.vtk" defaultValue={mag.source_path ?? ""} onchange={(e) => handleMagStr("source_path", e.target.value)} mono tooltip="Path to an .ovf, .omf, or .vtk file containing the continuous vector field." />
                   <div className="grid grid-cols-2 gap-3">
                     <TextField label="Source Format" placeholder="(optional)" defaultValue={mag.source_format ?? ""} onchange={(e) => handleMagStr("source_format", e.target.value)} mono tooltip="Optional explicit parser hint." />
                     <TextField label="Dataset Key" placeholder="(optional)" defaultValue={mag.dataset ?? ""} onchange={(e) => handleMagStr("dataset", e.target.value)} mono tooltip="Specify the internal dataset name if the file contains multiple." />
                   </div>
-                  {mag.kind === "sampled" ? (
-                    <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onchange={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
-                  ) : null}
+                  <TextField label="Sample Index" placeholder="(optional)" defaultValue={mag.sample_index?.toString() ?? ""} onchange={(e) => handleMagNum("sample_index", e.target.value)} mono tooltip="Index within the dataset if storing a time series." />
                 </div>
               ) : null}
 
-              {mag.kind === "random" ? (
-                <TextField label="Random Seed" placeholder="Random (Auto)" defaultValue={mag.seed?.toString() ?? ""} onchange={(e) => handleMagNum("seed", e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
+              {mag.kind === "preset_texture" && selectedPresetKind === "random_seeded" ? (
+                <TextField label="Random Seed" placeholder="Random (Seeded)" defaultValue={String(Number(presetParams.seed ?? 1))} onchange={(e) => handleRandomSeed(e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
               ) : null}
 
               {mag.kind === "preset_texture" && selectedPresetDescriptor ? (

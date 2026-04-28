@@ -30,7 +30,7 @@ def build() -> fm.Problem:
         name="body",
         geometry=body,
         material=material,
-        m0=fm.init.uniform((0.0, 0.0, 1.0)),
+        m0=fm.texture.uniform((0.0, 0.0, 1.0)),
     )
 
     return fm.Problem(

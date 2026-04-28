@@ -54,7 +54,7 @@ free = study.geometry(
 free.Ms = 700e3
 free.Aex = 1.2e-11
 free.alpha = 0.01
-free.m = fm.uniform(1, 0, 0)
+free.m = fm.texture.uniform(1, 0, 0)
 
 
 # ── 3. Mesh ──────────────────────────────────────────────

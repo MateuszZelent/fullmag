@@ -550,6 +550,6 @@ def _mesh_options_from_runtime_metadata(
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
         optimize_iters=int(raw_mesh_options.get("optimize_iterations", 1)),
         size_fields=size_fields,
-        compute_quality=bool(raw_mesh_options.get("compute_quality", False)),
-        per_element_quality=bool(raw_mesh_options.get("per_element_quality", False)),
+        compute_quality=bool(raw_mesh_options.get("compute_quality", True)),
+        per_element_quality=bool(raw_mesh_options.get("per_element_quality", True)),
     )

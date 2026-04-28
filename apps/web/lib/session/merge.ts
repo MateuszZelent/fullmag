@@ -87,14 +87,36 @@ function sameSceneRevision(
   lhs: SceneDocument | null | undefined,
   rhs: SceneDocument | null | undefined,
 ): boolean {
-  return Boolean(lhs && rhs && lhs.revision === rhs.revision);
+  return Boolean(
+    lhs &&
+    rhs &&
+    lhs.revision === rhs.revision &&
+    JSON.stringify(lhs) === JSON.stringify(rhs),
+  );
 }
 
 function sameScriptRevision(
   lhs: ScriptBuilderState | null | undefined,
   rhs: ScriptBuilderState | null | undefined,
 ): boolean {
-  return Boolean(lhs && rhs && lhs.revision === rhs.revision);
+  return Boolean(
+    lhs &&
+    rhs &&
+    lhs.revision === rhs.revision &&
+    JSON.stringify(lhs) === JSON.stringify(rhs),
+  );
+}
+
+function sameRevisionAndContent(
+  lhs: { revision?: number | null } | null | undefined,
+  rhs: { revision?: number | null } | null | undefined,
+): boolean {
+  return Boolean(
+    lhs &&
+    rhs &&
+    lhs.revision === rhs.revision &&
+    JSON.stringify(lhs) === JSON.stringify(rhs),
+  );
 }
 
 function sameVec3(
@@ -448,7 +470,7 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
   } else if (
     prev.model_builder_graph &&
     merged.model_builder_graph &&
-    prev.model_builder_graph.revision === merged.model_builder_graph.revision
+    sameRevisionAndContent(prev.model_builder_graph, merged.model_builder_graph)
   ) {
     merged.model_builder_graph = prev.model_builder_graph;
   }

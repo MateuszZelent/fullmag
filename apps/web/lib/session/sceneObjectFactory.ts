@@ -5,6 +5,7 @@ import {
   evaluateGeometryPreset,
   type GeometryPresetKind,
 } from "@/lib/geometryPresetCatalog";
+import { buildDefaultMagnetizationAsset } from "@/lib/session/magnetizationCanonical";
 import type {
   MagnetizationAsset,
   SceneMaterialAsset,
@@ -62,32 +63,7 @@ export function defaultSceneMaterialAsset(name: string): SceneMaterialAsset {
 }
 
 export function defaultSceneMagnetizationAsset(name: string): MagnetizationAsset {
-  return {
-    id: defaultSceneMagnetizationId(name),
-    name: `${name} magnetization`,
-    kind: "uniform",
-    value: [0, 0, 1],
-    seed: null,
-    source_path: null,
-    source_format: null,
-    dataset: null,
-    sample_index: null,
-    mapping: {
-      space: "object",
-      projection: "object_local",
-      clamp_mode: "clamp",
-    },
-    texture_transform: {
-      translation: [0, 0, 0],
-      rotation_quat: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-      pivot: [0, 0, 0],
-    },
-    preset_kind: null,
-    preset_params: null,
-    preset_version: null,
-    ui_label: null,
-  };
+  return buildDefaultMagnetizationAsset(name);
 }
 
 export function createSceneObjectFromGeometryPreset(

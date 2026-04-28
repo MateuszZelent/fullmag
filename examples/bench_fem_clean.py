@@ -49,7 +49,7 @@ body = study.geometry(
 body.Ms = 700_000
 body.Aex = 1.2e-11
 body.alpha = 0.01
-body.m = fm.random(seed=11)  # type: ignore[assignment]
+body.m = fm.texture.random_seeded(seed=11)  # type: ignore[assignment]
 
 study.b_ext(0, 0, 0.02)
 study.demag(realization="poisson_robin")

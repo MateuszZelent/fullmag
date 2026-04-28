@@ -157,7 +157,6 @@ fn apply_inverse_transform(point: [f64; 3], transform: &TextureTransform3DIR) ->
         ];
     }
     p = rotate_point_by_quat(p, inv_quat);
-    p = add(p, pivot);
     let sx = if transform.scale[0].abs() > 1e-30 {
         transform.scale[0]
     } else {
@@ -173,7 +172,7 @@ fn apply_inverse_transform(point: [f64; 3], transform: &TextureTransform3DIR) ->
     } else {
         1.0
     };
-    [p[0] / sx, p[1] / sy, p[2] / sz]
+    [p[0] / sx + pivot[0], p[1] / sy + pivot[1], p[2] / sz + pivot[2]]
 }
 
 fn wrap_repeat(x: f64) -> f64 {
@@ -406,4 +405,55 @@ pub fn sample_preset_texture(
         out.push(eval_preset(preset_kind, params, mapped)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inverse_transform_respects_pivot_and_scale() {
+        let transform = TextureTransform3DIR {
+            translation: [0.0, 0.0, 0.0],
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
+            scale: [2.0, 1.0, 1.0],
+            pivot: [1.0, 0.0, 0.0],
+        };
+
+        let local = apply_inverse_transform([3.0, 0.0, 0.0], &transform);
+        assert!((local[0] - 2.0).abs() < 1e-12);
+        assert!(local[1].abs() < 1e-12);
+        assert!(local[2].abs() < 1e-12);
+    }
+
+    #[test]
+    fn sample_preset_texture_keeps_translated_vortex_center_in_object_space() {
+        let mapping = TextureMappingIR::default();
+        let transform = TextureTransform3DIR {
+            translation: [0.0, 0.0, 0.0],
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            pivot: [0.0, 0.0, 0.0],
+        };
+        let mut params = BTreeMap::new();
+        params.insert("circulation".to_string(), Value::from(1));
+        params.insert("core_polarity".to_string(), Value::from(1));
+        params.insert("core_radius".to_string(), Value::from(10e-9));
+        params.insert("plane".to_string(), Value::from("xy"));
+
+        let values = sample_preset_texture(
+            "vortex",
+            &params,
+            &mapping,
+            &transform,
+            &[TextureSamplePoint {
+                position_world: [50e-9, 0.0, 0.0],
+                position_object: [0.0, 0.0, 0.0],
+                active: true,
+            }],
+        )
+        .expect("vortex sampling should succeed");
+
+        assert!(values[0][2] > 0.5);
+    }
 }

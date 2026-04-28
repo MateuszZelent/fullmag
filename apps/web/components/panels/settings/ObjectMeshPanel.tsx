@@ -587,9 +587,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                 )}
                 {sharedDomainMesh ? (
                   <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-xs text-info/90">
-                    Shared-domain FEM uses one conformal solver mesh. This panel edits only this
-                    object&apos;s local sizing override, but applying it rebuilds the full study-domain
-                    mesh rather than an isolated object mesh.
+                    These settings constrain the final shared-domain FEM solver mesh. This panel
+                    edits only this object&apos;s local sizing override, but applying it rebuilds the
+                    full study-domain mesh rather than an isolated object mesh.
                   </div>
                 ) : null}
 
@@ -740,7 +740,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     Swept / Through-Thickness
                   </div>
                   <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[0.72rem] text-muted-foreground">
-                    Extruded mesh for thin-film geometries. Set layer count to enable.
+                    Experimental, fallback-aware extruded mesh intent for thin-film geometries.
+                    The backend build report shows whether swept/prism meshing was actually
+                    applied or fell back to free tetrahedral.
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <TextField
@@ -1165,7 +1167,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.75rem] text-muted-foreground">
-            Quality metrics not loaded yet. Use the global Optimize preset or enable Extract quality metrics before remeshing.
+            Backend quality metrics are not loaded for this artifact. Open Mesh Statistics for topology fallback diagnostics, then rebuild the solver mesh to persist Gmsh quality metrics.
           </div>
         )}
               </SidebarSection>

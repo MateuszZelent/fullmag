@@ -23,6 +23,32 @@ use crate::types::*;
 
 // ── helpers local to the orchestrator ────────────────────────────────────────
 
+fn interactive_dense_ram_budget_bytes(available_ram: u64) -> u64 {
+    let available_budget = (available_ram as f64 * 0.8) as u64;
+    let default_interactive_budget = 12 * 1024 * 1024 * 1024_u64;
+
+    match std::env::var("FULLMAG_FEM_INTERACTIVE_RAM_TARGET_GB") {
+        Ok(raw) => {
+            let value = raw.trim();
+            if value.eq_ignore_ascii_case("off")
+                || value.eq_ignore_ascii_case("none")
+                || value == "0"
+            {
+                available_budget
+            } else if let Ok(gb) = value.parse::<f64>() {
+                if gb.is_finite() && gb > 0.0 {
+                    ((gb * 1024.0 * 1024.0 * 1024.0) as u64).min(available_budget)
+                } else {
+                    default_interactive_budget.min(available_budget)
+                }
+            } else {
+                default_interactive_budget.min(available_budget)
+            }
+        }
+        Err(_) => default_interactive_budget.min(available_budget),
+    }
+}
+
 fn current_live_metadata(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
@@ -622,6 +648,7 @@ fn current_fem_mesh_workspace(
     adaptive_mesh: Option<&serde_json::Value>,
     adaptive_runtime_state: Option<&serde_json::Value>,
     quality_summary: Option<&crate::python_bridge::RemeshQualitySummary>,
+    mesh_statistics: Option<&serde_json::Value>,
     mesh_history: &[serde_json::Value],
 ) -> serde_json::Value {
     let mesh_bounds = fem_mesh_bbox(mesh);
@@ -792,6 +819,7 @@ fn current_fem_mesh_workspace(
             "gamma_mean": quality.gamma_mean,
             "avg_quality": quality.avg_quality,
         })),
+        "mesh_statistics": mesh_statistics.cloned(),
         "mesh_pipeline_status": [
             {"id": "import", "label": "Import", "status": "done", "detail": mesh_source.map(|source| source.to_string()).unwrap_or_else(|| "Inline/generated geometry".to_string())},
             {"id": "classify", "label": "Classify", "status": if source_kind == "stl_surface" { "done" } else { "idle" }, "detail": if source_kind == "stl_surface" { "Surface classification completed for STL import".to_string() } else { "No explicit surface classification stage".to_string() }},
@@ -868,6 +896,7 @@ fn current_mesh_workspace(
             .runtime_metadata
             .get("adaptive_mesh_runtime_state"),
         quality_summary,
+        None,
         mesh_history,
     ))
 }
@@ -1755,8 +1784,9 @@ fn execute_manual_interactive_remesh(
                     })),
                     "mesh_target": mesh_target_label.clone(),
                     "mesh_reason": mesh_reason,
-                    "mesh_provenance": remesh_result.mesh_provenance,
-                    "size_field_stats": remesh_result.size_field_stats,
+                    "mesh_provenance": remesh_result.mesh_provenance.clone(),
+                    "mesh_statistics": remesh_result.mesh_statistics.clone(),
+                    "size_field_stats": remesh_result.size_field_stats.clone(),
                 }));
 
                 live_workspace.update(|state| {
@@ -1771,6 +1801,7 @@ fn execute_manual_interactive_remesh(
                         adaptive_mesh_runtime.as_ref(),
                         current_adaptive_runtime_state.as_ref(),
                         current_mesh_quality.as_ref(),
+                        remesh_result.mesh_statistics.as_ref(),
                         current_mesh_history,
                     );
                     let provenance = remesh_result
@@ -1812,6 +1843,22 @@ fn execute_manual_interactive_remesh(
                             .and_then(|value| value.get("fallbacks_triggered"))
                             .cloned()
                             .unwrap_or_else(|| serde_json::json!([])),
+                        "operation_statuses": provenance
+                            .and_then(|value| value.get("operation_statuses"))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                        "thin_film_diagnostics": provenance
+                            .and_then(|value| value.get("thin_film_diagnostics"))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                        "shared_domain_build_report": provenance
+                            .and_then(|value| value.get("shared_domain_build_report"))
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                        "mesh_statistics": remesh_result
+                            .mesh_statistics
+                            .clone()
+                            .unwrap_or(serde_json::Value::Null),
                         "n_nodes": node_count,
                         "n_elements": elem_count,
                         "n_boundary_faces": face_count,
@@ -3388,27 +3435,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             );
         });
 
-        // ── Auto-coarsen: if mesh exceeds available RAM, remesh with larger hmax ──
+        // ── Auto-coarsen: if mesh exceeds the interactive RAM budget, remesh with larger hmax ──
         if let BackendPlanIR::Fem(fem_plan) = &initial_execution_plan.backend_plan {
             let node_count = fem_plan.mesh.nodes.len();
             let available_ram = available_system_ram_bytes();
             let required_ram = estimate_fem_dense_ram(node_count);
-            let ram_budget = (available_ram as f64 * 0.8) as u64;
+            let ram_budget = interactive_dense_ram_budget_bytes(available_ram);
 
             if required_ram > ram_budget {
                 eprintln!(
-                    "[fullmag] mesh too large for available RAM ({} nodes, {:.1} GB required, {:.1} GB available)",
+                    "[fullmag] mesh too large for interactive dense FEM budget ({} nodes, {:.1} GB required, {:.1} GB budget, {:.1} GB available)",
                     node_count,
                     required_ram as f64 / 1e9,
+                    ram_budget as f64 / 1e9,
                     available_ram as f64 / 1e9
                 );
                 live_workspace.push_log(
                     "warn",
                     format!(
-                        "⛔ Mesh ({} nodes) requires {:.1} GB but only {:.1} GB available — auto-optimizing",
+                        "⛔ Mesh ({} nodes) requires {:.1} GB dense RAM, above the interactive target {:.1} GB — auto-optimizing",
                         node_count,
                         required_ram as f64 / 1e9,
-                        available_ram as f64 / 1e9
+                        ram_budget as f64 / 1e9
                     ),
                 );
 
@@ -3585,6 +3633,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                                 .get("adaptive_mesh"),
                                             current_adaptive_runtime_state.as_ref(),
                                             current_mesh_quality.as_ref(),
+                                            None,
                                             &current_mesh_history,
                                         ));
                                     });

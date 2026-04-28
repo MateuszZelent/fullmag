@@ -664,10 +664,10 @@ export interface ScriptBuilderMagneticInteractionEntry {
 }
 
 export interface ScriptBuilderMagnetizationEntry {
-  kind: string;                   // "uniform" | "random" | "file"
-  value: number[] | null;         // [mx, my, mz] for uniform
-  seed: number | null;            // for random
-  source_path: string | null;     // for file
+  kind: string;                   // canonical: "preset_texture" | "sampled"
+  value: number[] | null;         // legacy compatibility only
+  seed: number | null;            // legacy compatibility only
+  source_path: string | null;     // for sampled/loadfile sources
   source_format?: string | null;
   dataset?: string | null;
   sample_index?: number | null;
@@ -1226,6 +1226,7 @@ export interface MeshWorkspaceSharedDomainManifestState {
 export interface MeshWorkspaceState {
   mesh_summary: MeshSummaryState | null;
   mesh_quality_summary: MeshQualitySummaryState | null;
+  mesh_statistics: Record<string, unknown> | null;
   shared_domain_manifest: MeshWorkspaceSharedDomainManifestState | null;
   mesh_pipeline_status: MeshPipelinePhaseState[];
   mesh_capabilities: MeshCapabilitiesState | null;

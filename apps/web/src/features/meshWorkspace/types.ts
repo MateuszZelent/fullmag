@@ -38,6 +38,7 @@ export interface MeshBuildDiagnosticsView {
   last_build_error: string | null;
   pipeline_phase_count: number;
   raw_quality_summary: Record<string, unknown> | null;
+  raw_mesh_statistics: Record<string, unknown> | null;
   raw_last_build_summary: Record<string, unknown> | null;
   raw_pipeline_status: unknown;
 }

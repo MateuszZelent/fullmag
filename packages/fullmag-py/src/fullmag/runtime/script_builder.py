@@ -734,10 +734,10 @@ def _render_geometries_from_override(
             if mag_kind == "uniform":
                 val = mag.get("value")
                 if isinstance(val, list) and len(val) == 3:
-                    lines.append(f"{var_name}.m = fm.uniform({_py_number(float(val[0]))}, {_py_number(float(val[1]))}, {_py_number(float(val[2]))})")
+                    lines.append(f"{var_name}.m = fm.texture.uniform({_py_number(float(val[0]))}, {_py_number(float(val[1]))}, {_py_number(float(val[2]))})")
             elif mag_kind == "random":
                 seed = mag.get("seed")
-                lines.append(f"{var_name}.m = fm.random(seed={int(str(seed)) if seed is not None else 1})")
+                lines.append(f"{var_name}.m = fm.texture.random_seeded(seed={int(str(seed)) if seed is not None else 1})")
             elif mag_kind in {"file", "sampled"}:
                 src = str(mag.get("source_path", ""))
                 if src:
@@ -749,6 +749,18 @@ def _render_geometries_from_override(
                         kwargs.append(f"sample={int(str(mag.get('sample_index')))}")
                     suffix = f", {', '.join(kwargs)}" if kwargs else ""
                     lines.append(f"{var_name}.m.loadfile({_py_repr(_relativize_path(src, source_root))}{suffix})")
+            elif mag_kind == "preset_texture":
+                preset_kind = mag.get("preset_kind")
+                preset_params = mag.get("preset_params")
+                if isinstance(preset_kind, str) and isinstance(preset_params, dict):
+                    preset_expr = _render_preset_texture_expr(
+                        preset_kind,
+                        preset_params,
+                        mapping=mag.get("mapping") if isinstance(mag.get("mapping"), dict) else None,
+                        transform=mag.get("texture_transform") if isinstance(mag.get("texture_transform"), dict) else None,
+                        ui_label=mag.get("ui_label") if isinstance(mag.get("ui_label"), str) else None,
+                    )
+                    lines.append(f"{var_name}.m = {preset_expr}")
         
         lines.append("")
 
@@ -2151,9 +2163,9 @@ def _render_initial_magnetization(
     source_root: Path,
 ) -> str | list[str]:
     if isinstance(initializer, UniformMagnetization):
-        return f"{magnet_var}.m = fm.uniform({_py_number(initializer.value[0])}, {_py_number(initializer.value[1])}, {_py_number(initializer.value[2])})"
+        return f"{magnet_var}.m = fm.texture.uniform({_py_number(initializer.value[0])}, {_py_number(initializer.value[1])}, {_py_number(initializer.value[2])})"
     if isinstance(initializer, RandomMagnetization):
-        return f"{magnet_var}.m = fm.random(seed={initializer.seed})"
+        return f"{magnet_var}.m = fm.texture.random_seeded(seed={initializer.seed})"
     if isinstance(initializer, SampledMagnetization):
         if initializer.source_path:
             kwargs = []
@@ -2170,28 +2182,13 @@ def _render_initial_magnetization(
             "canonical flat-script rewrite requires sampled-field initial magnetization to come from loadfile(...)"
         )
     if isinstance(initializer, PresetTexture):
-        params = _py_repr(dict(initializer.params))
-        mapping = (
-            "fm.TextureMapping("
-            f"space={_py_repr(initializer.mapping.space)}, "
-            f"projection={_py_repr(initializer.mapping.projection)}, "
-            f"clamp_mode={_py_repr(initializer.mapping.clamp_mode)})"
-        )
-        transform = (
-            "fm.TextureTransform3D("
-            f"translation={_py_repr(tuple(initializer.transform.translation))}, "
-            f"rotation_quat={_py_repr(tuple(initializer.transform.rotation_quat))}, "
-            f"scale={_py_repr(tuple(initializer.transform.scale))}, "
-            f"pivot={_py_repr(tuple(initializer.transform.pivot))})"
-        )
-        preset_expr = (
-            "fm.PresetTexture("
-            f"preset_kind={_py_repr(initializer.preset_kind)}, "
-            f"params={params}, "
-            f"mapping={mapping}, "
-            f"transform={transform}, "
-            f"ui_label={_py_repr(initializer.ui_label)}, "
-            f"preview_proxy={_py_repr(initializer.preview_proxy)})"
+        preset_expr = _render_preset_texture_expr(
+            initializer.preset_kind,
+            initializer.params,
+            mapping=initializer.mapping.to_ir(),
+            transform=initializer.transform.to_ir(),
+            ui_label=initializer.ui_label,
+            preview_proxy=initializer.preview_proxy,
         )
         return f"{magnet_var}.m = {preset_expr}"
     raise ValueError(
@@ -2303,8 +2300,8 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "smoothing_steps": int(mesh_options.get("smoothing_steps", 1)),
         "optimize": str(mesh_options.get("optimize", "") or ""),
         "optimize_iterations": int(mesh_options.get("optimize_iterations", 1)),
-        "compute_quality": bool(mesh_options.get("compute_quality", False)),
-        "per_element_quality": bool(mesh_options.get("per_element_quality", False)),
+        "compute_quality": bool(mesh_options.get("compute_quality", True)),
+        "per_element_quality": bool(mesh_options.get("per_element_quality", True)),
         "adaptive_enabled": bool(adaptive_mesh.get("enabled", False)),
         "adaptive_policy": str(adaptive_mesh.get("policy", "auto") or "auto"),
         "adaptive_indicator": str(adaptive_mesh.get("indicator", "geometric_only") or "geometric_only"),
@@ -3038,6 +3035,181 @@ def _py_literal(value: object) -> str:
     if value is None:
         return "None"
     raise ValueError(f"unsupported literal for canonical rewrite: {type(value).__name__}")
+
+
+_DEFAULT_TEXTURE_MAPPING = {
+    "space": "object",
+    "projection": "object_local",
+    "clamp_mode": "none",
+}
+
+_DEFAULT_TEXTURE_TRANSFORM = {
+    "translation": [0.0, 0.0, 0.0],
+    "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+    "scale": [1.0, 1.0, 1.0],
+    "pivot": [0.0, 0.0, 0.0],
+}
+
+_DEFAULT_TEXTURE_PREVIEW_PROXY = {
+    "uniform": "none",
+    "random_seeded": "none",
+    "vortex": "disc",
+    "antivortex": "disc",
+    "bloch_skyrmion": "disc",
+    "neel_skyrmion": "disc",
+    "domain_wall": "box",
+    "two_domain": "box",
+    "helical": "box",
+    "conical": "box",
+}
+
+
+def _render_vector_literal(values: Sequence[object]) -> str:
+    return f"({', '.join(_py_number(float(value)) for value in values)})"
+
+
+def _render_texture_factory_call(
+    preset_kind: str,
+    params: Mapping[str, object],
+) -> str | None:
+    if preset_kind == "uniform":
+        direction = params.get("direction")
+        if isinstance(direction, list) and len(direction) == 3:
+            return f"fm.texture.uniform{_render_vector_literal(direction)}"
+        return "fm.texture.uniform((1.0, 0.0, 0.0))"
+    if preset_kind == "random_seeded":
+        seed = params.get("seed")
+        return f"fm.texture.random_seeded(seed={int(str(seed)) if seed is not None else 1})"
+    if preset_kind in {"vortex", "antivortex"}:
+        kwargs = [
+            f"circulation={int(str(params.get('circulation', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', 1)))}",
+        ]
+        if params.get("core_radius") is not None:
+            kwargs.append(f"core_radius={_py_number(float(params['core_radius']))}")
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.{preset_kind}({', '.join(kwargs)})"
+    if preset_kind in {"bloch_skyrmion", "neel_skyrmion"}:
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"chirality={int(str(params.get('chirality', 1)))}",
+            f"core_polarity={int(str(params.get('core_polarity', -1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.{preset_kind}({', '.join(kwargs)})"
+    if preset_kind == "domain_wall":
+        width = params.get("width")
+        if width is None:
+            return None
+        kwargs = [
+            f"width={_py_number(float(width))}",
+            f"kind={_py_repr(str(params.get('kind', 'neel')))}",
+            f"center_offset={_py_number(float(params.get('center_offset', 0.0)))}",
+            f"normal_axis={_py_repr(str(params.get('normal_axis', 'x')))}",
+        ]
+        left = params.get("left")
+        right = params.get("right")
+        if isinstance(left, list) and len(left) == 3:
+            kwargs.append(f"left={_render_vector_literal(left)}")
+        if isinstance(right, list) and len(right) == 3:
+            kwargs.append(f"right={_render_vector_literal(right)}")
+        return f"fm.texture.domain_wall({', '.join(kwargs)})"
+    if preset_kind == "two_domain":
+        left = params.get("left")
+        right = params.get("right")
+        wall = params.get("wall")
+        if not (
+            isinstance(left, list) and len(left) == 3
+            and isinstance(right, list) and len(right) == 3
+            and isinstance(wall, list) and len(wall) == 3
+        ):
+            return None
+        return (
+            "fm.texture.two_domain("
+            f"left={_render_vector_literal(left)}, "
+            f"right={_render_vector_literal(right)}, "
+            f"wall={_render_vector_literal(wall)}, "
+            f"normal_axis={_py_repr(str(params.get('normal_axis', 'x')))}"
+            ")"
+        )
+    if preset_kind == "helical":
+        wavevector = params.get("wavevector")
+        if not (isinstance(wavevector, list) and len(wavevector) == 3):
+            return None
+        kwargs = [f"wavevector={_render_vector_literal(wavevector)}"]
+        for key, default in (("e1", [1.0, 0.0, 0.0]), ("e2", [0.0, 1.0, 0.0])):
+            value = params.get(key)
+            if isinstance(value, list) and len(value) == 3 and value != default:
+                kwargs.append(f"{key}={_render_vector_literal(value)}")
+        if params.get("phase_rad") not in {None, 0.0}:
+            kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
+        return f"fm.texture.helical({', '.join(kwargs)})"
+    if preset_kind == "conical":
+        wavevector = params.get("wavevector")
+        if not (isinstance(wavevector, list) and len(wavevector) == 3):
+            return None
+        kwargs = [f"wavevector={_render_vector_literal(wavevector)}"]
+        cone_axis = params.get("cone_axis")
+        if isinstance(cone_axis, list) and len(cone_axis) == 3 and cone_axis != [0.0, 0.0, 1.0]:
+            kwargs.append(f"cone_axis={_render_vector_literal(cone_axis)}")
+        if params.get("cone_angle_rad") not in {None, 0.7853981633974483}:
+            kwargs.append(f"cone_angle_rad={_py_number(float(params['cone_angle_rad']))}")
+        if params.get("phase_rad") not in {None, 0.0}:
+            kwargs.append(f"phase_rad={_py_number(float(params['phase_rad']))}")
+        return f"fm.texture.conical({', '.join(kwargs)})"
+    return None
+
+
+def _render_preset_texture_expr(
+    preset_kind: str,
+    params: Mapping[str, object],
+    *,
+    mapping: Mapping[str, object] | None = None,
+    transform: Mapping[str, object] | None = None,
+    ui_label: str | None = None,
+    preview_proxy: str | None = None,
+) -> str:
+    normalized_mapping = dict(mapping or _DEFAULT_TEXTURE_MAPPING)
+    normalized_transform = dict(transform or _DEFAULT_TEXTURE_TRANSFORM)
+    factory_expr = _render_texture_factory_call(preset_kind, params)
+    if (
+        factory_expr is not None
+        and normalized_mapping == _DEFAULT_TEXTURE_MAPPING
+        and normalized_transform == _DEFAULT_TEXTURE_TRANSFORM
+        and ui_label is None
+        and preview_proxy in {None, _DEFAULT_TEXTURE_PREVIEW_PROXY.get(preset_kind)}
+    ):
+        return factory_expr
+
+    mapping_expr = (
+        "fm.TextureMapping("
+        f"space={_py_repr(str(normalized_mapping.get('space', 'object')))}, "
+        f"projection={_py_repr(str(normalized_mapping.get('projection', 'object_local')))}, "
+        f"clamp_mode={_py_repr(str(normalized_mapping.get('clamp_mode', 'none')))})"
+    )
+    transform_expr = (
+        "fm.TextureTransform3D("
+        f"translation={_py_literal(tuple(normalized_transform.get('translation', (0.0, 0.0, 0.0))))}, "
+        f"rotation_quat={_py_literal(tuple(normalized_transform.get('rotation_quat', (0.0, 0.0, 0.0, 1.0))))}, "
+        f"scale={_py_literal(tuple(normalized_transform.get('scale', (1.0, 1.0, 1.0))))}, "
+        f"pivot={_py_literal(tuple(normalized_transform.get('pivot', (0.0, 0.0, 0.0))))})"
+    )
+    return (
+        "fm.PresetTexture("
+        f"preset_kind={_py_repr(preset_kind)}, "
+        f"params={_py_literal(dict(params))}, "
+        f"mapping={mapping_expr}, "
+        f"transform={transform_expr}, "
+        f"ui_label={_py_repr(ui_label) if ui_label is not None else 'None'}, "
+        f"preview_proxy={_py_repr(preview_proxy) if preview_proxy is not None else 'None'})"
+    )
 
 
 def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:

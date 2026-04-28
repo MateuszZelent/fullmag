@@ -60,7 +60,7 @@ def build(mesh_path: Path, dt: float, steps: int) -> fm.Problem:
         name="body",
         geometry=body,
         material=material,
-        m0=fm.init.uniform((1.0, 0.0, 0.0)),
+        m0=fm.texture.uniform((1.0, 0.0, 0.0)),
     )
 
     return fm.Problem(

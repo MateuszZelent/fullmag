@@ -4,7 +4,8 @@ from dataclasses import dataclass
 import warnings
 
 from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
-from fullmag.init import InitialMagnetization, uniform
+from fullmag.init import InitialMagnetization
+from fullmag.init.magnetization import UniformMagnetization
 from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
 
@@ -154,7 +155,7 @@ class Ferromagnet:
         if self.region is not None and self.region.geometry.geometry_name != self.geometry.geometry_name:
             raise ValueError("region geometry must match magnet geometry")
         if self.m0 is None:
-            object.__setattr__(self, "m0", uniform((1.0, 0.0, 0.0)))
+            object.__setattr__(self, "m0", UniformMagnetization((1.0, 0.0, 0.0)))
 
     @property
     def region_name(self) -> str:

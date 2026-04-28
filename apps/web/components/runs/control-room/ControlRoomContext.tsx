@@ -30,6 +30,7 @@ import { useFemMeshDerived } from "./hooks/useFemMeshDerived";
 import { useMeshCommandPipeline } from "./hooks/useMeshCommandPipeline";
 import { useVisualizationPresets } from "./hooks/useVisualizationPresets";
 import { useWorkspaceActions } from "./hooks/useWorkspaceActions";
+import { buildAuthoredMagnetizationPreview } from "./authoredMagnetizationPreview";
 import {
   DEFAULT_AIR_MESH_OPACITY,
   DEFAULT_FDM_VISUALIZATION_SETTINGS,
@@ -1577,13 +1578,20 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
           const existing = previousScene.magnetization_assets.find(
             (candidate) => candidate.id === asset.id,
           );
-          return existing
-            ? {
-                ...asset,
-                ...existing,
-                id: asset.id,
-              }
-            : asset;
+          if (!existing) {
+            return asset;
+          }
+          const samePreset =
+            existing.kind === asset.kind &&
+            existing.preset_kind === asset.preset_kind;
+          return {
+            ...asset,
+            id: asset.id,
+            mapping: samePreset ? existing.mapping : asset.mapping,
+            texture_transform: samePreset
+              ? existing.texture_transform
+              : asset.texture_transform,
+          };
         }),
       };
     });
@@ -2085,6 +2093,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
     ?? selectedFieldCatalogDomain
     ?? null;
+  const authoredMagnetizationPreview = useMemo(
+    () => activeQuantityId === "m"
+      ? buildAuthoredMagnetizationPreview({
+          scene: sceneDocumentDraft ?? remoteSceneDocument,
+          mesh: femMesh,
+          selectedSidebarNodeId,
+          selectedObjectId,
+          activeTransformScope,
+        })
+      : null,
+    [
+      activeQuantityId,
+      activeTransformScope,
+      femMesh,
+      remoteSceneDocument,
+      sceneDocumentDraft,
+      selectedObjectId,
+      selectedSidebarNodeId,
+    ],
+  );
   const selectedFieldTransportKey = useMemo(() => {
     if (!binaryFieldTransportEnabled || !activeQuantityId || !selectedFieldFrame) {
       return null;
@@ -2347,7 +2375,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const selectedLiveField =
-    selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
+    authoredMagnetizationPreview?.vectors
+      ? authoredMagnetizationPreview.vectors
+      : selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
       ? selectedScopedBinaryFieldFrame.values
       : selectedFieldTopologyMismatch
       ? null
@@ -2355,7 +2385,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       ? selectedBinaryFieldFrame.values
       : activeQuantityId
         ? fieldMap[activeQuantityId] ?? null
-        : null;
+      : null;
   const selectedVectorSource = useMemo(() => {
     return selectViewportVectorField({
       activeQuantityId,
@@ -2379,6 +2409,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
   const selectedVectors = selectedVectorSource.vectors;
   const fieldDataRevision = useMemo(() => {
+    if (authoredMagnetizationPreview?.vectors && selectedVectors === authoredMagnetizationPreview.vectors) {
+      return authoredMagnetizationPreview.revision;
+    }
     if (!selectedFieldFrame || !selectedVectors?.length) {
       if (
         selectedVectorSource.source === "preview" &&
@@ -2415,6 +2448,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     renderPreview?.source_time,
     renderPreview?.vector_field_values,
     selectedVectorSource.source,
+    authoredMagnetizationPreview,
     selectedFieldFrame,
     selectedVectors,
   ]);

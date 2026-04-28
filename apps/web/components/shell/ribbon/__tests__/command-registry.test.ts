@@ -16,6 +16,30 @@ function context(overrides: Partial<RibbonCommandContext> = {}): RibbonCommandCo
 }
 
 describe("ribbon viewport commands", () => {
+  it("dispatches mesh transition and optimization through distinct callbacks", () => {
+    const onOpenMeshTransitionSettings = vi.fn();
+    const onOpenMeshOptimizationSettings = vi.fn();
+    const onOpenMeshSizeSettings = vi.fn();
+    const onOpenMeshQuality = vi.fn();
+    const ctx = context({
+      isFemBackend: true,
+      onOpenMeshTransitionSettings,
+      onOpenMeshOptimizationSettings,
+      onOpenMeshSizeSettings,
+      onOpenMeshQuality,
+    });
+
+    expect(canExecuteRibbonCommand(ctx, { id: "mesh.open-transition" })).toBe(true);
+    expect(canExecuteRibbonCommand(ctx, { id: "mesh.open-optimization" })).toBe(true);
+    executeRibbonCommand(ctx, { id: "mesh.open-transition" });
+    executeRibbonCommand(ctx, { id: "mesh.open-optimization" });
+
+    expect(onOpenMeshTransitionSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenMeshOptimizationSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenMeshSizeSettings).not.toHaveBeenCalled();
+    expect(onOpenMeshQuality).not.toHaveBeenCalled();
+  });
+
   it("keeps component changes independent from vector visibility", () => {
     const onSetPreviewComponent = vi.fn();
     const onSetMeshShowArrows = vi.fn();

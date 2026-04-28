@@ -73,7 +73,9 @@ export interface RibbonCommandContext {
   onOpenMeshStatistics?: () => void;
   onOpenMeshQuality?: () => void;
   onOpenMeshSizeSettings?: () => void;
+  onOpenMeshTransitionSettings?: () => void;
   onOpenMeshMethodSettings?: () => void;
+  onOpenMeshOptimizationSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   onRequestObjectFocus?: (objectId: string) => void;
   onSyncScriptBuilder?: () => void;
@@ -253,7 +255,9 @@ export type RibbonCommand =
   | { id: "mesh.open-statistics" }
   | { id: "mesh.open-quality" }
   | { id: "mesh.open-size-settings" }
+  | { id: "mesh.open-transition" }
   | { id: "mesh.open-method-settings" }
+  | { id: "mesh.open-optimization" }
   | { id: "mesh.open-pipeline" }
   | {
       id: "study.add-primitive";
@@ -425,8 +429,12 @@ export function canExecuteRibbonCommand(
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshQuality === "function";
     case "mesh.open-size-settings":
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshSizeSettings === "function";
+    case "mesh.open-transition":
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshTransitionSettings === "function";
     case "mesh.open-method-settings":
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshMethodSettings === "function";
+    case "mesh.open-optimization":
+      return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshOptimizationSettings === "function";
     case "mesh.open-pipeline":
       return supportsFemMeshActions(ctx) && typeof ctx.onOpenMeshPipeline === "function";
     case "study.add-primitive":
@@ -668,8 +676,14 @@ export function executeRibbonCommand(
     case "mesh.open-size-settings":
       ctx.onOpenMeshSizeSettings?.();
       return;
+    case "mesh.open-transition":
+      ctx.onOpenMeshTransitionSettings?.();
+      return;
     case "mesh.open-method-settings":
       ctx.onOpenMeshMethodSettings?.();
+      return;
+    case "mesh.open-optimization":
+      ctx.onOpenMeshOptimizationSettings?.();
       return;
     case "mesh.open-pipeline":
       ctx.onOpenMeshPipeline?.();

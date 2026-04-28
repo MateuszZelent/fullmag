@@ -2301,6 +2301,13 @@
               "object",
               "null"
             ]
+          },
+          "mesh_statistics": {
+            "description": "Full mesh statistics report for realized solver mesh diagnostics.",
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "type": "object"

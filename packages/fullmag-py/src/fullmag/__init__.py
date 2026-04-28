@@ -10,10 +10,8 @@ from .init import (
     evaluate_preset_texture,
     infer_magnetization_state_format,
     load_magnetization,
-    random,
     save_magnetization,
     texture,
-    uniform,
 )
 from .model import (
     AdaptiveTimestep,
@@ -279,7 +277,6 @@ __all__ = [
     "init",
     "load_magnetization",
     "load_problem_from_script",
-    "random",
     "save_magnetization",
     "texture",
     "EvaluatedTexture",
@@ -287,7 +284,6 @@ __all__ = [
     "TextureMapping",
     "TextureTransform3D",
     "evaluate_preset_texture",
-    "uniform",
     # Flat scripting API
     "GeometryMeshHandle",
     "QuantityCondition",

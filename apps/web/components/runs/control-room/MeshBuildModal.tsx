@@ -49,6 +49,49 @@ function formatLogTime(timestampUnixMs: number): string {
   });
 }
 
+function textOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function operationStatusesFromSummary(summary: Record<string, unknown> | null): Array<{
+  kind: string;
+  scope: string;
+  status: string;
+  requestedMethod: string | null;
+  actualMethod: string | null;
+  reason: string | null;
+}> {
+  const raw = Array.isArray(summary?.operation_statuses) ? summary.operation_statuses : [];
+  return raw.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const kind = textOrNull(record.kind);
+    const status = textOrNull(record.status);
+    if (!kind || !status) return [];
+    return [{
+      kind,
+      scope: textOrNull(record.scope) ?? "global",
+      status,
+      requestedMethod: textOrNull(record.requested_method),
+      actualMethod: textOrNull(record.actual_method),
+      reason: textOrNull(record.reason),
+    }];
+  });
+}
+
+function operationStatusClass(status: string): string {
+  switch (status.toLowerCase()) {
+    case "applied":
+      return "border-emerald-400/20 bg-emerald-400/10 text-emerald-200";
+    case "fallback":
+      return "border-amber-400/25 bg-amber-400/10 text-amber-200";
+    case "failed":
+      return "border-red-400/25 bg-red-400/10 text-red-200";
+    default:
+      return "border-white/10 bg-white/[0.04] text-slate-300";
+  }
+}
+
 export default function MeshBuildModal({
   open,
   generating,
@@ -85,6 +128,7 @@ export default function MeshBuildModal({
     buildSummary && Array.isArray(buildSummary.fallbacks_triggered)
       ? buildSummary.fallbacks_triggered.filter((entry): entry is string => typeof entry === "string")
       : [];
+  const operationStatuses = operationStatusesFromSummary(buildSummary);
   const recentHistory = meshWorkspace?.mesh_history?.slice().reverse().slice(0, 4) ?? [];
   const modalLog = engineLog
     .filter((entry) => {
@@ -312,6 +356,36 @@ export default function MeshBuildModal({
                 ) : null}
                 {summaryFallbacks.length > 0 ? (
                   <div>Fallbacks: <span className="font-mono text-amber-300">{summaryFallbacks.join(", ")}</span></div>
+                ) : null}
+                {operationStatuses.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      Operation statuses
+                    </div>
+                    {operationStatuses.map((operation, index) => (
+                      <div
+                        key={`${operation.kind}:${operation.scope}:${index}`}
+                        className={cn("rounded-lg border px-2.5 py-2", operationStatusClass(operation.status))}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate font-mono text-[0.72rem]">
+                            {operation.kind}.{operation.scope}
+                          </span>
+                          <span className="text-[0.58rem] font-bold uppercase tracking-[0.14em]">
+                            {operation.status}
+                          </span>
+                        </div>
+                        <div className="mt-1 font-mono text-[0.68rem] opacity-90">
+                          {operation.requestedMethod ?? "auto"} → {operation.actualMethod ?? "none"}
+                        </div>
+                        {operation.reason ? (
+                          <div className="mt-1 text-[0.68rem] leading-relaxed opacity-85">
+                            {operation.reason}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
                 ) : null}
               </div>
             </div>

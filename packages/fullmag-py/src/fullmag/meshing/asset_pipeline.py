@@ -38,15 +38,19 @@ from .voxelization import VoxelMaskData, voxelize_geometry
 
 # PR 2: target resolution extracted into _mesh_targets
 from ._mesh_targets import (
+    MeshOperationStatus,
     ResolvedAirboxTarget,
     ResolvedObjectPreviewTarget,
     ResolvedSharedDomainTargets,
     ResolvedSharedObjectTarget,
     SharedDomainBuildReport,
+    ThinFilmDiagnostic,
     _unique_size_field_kinds,
     resolve_object_preview_target,
     resolve_shared_domain_targets,
 )
+from ._gmsh_fields import resolve_effective_algorithm_3d
+from ._gmsh_swept import classify_sweepability
 from ._mesh_targets import (
     _coerce_positive_float as _coerce_positive_float,
     _geometry_name_aliases as _geometry_name_aliases,
@@ -688,6 +692,7 @@ def _build_shared_domain_build_report(
     region_markers: list[dict[str, object]],
     build_mode: str,
     fallbacks_triggered: list[str],
+    mesh_options: MeshOptions,
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
         geometries, hints,
@@ -719,14 +724,267 @@ def _build_shared_domain_build_report(
     # degraded = True when a fallback was triggered or size fields had to be
     # simplified (component identity lost).
     degraded = bool(fallbacks_triggered) or build_mode != "component_aware"
+    operation_statuses = _build_mesh_operation_statuses(
+        geometries,
+        mesh_options,
+        airbox=airbox,
+        build_mode=build_mode,
+        fallbacks_triggered=fallbacks_triggered,
+    )
+    thin_film_diagnostics = _build_thin_film_diagnostics(
+        geometries,
+        mesh_options,
+        per_object_targets,
+        default_hmax=float(hints.hmax),
+        build_mode=build_mode,
+        airbox=airbox,
+        operation_statuses=operation_statuses,
+    )
     return SharedDomainBuildReport(
         build_mode=build_mode,
         fallbacks_triggered=list(fallbacks_triggered),
         effective_airbox_target=resolved.airbox,
         effective_per_object_targets=per_object_targets,
         used_size_field_kinds=_unique_size_field_kinds(size_fields),
+        operation_statuses=operation_statuses,
+        thin_film_diagnostics=thin_film_diagnostics,
         degraded=degraded,
     )
+
+
+_ALGORITHM_3D_NAMES = {
+    1: "Delaunay",
+    4: "Frontal",
+    7: "MMG3D",
+    9: "R-tree",
+    10: "HXT",
+}
+
+
+def _algorithm_3d_name(value: int | None) -> str | None:
+    if value is None:
+        return None
+    return _ALGORITHM_3D_NAMES.get(int(value), f"Gmsh Algorithm3D {int(value)}")
+
+
+def _requested_swept_method(opts: MeshOptions) -> str | None:
+    strategy = opts.mesh_strategy
+    if strategy in {"swept_prism", "swept_hex"}:
+        return strategy
+    if opts.through_thickness_elements is not None and opts.through_thickness_elements > 0:
+        return "swept_prism"
+    return None
+
+
+def _shared_domain_swept_fallback_reason(
+    geometry_count: int,
+    airbox: AirboxOptions | None,
+    build_mode: str,
+) -> str | None:
+    if airbox is not None:
+        return "airbox combined-domain swept workflow is not implemented"
+    if geometry_count > 1:
+        return "multi-object shared-domain swept workflow is not implemented"
+    if build_mode in {"component_aware", "concatenated_stl_fallback"}:
+        return "component shared-domain workflow uses free tetrahedral meshing"
+    return None
+
+
+def _build_mesh_operation_statuses(
+    geometries: list[Geometry],
+    opts: MeshOptions,
+    *,
+    airbox: AirboxOptions | None,
+    build_mode: str,
+    fallbacks_triggered: list[str],
+) -> list[MeshOperationStatus]:
+    statuses: list[MeshOperationStatus] = []
+
+    if opts.optimize is not None:
+        statuses.append(
+            MeshOperationStatus(
+                kind="optimizer",
+                scope="global",
+                requested=True,
+                status="applied",
+                requested_method=opts.optimize,
+                actual_method=opts.optimize,
+                details={"optimize_iters": int(opts.optimize_iters)},
+            )
+        )
+    elif opts.optimize_iters > 0:
+        statuses.append(
+            MeshOperationStatus(
+                kind="optimizer",
+                scope="global",
+                requested=True,
+                status="skipped",
+                requested_method=None,
+                actual_method=None,
+                reason="optimize_iters > 0 but no optimizer method is selected",
+                details={"optimize_iters": int(opts.optimize_iters)},
+            )
+        )
+
+    actual_algorithm, fallback_reason = resolve_effective_algorithm_3d(opts)
+    statuses.append(
+        MeshOperationStatus(
+            kind="algorithm_3d",
+            scope="global",
+            requested=True,
+            status="fallback" if fallback_reason else "applied",
+            requested_method=_algorithm_3d_name(opts.algorithm_3d),
+            actual_method=_algorithm_3d_name(actual_algorithm),
+            reason=fallback_reason,
+            details={"size_field_count": len(opts.size_fields)},
+        )
+    )
+
+    requested_swept = _requested_swept_method(opts)
+    if requested_swept is not None:
+        fallback_reason = _shared_domain_swept_fallback_reason(
+            len(geometries), airbox, build_mode
+        )
+        for geometry in geometries:
+            sweepability = classify_sweepability(geometry)
+            scope = getattr(geometry, "geometry_name", type(geometry).__name__)
+            if not sweepability.sweepable:
+                statuses.append(
+                    MeshOperationStatus(
+                        kind="swept_prism",
+                        scope=str(scope),
+                        requested=True,
+                        status="skipped",
+                        requested_method=requested_swept,
+                        actual_method="free_tetrahedral",
+                        reason=sweepability.reason,
+                        details={"build_mode": build_mode},
+                    )
+                )
+            elif fallback_reason is not None:
+                statuses.append(
+                    MeshOperationStatus(
+                        kind="swept_prism",
+                        scope=str(scope),
+                        requested=True,
+                        status="fallback",
+                        requested_method=requested_swept,
+                        actual_method="free_tetrahedral",
+                        reason=fallback_reason,
+                        details={
+                            "build_mode": build_mode,
+                            "fallbacks_triggered": list(fallbacks_triggered),
+                            "through_thickness_elements": opts.through_thickness_elements,
+                        },
+                    )
+                )
+            else:
+                statuses.append(
+                    MeshOperationStatus(
+                        kind="swept_prism",
+                        scope=str(scope),
+                        requested=True,
+                        status="applied",
+                        requested_method=requested_swept,
+                        actual_method=requested_swept,
+                        details={
+                            "build_mode": build_mode,
+                            "through_thickness_elements": opts.through_thickness_elements,
+                        },
+                    )
+                )
+    return statuses
+
+
+def _actual_mesh_method_for_geometry(
+    geometry_name: str,
+    *,
+    requested_swept: str | None,
+    operation_statuses: list[MeshOperationStatus],
+) -> str:
+    if requested_swept is None:
+        return "free_tetrahedral"
+    for status in operation_statuses:
+        if status.kind == "swept_prism" and status.scope == geometry_name:
+            return status.actual_method or "free_tetrahedral"
+    return "free_tetrahedral"
+
+
+def _build_thin_film_diagnostics(
+    geometries: list[Geometry],
+    opts: MeshOptions,
+    per_object_targets: dict[str, ResolvedSharedObjectTarget],
+    *,
+    default_hmax: float,
+    build_mode: str,
+    airbox: AirboxOptions | None,
+    operation_statuses: list[MeshOperationStatus],
+) -> list[ThinFilmDiagnostic]:
+    diagnostics: list[ThinFilmDiagnostic] = []
+    requested_swept = _requested_swept_method(opts)
+    swept_fallback_scopes = {
+        status.scope
+        for status in operation_statuses
+        if status.kind == "swept_prism" and status.status == "fallback"
+    }
+    for geometry in geometries:
+        name = getattr(geometry, "geometry_name", type(geometry).__name__)
+        sweepability = classify_sweepability(geometry)
+        if not sweepability.sweepable and sweepability.thickness is None:
+            continue
+        target = per_object_targets.get(str(name))
+        hmax = target.hmax if target is not None and target.hmax is not None else default_hmax
+        thickness = sweepability.thickness
+        lateral_size: float | None = None
+        if thickness is not None and sweepability.aspect_ratio is not None:
+            lateral_size = thickness * sweepability.aspect_ratio
+        estimated_layers = (
+            max(1, int(math.floor(thickness / hmax)))
+            if thickness is not None and hmax is not None and hmax > 0
+            else None
+        )
+        hmax_ratio = (
+            hmax / thickness
+            if hmax is not None and thickness is not None and thickness > 0
+            else None
+        )
+        actual_method = _actual_mesh_method_for_geometry(
+            str(name),
+            requested_swept=requested_swept,
+            operation_statuses=operation_statuses,
+        )
+        warnings: list[str] = []
+        if opts.through_thickness_elements is not None and opts.through_thickness_elements < 4:
+            warnings.append("requested through-thickness layer count is below 4")
+        if estimated_layers is not None and estimated_layers < 4:
+            warnings.append("estimated layers from hmax across thickness is below 4")
+        if hmax_ratio is not None and hmax_ratio > 0.5:
+            warnings.append("hmax is too large relative to thin-film thickness")
+        if opts.smoothing_steps == 0:
+            warnings.append("smoothing is disabled for a thin-film mesh")
+        if sweepability.sweepable and actual_method == "free_tetrahedral":
+            warnings.append("thin-film object is using free tetrahedral meshing")
+        if str(name) in swept_fallback_scopes:
+            warnings.append("requested swept/prism meshing fell back to free tetrahedral")
+        if not warnings and not sweepability.sweepable:
+            continue
+        diagnostics.append(
+            ThinFilmDiagnostic(
+                geometry_name=str(name),
+                scope=str(name),
+                is_thin_film=bool(sweepability.sweepable),
+                thickness=thickness,
+                lateral_size=lateral_size,
+                aspect_ratio=sweepability.aspect_ratio,
+                requested_layers=opts.through_thickness_elements,
+                estimated_layers_from_hmax=estimated_layers,
+                hmax_to_thickness_ratio=hmax_ratio,
+                requested_method=requested_swept,
+                actual_method=actual_method,
+                warnings=warnings,
+            )
+        )
+    return diagnostics
 
 
 def _emit_shared_domain_mesh_summary(
@@ -1134,16 +1392,25 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             per_object_recipes=per_object_recipes,
         )
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
+        planned_build_mode = "single_geometry_occ" if single_geometry_occ_direct else "component_aware"
+        planned_operation_statuses = _build_mesh_operation_statuses(
+            geometries,
+            mesh_options,
+            airbox=airbox,
+            build_mode=planned_build_mode,
+            fallbacks_triggered=fallbacks_triggered,
+        )
         emit_progress_event(
             {
                 "kind": "mesh_build_started",
-                "shared_domain_build_mode": (
-                    "single_geometry_occ" if single_geometry_occ_direct else "component_aware"
-                ),
+                "shared_domain_build_mode": planned_build_mode,
                 "effective_airbox_target": effective_airbox_target,
                 "effective_per_object_targets": effective_per_object_targets,
                 "used_size_field_kinds": used_size_field_kinds,
                 "fallbacks_triggered": fallbacks_triggered,
+                "operation_statuses": [
+                    status.to_dict() for status in planned_operation_statuses
+                ],
                 "message": "Preparing shared-domain mesh inputs",
             }
         )
@@ -1280,6 +1547,16 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     "effective_per_object_targets": effective_per_object_targets,
                     "used_size_field_kinds": used_size_field_kinds,
                     "fallbacks_triggered": fallbacks_triggered,
+                    "operation_statuses": [
+                        status.to_dict()
+                        for status in _build_mesh_operation_statuses(
+                            geometries,
+                            mesh_options,
+                            airbox=airbox,
+                            build_mode=build_mode,
+                            fallbacks_triggered=fallbacks_triggered,
+                        )
+                    ],
                     "error": str(exc),
                     "message": "Shared-domain mesh build failed",
                 }
@@ -1368,6 +1645,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         region_markers=region_markers,
         build_mode=build_mode,
         fallbacks_triggered=fallbacks_triggered,
+        mesh_options=mesh_options,
     )
     emit_progress_event(
         {
@@ -1376,6 +1654,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             "n_nodes": classified_mesh.n_nodes,
             "n_elements": classified_mesh.n_elements,
             "n_boundary_faces": classified_mesh.n_boundary_faces,
+            "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
             **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
             "message": "Shared-domain mesh build finished",
         }

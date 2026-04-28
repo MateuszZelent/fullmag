@@ -61,7 +61,7 @@ export function FemContextMenu({
         onClick={onShowQuality}
       >
         <span className="w-4 text-xs">📊</span>
-        Show quality (AR)
+        Show surface quality (AR)
       </button>
       <div className="mx-2.5 my-1 h-px bg-border/30" />
       <button

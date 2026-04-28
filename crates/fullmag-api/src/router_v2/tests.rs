@@ -109,8 +109,8 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
                 dind: None,
             },
             magnetization: fullmag_authoring::ScriptBuilderMagnetizationState {
-                kind: "uniform".to_string(),
-                value: Some(vec![1.0, 0.0, 0.0]),
+                kind: "preset_texture".to_string(),
+                value: None,
                 seed: None,
                 source_path: None,
                 source_format: None,
@@ -118,10 +118,10 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
                 sample_index: None,
                 mapping: None,
                 texture_transform: None,
-                preset_kind: None,
-                preset_params: None,
-                preset_version: None,
-                ui_label: None,
+                preset_kind: Some("uniform".to_string()),
+                preset_params: Some(serde_json::json!({ "direction": [1.0, 0.0, 0.0] })),
+                preset_version: Some(1),
+                ui_label: Some("Uniform".to_string()),
             },
             physics_stack: vec![],
             mesh: None,
@@ -2203,6 +2203,66 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(json["last_build_error"], "stale topology");
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_report_preserves_backend_truth_payloads() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_summary": { "mesh_name": "mesh-b", "element_count": 24 },
+            "mesh_statistics": {
+                "mesh_name": "mesh-b",
+                "global": {
+                    "element_count": 24,
+                    "gamma": { "min": 0.12 },
+                    "sicn": { "p05": 0.34 }
+                }
+            },
+            "mesh_pipeline_status": [{ "id": "generate", "status": "done" }],
+            "last_build_summary": {
+                "operation_statuses": [{
+                    "kind": "swept_prism",
+                    "scope": "free_layer",
+                    "status": "fallback",
+                    "requested_method": "swept_prism",
+                    "actual_method": "free_tetrahedral",
+                    "reason": "airbox combined-domain swept workflow is not implemented"
+                }],
+                "thin_film_diagnostics": [{
+                    "geometry_name": "free_layer",
+                    "actual_method": "free_tetrahedral",
+                    "warnings": ["requested swept/prism meshing fell back to free tetrahedral"]
+                }],
+                "mesh_statistics": { "mesh_name": "mesh-b" }
+            }
+        }));
+        snapshot.mesh_revision = 17;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/report")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 17);
+    assert_eq!(json["report"]["mesh_statistics"]["global"]["element_count"], 24);
+    assert_eq!(
+        json["report"]["last_build_summary"]["operation_statuses"][0]["status"],
+        "fallback"
+    );
+    assert_eq!(
+        json["report"]["last_build_summary"]["thin_film_diagnostics"][0]["actual_method"],
+        "free_tetrahedral"
+    );
 }
 
 #[tokio::test]
@@ -5199,6 +5259,64 @@ async fn v2_field_vector_supports_mesh_scoped_samples() {
         first_value, 4.0,
         "airbox scope should start at airbox node values"
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        mesh.object_segments[0].node_start = 0;
+        mesh.object_segments[0].node_count = 2;
+        mesh.mesh_parts[0].node_indices = vec![3, 1];
+        mesh.mesh_parts[0].node_start = 0;
+        mesh.mesh_parts[0].node_count = 2;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-point-count")
+            .and_then(|value| value.to_str().ok()),
+        Some("2")
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let first_x = f64::from_le_bytes(bytes[48..56].try_into().unwrap());
+    let second_x = f64::from_le_bytes(bytes[72..80].try_into().unwrap());
+    assert_eq!(first_x, 3.0);
+    assert_eq!(second_x, 1.0);
 }
 
 #[tokio::test]

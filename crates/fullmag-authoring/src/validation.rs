@@ -57,7 +57,7 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         }
         if !matches!(
             asset.kind.as_str(),
-            "uniform" | "random" | "file" | "sampled" | "preset_texture"
+            "uniform" | "random" | "random_seeded" | "file" | "sampled" | "preset_texture"
         ) {
             return Err(SceneDocumentValidationError::new(format!(
                 "unsupported magnetization asset kind '{}'",

@@ -142,22 +142,12 @@ def _materialize_preset_texture_initial_conditions(
         geometry_name = magnet.geometry.geometry_name
         sampled_values: list[list[float]] | None = None
 
-        # Prefer sampling on the realized shared-domain FEM mesh when present.
-        # This keeps sampled_field length aligned with the execution mesh nodes.
         if domain_mesh_ir is not None and geometry_name in region_markers:
-            marker = region_markers[geometry_name]
-            sample_points = domain_mesh_ir.get("nodes") or []
-            sampled = prepare_initial_magnetization(
-                initial,
-                sample_points,
-                object_transform=object_transform,
-            )
-            mask = _node_mask_for_region_marker(domain_mesh_ir, marker)
-            if len(mask) == len(sampled):
-                sampled_values = [
-                    vector.tolist() if mask[index] else [0.0, 0.0, 0.0]
-                    for index, vector in enumerate(sampled)
-                ]
+            # Shared-domain FEM meshes are reordered by the Rust planner before
+            # execution. Keep analytic preset_texture descriptors intact so they
+            # are sampled on the final node ordering instead of pre-sampling a
+            # fragile full-domain array here.
+            continue
         elif geometry_name in fdm_assets:
             asset = fdm_assets[geometry_name]
             sample_points = _fdm_cell_centers_from_asset(asset)

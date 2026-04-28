@@ -9,6 +9,13 @@ import {
   useSlice2DToolbarStore,
   type Slice2DToolbarState,
 } from "@/src/features/slice2d";
+import {
+  positionPercentFromSliceIndex,
+  resolveEffectiveSlicePlane,
+  resolveSliceAxisSelection,
+  sliceIndexFromPositionPercent,
+  sliceAxisFromPlane,
+} from "@/src/features/slice2d/axisMapping";
 import type {
   AirboxDisplayPatch,
   ViewportMeshRenderMode,
@@ -245,18 +252,6 @@ function resolveFiniteMin(values: number[]): number | null {
 function resolveFiniteMax(values: number[]): number | null {
   if (values.length === 0) return null;
   return Math.max(...values);
-}
-
-function sliceAxisFromPlane(plane: "xy" | "xz" | "yz"): Slice2DToolbarState["axis"] {
-  if (plane === "yz") return "x";
-  if (plane === "xz") return "y";
-  return "z";
-}
-
-function planeFromSliceAxis(axis: Slice2DToolbarState["axis"]): "xy" | "xz" | "yz" {
-  if (axis === "x") return "yz";
-  if (axis === "y") return "xz";
-  return "xy";
 }
 
 function normalizeSliceComponent(
@@ -1201,8 +1196,20 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.handleViewModeChange("3D");
   }, [ctx, handleSelectModelNode, hasSharedAirboxDomain, openMeshNode]);
 
+  const handleOpenMeshTransition = useCallback(() => {
+    openMeshNode(hasSharedAirboxDomain ? "mesh-transition" : "universe-mesh-transition");
+    ctx.openFemMeshWorkspace("mesher");
+    ctx.handleViewModeChange("3D");
+  }, [ctx, hasSharedAirboxDomain, openMeshNode]);
+
   const handleOpenMeshMethod = useCallback(() => {
-    openMeshNode(hasSharedAirboxDomain ? "mesh-pipeline" : "universe-mesh-size");
+    openMeshNode(hasSharedAirboxDomain ? "mesh-algorithm" : "universe-mesh-algorithm");
+    ctx.openFemMeshWorkspace("mesher");
+    ctx.handleViewModeChange("3D");
+  }, [ctx, hasSharedAirboxDomain, openMeshNode]);
+
+  const handleOpenMeshOptimization = useCallback(() => {
+    openMeshNode(hasSharedAirboxDomain ? "mesh-quality" : "universe-mesh-quality");
     ctx.openFemMeshWorkspace("mesher");
     ctx.handleViewModeChange("3D");
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
@@ -1430,62 +1437,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     openAnalyzeCenterTab,
   ]);
 
-  /* ── Loading state ── */
-  if (!ctx.session) {
-    if (hasNoActiveWorkspace) {
-      return (
-        <div className="relative flex h-full min-h-screen flex-col items-center justify-center overflow-hidden bg-background p-8 text-center text-sm text-muted-foreground">
-          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[40vw] max-h-[500px] w-[40vw] max-w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-[100px]" />
-
-          <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-6 rounded-md border border-border/60 bg-card/70 p-8 shadow-sm">
-            <div className="flex h-16 w-16 items-center justify-center rounded-md border border-border/70 bg-background/70">
-              <FullmagLogo size={52} className="drop-shadow-[0_0_16px_rgba(137,180,250,0.35)]" />
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <h1 className="text-lg font-semibold text-foreground">No active workspace</h1>
-              <p className="max-w-sm leading-6 text-muted-foreground">
-                Start or open a simulation from the launcher before entering the control room.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => router.push("/")}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-            >
-              Open launcher
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex flex-col items-center justify-center p-8 text-sm text-muted-foreground h-full bg-background relative overflow-hidden">
-        {/* Subtle background glow */}
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40vw] h-[40vw] max-w-[500px] max-h-[500px] bg-primary/5 blur-[100px] rounded-full pointer-events-none" />
-        
-        <div className="flex flex-col items-center gap-8 relative z-10 w-full max-w-sm">
-          <div className="relative flex items-center justify-center w-28 h-20">
-            <div className="absolute inset-0 rounded-2xl border border-primary/20 bg-card/40 backdrop-blur-xl shadow-2xl" />
-            <FullmagLogo size={96} animate className="relative z-10 drop-shadow-[0_0_20px_rgba(137,180,250,0.4)]" />
-          </div>
-          
-          <div className="flex flex-col items-center gap-3 text-center">
-            <span className="flex items-center gap-3">
-              <span className="w-5 h-5 rounded-full border-[3px] border-primary/20 border-t-primary animate-spin" />
-              <span className="font-bold tracking-[0.2em] text-primary/90 uppercase text-xs">
-                {ctx.error ? "Connection Error" : "Initializing Workspace"}
-              </span>
-            </span>
-            <span className="text-muted-foreground/70 text-xs font-medium">
-              {ctx.error ? ctx.error : "Connecting to local Fullmag session..."}
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const previewNotices = (
     <>
       {(spatialPreview?.auto_downscaled || ctx.liveState?.preview_auto_downscaled) && (
@@ -1555,13 +1506,25 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     void ctx.patchDisplay({ auto_contrast: enabled });
   };
 
+  const effectiveSlicePlane = resolveEffectiveSlicePlane({
+    plane: ctx.plane,
+    clipAxis: ctx.meshClipAxis,
+    preferClipAxis: Boolean(femDiscretization),
+  });
+
   const slice2DToolbar = useMemo<Slice2DToolbarState>(() => ({
     quantityId: String(ctx.requestedPreviewQuantity ?? ctx.selectedQuantity ?? "m"),
     component: normalizeSliceComponent(ctx.requestedPreviewComponent ?? ctx.component),
-    axis: sliceAxisFromPlane(ctx.plane),
+    axis: sliceAxisFromPlane(effectiveSlicePlane),
     mode: ctx.requestedPreviewAllLayers ? "all_layers" : "single",
     layerIndex: ctx.sliceIndex,
-    positionPercent: ctx.meshClipPos ?? 50,
+    positionPercent: femDiscretization
+      ? (ctx.meshClipPos ?? 50)
+      : positionPercentFromSliceIndex({
+        grid: ctx.previewGrid,
+        plane: effectiveSlicePlane,
+        sliceIndex: ctx.sliceIndex,
+      }),
     thicknessPercent: null,
     colormap: "viridis",
     autoContrast: Boolean(ctx.requestedPreviewAutoScale ?? true),
@@ -1577,14 +1540,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.component,
     ctx.femViewportLayers,
     ctx.meshClipPos,
+    ctx.meshClipAxis,
     ctx.meshShowArrows,
-    ctx.plane,
+    ctx.previewGrid,
     ctx.requestedPreviewAllLayers,
     ctx.requestedPreviewAutoScale,
     ctx.requestedPreviewComponent,
     ctx.requestedPreviewQuantity,
     ctx.selectedQuantity,
     ctx.sliceIndex,
+    effectiveSlicePlane,
     slice2DToolbarPatch,
   ]);
 
@@ -1594,7 +1559,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ? (ctx.meshEntityViewState[airboxRepresentativePart.id]?.renderMode
       ?? defaultMeshEntityViewState(airboxRepresentativePart).renderMode)
     : null;
-
   const handleRibbonSlice2DToolbar = (patch: Partial<Slice2DToolbarState>) => {
     patchSlice2DToolbar(patch);
     if (patch.quantityId) {
@@ -1604,13 +1568,40 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       handleRibbonPreviewComponent(patch.component);
     }
     if (patch.axis) {
-      ctx.setPlane(planeFromSliceAxis(patch.axis));
+      const nextSliceAxis = resolveSliceAxisSelection({
+        axis: patch.axis,
+        syncClipAxis: Boolean(femDiscretization),
+      });
+      ctx.setPlane(nextSliceAxis.plane);
+      if (nextSliceAxis.clipAxis) {
+        ctx.setMeshClipAxis(nextSliceAxis.clipAxis);
+      }
     }
     if (patch.mode) {
       void ctx.patchDisplay({ slice_mode: patch.mode === "all_layers" ? "all" : patch.mode });
     }
+    if (typeof patch.layerIndex === "number") {
+      ctx.setSliceIndex(patch.layerIndex);
+      void ctx.patchDisplay({ slice_layer: patch.layerIndex });
+      if (femDiscretization) {
+        ctx.setMeshClipPos(
+          positionPercentFromSliceIndex({
+            grid: ctx.previewGrid,
+            plane: effectiveSlicePlane,
+            sliceIndex: patch.layerIndex,
+          }),
+        );
+      }
+    }
     if (typeof patch.positionPercent === "number") {
+      const nextSliceIndex = sliceIndexFromPositionPercent({
+        grid: ctx.previewGrid,
+        plane: effectiveSlicePlane,
+        positionPercent: patch.positionPercent,
+      });
       ctx.setMeshClipPos(patch.positionPercent);
+      ctx.setSliceIndex(nextSliceIndex);
+      void ctx.patchDisplay({ slice_layer: nextSliceIndex });
     }
     if (patch.colormap) {
       handleRibbonPreviewColormap(patch.colormap);
@@ -1894,6 +1885,61 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     });
   }, [ctx.meshParts, ctx.setMeshEntityViewState, ctx.setMeshRenderMode]);
 
+  /* ── Loading state ── */
+  if (!ctx.session) {
+    if (hasNoActiveWorkspace) {
+      return (
+        <div className="relative flex h-full min-h-screen flex-col items-center justify-center overflow-hidden bg-background p-8 text-center text-sm text-muted-foreground">
+          <div className="pointer-events-none absolute left-1/2 top-1/2 h-[40vw] max-h-[500px] w-[40vw] max-w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-[100px]" />
+
+          <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-6 rounded-md border border-border/60 bg-card/70 p-8 shadow-sm">
+            <div className="flex h-16 w-16 items-center justify-center rounded-md border border-border/70 bg-background/70">
+              <FullmagLogo size={52} className="drop-shadow-[0_0_16px_rgba(137,180,250,0.35)]" />
+            </div>
+            <div className="flex flex-col items-center gap-2">
+              <h1 className="text-lg font-semibold text-foreground">No active workspace</h1>
+              <p className="max-w-sm leading-6 text-muted-foreground">
+                Start or open a simulation from the launcher before entering the control room.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => router.push("/")}
+              className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              Open launcher
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex h-full flex-col items-center justify-center overflow-hidden bg-background p-8 text-sm text-muted-foreground relative">
+        <div className="pointer-events-none absolute left-1/2 top-1/2 h-[40vw] max-h-[500px] w-[40vw] max-w-[500px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/5 blur-[100px]" />
+
+        <div className="relative z-10 flex w-full max-w-sm flex-col items-center gap-8">
+          <div className="relative flex h-20 w-28 items-center justify-center">
+            <div className="absolute inset-0 rounded-2xl border border-primary/20 bg-card/40 shadow-2xl backdrop-blur-xl" />
+            <FullmagLogo size={96} animate className="relative z-10 drop-shadow-[0_0_20px_rgba(137,180,250,0.4)]" />
+          </div>
+
+          <div className="flex flex-col items-center gap-3 text-center">
+            <span className="flex items-center gap-3">
+              <span className="h-5 w-5 animate-spin rounded-full border-[3px] border-primary/20 border-t-primary" />
+              <span className="text-xs font-bold uppercase tracking-[0.2em] text-primary/90">
+                {ctx.error ? "Connection Error" : "Initializing Workspace"}
+              </span>
+            </span>
+            <span className="text-xs font-medium text-muted-foreground/70">
+              {ctx.error ? ctx.error : "Connecting to local Fullmag session..."}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableControlRoomShell) {
     return (
       <div className="flex min-h-[50vh] w-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
@@ -2011,7 +2057,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onOpenMeshStatistics={handleOpenMeshStatistics}
         onOpenMeshQuality={handleOpenMeshQuality}
         onOpenMeshSizeSettings={handleOpenMeshSize}
+        onOpenMeshTransitionSettings={handleOpenMeshTransition}
         onOpenMeshMethodSettings={handleOpenMeshMethod}
+        onOpenMeshOptimizationSettings={handleOpenMeshOptimization}
         onOpenMeshPipeline={handleOpenMeshPipeline}
         selectedObjectId={ctx.selectedObjectId}
         sceneObjectCount={ctx.sceneDocument?.objects.length ?? 0}

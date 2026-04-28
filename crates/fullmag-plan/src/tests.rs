@@ -1,6 +1,164 @@
 use super::*;
 
 #[test]
+fn fem_domain_full_sampled_field_copies_by_global_node_indices() {
+    let mesh = MeshIR {
+        mesh_name: "shared".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 1, 2]],
+        boundary_markers: vec![1],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let segment = fullmag_ir::FemObjectSegmentIR {
+        object_id: "free_geom".to_string(),
+        geometry_id: Some("free_geom".to_string()),
+        node_start: 0,
+        node_count: 2,
+        element_start: 0,
+        element_count: 1,
+        boundary_face_start: 0,
+        boundary_face_count: 1,
+    };
+    let mesh_parts = vec![fullmag_ir::FemMeshPartIR {
+        id: "part:free".to_string(),
+        label: "free".to_string(),
+        role: fullmag_ir::FemMeshPartRole::MagneticObject,
+        object_id: Some("free_geom".to_string()),
+        geometry_id: Some("free_geom".to_string()),
+        material_id: None,
+        element_selector: fullmag_ir::FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+        boundary_face_selector: fullmag_ir::FemMeshPartSelector::BoundaryFaceRange {
+            start: 0,
+            count: 1,
+        },
+        node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
+        boundary_face_indices: Vec::new(),
+        node_indices: vec![3, 1],
+        surface_faces: Vec::new(),
+        bounds_min: None,
+        bounds_max: None,
+        parent_id: None,
+    }];
+    let entry = crate::mesh::MagnetPlanningEntry {
+        magnet_name: "free".to_string(),
+        geometry_name: "free_geom".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::SampledField {
+            values: vec![
+                [0.0, 10.0, 100.0],
+                [1.0, 11.0, 101.0],
+                [2.0, 12.0, 102.0],
+                [3.0, 13.0, 103.0],
+                [4.0, 14.0, 104.0],
+            ],
+        }),
+    };
+    let mut target = vec![[0.0, 0.0, 0.0]; mesh.nodes.len()];
+
+    crate::fem::assign_domain_initial_for_segment(
+        &mut target,
+        &mesh,
+        &mesh_parts,
+        &segment,
+        &entry,
+    )
+    .expect("full-domain sampled field should copy by global indices");
+
+    assert_eq!(target[3], [3.0, 13.0, 103.0]);
+    assert_eq!(target[1], [1.0, 11.0, 101.0]);
+    assert_eq!(target[0], [0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn fem_domain_preset_texture_samples_final_mesh_node_order() {
+    let mesh = MeshIR {
+        mesh_name: "shared".to_string(),
+        nodes: vec![
+            [0.0, 1.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [20.0, 20.0, 0.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 1, 2]],
+        boundary_markers: vec![1],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
+        per_domain_quality: std::collections::HashMap::new(),
+    };
+    let segment = fullmag_ir::FemObjectSegmentIR {
+        object_id: "free_geom".to_string(),
+        geometry_id: Some("free_geom".to_string()),
+        node_start: 0,
+        node_count: 2,
+        element_start: 0,
+        element_count: 1,
+        boundary_face_start: 0,
+        boundary_face_count: 1,
+    };
+    let mesh_parts = vec![fullmag_ir::FemMeshPartIR {
+        id: "part:free".to_string(),
+        label: "free".to_string(),
+        role: fullmag_ir::FemMeshPartRole::MagneticObject,
+        object_id: Some("free_geom".to_string()),
+        geometry_id: Some("free_geom".to_string()),
+        material_id: None,
+        element_selector: fullmag_ir::FemMeshPartSelector::ElementRange { start: 0, count: 1 },
+        boundary_face_selector: fullmag_ir::FemMeshPartSelector::BoundaryFaceRange {
+            start: 0,
+            count: 1,
+        },
+        node_selector: fullmag_ir::FemMeshPartSelector::NodeRange { start: 0, count: 2 },
+        boundary_face_indices: Vec::new(),
+        node_indices: vec![2, 0],
+        surface_faces: Vec::new(),
+        bounds_min: None,
+        bounds_max: None,
+        parent_id: None,
+    }];
+    let entry = crate::mesh::MagnetPlanningEntry {
+        magnet_name: "free".to_string(),
+        geometry_name: "free_geom".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
+            preset_kind: "vortex".to_string(),
+            params: std::collections::BTreeMap::from([
+                ("circulation".to_string(), serde_json::json!(1)),
+                ("core_polarity".to_string(), serde_json::json!(1)),
+                ("core_radius".to_string(), serde_json::json!(1e-12)),
+            ]),
+            mapping: fullmag_ir::TextureMappingIR::default(),
+            texture_transform: fullmag_ir::TextureTransform3DIR::default(),
+        }),
+    };
+    let mut target = vec![[0.0, 0.0, 0.0]; mesh.nodes.len()];
+
+    crate::fem::assign_domain_initial_for_segment(
+        &mut target,
+        &mesh,
+        &mesh_parts,
+        &segment,
+        &entry,
+    )
+    .expect("preset texture should sample final mesh nodes");
+
+    assert!(target[2][0].abs() <= 1e-12);
+    assert!((target[2][1] - 1.0).abs() <= 1e-12);
+    assert!((target[0][0] + 1.0).abs() <= 1e-12);
+    assert!(target[0][1].abs() <= 1e-12);
+    assert_eq!(target[1], [0.0, 0.0, 0.0]);
+}
+
+#[test]
 fn mesh_parts_from_shared_domain_produces_air_and_magnetic() {
     let mesh = MeshIR {
         mesh_name: "shared".to_string(),

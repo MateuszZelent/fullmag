@@ -27,7 +27,7 @@ def build() -> fm.Problem:
         name="py_layer_with_hole",
         geometry=body,
         material=py,
-        m0=fm.init.uniform((1.0, 0.0, 0.0)),
+        m0=fm.texture.uniform((1.0, 0.0, 0.0)),
     )
 
     return fm.Problem(

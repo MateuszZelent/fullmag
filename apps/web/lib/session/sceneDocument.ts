@@ -7,6 +7,10 @@ import type {
   ScriptBuilderState,
   Transform3D,
 } from "./types";
+import {
+  buildDefaultScriptBuilderMagnetization,
+  normalizeScriptBuilderMagnetization,
+} from "./magnetizationCanonical";
 import { ensureObjectPhysicsStack } from "./magneticPhysics";
 
 function zeroVec3(): [number, number, number] {
@@ -67,36 +71,32 @@ function buildMagnetizationAsset(
   name: string,
   magnetization: ScriptBuilderMagnetizationEntry,
 ): MagnetizationAsset {
-  const inferredKind =
-    magnetization.kind === "file" &&
-    (magnetization.dataset != null || magnetization.sample_index != null)
-      ? "sampled"
-      : magnetization.kind;
+  const normalized = normalizeScriptBuilderMagnetization(magnetization);
   return {
     id: magnetizationIdForGeometry(name),
     name: `${name} magnetization`,
-    kind: inferredKind,
-    value: magnetization.value ?? null,
-    seed: magnetization.seed ?? null,
-    source_path: magnetization.source_path ?? null,
-    source_format: magnetization.source_format ?? null,
-    dataset: magnetization.dataset ?? null,
-    sample_index: magnetization.sample_index ?? null,
-    mapping: magnetization.mapping ?? {
+    kind: normalized.kind,
+    value: normalized.value ?? null,
+    seed: normalized.seed ?? null,
+    source_path: normalized.source_path ?? null,
+    source_format: normalized.source_format ?? null,
+    dataset: normalized.dataset ?? null,
+    sample_index: normalized.sample_index ?? null,
+    mapping: normalized.mapping ?? {
       space: "object",
       projection: "object_local",
       clamp_mode: "none",
     },
-    texture_transform: magnetization.texture_transform ?? {
+    texture_transform: normalized.texture_transform ?? {
       translation: zeroVec3(),
       rotation_quat: identityQuat(),
       scale: oneVec3(),
       pivot: zeroVec3(),
     },
-    preset_kind: magnetization.preset_kind ?? null,
-    preset_params: magnetization.preset_params ?? null,
-    preset_version: magnetization.preset_version ?? null,
-    ui_label: magnetization.ui_label ?? null,
+    preset_kind: normalized.preset_kind ?? null,
+    preset_params: normalized.preset_params ?? null,
+    preset_version: normalized.preset_version ?? null,
+    ui_label: normalized.ui_label ?? null,
   };
 }
 
@@ -200,17 +200,9 @@ function magnetizationForObject(
     (candidate) => candidate.id === object.magnetization_ref,
   );
   if (!asset) {
-    return {
-      kind: "uniform",
-      value: [1, 0, 0],
-      seed: null,
-      source_path: null,
-      source_format: null,
-      dataset: null,
-      sample_index: null,
-    };
+    return buildDefaultScriptBuilderMagnetization([1, 0, 0]);
   }
-  return {
+  return normalizeScriptBuilderMagnetization({
     kind: asset.kind,
     value: asset.value,
     seed: asset.seed,
@@ -224,7 +216,7 @@ function magnetizationForObject(
     preset_params: asset.preset_params,
     preset_version: asset.preset_version,
     ui_label: asset.ui_label,
-  };
+  });
 }
 
 export function buildScriptBuilderFromSceneDocument(

@@ -119,6 +119,12 @@ const STATIC_NODES: Record<string, StaticEntry> = {
     scope: "mesh_affecting",
     sourceOfTruth: "mesh_options",
   },
+  "universe-mesh-transition": {
+    nodeKind: "universe.mesh.transition",
+    domain: "build",
+    scope: "mesh_affecting",
+    sourceOfTruth: "mesh_options",
+  },
   "universe-mesh-statistics": {
     nodeKind: "universe.mesh.statistics",
     domain: "build",
@@ -277,6 +283,12 @@ const STATIC_NODES: Record<string, StaticEntry> = {
   },
   "mesh-algorithm": {
     nodeKind: "mesh.algorithm",
+    domain: "build",
+    scope: "mesh_affecting",
+    sourceOfTruth: "mesh_options",
+  },
+  "mesh-transition": {
+    nodeKind: "mesh.transition",
     domain: "build",
     scope: "mesh_affecting",
     sourceOfTruth: "mesh_options",

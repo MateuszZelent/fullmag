@@ -144,8 +144,8 @@ const COLOR_OPTIONS: { value: FemColorField; label: string; fullLabel: string }[
   { value: "x", label: "m_x", fullLabel: "Field X" },
   { value: "y", label: "m_y", fullLabel: "Field Y" },
   { value: "magnitude", label: "|m|", fullLabel: "|Field|" },
-  { value: "quality", label: "Qual", fullLabel: "Quality AR" },
-  { value: "sicn", label: "SICN", fullLabel: "SICN" },
+  { value: "quality", label: "Surf AR", fullLabel: "Surface Aspect Ratio" },
+  { value: "sicn", label: "Surf SICN", fullLabel: "Surface SICN Diagnostic" },
   { value: "none", label: "—", fullLabel: "None" },
 ];
 

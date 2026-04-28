@@ -29,6 +29,7 @@ interface MeshSettingsPanelProps {
   nodeCount?: number;
   waitMode?: boolean;
   showAdaptiveSection?: boolean;
+  focus?: "all" | "size" | "transition" | "method" | "optimization";
 }
 
 /* ── Algorithm options ─────────────────────────────────────────────── */
@@ -233,6 +234,7 @@ export default function MeshSettingsPanel({
   generatingLabel = "Building Mesh...",
   nodeCount,
   showAdaptiveSection = true,
+  focus = "all",
 }: MeshSettingsPanelProps) {
   const sicnCanvasRef = useRef<HTMLCanvasElement>(null);
   const gammaCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -244,6 +246,12 @@ export default function MeshSettingsPanel({
   );
   const sizeControlMode = options.sizeControlMode || "predefined";
   const isCustomSizeMode = sizeControlMode === "custom";
+  const showAllSections = focus === "all";
+  const showMethodSection = focus === "all" || focus === "method";
+  const showSizeSection = focus === "all" || focus === "size";
+  const showTransitionSection = focus === "all" || focus === "transition";
+  const showOptimizationSection = focus === "all" || focus === "optimization";
+  const advancedControlsVisible = showAdvanced || !showAllSections;
   const adaptiveIndicatorValue =
     options.adaptiveIndicator === "micromagnetics_hybrid" ||
     options.adaptiveIndicator === "magnetostatic_potential"
@@ -296,6 +304,7 @@ export default function MeshSettingsPanel({
   return (
     <div className="flex flex-col gap-3 p-3">
       {/* ── Basic / Advanced Toggle ── */}
+      {showAllSections ? (
       <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/25 bg-background/25 px-3 py-2.5">
         <div>
           <div className="text-[0.62rem] font-semibold tracking-[0.12em] text-muted-foreground">
@@ -313,9 +322,10 @@ export default function MeshSettingsPanel({
           {showAdvanced ? "Basic view" : "Advanced view"}
         </button>
       </div>
+      ) : null}
 
       {/* ── Algorithm Selection ── */}
-      {showAdvanced && (
+      {showMethodSection && advancedControlsVisible && (
         <InspectorSection
           title="Mesher"
           eyebrow="Advanced"
@@ -365,6 +375,7 @@ export default function MeshSettingsPanel({
       )}
 
       {/* ── Size Control ── */}
+      {showSizeSection ? (
       <InspectorSection
         title="Element size"
         eyebrow="Basic"
@@ -519,7 +530,7 @@ export default function MeshSettingsPanel({
             </div>
           </div>
         )}
-        {showAdvanced ? (
+        {advancedControlsVisible ? (
           <InspectorField
             label="Global size factor"
             hint="Applies a global multiplier on top of local sizing rules."
@@ -538,9 +549,10 @@ export default function MeshSettingsPanel({
           />
         ) : null}
       </InspectorSection>
+      ) : null}
 
       {/* ── Interface & Transition (COMSOL-like region controls) ── */}
-      {showAdvanced && (
+      {showTransitionSection && advancedControlsVisible && (
       <InspectorSection
         title="Interface & Transition"
         eyebrow="Advanced"
@@ -606,7 +618,7 @@ export default function MeshSettingsPanel({
       )}
 
       {/* ── Optimization ── */}
-      {showAdvanced && (
+      {showOptimizationSection && advancedControlsVisible && (
         <InspectorSection title="Optimization" eyebrow="Advanced">
           <InspectorField
             label="Method"

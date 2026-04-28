@@ -5,7 +5,14 @@ import {
   type MagneticPresetDescriptor,
   type MagneticPresetKind,
 } from "../magnetizationPresetCatalog";
-import { fitPresetParamsToBounds } from "../textureTransform";
+import { fitPresetParamsToBounds, fitTextureToBounds, type TextureTransform3D } from "../textureTransform";
+import {
+  quatInverse,
+  quatMultiply,
+  removeAffineTransformFromPoint,
+  removeLinearTransformFromPoint,
+  scaleVec3Components,
+} from "../textureTransformMath";
 
 function cloneSceneDocument(scene: SceneDocument): SceneDocument {
   // structuredClone is safe here as SceneDocument is pure JSON-serializable data
@@ -14,6 +21,27 @@ function cloneSceneDocument(scene: SceneDocument): SceneDocument {
 
 function isMagneticPresetKind(value: string): value is MagneticPresetKind {
   return MAGNETIC_PRESET_CATALOG.some((descriptor) => descriptor.kind === value);
+}
+
+function textureTransformWorldToObject(
+  transform: TextureTransform3D,
+  objectTransform: {
+    translation: [number, number, number];
+    rotation_quat: [number, number, number, number];
+    scale: [number, number, number];
+  },
+): TextureTransform3D {
+  const invR = quatInverse(objectTransform.rotation_quat);
+  return {
+    translation: removeAffineTransformFromPoint(transform.translation, objectTransform),
+    rotation_quat: quatMultiply(invR, transform.rotation_quat),
+    scale: scaleVec3Components(transform.scale, [
+      objectTransform.scale[0] !== 0 ? 1 / objectTransform.scale[0] : 0,
+      objectTransform.scale[1] !== 0 ? 1 / objectTransform.scale[1] : 0,
+      objectTransform.scale[2] !== 0 ? 1 / objectTransform.scale[2] : 0,
+    ]),
+    pivot: removeLinearTransformFromPoint(transform.pivot, objectTransform),
+  };
 }
 
 export function patchMagnetizationAsset(
@@ -126,6 +154,7 @@ export function fitTextureToObject(
 
   const asset = scene.magnetization_assets.find((a) => a.id === assetId);
   const presetKind = asset?.preset_kind;
+  const mappingSpace = asset?.mapping?.space === "world" ? "world" : "object";
 
   // For metric analytic presets, fit *preset parameters* to geometry instead
   // of scaling the coordinate system (which breaks physical dimensions).
@@ -135,33 +164,40 @@ export function fitTextureToObject(
     METRIC_ANALYTIC_PRESETS.has(presetKind)
   ) {
     const currentParams = asset?.preset_params ?? {};
-    const { params: fittedParams, transform } = fitPresetParamsToBounds(
+    const { params: fittedParams, transform: worldTransform } = fitPresetParamsToBounds(
       presetKind,
       currentParams,
       boundsMin as [number, number, number],
       boundsMax as [number, number, number],
     );
+    const transform =
+      mappingSpace === "object"
+        ? textureTransformWorldToObject(worldTransform, {
+            translation: object.transform.translation,
+            rotation_quat: object.transform.rotation_quat,
+            scale: object.transform.scale,
+          })
+        : worldTransform;
     return patchMagnetizationAsset(scene, assetId, {
       preset_params: fittedParams,
       texture_transform: transform,
     });
   }
 
-  // For non-metric presets, use the classic bounds-extent fit.
-  const cx = (boundsMin[0] + boundsMax[0]) / 2;
-  const cy = (boundsMin[1] + boundsMax[1]) / 2;
-  const cz = (boundsMin[2] + boundsMax[2]) / 2;
-
-  const ex = Math.abs(boundsMax[0] - boundsMin[0]);
-  const ey = Math.abs(boundsMax[1] - boundsMin[1]);
-  const ez = Math.abs(boundsMax[2] - boundsMin[2]);
+  const worldTransform = fitTextureToBounds(
+    boundsMin as [number, number, number],
+    boundsMax as [number, number, number],
+  );
+  const textureTransform =
+    mappingSpace === "object"
+      ? textureTransformWorldToObject(worldTransform, {
+          translation: object.transform.translation,
+          rotation_quat: object.transform.rotation_quat,
+          scale: object.transform.scale,
+        })
+      : worldTransform;
 
   return patchMagnetizationAsset(scene, assetId, {
-    texture_transform: {
-      translation: [cx, cy, cz],
-      rotation_quat: [0, 0, 0, 1],
-      scale: [ex, ey, ez],
-      pivot: [0, 0, 0],
-    },
+    texture_transform: textureTransform,
   });
 }

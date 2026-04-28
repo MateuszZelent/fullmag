@@ -7,6 +7,7 @@
  * The authoring store dispatches these commands and manages the draft lifecycle.
  */
 
+import { buildDefaultMagnetizationAsset } from "@/lib/session/magnetizationCanonical";
 import type { SceneDocument, SceneObject, Transform3D, ScriptBuilderMaterialEntry, ScriptBuilderPerGeometryMeshEntry } from "@/lib/session/types";
 
 // ─── Add Node ───────────────────────────────────────────────────
@@ -63,28 +64,7 @@ export function addNode(draft: SceneDocument, params: AddNodeParams): SceneDocum
     ],
     magnetization_assets: [
       ...draft.magnetization_assets,
-      {
-        id: magnetizationId,
-        name: `${params.name} magnetization`,
-        kind: "uniform",
-        value: [1, 0, 0],
-        seed: null,
-        source_path: null,
-        source_format: null,
-        dataset: null,
-        sample_index: null,
-        mapping: { space: "object", projection: "object_local", clamp_mode: "none" },
-        texture_transform: {
-          translation: [0, 0, 0],
-          rotation_quat: [0, 0, 0, 1],
-          scale: [1, 1, 1],
-          pivot: [0, 0, 0],
-        },
-        preset_kind: null,
-        preset_params: null,
-        preset_version: null,
-        ui_label: null,
-      },
+      buildDefaultMagnetizationAsset(params.name, [1, 0, 0]),
     ],
   };
 }
