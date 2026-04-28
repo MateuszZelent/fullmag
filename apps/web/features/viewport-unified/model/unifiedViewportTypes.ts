@@ -22,6 +22,8 @@ export interface FemViewportLayerState {
   showPrimitives: boolean;
   /** Show mesh wireframe overlay. */
   showMesh: boolean;
+  /** Show ferromagnet magnetic-texture shading when quantity overlay is hidden. */
+  showMagneticTexture: boolean;
   /** Show field quantity colour overlay. */
   showQuantity: boolean;
 }
@@ -29,6 +31,7 @@ export interface FemViewportLayerState {
 export const DEFAULT_FEM_VIEWPORT_LAYER_STATE: FemViewportLayerState = {
   showPrimitives: true,
   showMesh: false,
+  showMagneticTexture: true,
   showQuantity: true,
 };
 

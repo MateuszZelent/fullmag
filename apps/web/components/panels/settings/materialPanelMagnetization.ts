@@ -1,4 +1,5 @@
 import type { MagnetizationAsset } from "../../../lib/session/types";
+import { MAGNETIC_PRESET_CATALOG } from "../../../lib/magnetizationPresetCatalog";
 
 export const DEFAULT_TEXTURE_MAPPING = {
   space: "object",
@@ -18,9 +19,30 @@ export function buildMagnetizationAssetFingerprint(args: {
   asset: MagnetizationAsset;
 }): string {
   const { objectId, asset } = args;
+  const presetDescriptor =
+    asset.preset_kind != null
+      ? MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === asset.preset_kind)
+      : null;
+  const presetParams =
+    asset.kind === "preset_texture" && presetDescriptor
+      ? {
+          ...presetDescriptor.defaultParams,
+          ...(asset.preset_params ?? {}),
+        }
+      : (asset.preset_params ?? {});
+  const mapping = {
+    space: asset.mapping?.space ?? DEFAULT_TEXTURE_MAPPING.space,
+    projection: asset.mapping?.projection ?? DEFAULT_TEXTURE_MAPPING.projection,
+    clamp_mode: asset.mapping?.clamp_mode ?? DEFAULT_TEXTURE_MAPPING.clamp_mode,
+  };
+  const textureTransform = {
+    translation: asset.texture_transform?.translation ?? DEFAULT_TEXTURE_TRANSFORM.translation,
+    rotation_quat: asset.texture_transform?.rotation_quat ?? DEFAULT_TEXTURE_TRANSFORM.rotation_quat,
+    scale: asset.texture_transform?.scale ?? DEFAULT_TEXTURE_TRANSFORM.scale,
+    pivot: asset.texture_transform?.pivot ?? DEFAULT_TEXTURE_TRANSFORM.pivot,
+  };
   return JSON.stringify({
     objectId,
-    assetId: asset.id,
     kind: asset.kind,
     value: asset.value ?? null,
     seed: asset.seed ?? null,
@@ -29,9 +51,9 @@ export function buildMagnetizationAssetFingerprint(args: {
     dataset: asset.dataset ?? null,
     sampleIndex: asset.sample_index ?? null,
     presetKind: asset.preset_kind,
-    presetParams: asset.preset_params ?? {},
-    mapping: asset.mapping ?? DEFAULT_TEXTURE_MAPPING,
-    textureTransform: asset.texture_transform ?? DEFAULT_TEXTURE_TRANSFORM,
+    presetParams,
+    mapping,
+    textureTransform,
   });
 }
 

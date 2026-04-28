@@ -44,6 +44,7 @@ export function slice2DToolbarFromDisplay(
     autoContrast: quantity.autoContrast,
     showPrimitives: true,
     showMesh: false,
+    showMagneticTexture: true,
     showAirbox: false,
     showQuantity: true,
     showVectors: display.vector_glyphs,
@@ -117,6 +118,7 @@ export function buildSlice2DModel(args: {
     overlays: {
       showPrimitives: toolbar.showPrimitives,
       showMesh: toolbar.showMesh,
+      showMagneticTexture: toolbar.showMagneticTexture,
       showAirbox: toolbar.showAirbox,
       showQuantity: toolbar.showQuantity,
       showVectors: toolbar.showVectors,

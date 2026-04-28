@@ -155,6 +155,7 @@ export interface RibbonBuildContext {
   sidebarVisible: boolean;
   previewPending: boolean;
   airboxVisible: boolean;
+  magneticTextureVisible: boolean;
   quantityShaderVisible: boolean;
   viewportAxesScope: "universe" | "object";
   universeWireframeVisible: boolean;
@@ -176,6 +177,7 @@ export interface RibbonBuildContext {
   requestedPreviewQuantityDataStatus?: string | null;
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
+  selectedObjectTextureVisible?: boolean | null;
   selectedObjectOpacity?: number | null;
   selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
   meshClipEnabled?: boolean | null;

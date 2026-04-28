@@ -235,6 +235,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   shouldRenderMagneticGeometry,
   magneticVisibilityMode,
   field,
+  airColorField,
+  magneticColorField,
   renderMode,
   effectiveOpacity,
   magneticBoundaryFaceIndices,
@@ -306,6 +308,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   shouldRenderMagneticGeometry: boolean;
   magneticVisibilityMode: "hide" | "ghost";
   field: FemColorField;
+  airColorField: FemColorField;
+  magneticColorField: FemColorField;
   renderMode: RenderMode;
   effectiveOpacity: number;
   magneticBoundaryFaceIndices: number[] | null;
@@ -374,8 +378,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         fields.add(layer.viewState.colorField);
       }
     } else {
-      fields.add(meshData.quantityDomain === "full_domain" ? field : "none");
-      fields.add(magneticVisibilityMode === "ghost" ? "none" : field);
+      fields.add(meshData.quantityDomain === "full_domain" ? airColorField : "none");
+      fields.add(magneticVisibilityMode === "ghost" ? "none" : magneticColorField);
     }
     const next = new Map<FemColorField, Float32Array>();
     for (const colorField of fields) {
@@ -447,8 +451,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       {showSceneGeometry && showAirGeometry && !hasMeshParts && shouldRenderAirGeometry ? (
         <FemGeometry
           meshData={meshData}
-          field={meshData.quantityDomain === "full_domain" ? field : "none"}
-          sharedBaseVertexColors={sharedVertexColorsByField.get(meshData.quantityDomain === "full_domain" ? field : "none") ?? null}
+          field={meshData.quantityDomain === "full_domain" ? airColorField : "none"}
+          sharedBaseVertexColors={sharedVertexColorsByField.get(meshData.quantityDomain === "full_domain" ? airColorField : "none") ?? null}
           renderMode={renderMode}
           opacity={airSegmentOpacity}
           displayBoundaryFaceIndices={airBoundaryFaceIndices}
@@ -480,11 +484,11 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       {showSceneGeometry && showMagneticGeometry && !hasMeshParts && shouldRenderMagneticGeometry ? (
         <FemGeometry
           meshData={meshData}
-          field={magneticVisibilityMode === "ghost" ? "none" : field}
+          field={magneticVisibilityMode === "ghost" ? "none" : magneticColorField}
           sharedBaseVertexColors={
             magneticVisibilityMode === "ghost"
               ? null
-              : sharedVertexColorsByField.get(field) ?? null
+              : sharedVertexColorsByField.get(magneticColorField) ?? null
           }
           renderMode={renderMode}
           opacity={magneticVisibilityMode === "ghost" ? Math.min(effectiveOpacity, 22) : effectiveOpacity}

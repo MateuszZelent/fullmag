@@ -2145,7 +2145,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       !binaryFieldTransportEnabled ||
       !isFemBackend ||
       effectiveViewMode !== "3D" ||
-      (!meshShowArrows && !femViewportLayers.showQuantity) ||
+      (
+        !meshShowArrows &&
+        !femViewportLayers.showQuantity &&
+        !(femViewportLayers.showMagneticTexture && activeQuantityId === "m")
+      ) ||
       !activeQuantityId ||
       !selectedFieldFrame ||
       scopedFemVectorScopes.length === 0 ||
@@ -2173,6 +2177,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     femMesh?.generation_id,
     femMesh?.mesh_id,
     femMesh?.node_count,
+    femViewportLayers.showMagneticTexture,
     femViewportLayers.showQuantity,
     isFemBackend,
     meshShowArrows,

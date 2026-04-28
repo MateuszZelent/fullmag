@@ -77,6 +77,8 @@ const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
 interface Props {
   meshData: FemMeshData;
   colorField?: FemColorField;
+  airColorField?: FemColorField;
+  magneticColorField?: FemColorField;
   fieldLabel?: string;
   quantityId?: string;
   quantityOptions?: Array<{
@@ -176,6 +178,8 @@ interface Props {
 function FemMeshView3DInner({
   meshData,
   colorField = "orientation",
+  airColorField,
+  magneticColorField,
   fieldLabel,
   quantityId,
   quantityOptions = [],
@@ -795,6 +799,8 @@ function FemMeshView3DInner({
                 : "hide"
             }
             field={field}
+            airColorField={airColorField ?? colorField}
+            magneticColorField={magneticColorField ?? colorField}
             renderMode={runtimeRenderMode}
             effectiveOpacity={effectiveOpacity}
             magneticBoundaryFaceIndices={magneticBoundaryFaceIndices}

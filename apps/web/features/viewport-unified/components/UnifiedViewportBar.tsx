@@ -350,6 +350,7 @@ export const UnifiedViewportBar = memo(function UnifiedViewportBar({
         [
           { key: "showPrimitives", label: "Primitives" },
           { key: "showMesh", label: "Mesh" },
+          { key: "showMagneticTexture", label: "Texture" },
           { key: "showQuantity", label: "Quantity" },
         ] as const
       ).map(({ key, label }) => {

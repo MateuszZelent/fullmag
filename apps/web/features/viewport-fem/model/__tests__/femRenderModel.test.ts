@@ -198,6 +198,28 @@ describe("buildVisibleLayers", () => {
     expect(ghostLayer!.meshColor).toBe("#94a3b8");
   });
 
+  it("preserves points mode for ghosted magnetic parts in airbox_only mode", () => {
+    const air = makePart({ id: "air-1", role: "air", object_id: "air" });
+    const mag = makePart({ id: "mag-1", object_id: "obj-1" });
+    const viewState = {
+      "air-1": { visible: true, renderMode: "wireframe" as const, opacity: 28, colorField: "none" as const },
+      "mag-1": { visible: true, renderMode: "points" as const, opacity: 100, colorField: "orientation" as const },
+    };
+
+    const layers = buildVisibleLayers({
+      ...BASE_INPUT,
+      meshParts: [air, mag],
+      meshEntityViewState: viewState,
+      vectorDomainFilter: "airbox_only",
+      ferromagnetVisibilityMode: "ghost",
+      airSegmentVisible: true,
+    });
+
+    const ghostLayer = layers.find((layer) => layer.part.id === "mag-1");
+    expect(ghostLayer).toBeDefined();
+    expect(ghostLayer!.viewState.renderMode).toBe("points");
+  });
+
   it("does not hide magnetic parts in airbox_only when arrows are disabled", () => {
     const air = makePart({ id: "air-1", role: "air", object_id: "air" });
     const mag = makePart({ id: "mag-1", object_id: "obj-1" });

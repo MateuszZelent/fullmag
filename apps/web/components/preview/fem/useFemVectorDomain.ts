@@ -44,6 +44,16 @@ interface UseFemVectorDomainArgs {
   airSegmentVisible: boolean;
 }
 
+export function resolveRuntimeRenderMode(
+  renderMode: RenderMode,
+  interactionActive: boolean,
+): RenderMode {
+  if (!interactionActive) {
+    return renderMode;
+  }
+  return renderMode === "surface+edges" ? "surface" : renderMode;
+}
+
 export function useFemVectorDomain({
   enableVectorDerivedModel,
   missingExactScopeSegment,
@@ -320,15 +330,10 @@ export function useFemVectorDomain({
     return qualityProfile;
   })();
 
-  const runtimeRenderMode = useMemo<RenderMode>(() => {
-    if (!interactionActive) {
-      return renderMode;
-    }
-    if (renderMode === "surface+edges" || renderMode === "points") {
-      return "surface";
-    }
-    return renderMode;
-  }, [interactionActive, renderMode]);
+  const runtimeRenderMode = useMemo<RenderMode>(
+    () => resolveRuntimeRenderMode(renderMode, interactionActive),
+    [interactionActive, renderMode],
+  );
 
   const runtimeArrowDensity = useMemo(() => {
     if (!interactionActive || effectiveArrowDensity <= 0) {

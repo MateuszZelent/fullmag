@@ -689,6 +689,7 @@ export default function MaterialPanel({
   }, [remoteMagnetization, sceneObject]);
   const isMagnetizationDirty =
     magnetizationAssetHash != null &&
+    remoteMagnetizationAssetHash != null &&
     magnetizationAssetHash !== remoteMagnetizationAssetHash;
   const presetTextureSyncPercent = useMemo(() => {
     if (presetTextureSync.status === "done") return 100;

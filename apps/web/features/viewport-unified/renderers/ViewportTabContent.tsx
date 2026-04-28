@@ -214,6 +214,8 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             quantityId={ctx.requestedPreviewQuantity}
             quantityOptions={bridge.femQuantityOptions}
             colorField={bridge.femColorFieldForRender}
+            airColorField={bridge.femAirColorFieldForRender}
+            magneticColorField={bridge.femMagneticColorFieldForRender}
             showOrientationLegend={ctx.femMagnetization3DActive}
             toolbarMode={bridge.femToolbarMode}
             renderMode={

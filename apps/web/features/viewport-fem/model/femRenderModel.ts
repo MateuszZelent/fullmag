@@ -144,7 +144,6 @@ export function buildVisibleLayers(input: BuildVisibleLayersInput): RenderLayer[
         ? {
             ...viewState,
             opacity: Math.min(viewState.opacity, 22),
-            renderMode: viewState.renderMode === "points" ? "wireframe" : viewState.renderMode,
           }
         : viewState;
 

@@ -74,7 +74,7 @@ export const MAGNETIC_PRESET_CATALOG: MagneticPresetDescriptor[] = [
     category: "topological",
     icon: "🌀",
     previewProxy: "disc",
-    defaultParams: { circulation: 1, core_polarity: 1, core_radius: 10e-9, plane: "xy" },
+    defaultParams: { circulation: 1, core_polarity: 1, core_radius: 1e-9, plane: "xy" },
     parameters: [
       { key: "circulation", label: "Circulation", type: "integer", options: [{ value: 1, label: "+1" }, { value: -1, label: "-1" }] },
       { key: "core_polarity", label: "Core polarity", type: "integer", options: [{ value: 1, label: "+1" }, { value: -1, label: "-1" }] },
@@ -88,7 +88,7 @@ export const MAGNETIC_PRESET_CATALOG: MagneticPresetDescriptor[] = [
     category: "topological",
     icon: "🌀",
     previewProxy: "disc",
-    defaultParams: { core_polarity: 1, core_radius: 10e-9, plane: "xy" },
+    defaultParams: { core_polarity: 1, core_radius: 1e-9, plane: "xy" },
     parameters: [
       { key: "core_polarity", label: "Core polarity", type: "integer", options: [{ value: 1, label: "+1" }, { value: -1, label: "-1" }] },
       { key: "core_radius", label: "Core radius", type: "number", unit: "m", min: 0 },

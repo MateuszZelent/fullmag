@@ -86,6 +86,17 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshShowArrows).not.toHaveBeenCalled();
   });
 
+  it("dispatches magnetic texture visibility through its own explicit command", () => {
+    const onSetMagneticTextureVisible = vi.fn();
+    const onSetQuantityShaderVisible = vi.fn();
+    const ctx = context({ onSetMagneticTextureVisible, onSetQuantityShaderVisible });
+
+    executeRibbonCommand(ctx, { id: "viewport.toggle-magnetic-texture", visible: false });
+
+    expect(onSetMagneticTextureVisible).toHaveBeenCalledWith(false);
+    expect(onSetQuantityShaderVisible).not.toHaveBeenCalled();
+  });
+
   it("passes airbox render options through without touching global mesh render mode", () => {
     const onSetAirboxDisplay = vi.fn();
     const onSetMeshRenderMode = vi.fn();
@@ -110,6 +121,18 @@ describe("ribbon viewport commands", () => {
     });
 
     expect(onSetSelectedObjectRenderMode).toHaveBeenCalledWith("wireframe");
+  });
+
+  it("dispatches selected texture visibility changes for object override", () => {
+    const onSetSelectedObjectTextureVisible = vi.fn();
+    const ctx = context({ onSetSelectedObjectTextureVisible });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.toggle-selected-texture",
+      visible: false,
+    });
+
+    expect(onSetSelectedObjectTextureVisible).toHaveBeenCalledWith(false);
   });
 
   it("requires an override callback for selected render override commands", () => {

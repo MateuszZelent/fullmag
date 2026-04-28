@@ -61,6 +61,7 @@ export interface RibbonCommandContext {
   onSetPreviewEveryN?: (everyN: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
@@ -110,6 +111,7 @@ export interface RibbonCommandContext {
   ) => void;
   onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
+  onSetSelectedObjectTextureVisible?: (visible: boolean) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
   onSetSelectedObjectRenderMode?: (mode: ViewportMeshRenderMode | "inherit") => void;
   onClearSelectedDisplayOverrides?: () => void;
@@ -209,6 +211,7 @@ export type RibbonCommand =
   | { id: "viewport.set-component"; component: "3D" | "x" | "y" | "z" | "magnitude" }
   | { id: "viewport.set-colormap"; colormap: string }
   | { id: "viewport.set-auto-scale"; enabled: boolean }
+  | { id: "viewport.toggle-magnetic-texture"; visible: boolean }
   | { id: "viewport.toggle-quantity-shader"; visible: boolean }
   | { id: "viewport.set-vector-density"; everyN: number }
   | { id: "viewport.toggle-vectors"; visible: boolean }
@@ -236,6 +239,7 @@ export type RibbonCommand =
   | { id: "viewport.set-slice-primitives"; visible: boolean }
   | { id: "viewport.set-slice-mesh"; visible: boolean }
   | { id: "viewport.set-slice-airbox"; visible: boolean }
+  | { id: "viewport.toggle-selected-texture"; visible: boolean }
   | { id: "viewport.set-selected-opacity"; opacity: number }
   | { id: "viewport.set-selected-render-mode"; renderMode: ViewportMeshRenderMode | "inherit" }
   | { id: "viewport.clear-selected-display-overrides" }
@@ -355,6 +359,8 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSetPreviewColormap === "function";
     case "viewport.set-auto-scale":
       return typeof ctx.onSetPreviewAutoScale === "function";
+    case "viewport.toggle-magnetic-texture":
+      return typeof ctx.onSetMagneticTextureVisible === "function";
     case "viewport.toggle-quantity-shader":
       return typeof ctx.onSetQuantityShaderVisible === "function";
     case "viewport.set-vector-density":
@@ -385,6 +391,9 @@ export function canExecuteRibbonCommand(
     case "viewport.set-slice-mesh":
     case "viewport.set-slice-airbox":
       return typeof ctx.onSetSlice2DToolbar === "function";
+    case "viewport.toggle-selected-texture":
+      return Boolean(ctx.selectedObjectId)
+        && typeof ctx.onSetSelectedObjectTextureVisible === "function";
     case "viewport.set-selected-opacity":
       return Boolean(ctx.selectedObjectId) && typeof ctx.onSetSelectedObjectOpacity === "function";
     case "viewport.set-selected-render-mode":
@@ -550,6 +559,9 @@ export function executeRibbonCommand(
     case "viewport.set-auto-scale":
       ctx.onSetPreviewAutoScale?.(command.enabled);
       return;
+    case "viewport.toggle-magnetic-texture":
+      ctx.onSetMagneticTextureVisible?.(command.visible);
+      return;
     case "viewport.toggle-quantity-shader":
       ctx.onSetQuantityShaderVisible?.(command.visible);
       return;
@@ -620,6 +632,9 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-slice-airbox":
       ctx.onSetSlice2DToolbar?.({ showAirbox: command.visible });
+      return;
+    case "viewport.toggle-selected-texture":
+      ctx.onSetSelectedObjectTextureVisible?.(command.visible);
       return;
     case "viewport.clear-selected-display-overrides":
       ctx.onClearSelectedDisplayOverrides?.();

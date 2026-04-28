@@ -42,6 +42,7 @@ export type Viewport3DFdmTopoComponent = "x" | "y" | "z";
 export interface Viewport3DLayerVisibility {
   showPrimitives: boolean;
   showMesh: boolean;
+  showMagneticTexture: boolean;
   showQuantity: boolean;
 }
 
@@ -220,6 +221,7 @@ export interface Viewport3DToolbarState {
     autoScale: boolean;
     showPrimitives: boolean;
     showMesh: boolean;
+    showMagneticTexture: boolean;
     showQuantity: boolean;
     renderMode: Viewport3DRenderMode;
     opacity: number;

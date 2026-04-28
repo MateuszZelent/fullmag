@@ -18,6 +18,7 @@ const DEFAULT_TOOLBAR_STATE: Viewport3DToolbarState = {
     autoScale: true,
     showPrimitives: true,
     showMesh: false,
+    showMagneticTexture: true,
     showQuantity: true,
     renderMode: "shaded",
     opacity: 100,
@@ -59,7 +60,7 @@ export type Viewport3DToolbarAction =
   | { type: "setEveryN"; value: number }
   | { type: "setColormap"; value: string }
   | { type: "setAutoScale"; value: boolean }
-  | { type: "setLayerVisibility"; layer: "primitives" | "mesh" | "quantity"; value: boolean }
+  | { type: "setLayerVisibility"; layer: "primitives" | "mesh" | "magneticTexture" | "quantity"; value: boolean }
   | { type: "setRenderMode"; value: Viewport3DRenderMode }
   | { type: "setOpacity"; value: number }
   | { type: "setClipEnabled"; value: boolean }
@@ -132,6 +133,12 @@ export function viewport3dToolbarReducer(
         return {
           ...state,
           rowA: { ...state.rowA, showMesh: action.value },
+        };
+      }
+      if (action.layer === "magneticTexture") {
+        return {
+          ...state,
+          rowA: { ...state.rowA, showMagneticTexture: action.value },
         };
       }
       return {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { buildAuthoredMagnetizationPreview } from "../authoredMagnetizationPreview";
 import type { FemLiveMesh, SceneDocument } from "@/lib/session/types";
 
@@ -13,6 +14,14 @@ function identityTransform() {
 }
 
 describe("buildAuthoredMagnetizationPreview", () => {
+  it("keeps vortex catalog defaults aligned with the backend evaluator", () => {
+    const vortex = MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === "vortex");
+    const antivortex = MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === "antivortex");
+
+    expect(vortex?.defaultParams.core_radius).toBe(1e-9);
+    expect(antivortex?.defaultParams.core_radius).toBe(1e-9);
+  });
+
   it("samples selected vortex texture in mesh node order", () => {
     const scene = {
       revision: 4,

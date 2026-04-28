@@ -49,6 +49,7 @@ function coalesceLayers(layers?: FemViewportLayerState): FemViewportLayerState {
   return {
     showPrimitives: layers?.showPrimitives ?? true,
     showMesh: layers?.showMesh ?? false,
+    showMagneticTexture: layers?.showMagneticTexture ?? true,
     showQuantity: layers?.showQuantity ?? true,
   };
 }
@@ -92,6 +93,7 @@ export function buildToolbarStateFromLegacy({
       autoScale: renderState.autoScale,
       showPrimitives: layers.showPrimitives,
       showMesh: layers.showMesh,
+      showMagneticTexture: layers.showMagneticTexture,
       showQuantity: layers.showQuantity,
       renderMode: toViewport3DRenderMode(renderState.meshRenderMode),
       opacity: renderState.meshOpacity ?? 100,
@@ -135,6 +137,7 @@ export function applyToolbarStateToLegacyRenderState(
     femLayers: {
       showPrimitives: toolbarState.rowA.showPrimitives,
       showMesh: toolbarState.rowA.showMesh,
+      showMagneticTexture: toolbarState.rowA.showMagneticTexture,
       showQuantity: toolbarState.rowA.showQuantity,
     },
   };
@@ -297,6 +300,7 @@ export function buildViewport3DModelFromAdapter({
       layerVisibility: {
         showPrimitives: toolbarState.rowA.showPrimitives,
         showMesh: toolbarState.rowA.showMesh,
+        showMagneticTexture: toolbarState.rowA.showMagneticTexture,
         showQuantity: toolbarState.rowA.showQuantity,
       },
       selectedLayer: renderState.selectedLayer,

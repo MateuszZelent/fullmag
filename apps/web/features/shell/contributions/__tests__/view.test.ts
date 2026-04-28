@@ -17,6 +17,7 @@ const slice2DToolbar: Slice2DToolbarState = {
   autoContrast: true,
   showPrimitives: true,
   showMesh: true,
+  showMagneticTexture: true,
   showAirbox: false,
   showQuantity: true,
   showVectors: true,
@@ -56,13 +57,15 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     ],
     selectedQuantity: "m",
     requestedPreviewComponent: "3D",
-    requestedPreviewEveryN: 4,
-    requestedPreviewAutoScale: true,
-    requestedPreviewQuantityDataStatus: "ready",
-    meshRenderMode: "surface+edges",
-    meshOpacity: 80,
-    selectedObjectOpacity: 55,
-    selectedObjectRenderMode: "inherit",
+  requestedPreviewEveryN: 4,
+  requestedPreviewAutoScale: true,
+  requestedPreviewQuantityDataStatus: "ready",
+  magneticTextureVisible: true,
+  meshRenderMode: "surface+edges",
+  meshOpacity: 80,
+  selectedObjectTextureVisible: true,
+  selectedObjectOpacity: 55,
+  selectedObjectRenderMode: "inherit",
     meshClipEnabled: false,
     meshClipAxis: "z",
     meshClipPos: 50,
@@ -169,15 +172,19 @@ describe("View ribbon contribution", () => {
 
   it("exposes rich quantity controls and keeps disabled quantity reasons", () => {
     const group = buildViewRibbonGroups(baseContext())[0];
+    const texture = group.actions.find((action) => action.id === "view-texture");
     const quantity = group.actions.find((action) => action.id === "view-quantity");
+    expect(texture?.menu).toBeTruthy();
     expect(quantity?.menu).toBeTruthy();
 
     const source = findNode(quantity?.menu ?? [], "quantity:source");
-    const shader = findNode(quantity?.menu ?? [], "quantity:shader-visible");
+    const shader = findNode(quantity?.menu ?? [], "quantity:overlay-visible");
     const everyN = findNode(quantity?.menu ?? [], "quantity:every-n");
+    const textureVisible = findNode(texture?.menu ?? [], "texture:visible");
 
     expect(source).toMatchObject({ type: "radio-group", value: "m" });
     expect(shader).toMatchObject({ type: "checkbox", checked: true });
+    expect(textureVisible).toMatchObject({ type: "checkbox", checked: true });
     expect(source?.type === "radio-group" ? source.items[1] : null).toMatchObject({
       value: "H_eff",
       disabled: true,
@@ -192,6 +199,23 @@ describe("View ribbon contribution", () => {
     const slider = findNode(opacity?.menu ?? [], "selected-opacity:slider");
 
     expect(slider).toMatchObject({ type: "slider", value: 55 });
+  });
+
+  it("shows dedicated texture actions in global and selected display groups", () => {
+    const groups = buildViewRibbonGroups(baseContext({ quantityShaderVisible: false, magneticTextureVisible: true }));
+    const global = groups[0];
+    const selected = groups[2];
+
+    expect(global.actions.map((action) => action.id)).toContain("view-texture");
+    expect(selected.actions.map((action) => action.id)).toContain("view-selected-texture");
+    expect(findNode(global.actions.find((action) => action.id === "view-texture")?.menu ?? [], "texture:visible")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
+    expect(findNode(selected.actions.find((action) => action.id === "view-selected-texture")?.menu ?? [], "selected-texture:visible")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
   });
 
   it("keeps selected display visible but disabled without selection", () => {

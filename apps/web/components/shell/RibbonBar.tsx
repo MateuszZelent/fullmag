@@ -88,9 +88,11 @@ interface RibbonBarProps {
   requestedPreviewEveryN?: number | null;
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
+  magneticTextureVisible?: boolean;
   quantityShaderVisible?: boolean;
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
+  selectedObjectTextureVisible?: boolean | null;
   selectedObjectOpacity?: number | null;
   selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
   meshClipEnabled?: boolean | null;
@@ -116,6 +118,7 @@ interface RibbonBarProps {
   onSetPreviewEveryN?: (everyN: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
@@ -193,6 +196,7 @@ interface RibbonBarProps {
   ) => void;
   onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
+  onSetSelectedObjectTextureVisible?: (visible: boolean) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
   onSetSelectedObjectRenderMode?: (mode: ViewportMeshRenderMode | "inherit") => void;
   onClearSelectedDisplayOverrides?: () => void;
@@ -358,6 +362,7 @@ function buildContext(
     sidebarVisible: Boolean(props.sidebarVisible),
     previewPending: Boolean(props.previewPending),
     airboxVisible: Boolean(props.airboxVisible),
+    magneticTextureVisible: props.magneticTextureVisible ?? true,
     quantityShaderVisible: props.quantityShaderVisible ?? true,
     viewportAxesScope: props.viewportAxesScope ?? "universe",
     universeWireframeVisible: props.universeWireframeVisible ?? true,
@@ -373,6 +378,7 @@ function buildContext(
     requestedPreviewQuantityDataStatus: props.requestedPreviewQuantityDataStatus ?? null,
     meshRenderMode: props.meshRenderMode ?? null,
     meshOpacity: props.meshOpacity ?? null,
+    selectedObjectTextureVisible: props.selectedObjectTextureVisible ?? null,
     selectedObjectOpacity: props.selectedObjectOpacity ?? null,
     selectedObjectRenderMode: props.selectedObjectRenderMode ?? null,
     meshClipEnabled: props.meshClipEnabled ?? null,
@@ -699,9 +705,11 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.requestedPreviewEveryN,
     props.requestedPreviewAutoScale,
     props.requestedPreviewQuantityDataStatus,
+    props.magneticTextureVisible,
     props.quantityShaderVisible,
     props.meshRenderMode,
     props.meshOpacity,
+    props.selectedObjectTextureVisible,
     props.selectedObjectOpacity,
     props.selectedObjectRenderMode,
     props.meshClipEnabled,
@@ -737,9 +745,11 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetPreviewEveryN,
     props.onSetPreviewColormap,
     props.onSetPreviewAutoScale,
+    props.onSetMagneticTextureVisible,
     props.onSetQuantityShaderVisible,
     props.onSetMeshRenderMode,
     props.onSetMeshOpacity,
+    props.onSetSelectedObjectTextureVisible,
     props.onSetSelectedObjectOpacity,
     props.onSetSelectedObjectRenderMode,
     props.onClearSelectedDisplayOverrides,

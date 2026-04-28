@@ -71,6 +71,19 @@ describe("viewport3dToolbarReducer", () => {
 
     expect(hidden.rowB.vectorsVisible).toBe(false);
     expect(hidden.rowA.showQuantity).toBe(true);
+    expect(hidden.rowA.showMagneticTexture).toBe(true);
     expect(visible.rowB.vectorsVisible).toBe(true);
+  });
+
+  it("lets magnetic texture visibility change independently from quantity visibility", () => {
+    const initial = createViewport3DToolbarState();
+    const hiddenTexture = viewport3dToolbarReducer(initial, {
+      type: "setLayerVisibility",
+      layer: "magneticTexture",
+      value: false,
+    });
+
+    expect(hiddenTexture.rowA.showMagneticTexture).toBe(false);
+    expect(hiddenTexture.rowA.showQuantity).toBe(true);
   });
 });

@@ -1530,6 +1530,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     autoContrast: Boolean(ctx.requestedPreviewAutoScale ?? true),
     showPrimitives: ctx.femViewportLayers.showPrimitives,
     showMesh: ctx.femViewportLayers.showMesh,
+    showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
     showAirbox: ctx.airMeshVisible,
     showQuantity: ctx.femViewportLayers.showQuantity,
     showVectors: Boolean(ctx.meshShowArrows),
@@ -1802,6 +1803,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ? (ctx.meshEntityViewState[selectedObjectRepresentativePart.id]?.renderMode ?? null)
       : "inherit")
     : null;
+  const selectedObjectTextureVisible = selectedObjectRepresentativePart
+    ? ((ctx.meshEntityViewState[selectedObjectRepresentativePart.id]?.colorField
+      ?? defaultMeshEntityViewState(selectedObjectRepresentativePart).colorField) !== "none")
+    : null;
   const handleRibbonSelectedObjectOpacity = (opacity: number) => {
     if (selectedObjectPartIds.length === 0) return;
     ctx.setMeshEntityViewState((previous) => {
@@ -1845,6 +1850,26 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           const current = next[partId] ?? defaultMeshEntityViewState(part);
           if (current.renderMode === nextMode) continue;
           next[partId] = { ...current, renderMode: nextMode };
+          changed = true;
+        }
+        return changed ? next : previous;
+      });
+    },
+    [ctx.meshParts, ctx.setMeshEntityViewState, selectedObjectPartIds],
+  );
+  const handleRibbonSelectedObjectTextureVisible = useCallback(
+    (visible: boolean) => {
+      if (selectedObjectPartIds.length === 0) return;
+      ctx.setMeshEntityViewState((previous) => {
+        let changed = false;
+        const next = { ...previous };
+        for (const partId of selectedObjectPartIds) {
+          const part = ctx.meshParts.find((entry) => entry.id === partId);
+          if (!part || part.role !== "magnetic_object") continue;
+          const current = next[partId] ?? defaultMeshEntityViewState(part);
+          const nextColorField = visible ? "orientation" : "none";
+          if (current.colorField === nextColorField) continue;
+          next[partId] = { ...current, colorField: nextColorField };
           changed = true;
         }
         return changed ? next : previous;
@@ -2006,9 +2031,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         requestedPreviewEveryN={ctx.requestedPreviewEveryN}
         requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
         requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
+        magneticTextureVisible={ctx.femViewportLayers.showMagneticTexture}
         quantityShaderVisible={ctx.femViewportLayers.showQuantity}
         meshRenderMode={ctx.meshRenderMode}
         meshOpacity={ctx.meshOpacity}
+        selectedObjectTextureVisible={selectedObjectTextureVisible}
         selectedObjectOpacity={selectedObjectOpacity}
         selectedObjectRenderMode={selectedObjectRenderMode}
         meshClipEnabled={ctx.meshClipEnabled}
@@ -2034,8 +2061,22 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetPreviewEveryN={handleRibbonPreviewEveryN}
         onSetPreviewColormap={handleRibbonPreviewColormap}
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
+        onSetMagneticTextureVisible={(visible) => {
+          ctx.setFemViewportLayers((previous) => ({
+            ...previous,
+            showMagneticTexture: visible,
+            showQuantity: visible ? false : previous.showQuantity,
+          }));
+          if (visible) {
+            ctx.requestPreviewQuantity("m");
+          }
+        }}
         onSetQuantityShaderVisible={(visible) =>
-          ctx.setFemViewportLayers((previous) => ({ ...previous, showQuantity: visible }))
+          ctx.setFemViewportLayers((previous) => ({
+            ...previous,
+            showQuantity: visible,
+            showMagneticTexture: visible ? false : previous.showMagneticTexture,
+          }))
         }
         onCapture={ctx.handleCapture}
         onExport={ctx.handleExport}
@@ -2079,6 +2120,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetTransformScope={handleSetTransformScope}
         onSetMeshRenderMode={handleRibbonMeshRenderMode}
         onSetMeshOpacity={ctx.setMeshOpacity}
+        onSetSelectedObjectTextureVisible={handleRibbonSelectedObjectTextureVisible}
         onSetSelectedObjectOpacity={handleRibbonSelectedObjectOpacity}
         onSetSelectedObjectRenderMode={handleRibbonSelectedObjectRenderMode}
         onClearSelectedDisplayOverrides={handleRibbonClearSelectedDisplayOverrides}

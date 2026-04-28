@@ -2,8 +2,8 @@
  * Unified 3-D viewport registry entry.
  *
  * Replaces the separate VIEWPORT_3D_FDM / VIEWPORT_3D_FEM entries
- * with a single entry that activates for any discretization when the
- * workspace is in 3-D mode with session data.
+ * with a single entry that activates for Mesh authoring before solver data
+ * exists and for 3-D results once session data is available.
  */
 
 import type {
@@ -18,5 +18,6 @@ export const UNIFIED_VIEWPORT_3D: ViewRegistryEntry = {
   title: "3D Viewport",
   componentKey: "UnifiedViewport3D",
   canOpen: (ctx: WorkspaceViewContext) =>
-    (ctx.viewportMode === "3D" || ctx.viewportMode === "Mesh") && ctx.hasSessionData,
+    ctx.viewportMode === "Mesh" ||
+    (ctx.viewportMode === "3D" && ctx.hasSessionData),
 };

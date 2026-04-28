@@ -706,19 +706,24 @@ export function useViewportDataBridge() {
         objectOverlays: displayObjectOverlays,
         meshOpacity: ctx.meshOpacity,
         colorField: ctx.femColorField,
+        magneticTextureColorField:
+          ctx.requestedPreviewQuantity === "m" ? "orientation" : "none",
         showArrows: ctx.meshShowArrows,
       }),
     [
       ctx.femColorField,
       ctx.meshOpacity,
       ctx.meshShowArrows,
+      ctx.requestedPreviewQuantity,
       displayObjectOverlays,
       femLayerState,
     ],
   );
   const femObjectOverlaysForRender = femLayerRenderState.objectOverlays;
   const femOpacityForRender = femLayerRenderState.meshOpacity;
-  const femColorFieldForRender = femLayerRenderState.colorField;
+  const femMagneticColorFieldForRender = femLayerRenderState.magneticColorField;
+  const femAirColorFieldForRender = femLayerRenderState.airColorField;
+  const femColorFieldForRender = femMagneticColorFieldForRender;
   const femShowArrowsForRender = femLayerRenderState.showArrows;
 
   const effectiveFemMeshEntityViewState = useMemo(() => {
@@ -753,8 +758,14 @@ export function useViewportDataBridge() {
             ? current.opacity
             : ctx.meshOpacity,
         colorField:
-          femLayerState.showQuantity && part.role === "magnetic_object"
-            ? current.colorField
+          part.role === "magnetic_object"
+            ? femLayerState.showQuantity
+              ? current.colorField
+              : femLayerState.showMagneticTexture
+                ? ctx.requestedPreviewQuantity === "m"
+                  ? "orientation"
+                  : "none"
+                : "none"
             : "none",
       };
     }
@@ -763,8 +774,10 @@ export function useViewportDataBridge() {
     ctx.meshEntityViewState,
     ctx.meshOpacity,
     ctx.meshParts,
+    ctx.requestedPreviewQuantity,
     femDiscretization,
     femLayerState.showMesh,
+    femLayerState.showMagneticTexture,
     femLayerState.showQuantity,
   ]);
 
@@ -911,6 +924,16 @@ export function useViewportDataBridge() {
           showMesh: patch.showMesh ?? previous.showMesh,
         }));
       }
+      if (typeof patch.showMagneticTexture === "boolean") {
+        ctx.setFemViewportLayers((previous) => ({
+          ...previous,
+          showMagneticTexture: patch.showMagneticTexture ?? previous.showMagneticTexture,
+          showQuantity: patch.showMagneticTexture ? false : previous.showQuantity,
+        }));
+        if (patch.showMagneticTexture) {
+          ctx.requestPreviewQuantity("m");
+        }
+      }
       if (typeof patch.showAirbox === "boolean") {
         ctx.setAirMeshVisible(patch.showAirbox);
       }
@@ -918,6 +941,7 @@ export function useViewportDataBridge() {
         ctx.setFemViewportLayers((previous) => ({
           ...previous,
           showQuantity: patch.showQuantity ?? previous.showQuantity,
+          showMagneticTexture: patch.showQuantity ? false : previous.showMagneticTexture,
         }));
       }
     },
@@ -1108,10 +1132,11 @@ export function useViewportDataBridge() {
 
   const slice2DModel = useMemo<Slice2DModel>(() => {
     const layerControlledToolbar = femDiscretization
-      ? {
+        ? {
           ...slice2DBaseModel.toolbar,
           showPrimitives: ctx.femViewportLayers.showPrimitives,
           showMesh: ctx.femViewportLayers.showMesh,
+          showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
           showAirbox: ctx.airMeshVisible,
           showQuantity: ctx.femViewportLayers.showQuantity,
         }
@@ -1124,6 +1149,7 @@ export function useViewportDataBridge() {
         ...slice2DBaseModel.overlays,
         showPrimitives: toolbar.showPrimitives,
         showMesh: toolbar.showMesh,
+        showMagneticTexture: toolbar.showMagneticTexture,
         showAirbox: toolbar.showAirbox,
         showQuantity: toolbar.showQuantity,
         showVectors: toolbar.showVectors,
@@ -1657,7 +1683,9 @@ export function useViewportDataBridge() {
     femLayerRenderState,
     femObjectOverlaysForRender,
     femOpacityForRender,
+    femAirColorFieldForRender,
     femColorFieldForRender,
+    femMagneticColorFieldForRender,
     femShowArrowsForRender,
     effectiveFemMeshEntityViewState,
     geometryAuthoringShowPrimitives,

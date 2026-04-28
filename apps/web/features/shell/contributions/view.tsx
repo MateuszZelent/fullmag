@@ -110,7 +110,6 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const quantityStatus = ctx.requestedPreviewQuantityDataStatus ?? (ctx.previewPending ? "pending" : "ready");
   const everyN = ctx.requestedPreviewEveryN ?? 4;
   const autoScale = Boolean(ctx.requestedPreviewAutoScale ?? true);
-  const shaderVisible = ctx.quantityShaderVisible;
   const component = ctx.requestedPreviewComponent ?? "magnitude";
   const scalarReason = ctx.isFemBackend
     ? "FEM explicit topology may expose orientation/component coloring before scalar colormap support."
@@ -121,9 +120,9 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
     { type: "status", id: "quantity:current", label: "Current", value: ctx.selectedQuantity ?? "None" },
     {
       type: "checkbox",
-      id: "quantity:shader-visible",
-      label: "Shader / magnetic texture on/off",
-      checked: shaderVisible,
+      id: "quantity:overlay-visible",
+      label: "Quantity overlay on/off",
+      checked: ctx.quantityShaderVisible,
       disabled: global.disabled,
       disabledReason: global.reason,
       onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-quantity-shader", visible }),
@@ -234,6 +233,33 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
         { type: "item", id: "quantity:balanced", label: "Balanced", action: () => ctx.run({ id: "viewport.set-vector-density", everyN: 6 }) },
         { type: "item", id: "quantity:performance", label: "Performance", action: () => ctx.run({ id: "viewport.set-vector-density", everyN: 16 }) },
       ],
+    },
+  ];
+}
+
+function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
+  const global = canUse3D(ctx);
+  return [
+    {
+      type: "label",
+      id: "texture:header",
+      label: "Magnetic texture",
+      badge: ctx.magneticTextureVisible ? "on" : "off",
+    },
+    {
+      type: "status",
+      id: "texture:scope",
+      label: "Scope",
+      value: "Global ferromagnet base shading",
+    },
+    {
+      type: "checkbox",
+      id: "texture:visible",
+      label: "Texture on/off",
+      checked: ctx.magneticTextureVisible,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-magnetic-texture", visible }),
     },
   ];
 }
@@ -604,11 +630,21 @@ function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
     tone: "neutral",
     actions: [
       {
+        id: "view-texture",
+        icon: <Sparkles size={20} />,
+        label: "Texture",
+        tooltip: "Control base magnetic texture shading for ferromagnets",
+        active: ctx.magneticTextureVisible,
+        disabled: global.disabled,
+        iconColor: "text-teal-300",
+        menu: buildTextureMenu(ctx),
+      },
+      {
         id: "view-quantity",
         icon: <Sigma size={20} />,
         label: "Quantity",
-        tooltip: "Choose field quantity, component, colormap, and sampling",
-        active: Boolean(ctx.selectedQuantity),
+        tooltip: "Choose field quantity, quantity overlay, component, colormap, and sampling",
+        active: Boolean(ctx.selectedQuantity) || ctx.quantityShaderVisible,
         disabled: global.disabled,
         iconColor: "text-sky-300",
         menu: buildQuantityMenu(ctx),
@@ -968,6 +1004,13 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
 
 function buildSelectedDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
   const selected = canUseSelected(ctx);
+  const selectedTextureDisabledReason = selected.reason
+    ?? (ctx.quantityShaderVisible
+      ? "Turn off global Quantity overlay to edit per-object magnetic texture visibility"
+      : !ctx.magneticTextureVisible
+        ? "Enable global Texture first"
+        : null);
+  const selectedTextureDisabled = Boolean(selectedTextureDisabledReason);
   const selectedOpacity = ctx.selectedObjectOpacity ?? ctx.meshOpacity ?? 100;
   return {
     id: "view-selected-display",
@@ -975,6 +1018,43 @@ function buildSelectedDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
     subtitle: ctx.selectedObjectId ? "Per object" : "No selection",
     tone: "selection",
     actions: [
+      {
+        id: "view-selected-texture",
+        icon: <Sparkles size={20} />,
+        label: "Texture",
+        tooltip: selectedTextureDisabledReason ?? "Override magnetic texture visibility for the selected object",
+        disabled: selectedTextureDisabled,
+        active: ctx.selectedObjectTextureVisible ?? ctx.magneticTextureVisible,
+        iconColor: "text-teal-300",
+        menu: [
+          {
+            type: "label",
+            id: "selected-texture:header",
+            label: "Selected texture",
+            badge:
+              ctx.selectedObjectTextureVisible == null
+                ? "inherit"
+                : ctx.selectedObjectTextureVisible
+                  ? "on"
+                  : "off",
+          },
+          {
+            type: "status",
+            id: "selected-texture:state",
+            label: "Global texture",
+            value: ctx.magneticTextureVisible ? "Enabled" : "Disabled",
+          },
+          {
+            type: "checkbox",
+            id: "selected-texture:visible",
+            label: "Texture on/off",
+            checked: ctx.selectedObjectTextureVisible ?? ctx.magneticTextureVisible,
+            disabled: selectedTextureDisabled,
+            disabledReason: selectedTextureDisabledReason,
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-selected-texture", visible }),
+          },
+        ],
+      },
       {
         id: "view-selected-render",
         icon: <BoxSelect size={20} />,

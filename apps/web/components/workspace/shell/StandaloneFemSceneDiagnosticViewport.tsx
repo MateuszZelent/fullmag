@@ -235,6 +235,8 @@ export default function StandaloneFemSceneDiagnosticViewport() {
             shouldRenderMagneticGeometry={true}
             magneticVisibilityMode="ghost"
             field="none"
+            airColorField="none"
+            magneticColorField="orientation"
             renderMode="surface"
             effectiveOpacity={100}
             magneticBoundaryFaceIndices={null}

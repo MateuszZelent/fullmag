@@ -27,6 +27,7 @@ const BASE_RENDER_STATE: UnifiedRenderState = {
   femLayers: {
     showPrimitives: true,
     showMesh: false,
+    showMagneticTexture: true,
     showQuantity: true,
   },
 };
@@ -51,6 +52,7 @@ describe("viewport3d adapters", () => {
     expect(toolbar.rowA.opacity).toBe(72);
     expect(toolbar.rowA.clipAxis).toBe("y");
     expect(toolbar.rowA.quantity).toBe("m");
+    expect(toolbar.rowA.showMagneticTexture).toBe(true);
   });
 
   it("maps canonical toolbar state back to legacy clip/render fields", () => {
@@ -112,6 +114,7 @@ describe("viewport3d adapters", () => {
 
     expect(model.scene.fallbackMode).toBe("bounds-preview");
     expect(model.scene.renderMode).toBe("shaded+wireframe");
+    expect(model.scene.layerVisibility.showMagneticTexture).toBe(true);
     expect(model.fdm).toBeNull();
   });
 
