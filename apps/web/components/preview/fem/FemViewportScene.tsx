@@ -388,6 +388,14 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         getSharedVertexColors({
           meshData,
           field: colorField,
+          fieldData:
+            colorField === "orientation" ||
+            colorField === "x" ||
+            colorField === "y" ||
+            colorField === "z" ||
+            colorField === "magnitude"
+              ? meshData.shaderFieldData ?? meshData.fieldData
+              : meshData.fieldData,
           qualityPerFace,
         }),
       );

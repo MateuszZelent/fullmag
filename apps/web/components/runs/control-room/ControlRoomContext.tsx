@@ -393,6 +393,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [meshClipPos, setMeshClipPos] = useState(50);
   const [meshClipFlip, setMeshClipFlip] = useState(false);
   const [meshShowArrows, setMeshShowArrows] = useState(true);
+  const [femTextureDownsampleCells, setFemTextureDownsampleCells] = useState(65_536);
+  const [femVectorGlyphBudget, setFemVectorGlyphBudget] = useState(1_200);
   const [femArrowColorMode, setFemArrowColorMode] = useState<
     "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome"
   >("orientation");
@@ -2057,6 +2059,24 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
   }, [requestedPreviewQuantity]);
 
+  useEffect(() => {
+    if (
+      isFemBackend &&
+      effectiveViewMode === "3D" &&
+      femViewportLayers.showMagneticTexture &&
+      !femViewportLayers.showQuantity &&
+      selectedQuantity !== "m"
+    ) {
+      setSelectedQuantity("m");
+    }
+  }, [
+    effectiveViewMode,
+    femViewportLayers.showMagneticTexture,
+    femViewportLayers.showQuantity,
+    isFemBackend,
+    selectedQuantity,
+  ]);
+
   const latestFieldFrames = runtimeLatestFieldFrames;
   const binaryFieldTransportEnabled =
     FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
@@ -2920,7 +2940,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         null,
     },
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
+    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
     viewportAxesScope, universeWireframeVisible,
@@ -2973,7 +2993,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     workspaceTabs,
     activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
-    setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
+    setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemTextureDownsampleCells, setFemVectorGlyphBudget, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers, setViewportLegendVisible,
     setViewportAxesScope, setUniverseWireframeVisible,
     setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
@@ -2982,7 +3002,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resetViewportDisplayState,
   }), [
     localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows,
+    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
     viewportAxesScope, universeWireframeVisible,

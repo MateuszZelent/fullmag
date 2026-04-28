@@ -177,16 +177,17 @@ function getBaseVertexColorCache(meshData: FemMeshData): Map<string, Float32Arra
 export function getSharedVertexColors(args: {
   meshData: FemMeshData;
   field: FemColorField;
+  fieldData?: FemMeshData["fieldData"];
   uniformColor?: string;
   qualityPerFace?: number[] | null;
 }): Float32Array {
-  const { meshData, field, uniformColor, qualityPerFace } = args;
+  const { meshData, field, fieldData = meshData.fieldData, uniformColor, qualityPerFace } = args;
   const baseVertexColorCache = getBaseVertexColorCache(meshData);
   const nNodes = meshData.nNodes;
   const cacheableField = field !== "quality" && field !== "sicn";
 
   if (cacheableField) {
-    const fieldDataId = fieldDataCacheId(meshData.fieldData);
+    const fieldDataId = fieldDataCacheId(fieldData);
     const fieldRevision = meshData.fieldRevision ?? "none";
     const cacheKey =
       field === "none"
@@ -211,7 +212,7 @@ export function getSharedVertexColors(args: {
         : computeVertexColors(
             meshData.nNodes,
             field,
-            meshData.fieldData,
+            fieldData,
             meshData.fieldNComp ?? 3,
             meshData.nodes,
             meshData.boundaryFaces,
@@ -224,7 +225,7 @@ export function getSharedVertexColors(args: {
   return computeVertexColors(
     meshData.nNodes,
     field,
-    meshData.fieldData,
+    fieldData,
     meshData.fieldNComp ?? 3,
     meshData.nodes,
     meshData.boundaryFaces,

@@ -2,7 +2,6 @@
 
 import React from "react";
 import dynamic from "next/dynamic";
-import { cn } from "@/lib/utils";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_WORKSPACE_SYNC_STATE } from "@/src/features/workspaceSync";
 import { ViewportHost } from "@/features";
@@ -208,7 +207,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
         <ViewportErrorBoundary label="Hosted FEM Mesh Viewport">
           <FemMeshView3D
             topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
-            meshData={bridge.scopedFetchedFemMeshData!}
+            meshData={bridge.renderFemMeshData!}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             quantityId={ctx.requestedPreviewQuantity}
@@ -233,6 +232,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             clipPos={ctx.meshClipPos}
             clipFlip={ctx.meshClipFlip}
             previewMaxPoints={ctx.requestedPreviewMaxPoints}
+            femVectorGlyphBudget={ctx.femVectorGlyphBudget}
             onRenderModeChange={ctx.setMeshRenderMode}
             onOpacityChange={ctx.setMeshOpacity}
             onClipEnabledChange={ctx.setMeshClipEnabled}
@@ -322,7 +322,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
           <div className="relative h-full w-full">
             <FemMeshView3D
               topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
-              meshData={bridge.scopedFetchedFemMeshData!}
+              meshData={bridge.renderFemMeshData!}
               selectedSidebarNodeId={ctx.selectedSidebarNodeId}
               viewportFitSeed={bridge.viewportFitSeed}
               fieldLabel={
@@ -361,6 +361,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
               vectorDomainFilter={geometryViewportPresetActive ? "magnetic_only" : ctx.femVectorDomainFilter}
               ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
               previewMaxPoints={ctx.requestedPreviewMaxPoints}
+              femVectorGlyphBudget={ctx.femVectorGlyphBudget}
               onRenderModeChange={ctx.setMeshRenderMode}
               onOpacityChange={ctx.setMeshOpacity}
               onClipEnabledChange={ctx.setMeshClipEnabled}
@@ -736,35 +737,6 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
           className="viewportOverlay absolute right-4 top-14 flex items-center gap-2"
           style={VIEWPORT_BADGE_STYLE}
         >
-          {ctx.selectedMeshPart || bridge.selectedFemObjectId ? (
-            <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
-              <button
-                type="button"
-                className={cn(
-                  "px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] transition-colors",
-                  ctx.objectViewMode === "context"
-                    ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:bg-muted/50",
-                )}
-                onClick={() => ctx.setObjectViewMode("context")}
-              >
-                Context
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] transition-colors",
-                  ctx.objectViewMode === "isolate"
-                    ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:bg-muted/50",
-                )}
-                onClick={() => ctx.setObjectViewMode("isolate")}
-              >
-                Isolate
-              </button>
-            </div>
-          ) : null}
-
           {bridge.missingExactScopeSegment && viewportSelectedObjectId ? (
             <button
               type="button"
@@ -776,35 +748,6 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             >
               Focus {viewportSelectedObjectId}
             </button>
-          ) : null}
-
-          {bridge.selectedObjectOverlay ? (
-            <div className="pointer-events-auto flex overflow-hidden rounded-full border border-border/40 bg-background/85 shadow-[0_4px_16px_rgba(0,0,0,0.4)] backdrop-blur-md">
-              <button
-                type="button"
-                className={cn(
-                  "px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] transition-colors",
-                  ctx.objectViewMode === "context"
-                    ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:bg-muted/50",
-                )}
-                onClick={() => ctx.setObjectViewMode("context")}
-              >
-                Context
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  "px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.12em] transition-colors",
-                  ctx.objectViewMode === "isolate"
-                    ? "bg-primary/20 text-primary"
-                    : "text-muted-foreground hover:bg-muted/50",
-                )}
-                onClick={() => ctx.setObjectViewMode("isolate")}
-              >
-                Isolate
-              </button>
-            </div>
           ) : null}
 
           {bridge.selectedObjectOverlay ? (

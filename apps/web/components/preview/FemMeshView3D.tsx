@@ -105,6 +105,7 @@ interface Props {
   vectorDomainFilter?: FemVectorDomainFilter;
   ferromagnetVisibilityMode?: FemFerromagnetVisibilityMode;
   previewMaxPoints?: number;
+  femVectorGlyphBudget?: number | null;
   showOrientationLegend?: boolean;
   qualityPerFace?: number[] | null;
   shrinkFactor?: number;
@@ -199,6 +200,7 @@ function FemMeshView3DInner({
   vectorDomainFilter: controlledVectorDomainFilter,
   ferromagnetVisibilityMode: controlledFerromagnetVisibilityMode,
   previewMaxPoints,
+  femVectorGlyphBudget,
   showOrientationLegend = false,
   qualityPerFace,
   topologyKey,
@@ -417,6 +419,7 @@ function FemMeshView3DInner({
     opacity,
     arrowColorMode,
     showArrowsRequested,
+    femVectorGlyphBudget,
     qualityPerFace,
     sampledArrowCount,
     quantityOptions,
@@ -473,7 +476,8 @@ function FemMeshView3DInner({
     effectiveShowArrows,
     arrowsBlockReason,
     toolbarScopeLabel,
-    fieldMagnitudeStats,
+    colorLegendField,
+    colorLegendStats,
     selectionScope,
   } = toolbarModel;
   const effectiveOpacity = opacity;
@@ -684,8 +688,9 @@ function FemMeshView3DInner({
     liveRenderDebugData,
     arrowField,
     legendField,
+    colorLegendField,
     fieldLabel,
-    fieldMagnitudeStats,
+    colorLegendStats,
     quantityId,
     prominentQuantityOptions,
     applyToolbarRenderMode,

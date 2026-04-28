@@ -54,6 +54,7 @@ interface UseFemViewportDerivedModelArgs {
   opacity: number;
   arrowColorMode: FemArrowColorMode;
   showArrowsRequested: boolean;
+  femVectorGlyphBudget?: number | null;
   qualityPerFace?: number[] | null;
   sampledArrowCount?: number;
   quantityOptions?: Array<{
@@ -91,6 +92,7 @@ export function useFemViewportDerivedModel({
   opacity,
   arrowColorMode,
   showArrowsRequested,
+  femVectorGlyphBudget,
   qualityPerFace,
   sampledArrowCount,
   quantityOptions = [],
@@ -222,6 +224,7 @@ export function useFemViewportDerivedModel({
     ferromagnetVisibilityMode,
     showArrowsForGeometry: showArrowsRequested,
     resolvedPreviewMaxPoints,
+    femVectorGlyphBudget,
     captureActive,
     interactionActive,
     qualityProfile,

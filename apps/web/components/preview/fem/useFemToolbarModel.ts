@@ -80,7 +80,71 @@ export interface FemToolbarModel {
   arrowsBlockReason: string | null;
   arrowToolbarState: ArrowToolbarState;
   toolbarScopeLabel: string | null;
-  fieldMagnitudeStats: { min: number; max: number; mean: number } | null;
+  colorLegendField: FemColorField | null;
+  colorLegendStats: { min: number; max: number; mean: number } | null;
+}
+
+const LINEAR_COLOR_FIELDS = new Set<FemColorField>([
+  "x",
+  "y",
+  "z",
+  "magnitude",
+  "quality",
+  "sicn",
+]);
+
+function computeColorFieldStats(args: {
+  field: FemColorField | null;
+  meshData: FemMeshData;
+  qualityPerFace?: number[] | null;
+}): { min: number; max: number; mean: number } | null {
+  const { field, meshData, qualityPerFace } = args;
+  if (!field) {
+    return null;
+  }
+  if ((field === "quality" || field === "sicn") && qualityPerFace && qualityPerFace.length > 0) {
+    const values = qualityPerFace.filter((value) => Number.isFinite(value));
+    if (values.length === 0) {
+      return null;
+    }
+    const sum = values.reduce((acc, value) => acc + value, 0);
+    return {
+      min: Math.min(...values),
+      max: Math.max(...values),
+      mean: sum / values.length,
+    };
+  }
+  if (!meshData.fieldData || meshData.nNodes === 0) {
+    return null;
+  }
+  const fieldNComp = meshData.fieldNComp ?? 3;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let sum = 0;
+  for (let index = 0; index < meshData.nNodes; index += 1) {
+    const x = meshData.fieldData.x[index] ?? 0;
+    const y = meshData.fieldData.y[index] ?? 0;
+    const z = meshData.fieldData.z[index] ?? 0;
+    const value =
+      fieldNComp <= 1
+        ? x
+        : field === "x"
+          ? x
+          : field === "y"
+            ? y
+            : field === "z"
+              ? z
+              : field === "magnitude"
+                ? Math.hypot(x, y, z)
+                : 0;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+    sum += value;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return null;
+  }
+  return { min, max, mean: sum / meshData.nNodes };
 }
 
 export function useFemToolbarModel({
@@ -343,55 +407,25 @@ export function useFemToolbarModel({
     return scopeLabel(selectionScope, meshParts);
   }, [hasMeshParts, meshParts, selectionScope, toolbarStylePartIds]);
 
-  const fieldMagnitudeStats = useMemo(() => {
-    if (
-      (legendField === "quality" || legendField === "sicn") &&
-      qualityPerFace &&
-      qualityPerFace.length > 0
-    ) {
-      const values = qualityPerFace.filter((value) => Number.isFinite(value));
-      if (values.length === 0) {
-        return null;
-      }
-      const sum = values.reduce((acc, value) => acc + value, 0);
-      return {
-        min: Math.min(...values),
-        max: Math.max(...values),
-        mean: sum / values.length,
-      };
+  const colorLegendField = useMemo<FemColorField | null>(() => {
+    if (LINEAR_COLOR_FIELDS.has(legendField)) {
+      return legendField;
     }
-    if (!meshData.fieldData || meshData.nNodes === 0) {
-      return null;
+    if (effectiveShowArrows && LINEAR_COLOR_FIELDS.has(arrowField)) {
+      return arrowField;
     }
-    const fieldNComp = meshData.fieldNComp ?? 3;
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    let sum = 0;
-    for (let index = 0; index < meshData.nNodes; index += 1) {
-      const x = meshData.fieldData.x[index] ?? 0;
-      const y = meshData.fieldData.y[index] ?? 0;
-      const z = meshData.fieldData.z[index] ?? 0;
-      const value =
-        fieldNComp <= 1
-          ? x
-          : legendField === "x"
-          ? x
-          : legendField === "y"
-            ? y
-            : legendField === "z"
-              ? z
-              : legendField === "magnitude" || legendField === "orientation"
-                ? Math.hypot(x, y, z)
-                : 0;
-      min = Math.min(min, value);
-      max = Math.max(max, value);
-      sum += value;
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      return null;
-    }
-    return { min, max, mean: sum / meshData.nNodes };
-  }, [legendField, meshData.fieldData, meshData.fieldNComp, meshData.nNodes, qualityPerFace]);
+    return null;
+  }, [arrowField, effectiveShowArrows, legendField]);
+
+  const colorLegendStats = useMemo(
+    () =>
+      computeColorFieldStats({
+        field: colorLegendField,
+        meshData,
+        qualityPerFace,
+      }),
+    [colorLegendField, meshData, qualityPerFace],
+  );
 
   return {
     selectionScope,
@@ -413,6 +447,7 @@ export function useFemToolbarModel({
     arrowsBlockReason,
     arrowToolbarState,
     toolbarScopeLabel,
-    fieldMagnitudeStats,
+    colorLegendField,
+    colorLegendStats,
   };
 }

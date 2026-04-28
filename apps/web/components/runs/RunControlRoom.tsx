@@ -1498,6 +1498,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     void ctx.patchDisplay({ vector_density: everyN });
   };
 
+  const handleRibbonPreviewMaxPoints = (maxPoints: number) => {
+    void ctx.patchDisplay({ max_points: maxPoints });
+  };
+
   const handleRibbonPreviewColormap = (colormap: string) => {
     void ctx.patchDisplay({ colormap });
   };
@@ -1613,6 +1617,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (typeof patch.showVectors === "boolean") {
       ctx.setMeshShowArrows(patch.showVectors);
       void ctx.patchDisplay({ vector_glyphs: patch.showVectors });
+      if (!patch.showVectors && ctx.femViewportLayers.showMagneticTexture && !ctx.femViewportLayers.showQuantity) {
+        ctx.requestPreviewQuantity("m");
+      }
     }
     if (typeof patch.showPrimitives === "boolean") {
       ctx.setFemViewportLayers((previous) => ({ ...previous, showPrimitives: patch.showPrimitives ?? previous.showPrimitives }));
@@ -1641,8 +1648,22 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         return changed ? next : previous;
       });
     }
+    if (typeof patch.showMagneticTexture === "boolean") {
+      ctx.setFemViewportLayers((previous) => ({
+        ...previous,
+        showMagneticTexture: patch.showMagneticTexture ?? previous.showMagneticTexture,
+        showQuantity: patch.showMagneticTexture ? false : previous.showQuantity,
+      }));
+      if (patch.showMagneticTexture) {
+        ctx.requestPreviewQuantity("m");
+      }
+    }
     if (typeof patch.showQuantity === "boolean") {
-      ctx.setFemViewportLayers((previous) => ({ ...previous, showQuantity: patch.showQuantity ?? previous.showQuantity }));
+      ctx.setFemViewportLayers((previous) => ({
+        ...previous,
+        showQuantity: patch.showQuantity ?? previous.showQuantity,
+        showMagneticTexture: patch.showQuantity ? false : previous.showMagneticTexture,
+      }));
     }
   };
 
@@ -2029,10 +2050,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         selectedQuantity={ctx.requestedPreviewQuantity}
         requestedPreviewComponent={ctx.requestedPreviewComponent}
         requestedPreviewEveryN={ctx.requestedPreviewEveryN}
+        requestedPreviewMaxPoints={ctx.requestedPreviewMaxPoints}
         requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
         requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
         magneticTextureVisible={ctx.femViewportLayers.showMagneticTexture}
+        magneticTextureDensity={ctx.femTextureDownsampleCells}
         quantityShaderVisible={ctx.femViewportLayers.showQuantity}
+        femVectorGlyphBudget={ctx.femVectorGlyphBudget}
         meshRenderMode={ctx.meshRenderMode}
         meshOpacity={ctx.meshOpacity}
         selectedObjectTextureVisible={selectedObjectTextureVisible}
@@ -2059,6 +2083,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onQuickPreviewSelect={ctx.requestPreviewQuantity}
         onSetPreviewComponent={handleRibbonPreviewComponent}
         onSetPreviewEveryN={handleRibbonPreviewEveryN}
+        onSetPreviewMaxPoints={handleRibbonPreviewMaxPoints}
+        onSetFemVectorGlyphBudget={ctx.setFemVectorGlyphBudget}
         onSetPreviewColormap={handleRibbonPreviewColormap}
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
         onSetMagneticTextureVisible={(visible) => {
@@ -2071,6 +2097,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             ctx.requestPreviewQuantity("m");
           }
         }}
+        onSetMagneticTextureDensity={ctx.setFemTextureDownsampleCells}
         onSetQuantityShaderVisible={(visible) =>
           ctx.setFemViewportLayers((previous) => ({
             ...previous,
@@ -2103,8 +2130,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onOpenMeshOptimizationSettings={handleOpenMeshOptimization}
         onOpenMeshPipeline={handleOpenMeshPipeline}
         selectedObjectId={ctx.selectedObjectId}
+        objectViewMode={ctx.objectViewMode}
         sceneObjectCount={ctx.sceneDocument?.objects.length ?? 0}
         onRequestObjectFocus={ctx.requestFocusObject}
+        onSetObjectViewMode={ctx.setObjectViewMode}
         hasSharedAirboxDomain={hasSharedAirboxDomain}
         canSyncScriptBuilder={Boolean(ctx.sessionFooter.scriptPath)}
         scriptSyncBusy={ctx.scriptSyncBusy}

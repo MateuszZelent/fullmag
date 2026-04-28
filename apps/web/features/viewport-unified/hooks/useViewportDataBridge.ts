@@ -41,6 +41,7 @@ import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import type { TextureGizmoMode } from "@/components/preview/TextureTransformGizmo";
 import type { FemLiveRenderDebugData } from "@/components/preview/fem/FemLiveRenderDebugPanel";
 import type { RenderMode as FemRenderMode } from "@/components/preview/FemMeshView3D";
+import { downsampleVectorFieldSpatialBins } from "@/components/preview/fem/femFieldDownsample";
 import { resolveAntennaNodeName } from "@/components/runs/control-room/shared";
 import {
   buildDenseFemVectorField,
@@ -412,8 +413,18 @@ export function useViewportDataBridge() {
         ? ctx.domainCapabilities.explicit_topology && ctx.domainCapabilities.node_fields
         : ctx.domainCapabilities.structured_grid || ctx.domainCapabilities.explicit_topology),
   );
+  const vectorGlyphDataNeeded =
+    (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
+    ctx.meshShowArrows;
+  const shaderFieldDataNeeded =
+    (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
+    (
+      ctx.meshShowArrows ||
+      ctx.femViewportLayers.showQuantity ||
+      (ctx.femViewportLayers.showMagneticTexture && ctx.selectedQuantity === "m")
+    );
 
-  /* ── 3D vector field model ── */
+  /* ── 3D vector glyph model: arrows only, with glyph-density controls. ── */
   const viewport3DVectorField = useViewport3DVectorFieldModel({
     quantityId: ctx.selectedQuantity ?? null,
     fieldRevision: vectorFieldRevision,
@@ -421,9 +432,7 @@ export function useViewportDataBridge() {
     adapterPointCount: vectorAdapterPointCount,
     colorComponent:
       ctx.effectiveVectorComponent === "magnitude" ? "|v|" : ctx.effectiveVectorComponent,
-    vectorsVisible:
-      (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
-      ctx.meshShowArrows,
+    vectorsVisible: vectorGlyphDataNeeded,
     vectorCapabilityEnabled,
     unsupportedReason: null,
     quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
@@ -431,9 +440,26 @@ export function useViewportDataBridge() {
     maxGlyphs: ctx.requestedPreviewMaxPoints,
     scope: vectorFetchScope,
   });
+  /* ── 3D shader field model: dense field data for mesh coloring/texture. ── */
+  const viewport3DShaderField = useViewport3DVectorFieldModel({
+    quantityId: ctx.selectedQuantity ?? null,
+    fieldRevision: vectorFieldRevision,
+    domainGenerationId: vectorDomainGenerationId,
+    adapterPointCount: vectorAdapterPointCount,
+    colorComponent:
+      ctx.effectiveVectorComponent === "magnitude" ? "|v|" : ctx.effectiveVectorComponent,
+    vectorsVisible: shaderFieldDataNeeded,
+    vectorCapabilityEnabled,
+    unsupportedReason: null,
+    quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
+    everyN: 1,
+    maxGlyphs: null,
+    scope: vectorFetchScope,
+  });
   const hasVectorData = Boolean(
     (ctx.selectedVectors && ctx.selectedVectors.length > 0) ||
-      (viewport3DVectorField.data && viewport3DVectorField.data.values.length > 0),
+      (viewport3DVectorField.data && viewport3DVectorField.data.values.length > 0) ||
+      (viewport3DShaderField.data && viewport3DShaderField.data.values.length > 0),
   );
 
   /* ── Texture / selection derivation ── */
@@ -707,14 +733,14 @@ export function useViewportDataBridge() {
         meshOpacity: ctx.meshOpacity,
         colorField: ctx.femColorField,
         magneticTextureColorField:
-          ctx.requestedPreviewQuantity === "m" ? "orientation" : "none",
+          ctx.selectedQuantity === "m" ? "orientation" : "none",
         showArrows: ctx.meshShowArrows,
       }),
     [
       ctx.femColorField,
       ctx.meshOpacity,
       ctx.meshShowArrows,
-      ctx.requestedPreviewQuantity,
+      ctx.selectedQuantity,
       displayObjectOverlays,
       femLayerState,
     ],
@@ -762,7 +788,7 @@ export function useViewportDataBridge() {
             ? femLayerState.showQuantity
               ? current.colorField
               : femLayerState.showMagneticTexture
-                ? ctx.requestedPreviewQuantity === "m"
+                ? ctx.selectedQuantity === "m"
                   ? "orientation"
                   : "none"
                 : "none"
@@ -774,7 +800,7 @@ export function useViewportDataBridge() {
     ctx.meshEntityViewState,
     ctx.meshOpacity,
     ctx.meshParts,
-    ctx.requestedPreviewQuantity,
+    ctx.selectedQuantity,
     femDiscretization,
     femLayerState.showMesh,
     femLayerState.showMagneticTexture,
@@ -911,6 +937,9 @@ export function useViewportDataBridge() {
       if (typeof patch.showVectors === "boolean") {
         setMeshShowArrows(patch.showVectors);
         void patchDisplay({ vector_glyphs: patch.showVectors });
+        if (!patch.showVectors && femLayerState.showMagneticTexture && !femLayerState.showQuantity) {
+          ctx.requestPreviewQuantity("m");
+        }
       }
       if (typeof patch.showPrimitives === "boolean") {
         ctx.setFemViewportLayers((previous) => ({
@@ -947,6 +976,8 @@ export function useViewportDataBridge() {
     },
     [
       ctx,
+      femLayerState.showMagneticTexture,
+      femLayerState.showQuantity,
       handleFemSliceComponentChange,
       patchDisplay,
       patchSlice2DToolbar,
@@ -1222,13 +1253,13 @@ export function useViewportDataBridge() {
       !scaledFemMeshData ||
       !femDiscretization ||
       vectorFetchScope.kind === "full" ||
-      viewport3DVectorField.status !== "ready" ||
-      !viewport3DVectorField.data
+      viewport3DShaderField.status !== "ready" ||
+      !viewport3DShaderField.data
     ) return scaledFemMeshData;
     const dense = buildDenseFemVectorField({
       nNodes: scaledFemMeshData.nNodes,
       meshParts: ctx.meshParts,
-      frames: [{ scope: vectorFetchScope, field: viewport3DVectorField.data }],
+      frames: [{ scope: vectorFetchScope, field: viewport3DShaderField.data }],
     });
     if (!dense) return scaledFemMeshData;
     const values =
@@ -1248,7 +1279,7 @@ export function useViewportDataBridge() {
       fieldData: { x, y, z },
       fieldNComp: dense.nComp,
       activeMask: dense.activeMask,
-      fieldRevision: viewport3DVectorField.fieldRevision ?? scaledFemMeshData.fieldRevision,
+      fieldRevision: viewport3DShaderField.fieldRevision ?? scaledFemMeshData.fieldRevision,
     };
   }, [
     ctx.meshParts,
@@ -1256,10 +1287,25 @@ export function useViewportDataBridge() {
     scaleFactor,
     scaledFemMeshData,
     vectorFetchScope,
-    viewport3DVectorField.data,
-    viewport3DVectorField.fieldRevision,
-    viewport3DVectorField.status,
+    viewport3DShaderField.data,
+    viewport3DShaderField.fieldRevision,
+    viewport3DShaderField.status,
   ]);
+
+  const shaderDownsampledFemMeshData = useMemo(() => {
+    if (!scopedFetchedFemMeshData?.fieldData) return scopedFetchedFemMeshData;
+    return {
+      ...scopedFetchedFemMeshData,
+      shaderFieldData: downsampleVectorFieldSpatialBins({
+        nodes: scopedFetchedFemMeshData.nodes,
+        nNodes: scopedFetchedFemMeshData.nNodes,
+        fieldData: scopedFetchedFemMeshData.fieldData,
+        targetBins: ctx.femTextureDownsampleCells,
+      }),
+    };
+  }, [ctx.femTextureDownsampleCells, scopedFetchedFemMeshData]);
+
+  const renderFemMeshData = shaderDownsampledFemMeshData ?? scopedFetchedFemMeshData;
 
   const resolvedFemTopologyKey = useMemo(() => {
     const explicit = ctx.femTopologyKey?.trim();
@@ -1440,7 +1486,10 @@ export function useViewportDataBridge() {
       femMeshFieldRevision: scaledFemMeshData?.fieldRevision,
       dataPlaneFieldRevision: ctx.fieldDataRevision,
       selectedVectorCount:
-        ctx.selectedVectors?.length ?? viewport3DVectorField.data?.values.length ?? 0,
+        ctx.selectedVectors?.length
+          ?? viewport3DVectorField.data?.values.length
+          ?? viewport3DShaderField.data?.values.length
+          ?? 0,
     },
     toolbar: {
       clipFlip: ctx.meshClipFlip,
@@ -1703,6 +1752,8 @@ export function useViewportDataBridge() {
     hasSliceScalar,
     scaledFemMeshData,
     scopedFetchedFemMeshData,
+    shaderDownsampledFemMeshData,
+    renderFemMeshData,
     resolvedFemTopologyKey,
     viewportFitSeed,
     isVectorSurface3DActive,

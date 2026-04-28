@@ -14,6 +14,7 @@ import {
 import { countActiveNodes } from "./femNodeMask";
 import { buildMagneticArrowNodeMask } from "@/features/viewport-fem/model/femSelectionMap";
 import {
+  GLYPH_BUDGET_MAX,
   GLYPH_BUDGET_MIN,
   maxPointsToGlyphBudget,
 } from "./vectorDensityBudget";
@@ -37,6 +38,7 @@ interface UseFemVectorDomainArgs {
   ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
   showArrowsForGeometry?: boolean;
   resolvedPreviewMaxPoints: number;
+  femVectorGlyphBudget?: number | null;
   captureActive: boolean;
   interactionActive: boolean;
   qualityProfile: ViewportQualityProfileId;
@@ -69,6 +71,7 @@ export function useFemVectorDomain({
   ferromagnetVisibilityMode,
   showArrowsForGeometry,
   resolvedPreviewMaxPoints,
+  femVectorGlyphBudget,
   captureActive,
   interactionActive,
   qualityProfile,
@@ -268,8 +271,16 @@ export function useFemVectorDomain({
   }, [airBoundaryFaceIndices, magneticBoundaryFaceIndices, resolvedVectorDomain]);
 
   const baseArrowDensity = useMemo(
-    () => maxPointsToGlyphBudget(resolvedPreviewMaxPoints),
-    [resolvedPreviewMaxPoints],
+    () => {
+      if (typeof femVectorGlyphBudget === "number" && Number.isFinite(femVectorGlyphBudget)) {
+        return Math.max(
+          GLYPH_BUDGET_MIN,
+          Math.min(GLYPH_BUDGET_MAX, Math.round(femVectorGlyphBudget)),
+        );
+      }
+      return maxPointsToGlyphBudget(resolvedPreviewMaxPoints);
+    },
+    [femVectorGlyphBudget, resolvedPreviewMaxPoints],
   );
 
   const baselineArrowNodeCount = useMemo(() => {

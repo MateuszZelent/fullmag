@@ -6,7 +6,6 @@ import {
   Activity,
   Bug,
   Camera,
-  Eye,
   Focus,
   Hand,
   Info,
@@ -765,28 +764,6 @@ export const ViewportBar = memo(function ViewportBar() {
 
           <div className={ROW_B_GROUP_CLASS}>
             <span className={ROW_B_GROUP_TITLE_CLASS}>View</span>
-            <ToolbarActionButton
-              label="Context"
-              icon={Layers3}
-              active={model.objectViewMode === "context"}
-              title="Show context objects"
-              pressed={model.objectViewMode === "context"}
-              onClick={() => {
-                model.setObjectViewMode("context");
-                dispatchToolbar({ type: "setObjectView", value: "context" });
-              }}
-            />
-            <ToolbarActionButton
-              label="Isolate"
-              icon={Eye}
-              active={model.objectViewMode === "isolate"}
-              title="Isolate selected object"
-              pressed={model.objectViewMode === "isolate"}
-              onClick={() => {
-                model.setObjectViewMode("isolate");
-                dispatchToolbar({ type: "setObjectView", value: "isolate" });
-              }}
-            />
             {supportsFieldOverlayInActiveView ? (
               <>
                 <ToolbarActionButton

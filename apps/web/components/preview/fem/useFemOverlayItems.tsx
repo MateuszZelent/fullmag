@@ -11,6 +11,7 @@ import type { MutableRefObject } from "react";
 import type { ViewportOverlayDescriptor } from "../ViewportOverlayManager";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { cn } from "@/lib/utils";
 import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
@@ -34,6 +35,24 @@ import type {
 import type { FemMeshPart } from "../../../lib/session/types";
 
 type CameraPresetKey = string;
+
+function colorLegendLengthLabel(args: {
+  effectiveShowArrows: boolean;
+  arrowColorMode: FemArrowColorMode;
+  arrowField: FemColorField;
+  fieldLabel?: string;
+}): string | undefined {
+  if (!args.effectiveShowArrows) {
+    return undefined;
+  }
+  if (args.arrowColorMode === "orientation") {
+    return "vector magnitude, arrow color = orientation";
+  }
+  if (args.arrowColorMode === "monochrome") {
+    return "vector magnitude, arrow color = monochrome";
+  }
+  return `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`;
+}
 
 export interface UseFemOverlayItemsArgs {
   // Feature flags
@@ -115,8 +134,9 @@ export interface UseFemOverlayItemsArgs {
   // Legend data
   arrowField: FemColorField;
   legendField: FemColorField;
+  colorLegendField: FemColorField | null;
   fieldLabel?: string;
-  fieldMagnitudeStats: { min: number; max: number; mean: number } | null;
+  colorLegendStats: { min: number; max: number; mean: number } | null;
 
   // Quantity
   quantityId?: string;
@@ -420,46 +440,54 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         ),
       });
     }
-    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showFieldLegend && args.legendOpen) {
+    const showColorLegend =
+      FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showFieldLegend &&
+      args.legendOpen &&
+      args.colorLegendField != null;
+    const showOrientationLegend =
+      FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere &&
+      args.effectiveShowOrientationLegend;
+    if (showColorLegend || showOrientationLegend) {
       items.push({
-        id: "field-legend",
+        id: "legend-stack",
         anchor: "bottom-left",
         priority: 4,
         render: ({ variant }) => (
-          <FieldLegend
-            compact={variant !== "full"}
-            className="pointer-events-none z-10"
-            colorLabel={colorLegendLabel(args.legendField, args.fieldLabel)}
-            lengthLabel={
-              args.effectiveShowArrows
-                ? args.arrowColorMode === "orientation"
-                  ? "vector magnitude, arrow color = orientation"
-                  : args.arrowColorMode === "monochrome"
-                    ? "vector magnitude, arrow color = monochrome"
-                    : `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`
-                : undefined
-            }
-            min={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.min}
-            max={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.max}
-            mean={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.mean}
-            gradient={colorLegendGradient(args.legendField)}
-          />
-        ),
-      });
-    }
-    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere && args.effectiveShowOrientationLegend) {
-      items.push({
-        id: "orientation-legend",
-        anchor: "bottom-left",
-        priority: 5,
-        render: ({ variant }) => (
-          <HslSphere
-            sceneRef={args.viewCubeSceneRef}
-            axisConvention="swapYZ"
-            compact={variant !== "full"}
-            onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
-            embedded
-          />
+          <div
+            className={cn(
+              "pointer-events-none flex gap-2",
+              showColorLegend && showOrientationLegend && variant !== "icon"
+                ? "flex-row items-end"
+                : "flex-col items-start",
+            )}
+          >
+            {showOrientationLegend ? (
+              <HslSphere
+                sceneRef={args.viewCubeSceneRef}
+                axisConvention="swapYZ"
+                compact={variant !== "full"}
+                onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
+                embedded
+              />
+            ) : null}
+            {showColorLegend && args.colorLegendField ? (
+              <FieldLegend
+                compact={variant !== "full"}
+                className="pointer-events-none z-10"
+                colorLabel={colorLegendLabel(args.colorLegendField, args.fieldLabel)}
+                lengthLabel={colorLegendLengthLabel({
+                  effectiveShowArrows: args.effectiveShowArrows,
+                  arrowColorMode: args.arrowColorMode,
+                  arrowField: args.arrowField,
+                  fieldLabel: args.fieldLabel,
+                })}
+                min={args.colorLegendStats?.min}
+                max={args.colorLegendStats?.max}
+                mean={args.colorLegendStats?.mean}
+                gradient={colorLegendGradient(args.colorLegendField)}
+              />
+            ) : null}
+          </div>
         ),
       });
     }

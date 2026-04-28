@@ -27,6 +27,7 @@ export interface FemMeshData {
   nNodes: number;
   nElements: number;
   fieldData?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> };
+  shaderFieldData?: { x: ArrayLike<number>; y: ArrayLike<number>; z: ArrayLike<number> };
   fieldNComp?: number;
   fieldRevision?: number | string | null;
   /** Backend-assigned mesh generation id. Used as primary topology cache key. */

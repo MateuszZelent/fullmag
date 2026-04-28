@@ -24,6 +24,10 @@ import {
 } from "../registry/ribbonRegistry";
 import type { RibbonMenuNode } from "../registry/ribbonMenuTypes";
 import type { ViewportMeshRenderMode } from "@/components/shell/ribbon/command-registry";
+import {
+  GLYPH_BUDGET_MAX,
+  GLYPH_BUDGET_MIN,
+} from "@/components/preview/fem/vectorDensityBudget";
 
 const QUANTITY_FALLBACKS = [
   { id: "m", label: "Magnetization / m" },
@@ -42,6 +46,38 @@ const VECTOR_COLOR_ITEMS = [
   { value: "z", label: "Z component" },
   { value: "monochrome", label: "Monochrome" },
 ];
+
+const VECTOR_COMPONENT_ITEMS = [
+  { value: "3D", label: "3D vectors" },
+  { value: "magnitude", label: "Magnitude |v|" },
+  { value: "x", label: "X" },
+  { value: "y", label: "Y" },
+  { value: "z", label: "Z" },
+];
+
+function buildComponentMenuNode(
+  ctx: RibbonBuildContext,
+  id: string,
+  label: string,
+  component: "3D" | "x" | "y" | "z" | "magnitude",
+  disabled: boolean,
+  disabledReason: string | null,
+): RibbonMenuNode {
+  return {
+    type: "radio-group",
+    id,
+    label,
+    value: component,
+    disabled,
+    disabledReason,
+    onValueChange: (value) =>
+      ctx.run({
+        id: "viewport.set-component",
+        component: value as "3D" | "x" | "y" | "z" | "magnitude",
+      }),
+    items: VECTOR_COMPONENT_ITEMS,
+  } as RibbonMenuNode;
+}
 
 const AIRBOX_RENDER_ITEMS = [
   { value: "surface", label: "Shaded" },
@@ -84,6 +120,14 @@ function canUse2D(ctx: RibbonBuildContext): { disabled: boolean; reason: string 
   return { disabled: false, reason: null };
 }
 
+function canUseObjectView(ctx: RibbonBuildContext): { disabled: boolean; reason: string | null } {
+  const base = canUse3Dor2D(ctx);
+  if (base.disabled) {
+    return base;
+  }
+  return { disabled: false, reason: null };
+}
+
 function canUseSelected(ctx: RibbonBuildContext): { disabled: boolean; reason: string | null } {
   const global = canUse3D(ctx);
   if (global.disabled) return global;
@@ -108,9 +152,7 @@ function quantityOptions(ctx: RibbonBuildContext) {
 function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3Dor2D(ctx);
   const quantityStatus = ctx.requestedPreviewQuantityDataStatus ?? (ctx.previewPending ? "pending" : "ready");
-  const everyN = ctx.requestedPreviewEveryN ?? 4;
   const autoScale = Boolean(ctx.requestedPreviewAutoScale ?? true);
-  const component = ctx.requestedPreviewComponent ?? "magnitude";
   const scalarReason = ctx.isFemBackend
     ? "FEM explicit topology may expose orientation/component coloring before scalar colormap support."
     : null;
@@ -137,26 +179,6 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onValueChange: (quantityId) => ctx.run({ id: "viewport.set-quantity", quantityId }),
       items: quantityOptions(ctx),
-    },
-    {
-      type: "radio-group",
-      id: "quantity:component",
-      label: "Component",
-      value: component === "3D" ? "3D" : component,
-      disabled: global.disabled,
-      disabledReason: global.reason,
-      onValueChange: (value) =>
-        ctx.run({
-          id: "viewport.set-component",
-          component: value as "3D" | "x" | "y" | "z" | "magnitude",
-        }),
-      items: [
-        { value: "3D", label: "3D vectors" },
-        { value: "magnitude", label: "Magnitude |v|" },
-        { value: "x", label: "X" },
-        { value: "y", label: "Y" },
-        { value: "z", label: "Z" },
-      ],
     },
     { type: "separator", id: "quantity:s1" },
     {
@@ -212,33 +234,18 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
         },
       ],
     },
-    {
-      type: "submenu",
-      id: "quantity:sampling",
-      label: "Sampling",
-      nodes: [
-        {
-          type: "slider",
-          id: "quantity:every-n",
-          label: "Every N",
-          value: everyN,
-          min: 1,
-          max: 32,
-          step: 1,
-          disabled: global.disabled,
-          disabledReason: global.reason,
-          onValueChange: (value) => ctx.run({ id: "viewport.set-vector-density", everyN: value }),
-        },
-        { type: "item", id: "quantity:dense", label: "Dense", action: () => ctx.run({ id: "viewport.set-vector-density", everyN: 2 }) },
-        { type: "item", id: "quantity:balanced", label: "Balanced", action: () => ctx.run({ id: "viewport.set-vector-density", everyN: 6 }) },
-        { type: "item", id: "quantity:performance", label: "Performance", action: () => ctx.run({ id: "viewport.set-vector-density", everyN: 16 }) },
-      ],
-    },
   ];
 }
 
 function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3D(ctx);
+  const textureDensity = ctx.magneticTextureDensity ?? 65_536;
+  const component = (ctx.requestedPreviewComponent ?? "magnitude") as
+    | "3D"
+    | "x"
+    | "y"
+    | "z"
+    | "magnitude";
   return [
     {
       type: "label",
@@ -261,6 +268,26 @@ function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-magnetic-texture", visible }),
     },
+    buildComponentMenuNode(
+      ctx,
+      "texture:component",
+      "Texture component",
+      component === "3D" ? "3D" : component,
+      global.disabled,
+      global.reason,
+    ),
+    {
+      type: "slider",
+      id: "texture:density",
+      label: "Texture downsample cells",
+      value: textureDensity,
+      min: 8,
+      max: 131072,
+      step: 8,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (density) => ctx.run({ id: "viewport.set-magnetic-texture-density", density }),
+    },
   ];
 }
 
@@ -268,6 +295,13 @@ function buildVectorsMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3Dor2D(ctx);
   const visible = Boolean(ctx.meshShowArrows);
   const warning = visible && ctx.previewPending ? "Vectors requested while preview data is pending" : null;
+  const component = (ctx.requestedPreviewComponent ?? "magnitude") as
+    | "3D"
+    | "x"
+    | "y"
+    | "z"
+    | "magnitude";
+  const vectorBudget = ctx.femVectorGlyphBudget ?? 1_200;
   return [
     { type: "label", id: "vectors:header", label: "Field arrows", badge: warning ? "warning" : visible ? "on" : "off" },
     ...(warning ? [{ type: "status", id: "vectors:warning", label: "Hidden reason", value: warning, tone: "warning" } as RibbonMenuNode] : []),
@@ -283,15 +317,23 @@ function buildVectorsMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
     {
       type: "slider",
       id: "vectors:density",
-      label: "Every N",
-      value: ctx.requestedPreviewEveryN ?? 4,
-      min: 1,
-      max: 64,
-      step: 1,
+      label: "Vector glyph budget",
+      value: vectorBudget,
+      min: GLYPH_BUDGET_MIN,
+      max: GLYPH_BUDGET_MAX,
+      step: 8,
       disabled: global.disabled,
       disabledReason: global.reason,
-      onValueChange: (everyN) => ctx.run({ id: "viewport.set-vector-density", everyN }),
+      onValueChange: (budget) => ctx.run({ id: "viewport.set-vector-glyph-budget", glyphBudget: budget }),
     },
+    buildComponentMenuNode(
+      ctx,
+      "vectors:component",
+      "Vector component",
+      component === "3D" ? "3D" : component,
+      global.disabled,
+      global.reason,
+    ),
     {
       type: "submenu",
       id: "vectors:size",
@@ -1240,6 +1282,9 @@ function buildSnapshotExportGroup(ctx: RibbonBuildContext): RibbonGroup {
 }
 
 function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
+  const objectView = canUseObjectView(ctx);
+  const isolateDisabledReason = objectView.reason ?? (!ctx.selectedObjectId ? "Select object to isolate it" : null);
+  const isolateDisabled = Boolean(isolateDisabledReason);
   return {
     id: "view-display",
     title: "Display",
@@ -1280,6 +1325,26 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
           { type: "item", id: "camera:trackball", label: "Trackball navigation", disabled: true, disabledReason: "Navigation profile persistence is pending viewport settings state" },
           { type: "item", id: "camera:orbit", label: "Orbit navigation", disabled: true, disabledReason: "Navigation profile persistence is pending viewport settings state" },
         ],
+      },
+      {
+        id: "view-object-context",
+        icon: <Layers3 size={20} />,
+        label: "Context",
+        tooltip: objectView.reason ?? "Show selected object in scene context",
+        active: ctx.objectViewMode === "context",
+        disabled: objectView.disabled,
+        iconColor: "text-cyan-300",
+        action: () => ctx.run({ id: "viewport.set-object-view", mode: "context" }),
+      },
+      {
+        id: "view-object-isolate",
+        icon: <BoxSelect size={20} />,
+        label: "Isolate",
+        tooltip: isolateDisabledReason ?? "Show only the selected object",
+        active: ctx.objectViewMode === "isolate",
+        disabled: isolateDisabled,
+        iconColor: "text-amber-300",
+        action: () => ctx.run({ id: "viewport.set-object-view", mode: "isolate" }),
       },
       {
         id: "view-panels",

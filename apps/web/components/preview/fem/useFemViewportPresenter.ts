@@ -67,8 +67,9 @@ interface UseFemViewportPresenterArgs {
   liveRenderDebugData?: FemLiveRenderDebugData | null;
   arrowField: FemColorField;
   legendField: FemColorField;
+  colorLegendField: FemColorField | null;
   fieldLabel?: string;
-  fieldMagnitudeStats: { min: number; max: number; mean: number } | null;
+  colorLegendStats: { min: number; max: number; mean: number } | null;
   quantityId?: string;
   prominentQuantityOptions: Array<{
     id: string;
@@ -180,9 +181,9 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
   }, [args.hoveredFace, args.qualityPerFace, args.wrapperFlags.enableHoverTooltip, faceAspectRatios]);
 
   const effectiveShowOrientationLegend =
-    Boolean(args.showOrientationLegend) ||
-    args.legendField === "orientation" ||
-    args.arrowColorMode === "orientation";
+    Boolean(args.showOrientationLegend) &&
+    (args.legendField === "orientation" ||
+      (args.effectiveShowArrows && args.arrowColorMode === "orientation"));
 
   const overlayItems = useFemOverlayItems({
     enableOverlayItemsModel: args.wrapperFlags.enableOverlayItemsModel,
@@ -234,8 +235,9 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     liveRenderDebugData: args.liveRenderDebugData,
     arrowField: args.arrowField,
     legendField: args.legendField,
+    colorLegendField: args.colorLegendField,
     fieldLabel: args.fieldLabel,
-    fieldMagnitudeStats: args.fieldMagnitudeStats,
+    colorLegendStats: args.colorLegendStats,
     quantityId: args.quantityId,
     prominentQuantityOptions: args.prominentQuantityOptions,
     applyToolbarRenderMode: args.applyToolbarRenderMode,

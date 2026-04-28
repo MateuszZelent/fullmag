@@ -163,6 +163,32 @@ describe("ribbon viewport commands", () => {
     expect(canExecuteRibbonCommand(context({ onClearSelectedDisplayOverrides: undefined }), { id: "viewport.clear-selected-display-overrides" })).toBe(false);
   });
 
+  it("dispatches object view mode through its own explicit command", () => {
+    const onSetObjectViewMode = vi.fn();
+    const onSetSelectedObjectRenderMode = vi.fn();
+    const ctx = context({ onSetObjectViewMode, onSetSelectedObjectRenderMode });
+
+    executeRibbonCommand(ctx, { id: "viewport.set-object-view", mode: "isolate" });
+
+    expect(onSetObjectViewMode).toHaveBeenCalledWith("isolate");
+    expect(onSetSelectedObjectRenderMode).not.toHaveBeenCalled();
+  });
+
+  it("requires an object-view callback for context isolate ribbon commands", () => {
+    expect(
+      canExecuteRibbonCommand(context({ onSetObjectViewMode: vi.fn() }), {
+        id: "viewport.set-object-view",
+        mode: "context",
+      }),
+    ).toBe(true);
+    expect(
+      canExecuteRibbonCommand(context({ onSetObjectViewMode: undefined }), {
+        id: "viewport.set-object-view",
+        mode: "isolate",
+      }),
+    ).toBe(false);
+  });
+
   it("dispatches 2D slice toolbar commands through the slice callback", () => {
     const onSetSlice2DToolbar = vi.fn();
     const ctx = context({ onSetSlice2DToolbar });

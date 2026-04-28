@@ -327,6 +327,8 @@ export interface ModelContextValue {
   meshClipPos: number;
   meshClipFlip: boolean;
   meshShowArrows: boolean;
+  femTextureDownsampleCells: number;
+  femVectorGlyphBudget: number;
   femArrowColorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
   femArrowMonoColor: string;
   femArrowAlpha: number;
@@ -433,6 +435,8 @@ export interface ModelContextValue {
   setMeshClipPos: React.Dispatch<React.SetStateAction<number>>;
   setMeshClipFlip: React.Dispatch<React.SetStateAction<boolean>>;
   setMeshShowArrows: React.Dispatch<React.SetStateAction<boolean>>;
+  setFemTextureDownsampleCells: React.Dispatch<React.SetStateAction<number>>;
+  setFemVectorGlyphBudget: React.Dispatch<React.SetStateAction<number>>;
   setFemArrowColorMode: React.Dispatch<
     React.SetStateAction<"orientation" | "x" | "y" | "z" | "magnitude" | "monochrome">
   >;

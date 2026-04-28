@@ -89,7 +89,10 @@ interface RibbonBarProps {
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
   magneticTextureVisible?: boolean;
+  magneticTextureDensity?: number | null;
   quantityShaderVisible?: boolean;
+  femVectorGlyphBudget?: number | null;
+  requestedPreviewMaxPoints?: number | null;
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
   selectedObjectTextureVisible?: boolean | null;
@@ -116,9 +119,12 @@ interface RibbonBarProps {
   onQuickPreviewSelect?: (quantityId: string) => void;
   onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
   onSetPreviewEveryN?: (everyN: number) => void;
+  onSetPreviewMaxPoints?: (maxPoints: number) => void;
+  onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
+  onSetMagneticTextureDensity?: (density: number) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
@@ -145,8 +151,10 @@ interface RibbonBarProps {
   onOpenMeshOptimizationSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   selectedObjectId?: string | null;
+  objectViewMode?: "context" | "isolate";
   sceneObjectCount?: number;
   onRequestObjectFocus?: (objectId: string) => void;
+  onSetObjectViewMode?: (mode: "context" | "isolate") => void;
   hasSharedAirboxDomain?: boolean;
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
@@ -356,6 +364,7 @@ function buildContext(
     selectedObjectId: props.selectedObjectId ?? null,
     selectedNodeId: props.selectedNodeId ?? null,
     selectedNodeKind: null, // resolved from handle if needed
+    objectViewMode: props.objectViewMode ?? "context",
     activeTransformScope: props.activeTransformScope ?? null,
 
     viewMode: props.viewMode ?? null,
@@ -363,7 +372,9 @@ function buildContext(
     previewPending: Boolean(props.previewPending),
     airboxVisible: Boolean(props.airboxVisible),
     magneticTextureVisible: props.magneticTextureVisible ?? true,
+    magneticTextureDensity: props.magneticTextureDensity ?? null,
     quantityShaderVisible: props.quantityShaderVisible ?? true,
+    femVectorGlyphBudget: props.femVectorGlyphBudget ?? null,
     viewportAxesScope: props.viewportAxesScope ?? "universe",
     universeWireframeVisible: props.universeWireframeVisible ?? true,
     viewportLegendVisible: Boolean(props.viewportLegendVisible),
@@ -374,6 +385,7 @@ function buildContext(
     selectedQuantity: props.selectedQuantity ?? null,
     requestedPreviewComponent: props.requestedPreviewComponent ?? null,
     requestedPreviewEveryN: props.requestedPreviewEveryN ?? null,
+    requestedPreviewMaxPoints: props.requestedPreviewMaxPoints ?? null,
     requestedPreviewAutoScale: props.requestedPreviewAutoScale ?? null,
     requestedPreviewQuantityDataStatus: props.requestedPreviewQuantityDataStatus ?? null,
     meshRenderMode: props.meshRenderMode ?? null,
@@ -703,10 +715,13 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.selectedQuantity,
     props.requestedPreviewComponent,
     props.requestedPreviewEveryN,
+    props.requestedPreviewMaxPoints,
     props.requestedPreviewAutoScale,
     props.requestedPreviewQuantityDataStatus,
     props.magneticTextureVisible,
+    props.magneticTextureDensity,
     props.quantityShaderVisible,
+    props.femVectorGlyphBudget,
     props.meshRenderMode,
     props.meshOpacity,
     props.selectedObjectTextureVisible,
@@ -734,6 +749,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canSyncScriptBuilder,
     props.scriptSyncBusy,
     props.selectedObjectId,
+    props.objectViewMode,
     props.onStudyAddPrimitive,
     props.onStudyAddMacro,
     props.onStudyDuplicateSelected,
@@ -743,9 +759,12 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetTextureTransformMode,
     props.onSetPreviewComponent,
     props.onSetPreviewEveryN,
+    props.onSetPreviewMaxPoints,
+    props.onSetFemVectorGlyphBudget,
     props.onSetPreviewColormap,
     props.onSetPreviewAutoScale,
     props.onSetMagneticTextureVisible,
+    props.onSetMagneticTextureDensity,
     props.onSetQuantityShaderVisible,
     props.onSetMeshRenderMode,
     props.onSetMeshOpacity,
@@ -761,6 +780,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetFemArrowStyle,
     props.onSetAirboxDisplay,
     props.onSetSlice2DToolbar,
+    props.onSetObjectViewMode,
     props.onBuilderAddPrimitive,
     props.onBuilderCreateBoolean,
     props.onBuilderBuildGeometry,

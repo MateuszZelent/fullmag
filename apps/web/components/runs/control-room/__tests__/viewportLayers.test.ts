@@ -68,6 +68,26 @@ describe("deriveFemLayerRenderState", () => {
     expect(result.showArrows).toBe(true);
   });
 
+  it("keeps magnetic texture coloring when vector arrows are hidden", () => {
+    const result = deriveFemLayerRenderState({
+      layers: {
+        showPrimitives: true,
+        showMesh: true,
+        showMagneticTexture: true,
+        showQuantity: false,
+      },
+      objectOverlays: [{ id: "obj-1" }],
+      meshOpacity: 75,
+      colorField: "magnitude",
+      magneticTextureColorField: "orientation",
+      showArrows: false,
+    });
+
+    expect(result.magneticColorField).toBe("orientation");
+    expect(result.airColorField).toBe("none");
+    expect(result.showArrows).toBe(false);
+  });
+
   it("can fully disable ferromagnet shader coloring when both texture and quantity are hidden", () => {
     const result = deriveFemLayerRenderState({
       layers: {

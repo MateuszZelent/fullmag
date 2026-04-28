@@ -43,6 +43,7 @@ export interface RibbonCommandContext {
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;
   selectedObjectId?: string | null;
+  objectViewMode?: "context" | "isolate";
   airboxVisible?: boolean;
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
@@ -59,9 +60,12 @@ export interface RibbonCommandContext {
   onQuickPreviewSelect?: (quantityId: string) => void;
   onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
   onSetPreviewEveryN?: (everyN: number) => void;
+  onSetPreviewMaxPoints?: (maxPoints: number) => void;
+  onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
+  onSetMagneticTextureDensity?: (density: number) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
   onExport?: () => void;
   onCapture?: () => void;
@@ -79,6 +83,7 @@ export interface RibbonCommandContext {
   onOpenMeshOptimizationSettings?: () => void;
   onOpenMeshPipeline?: () => void;
   onRequestObjectFocus?: (objectId: string) => void;
+  onSetObjectViewMode?: (mode: "context" | "isolate") => void;
   onSyncScriptBuilder?: () => void;
   onStudyAddPrimitive?: (
     kind: StudyPrimitiveStageKind,
@@ -212,8 +217,11 @@ export type RibbonCommand =
   | { id: "viewport.set-colormap"; colormap: string }
   | { id: "viewport.set-auto-scale"; enabled: boolean }
   | { id: "viewport.toggle-magnetic-texture"; visible: boolean }
+  | { id: "viewport.set-magnetic-texture-density"; density: number }
   | { id: "viewport.toggle-quantity-shader"; visible: boolean }
   | { id: "viewport.set-vector-density"; everyN: number }
+  | { id: "viewport.set-vector-max-points"; maxPoints: number }
+  | { id: "viewport.set-vector-glyph-budget"; glyphBudget: number }
   | { id: "viewport.toggle-vectors"; visible: boolean }
   | {
       id: "viewport.set-vector-style";
@@ -231,6 +239,7 @@ export type RibbonCommand =
   | { id: "viewport.set-global-render-mode"; renderMode: ViewportMeshRenderMode }
   | { id: "viewport.set-global-opacity"; opacity: number }
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
+  | { id: "viewport.set-object-view"; mode: "context" | "isolate" }
   | { id: "viewport.set-slice-axis"; axis: Slice2DToolbarState["axis"] }
   | { id: "viewport.set-slice-mode"; mode: Slice2DToolbarState["mode"] }
   | { id: "viewport.set-slice-position"; positionPercent: number }
@@ -365,6 +374,12 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSetQuantityShaderVisible === "function";
     case "viewport.set-vector-density":
       return typeof ctx.onSetPreviewEveryN === "function";
+    case "viewport.set-vector-max-points":
+      return typeof ctx.onSetPreviewMaxPoints === "function";
+    case "viewport.set-vector-glyph-budget":
+      return typeof ctx.onSetFemVectorGlyphBudget === "function";
+    case "viewport.set-magnetic-texture-density":
+      return typeof ctx.onSetMagneticTextureDensity === "function";
     case "viewport.toggle-vectors":
       return typeof ctx.onSetMeshShowArrows === "function";
     case "viewport.set-vector-style":
@@ -382,6 +397,8 @@ export function canExecuteRibbonCommand(
         typeof ctx.onSetMeshClipPos === "function" ||
         typeof ctx.onSetMeshClipFlip === "function"
       );
+    case "viewport.set-object-view":
+      return typeof ctx.onSetObjectViewMode === "function";
     case "viewport.set-slice-axis":
     case "viewport.set-slice-mode":
     case "viewport.set-slice-position":
@@ -568,6 +585,15 @@ export function executeRibbonCommand(
     case "viewport.set-vector-density":
       ctx.onSetPreviewEveryN?.(command.everyN);
       return;
+    case "viewport.set-vector-max-points":
+      ctx.onSetPreviewMaxPoints?.(command.maxPoints);
+      return;
+    case "viewport.set-vector-glyph-budget":
+      ctx.onSetFemVectorGlyphBudget?.(command.glyphBudget);
+      return;
+    case "viewport.set-magnetic-texture-density":
+      ctx.onSetMagneticTextureDensity?.(command.density);
+      return;
     case "viewport.toggle-vectors":
       ctx.onSetMeshShowArrows?.(command.visible);
       return;
@@ -594,6 +620,9 @@ export function executeRibbonCommand(
       if (command.patch.axis) ctx.onSetMeshClipAxis?.(command.patch.axis);
       if (typeof command.patch.position === "number") ctx.onSetMeshClipPos?.(command.patch.position);
       if (typeof command.patch.flipped === "boolean") ctx.onSetMeshClipFlip?.(command.patch.flipped);
+      return;
+    case "viewport.set-object-view":
+      ctx.onSetObjectViewMode?.(command.mode);
       return;
     case "viewport.set-slice-axis":
       ctx.onSetSlice2DToolbar?.({ axis: command.axis });

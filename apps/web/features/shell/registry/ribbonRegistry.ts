@@ -148,6 +148,7 @@ export interface RibbonBuildContext {
   selectedObjectId: string | null;
   selectedNodeId: string | null;
   selectedNodeKind: NodeKind | null;
+  objectViewMode: "context" | "isolate";
   activeTransformScope: "object" | "texture" | null;
 
   // ── Viewport state ──
@@ -156,7 +157,9 @@ export interface RibbonBuildContext {
   previewPending: boolean;
   airboxVisible: boolean;
   magneticTextureVisible: boolean;
+  magneticTextureDensity?: number | null;
   quantityShaderVisible: boolean;
+  femVectorGlyphBudget?: number | null;
   viewportAxesScope: "universe" | "object";
   universeWireframeVisible: boolean;
   viewportLegendVisible: boolean;
@@ -175,6 +178,7 @@ export interface RibbonBuildContext {
   requestedPreviewEveryN?: number | null;
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
+  requestedPreviewMaxPoints?: number | null;
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
   selectedObjectTextureVisible?: boolean | null;

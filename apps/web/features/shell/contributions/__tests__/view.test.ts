@@ -41,6 +41,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     selectedObjectId: "obj-1",
     selectedNodeId: null,
     selectedNodeKind: null,
+    objectViewMode: "context",
     activeTransformScope: null,
     viewMode: "3D",
     sidebarVisible: true,
@@ -57,15 +58,17 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     ],
     selectedQuantity: "m",
     requestedPreviewComponent: "3D",
-  requestedPreviewEveryN: 4,
-  requestedPreviewAutoScale: true,
-  requestedPreviewQuantityDataStatus: "ready",
-  magneticTextureVisible: true,
-  meshRenderMode: "surface+edges",
-  meshOpacity: 80,
-  selectedObjectTextureVisible: true,
-  selectedObjectOpacity: 55,
-  selectedObjectRenderMode: "inherit",
+    requestedPreviewEveryN: 4,
+    requestedPreviewAutoScale: true,
+    requestedPreviewQuantityDataStatus: "ready",
+    magneticTextureVisible: true,
+    magneticTextureDensity: 65_536,
+    femVectorGlyphBudget: 1_200,
+    meshRenderMode: "surface+edges",
+    meshOpacity: 80,
+    selectedObjectTextureVisible: true,
+    selectedObjectOpacity: 55,
+    selectedObjectRenderMode: "inherit",
     meshClipEnabled: false,
     meshClipAxis: "z",
     meshClipPos: 50,
@@ -173,24 +176,34 @@ describe("View ribbon contribution", () => {
   it("exposes rich quantity controls and keeps disabled quantity reasons", () => {
     const group = buildViewRibbonGroups(baseContext())[0];
     const texture = group.actions.find((action) => action.id === "view-texture");
+    const vectors = group.actions.find((action) => action.id === "view-vectors");
     const quantity = group.actions.find((action) => action.id === "view-quantity");
     expect(texture?.menu).toBeTruthy();
+    expect(vectors?.menu).toBeTruthy();
     expect(quantity?.menu).toBeTruthy();
 
     const source = findNode(quantity?.menu ?? [], "quantity:source");
     const shader = findNode(quantity?.menu ?? [], "quantity:overlay-visible");
-    const everyN = findNode(quantity?.menu ?? [], "quantity:every-n");
     const textureVisible = findNode(texture?.menu ?? [], "texture:visible");
+    const textureComponent = findNode(texture?.menu ?? [], "texture:component");
+    const vectorComponent = findNode(vectors?.menu ?? [], "vectors:component");
+    const vectorDensity = findNode(vectors?.menu ?? [], "vectors:density");
+    const vectorColoring = findNode(quantity?.menu ?? [], "quantity:vector-coloring");
 
     expect(source).toMatchObject({ type: "radio-group", value: "m" });
     expect(shader).toMatchObject({ type: "checkbox", checked: true });
     expect(textureVisible).toMatchObject({ type: "checkbox", checked: true });
+    expect(findNode(quantity?.menu ?? [], "quantity:component")).toBeNull();
+    expect(findNode(quantity?.menu ?? [], "quantity:every-n")).toBeNull();
+    expect(textureComponent).toMatchObject({ type: "radio-group", value: "3D" });
+    expect(vectorComponent).toMatchObject({ type: "radio-group", value: "3D" });
+    expect(vectorDensity).toMatchObject({ type: "slider", value: 1200, min: 8, max: 4096 });
+    expect(vectorColoring).toMatchObject({ type: "radio-group", value: "orientation" });
     expect(source?.type === "radio-group" ? source.items[1] : null).toMatchObject({
       value: "H_eff",
       disabled: true,
       disabledReason: "Quantity is not available for this run",
     });
-    expect(everyN).toMatchObject({ type: "slider", value: 4, min: 1, max: 32 });
   });
 
   it("keeps selected opacity per-object rather than reading global opacity", () => {
@@ -199,6 +212,21 @@ describe("View ribbon contribution", () => {
     const slider = findNode(opacity?.menu ?? [], "selected-opacity:slider");
 
     expect(slider).toMatchObject({ type: "slider", value: 55 });
+  });
+
+  it("exposes object context and isolate controls in the display group", () => {
+    const display = buildViewRibbonGroups(baseContext({ viewMode: "2D", objectViewMode: "isolate" }))[5];
+
+    expect(display.actions.map((action) => action.id)).toContain("view-object-context");
+    expect(display.actions.map((action) => action.id)).toContain("view-object-isolate");
+    expect(display.actions.find((action) => action.id === "view-object-context")).toMatchObject({
+      disabled: false,
+      active: false,
+    });
+    expect(display.actions.find((action) => action.id === "view-object-isolate")).toMatchObject({
+      disabled: false,
+      active: true,
+    });
   });
 
   it("shows dedicated texture actions in global and selected display groups", () => {
@@ -222,6 +250,16 @@ describe("View ribbon contribution", () => {
     const selected = buildViewRibbonGroups(baseContext({ selectedObjectId: null }))[2];
     expect(selected.actions.every((action) => action.disabled)).toBe(true);
     expect(selected.actions[0].tooltip).toBe("Select object to edit object display");
+  });
+
+  it("disables isolate in the display group when no object is selected", () => {
+    const display = buildViewRibbonGroups(baseContext({ selectedObjectId: null }))[5];
+    const isolate = display.actions.find((action) => action.id === "view-object-isolate");
+
+    expect(isolate).toMatchObject({
+      disabled: true,
+      tooltip: "Select object to isolate it",
+    });
   });
 
   it("exposes independent airbox shaded wireframe points and vector controls", () => {
