@@ -11,8 +11,8 @@ function makeTab(patch: Partial<WorkspaceTab>): WorkspaceTab {
     title: "3D Viewport",
     closable: false,
     pinned: true,
-    keepAlive: false,
-    lifecycle: "unmount-on-hide",
+    keepAlive: true,
+    lifecycle: "warm",
     payload: { viewMode: "3D" },
     ...patch,
   };
@@ -138,10 +138,10 @@ describe("applyWorkspaceTabSelection", () => {
     expect(api.openAnalyzeSurface).not.toHaveBeenCalled();
   });
 
-  it("keeps viewport tabs switching view modes", () => {
+  it("keeps viewport tabs as tab-driven routing without forcing another view-mode transition", () => {
     const api = makeApi({ effectiveViewMode: "2D" });
     applyWorkspaceTabSelection(stage, makeTab({ kind: "viewport-3d" }), api);
 
-    expect(api.handleViewModeChange).toHaveBeenCalledWith("3D");
+    expect(api.handleViewModeChange).not.toHaveBeenCalled();
   });
 });

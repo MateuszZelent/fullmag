@@ -70,10 +70,20 @@ export interface ViewportDocumentState {
   selectedDatasetId: string | null;
   selectedResultNodeId: string | null;
   renderMode: string | null;
+  camera: ViewportCameraState | null;
   overlayToggles: {
     telemetryHudVisible: boolean;
     previewNoticesVisible: boolean;
   };
+}
+
+export interface ViewportCameraState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  projection: "perspective" | "orthographic" | null;
+  navigation: "trackball" | "cad" | null;
+  lastFocusedObjectId: string | null;
 }
 
 export interface WorkspaceGraphSelectionState {

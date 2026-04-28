@@ -30,6 +30,7 @@ interface UseFemSceneGeometryArgs {
   enableTextureTransformModel: boolean;
   enableCameraFitEffect: boolean;
   enableScreenshotCapture: boolean;
+  suppressInitialCameraFit?: boolean;
   activeTextureTransform: TextureTransform3D | null;
   viewportFitSeed?: string | number;
   selectedObjectOverlay: BuilderObjectOverlay | null;
@@ -80,6 +81,7 @@ export function useFemSceneGeometry({
   enableTextureTransformModel,
   enableCameraFitEffect,
   enableScreenshotCapture,
+  suppressInitialCameraFit = false,
   activeTextureTransform,
   selectedObjectOverlay,
   objectOverlays,
@@ -344,6 +346,10 @@ export function useFemSceneGeometry({
     const fitSeed = viewportFitSeed == null ? null : String(viewportFitSeed);
     const sig = fitSeed
       ?? `${dynamicMaxDim.toFixed(6)}_${dynamicGeomCenter.x.toFixed(6)}_${dynamicGeomCenter.y.toFixed(6)}_${dynamicGeomCenter.z.toFixed(6)}`;
+    if (lastFittedGeomRef.current === null && suppressInitialCameraFit) {
+      lastFittedGeomRef.current = sig;
+      return;
+    }
     if (lastFittedGeomRef.current !== sig) {
       lastFittedGeomRef.current = sig;
       setCameraFitGeneration((g) => g + 1);
@@ -352,6 +358,7 @@ export function useFemSceneGeometry({
     dynamicMaxDim,
     dynamicGeomCenter,
     enableCameraFitEffect,
+    suppressInitialCameraFit,
     setCameraFitGeneration,
     viewportFitSeed,
   ]);

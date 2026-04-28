@@ -7,6 +7,7 @@ export type {
   DatasetNodeRef,
   DerivedValueNodeRef,
   QuantityFrameViewModel,
+  ViewportCameraState,
   ViewportDocumentState,
   WorkspaceGraphBridgeInput,
 } from "./model/types";

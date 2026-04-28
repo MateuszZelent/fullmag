@@ -37,24 +37,24 @@ else:
     # isotropic 2 nm tetrahedra through the full shared airbox. The dense FEM
     # demag path scales roughly as O(nodes^2) in memory.
     universe_mesh = dict(
-        maximum_element_size=5.5e-08,
-        minimum_element_size=3.0e-09,
-        growth_rate=1.18,
+        maximum_element_size=7.0e-08,
+        minimum_element_size=5.0e-09,
+        growth_rate=1.25,
     )
     body_mesh = dict(
-        maximum_element_size=8.0e-09,
+        maximum_element_size=6.0e-09,
         minimum_element_size=2.5e-09,
-        size_from_curvature=24,
+        size_from_curvature=12,
         smoothing_steps=5,
         optimize_iterations=5,
         curvature_factor=1.0,
-        maximum_element_growth_rate=1.22,
+        maximum_element_growth_rate=1.25,
         narrow_regions=0,
         narrow_region_resolution=0.7,
-        interface_hmax=3.0e-09,
-        interface_thickness=6.0e-09,
-        transition_distance=24.0e-09,
-        transition_growth=1.2,
+        interface_hmax=4.0e-09,
+        interface_thickness=5.0e-09,
+        transition_distance=12.0e-09,
+        transition_growth=1.25,
     )
 
 # Engine

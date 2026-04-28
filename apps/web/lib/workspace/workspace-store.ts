@@ -83,8 +83,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "3D Viewport",
       closable: false,
       pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
+      keepAlive: true,
+      lifecycle: "warm",
       payload: { viewMode: "3D" },
     },
     {
@@ -94,8 +94,8 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "2D Slice",
       closable: false,
       pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
+      keepAlive: true,
+      lifecycle: "warm",
       payload: { viewMode: "2D" },
     },
     {
@@ -131,11 +131,22 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
   };
 }
 
+function shouldWarmWorkspaceTab(tab: Pick<WorkspaceTab, "id" | "key" | "kind">): boolean {
+  return (
+    tab.id === "core:3d" ||
+    tab.key === "core:3d" ||
+    tab.id === "core:2d" ||
+    tab.key === "core:2d"
+  );
+}
+
 function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab {
-  const lifecycle: WorkspaceTabLifecycle = "unmount-on-hide";
+  const lifecycle: WorkspaceTabLifecycle = shouldWarmWorkspaceTab(tab)
+    ? "warm"
+    : "unmount-on-hide";
   return {
     ...tab,
-    keepAlive: false,
+    keepAlive: lifecycle === "warm",
     lifecycle,
     payload: tab.payload ? { ...tab.payload } : undefined,
   };

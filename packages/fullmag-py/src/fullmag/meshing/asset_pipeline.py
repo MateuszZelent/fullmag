@@ -50,6 +50,7 @@ from ._mesh_targets import (
     resolve_shared_domain_targets,
 )
 from ._gmsh_fields import resolve_effective_algorithm_3d
+from ._gmsh_extraction import build_per_domain_quality_from_mesh_arrays
 from ._gmsh_swept import classify_sweepability
 from ._mesh_targets import (
     _coerce_positive_float as _coerce_positive_float,
@@ -1259,7 +1260,12 @@ def realize_fem_domain_mesh_asset(
         boundary_faces=mesh.boundary_faces,
         boundary_markers=mesh.boundary_markers,
         quality=mesh.quality,
-        per_domain_quality=mesh.per_domain_quality,
+        per_domain_quality=build_per_domain_quality_from_mesh_arrays(
+            mesh.nodes,
+            mesh.elements,
+            assigned_markers,
+            mesh.quality,
+        ) or mesh.per_domain_quality,
     )
     requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
         geometries,
@@ -1624,7 +1630,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         boundary_faces=mesh.boundary_faces,
         boundary_markers=mesh.boundary_markers,
         quality=mesh.quality,
-        per_domain_quality=mesh.per_domain_quality,
+        per_domain_quality=build_per_domain_quality_from_mesh_arrays(
+            mesh.nodes,
+            mesh.elements,
+            assigned_markers,
+            mesh.quality,
+        ) or mesh.per_domain_quality,
     )
     requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
         geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,

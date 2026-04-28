@@ -245,6 +245,7 @@ export default function DockCenterTabs() {
           <TabsContent
             key={tab.id}
             value={tab.id}
+            forceMount={tab.lifecycle === "warm"}
             className="relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {renderTabContent(tab)}

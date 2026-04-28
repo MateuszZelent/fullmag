@@ -45,6 +45,11 @@ import {
   type OrientationDebugSnapshot,
 } from "./camera/cameraOrientation";
 import { useSceneCameraChange } from "./camera/useSceneCameraChange";
+import {
+  captureViewportCameraState,
+  restoreViewportCameraState,
+} from "./camera/persistedViewportCamera";
+import type { ViewportCameraState } from "@/features/workspace-graph";
 export type {
   FemMeshData,
   MeshSelectionSnapshot,
@@ -171,6 +176,9 @@ interface Props {
   onVisibleSubmeshSnapshotChange?: (snapshot: VisibleSubmeshSnapshot | null) => void;
   selectedSidebarNodeId?: string | null;
   liveRenderDebugData?: FemLiveRenderDebugData | null;
+  viewportDocumentId?: string | null;
+  persistedCameraState?: ViewportCameraState | null;
+  onPersistCameraState?: (state: ViewportCameraState) => void;
   authoringOverlay?: ReactNode;
 }
 
@@ -262,6 +270,9 @@ function FemMeshView3DInner({
   onVisibleSubmeshSnapshotChange,
   selectedSidebarNodeId = null,
   liveRenderDebugData = null,
+  viewportDocumentId = null,
+  persistedCameraState = null,
+  onPersistCameraState,
   authoringOverlay = null,
 }: Props) {
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
@@ -291,6 +302,10 @@ function FemMeshView3DInner({
   const viewCubeSceneRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const qualityProfileRef = useRef<ViewportQualityProfileId>("interactive");
+  const cameraPersistenceScope = viewportDocumentId ?? topologyKey;
+  const cameraRestoreReadyRef = useRef(false);
+  const restoredCameraScopeRef = useRef<string | null>(null);
+  const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
 
   const {
     renderMode,
@@ -371,6 +386,33 @@ function FemMeshView3DInner({
     onPreviewMaxPointsChange,
     onLegendOpenChange,
   });
+  useEffect(() => {
+    if (
+      persistedCameraState?.projection &&
+      persistedCameraState.projection !== cameraProjection
+    ) {
+      setCameraProjection(persistedCameraState.projection);
+    }
+    if (
+      persistedCameraState?.navigation &&
+      persistedCameraState.navigation !== navigationMode
+    ) {
+      setNavigationMode(persistedCameraState.navigation);
+    }
+  }, [
+    cameraProjection,
+    navigationMode,
+    persistedCameraState?.navigation,
+    persistedCameraState?.projection,
+    setCameraProjection,
+    setNavigationMode,
+  ]);
+  useEffect(() => {
+    if (!focusObjectRequest?.objectId) {
+      return;
+    }
+    lastFocusedObjectIdRef.current = focusObjectRequest.objectId;
+  }, [focusObjectRequest?.objectId, focusObjectRequest?.revision]);
   const wrapperFlags = FRONTEND_DIAGNOSTIC_FLAGS.femWrapper;
   const selectionOnlyInteractionMode =
     FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableSelectionOnlyInteractionMode;
@@ -566,6 +608,7 @@ function FemMeshView3DInner({
     enableTextureTransformModel: wrapperFlags.enableTextureTransformModel,
     enableCameraFitEffect: wrapperFlags.enableCameraFitEffect,
     enableScreenshotCapture: wrapperFlags.enableScreenshotCapture,
+    suppressInitialCameraFit: Boolean(persistedCameraState),
     activeTextureTransform,
     selectedObjectOverlay,
     objectOverlays,
@@ -603,7 +646,60 @@ function FemMeshView3DInner({
     }
     updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
   }, [updateRotationSnapshot]);
-  useSceneCameraChange(viewCubeSceneRef, syncViewportRotationSnapshot);
+  const persistCameraState = useCallback(() => {
+    if (!cameraRestoreReadyRef.current) {
+      return;
+    }
+    const state = captureViewportCameraState(viewCubeSceneRef.current, {
+      projection: cameraProjection,
+      navigation: navigationMode,
+      lastFocusedObjectId: lastFocusedObjectIdRef.current,
+    });
+    if (!state || !onPersistCameraState) {
+      return;
+    }
+    onPersistCameraState(state);
+  }, [cameraProjection, navigationMode, onPersistCameraState]);
+  const handleSceneCameraChange = useCallback(() => {
+    syncViewportRotationSnapshot();
+    persistCameraState();
+  }, [persistCameraState, syncViewportRotationSnapshot]);
+  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
+  useEffect(() => {
+    if (restoredCameraScopeRef.current === cameraPersistenceScope && cameraRestoreReadyRef.current) {
+      syncViewportRotationSnapshot();
+      return;
+    }
+    cameraRestoreReadyRef.current = false;
+    let raf = 0;
+    let disposed = false;
+
+    const restore = () => {
+      if (disposed) {
+        return;
+      }
+      const bridge = viewCubeSceneRef.current;
+      if (!bridge?.camera || !bridge?.controls) {
+        raf = window.requestAnimationFrame(restore);
+        return;
+      }
+      if (restoreViewportCameraState(bridge, persistedCameraState)) {
+        lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
+      }
+      restoredCameraScopeRef.current = cameraPersistenceScope;
+      cameraRestoreReadyRef.current = true;
+      syncViewportRotationSnapshot();
+    };
+
+    restore();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [cameraPersistenceScope, persistedCameraState, syncViewportRotationSnapshot]);
   const applyRotationEuler = useCallback((nextEulerDeg: [number, number, number]) => {
     const quaternion = new THREE.Quaternion().setFromEuler(
       new THREE.Euler(

@@ -116,6 +116,9 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             universeCenter: ctx.worldCenter,
             focusObjectRequest: ctx.focusObjectRequest,
             objectViewMode: ctx.objectViewMode,
+            viewportDocumentId: bridge.graphActiveViewportDocumentId,
+            persistedCameraState: bridge.graphActiveViewportCameraState,
+            onPersistCameraState: bridge.persistViewportCameraState,
             viewportAxesScope: ctx.viewportAxesScope,
             universeWireframeVisible: ctx.universeWireframeVisible,
             onRequestObjectSelect: bridge.handleRequestObjectSelect,
@@ -217,6 +220,9 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             magneticColorField={bridge.femMagneticColorFieldForRender}
             showOrientationLegend={ctx.femMagnetization3DActive}
             toolbarMode={bridge.femToolbarMode}
+            viewportDocumentId={bridge.graphActiveViewportDocumentId}
+            persistedCameraState={bridge.graphActiveViewportCameraState}
+            onPersistCameraState={bridge.persistViewportCameraState}
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
@@ -336,6 +342,9 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
               toolbarMode={bridge.femToolbarMode}
               colorField={geometryViewportPresetActive ? "none" : bridge.femColorFieldForRender}
               showOrientationLegend={!geometryViewportPresetActive && ctx.femMagnetization3DActive}
+              viewportDocumentId={bridge.graphActiveViewportDocumentId}
+              persistedCameraState={bridge.graphActiveViewportCameraState}
+              onPersistCameraState={bridge.persistViewportCameraState}
               renderMode={
                 geometryViewportPresetActive
                   ? "surface"
@@ -438,6 +447,9 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
               ? "Geometry"
               : bridge.vectorSurfaceSharedProps.fieldLabel,
             geometryMode: geometryViewportPresetActive || bridge.vectorSurfaceSharedProps.geometryMode,
+            viewportDocumentId: bridge.graphActiveViewportDocumentId,
+            persistedCameraState: bridge.graphActiveViewportCameraState,
+            onPersistCameraState: bridge.persistViewportCameraState,
             viewport3DModel: bridge.hostedVectorSurfaceViewportModel,
             vectors: geometryViewportPresetActive ? null : bridge.vectorSurfaceVectors,
             toolbarMode: bridge.vectorToolbarMode,
@@ -464,6 +476,9 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             viewportFitSeed={bridge.viewportFitSeed}
             colorField="none"
             toolbarMode={bridge.femToolbarMode}
+            viewportDocumentId={bridge.graphActiveViewportDocumentId}
+            persistedCameraState={bridge.graphActiveViewportCameraState}
+            onPersistCameraState={bridge.persistViewportCameraState}
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"

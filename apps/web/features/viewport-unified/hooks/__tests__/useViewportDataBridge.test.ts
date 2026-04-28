@@ -1,24 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveEffectiveMeshEntityRenderMode } from "../useViewportDataBridge";
+import { buildViewportFitSeed } from "../useViewportDataBridge";
 
-describe("resolveEffectiveMeshEntityRenderMode", () => {
-  it("does not coerce non-air mesh part render mode from surface+edges", () => {
-    const result = resolveEffectiveMeshEntityRenderMode({ currentRenderMode: "surface+edges" });
+describe("buildViewportFitSeed", () => {
+  it("stays stable across presentation mode changes and only tracks topology-relevant inputs", () => {
+    const base = buildViewportFitSeed({
+      resolvedFemTopologyKey: "gen:42",
+      scaledFemMeshData: {
+        nNodes: 128,
+        nElements: 96,
+        boundaryFaces: new Array(24).fill(0),
+      },
+    });
 
-    expect(result).toBe("surface+edges");
-  });
+    const sameTopology = buildViewportFitSeed({
+      resolvedFemTopologyKey: "gen:42",
+      scaledFemMeshData: {
+        nNodes: 128,
+        nElements: 96,
+        boundaryFaces: new Array(24).fill(1),
+      },
+    });
 
-  it("does not coerce non-air mesh part render mode from surface", () => {
-    const result = resolveEffectiveMeshEntityRenderMode({ currentRenderMode: "surface" });
+    const newTopology = buildViewportFitSeed({
+      resolvedFemTopologyKey: "gen:43",
+      scaledFemMeshData: {
+        nNodes: 128,
+        nElements: 96,
+        boundaryFaces: new Array(24).fill(0),
+      },
+    });
 
-    expect(result).toBe("surface");
-  });
-
-  it("preserves airbox render mode for airbox parts", () => {
-    expect(resolveEffectiveMeshEntityRenderMode({ currentRenderMode: "surface" })).toBe("surface");
-    expect(
-      resolveEffectiveMeshEntityRenderMode({ currentRenderMode: "surface+edges" }),
-    ).toBe("surface+edges");
+    expect(base).toBe(sameTopology);
+    expect(newTopology).not.toBe(base);
   });
 });

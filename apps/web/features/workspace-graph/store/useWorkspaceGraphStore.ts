@@ -58,6 +58,15 @@ interface WorkspaceGraphStoreState {
   reset: () => void;
 }
 
+function viewportDocumentStatesEqual(
+  a: ViewportDocumentState | null | undefined,
+  b: ViewportDocumentState | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => ({
   snapshot: EMPTY_WORKSPACE_GRAPH,
   lastSnapshotSignature: null,
@@ -89,17 +98,22 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
       lastSnapshotSignature: null,
     })),
   upsertViewportDocument: (document) =>
-    set((state) => ({
-      snapshot: {
-        ...state.snapshot,
-        viewportDocuments: {
-          ...state.snapshot.viewportDocuments,
-          [document.id]: document,
+    set((state) => {
+      if (viewportDocumentStatesEqual(state.snapshot.viewportDocuments[document.id], document)) {
+        return state;
+      }
+      return {
+        snapshot: {
+          ...state.snapshot,
+          viewportDocuments: {
+            ...state.snapshot.viewportDocuments,
+            [document.id]: document,
+          },
+          updatedAt: Date.now(),
         },
-        updatedAt: Date.now(),
-      },
-      lastSnapshotSignature: null,
-    })),
+        lastSnapshotSignature: null,
+      };
+    }),
   setSelection: (selection) =>
     set((state) => ({
       snapshot: {

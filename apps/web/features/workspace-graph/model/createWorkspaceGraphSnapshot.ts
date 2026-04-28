@@ -168,6 +168,7 @@ export function createWorkspaceGraphSnapshot(
         selectedDatasetId,
         selectedResultNodeId,
         renderMode: input.renderMode ?? existingViewportDocument?.renderMode ?? null,
+        camera: existingViewportDocument?.camera ?? null,
         overlayToggles: {
           telemetryHudVisible: existingViewportDocument?.overlayToggles.telemetryHudVisible ?? true,
           previewNoticesVisible: existingViewportDocument?.overlayToggles.previewNoticesVisible ?? true,

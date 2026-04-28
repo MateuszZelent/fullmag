@@ -64,6 +64,10 @@ import { TransformGizmoLayer } from "@/components/preview/transform/TransformGiz
 import { axisLabelsForConvention } from "@/components/preview/transform/axisConvention";
 import { useSceneCameraChange } from "@/components/preview/camera/useSceneCameraChange";
 import {
+  captureViewportCameraState,
+  restoreViewportCameraState,
+} from "@/components/preview/camera/persistedViewportCamera";
+import {
   physicalPositionToScene,
   physicalScaleToScene,
   sceneDeltaToPhysical,
@@ -76,6 +80,7 @@ import {
   type VoxelSampling,
   type TopoComponent,
 } from "@/components/preview/useFdmViewportSettings";
+import type { ViewportCameraState } from "@/features/workspace-graph";
 
 const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
 
@@ -121,6 +126,9 @@ interface Props {
   onSettingsChange?: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
   toolbarMode?: "visible" | "hidden";
   viewportVisible?: boolean;
+  viewportDocumentId?: string | null;
+  persistedCameraState?: ViewportCameraState | null;
+  onPersistCameraState?: (state: ViewportCameraState) => void;
   /** Optional extra R3F nodes rendered inside the scene (e.g. geometry builder layer). */
   authoringOverlay?: ReactNode;
 }
@@ -789,6 +797,9 @@ function UnifiedVectorFieldRendererInner({
   viewportAxesScope = "universe",
   universeWireframeVisible = true,
   viewportVisible = true,
+  viewportDocumentId = null,
+  persistedCameraState = null,
+  onPersistCameraState,
   authoringOverlay = null,
 }: Props) {
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
@@ -945,12 +956,15 @@ function UnifiedVectorFieldRendererInner({
   const sceneTarget = sceneFrame.center;
   const cameraPersistenceKey = useMemo(
     () =>
-      sceneMode === "grid"
+      viewportDocumentId
+        ? `viewport-doc:${viewportDocumentId}`
+        : sceneMode === "grid"
         ? `fdm:${geometryMode ? "mesh" : "3d"}:${deferredGrid.join("x")}`
         : `fdm:world:${sceneTarget.join("x")}:${sceneFrame.extent.join("x")}`,
-    [deferredGrid, geometryMode, sceneFrame.extent, sceneMode, sceneTarget],
+    [deferredGrid, geometryMode, sceneFrame.extent, sceneMode, sceneTarget, viewportDocumentId],
   );
   const cameraRestoreReadyRef = useRef(false);
+  const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
     setRotationSnapshots((previous) => {
       const current = previous[key];
@@ -975,23 +989,24 @@ function UnifiedVectorFieldRendererInner({
       return;
     }
     const bridge = viewCubeSceneRef.current;
-    if (!bridge?.camera || !bridge?.controls) {
+    const state = captureViewportCameraState(bridge, {
+      projection: "perspective",
+      navigation: "trackball",
+      lastFocusedObjectId: lastFocusedObjectIdRef.current,
+    });
+    if (!state) {
+      return;
+    }
+    if (onPersistCameraState) {
+      onPersistCameraState(state);
       return;
     }
     VECTOR_SURFACE_CAMERA_STATE_CACHE.set(cameraPersistenceKey, {
-      position: [
-        bridge.camera.position.x,
-        bridge.camera.position.y,
-        bridge.camera.position.z,
-      ],
-      up: [bridge.camera.up.x, bridge.camera.up.y, bridge.camera.up.z],
-      target: [
-        bridge.controls.target.x,
-        bridge.controls.target.y,
-        bridge.controls.target.z,
-      ],
+      position: state.position,
+      up: state.up,
+      target: state.target,
     });
-  }, [cameraPersistenceKey]);
+  }, [cameraPersistenceKey, onPersistCameraState]);
   const handleSceneCameraChange = useCallback(() => {
     syncViewportRotationSnapshot();
     persistCameraState();
@@ -1011,13 +1026,22 @@ function UnifiedVectorFieldRendererInner({
         raf = window.requestAnimationFrame(restore);
         return;
       }
-      const saved = VECTOR_SURFACE_CAMERA_STATE_CACHE.get(cameraPersistenceKey);
-      if (saved) {
-        bridge.camera.position.set(...saved.position);
-        bridge.camera.up.set(...saved.up);
-        bridge.controls.target.set(...saved.target);
-        bridge.camera.lookAt(...saved.target);
-        bridge.controls.update();
+      const restored =
+        restoreViewportCameraState(bridge, persistedCameraState) ||
+        (() => {
+          const saved = VECTOR_SURFACE_CAMERA_STATE_CACHE.get(cameraPersistenceKey);
+          if (!saved) {
+            return false;
+          }
+          bridge.camera.position.set(...saved.position);
+          bridge.camera.up.set(...saved.up);
+          bridge.controls.target.set(...saved.target);
+          bridge.camera.lookAt(...saved.target);
+          bridge.controls.update();
+          return true;
+        })();
+      if (restored) {
+        lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
       }
       cameraRestoreReadyRef.current = true;
       syncViewportRotationSnapshot();
@@ -1032,7 +1056,7 @@ function UnifiedVectorFieldRendererInner({
       }
       persistCameraState();
     };
-  }, [cameraPersistenceKey, persistCameraState, syncViewportRotationSnapshot]);
+  }, [cameraPersistenceKey, persistCameraState, persistedCameraState, syncViewportRotationSnapshot]);
 
   // Snap camera to a direction
   const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
@@ -1072,6 +1096,7 @@ function UnifiedVectorFieldRendererInner({
     if (!overlay || !bridge?.camera || !bridge?.controls) {
       return;
     }
+    lastFocusedObjectIdRef.current = objectId;
     const mapped = mapOverlayToFdmSceneBox(overlay, sceneMode, grid, worldExtent, universeCenter);
     if (!mapped) {
       return;

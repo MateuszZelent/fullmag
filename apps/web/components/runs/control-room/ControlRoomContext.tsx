@@ -2113,23 +2113,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
     ?? selectedFieldCatalogDomain
     ?? null;
-  const authoredMagnetizationPreview = useMemo(
-    () => activeQuantityId === "m"
-      ? buildAuthoredMagnetizationPreview({
-          scene: sceneDocumentDraft ?? remoteSceneDocument,
-          mesh: femMesh,
-          selectedSidebarNodeId,
-          selectedObjectId,
-          activeTransformScope,
-        })
-      : null,
-    [
-      activeQuantityId,
-      activeTransformScope,
-      femMesh,
-      remoteSceneDocument,
-      sceneDocumentDraft,
-      selectedObjectId,
+	  const authoredMagnetizationPreview = useMemo(
+	    () => activeQuantityId === "m"
+	      ? buildAuthoredMagnetizationPreview({
+	          scene: sceneDocumentDraft ?? remoteSceneDocument,
+	          mesh: femMesh,
+	          selectedSidebarNodeId,
+	          selectedObjectId,
+	          activeTransformScope,
+	          includeAllObjects: isFemBackend && isWaitingForCompute,
+	        })
+	      : null,
+	    [
+	      activeQuantityId,
+	      activeTransformScope,
+	      femMesh,
+	      isFemBackend,
+	      isWaitingForCompute,
+	      remoteSceneDocument,
+	      sceneDocumentDraft,
+	      selectedObjectId,
       selectedSidebarNodeId,
     ],
   );

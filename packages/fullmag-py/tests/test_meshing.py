@@ -68,6 +68,10 @@ from fullmag.meshing.gmsh_bridge import (
 )
 from fullmag.meshing.remesh_cli import _geometry_from_ir, _mesh_result_payload, _size_field_from_dict
 from fullmag.meshing.remesh_cli import _describe_remesh_job
+from fullmag.meshing._gmsh_extraction import (
+    _align_quality_report_to_element_tags,
+    build_per_domain_quality_from_mesh_arrays,
+)
 from fullmag.meshing import remesh_cli as remesh_cli_module
 from fullmag.meshing.quality import validate_mesh
 from fullmag.meshing.surface_assets import export_geometry_to_stl
@@ -370,6 +374,89 @@ class MeshScaffoldTests(unittest.TestCase):
                 "worst_element_gamma": 0.25,
             },
         )
+
+    def test_quality_arrays_reorder_to_mesh_element_tags(self) -> None:
+        quality = MeshQualityReport(
+            n_elements=2,
+            sicn_min=0.1,
+            sicn_max=0.8,
+            sicn_mean=0.45,
+            sicn_p5=0.135,
+            sicn_histogram=[0] * 20,
+            gamma_min=0.2,
+            gamma_mean=0.55,
+            gamma_histogram=[0] * 20,
+            volume_min=1.0,
+            volume_max=2.0,
+            volume_mean=1.5,
+            volume_std=0.5,
+            avg_quality=0.45,
+            element_sicn=[0.1, 0.8],
+            element_gamma=[0.2, 0.9],
+            element_volume=[1.0, 2.0],
+            element_tags=[20, 10],
+        )
+
+        reordered = _align_quality_report_to_element_tags(quality, [10, 20])
+
+        self.assertIsNotNone(reordered)
+        self.assertEqual(reordered.element_tags, [10, 20])
+        self.assertEqual(reordered.element_sicn, [0.8, 0.1])
+        self.assertEqual(reordered.element_gamma, [0.9, 0.2])
+        self.assertEqual(reordered.element_volume, [2.0, 1.0])
+
+    def test_per_domain_quality_uses_final_shared_domain_markers(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3], [1, 4, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([0, 1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros(0, dtype=np.int32),
+            quality=MeshQualityReport(
+                n_elements=2,
+                sicn_min=0.2,
+                sicn_max=0.7,
+                sicn_mean=0.45,
+                sicn_p5=0.225,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.3,
+                gamma_mean=0.55,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0,
+                volume_max=2.0,
+                volume_mean=1.5,
+                volume_std=0.5,
+                avg_quality=0.45,
+                element_sicn=[0.2, 0.7],
+                element_gamma=[0.3, 0.8],
+                element_volume=[1.0, 2.0],
+                element_tags=[1, 2],
+            ),
+        )
+        final_markers = np.asarray([1, 0], dtype=np.int32)
+
+        per_domain = build_per_domain_quality_from_mesh_arrays(
+            mesh.nodes,
+            mesh.elements,
+            final_markers,
+            mesh.quality,
+        )
+
+        self.assertIsNotNone(per_domain)
+        self.assertEqual(set(per_domain.keys()), {0, 1})
+        self.assertAlmostEqual(per_domain[0].gamma_min, 0.8)
+        self.assertAlmostEqual(per_domain[1].gamma_min, 0.3)
+        self.assertEqual(per_domain[0].n_elements, 1)
+        self.assertEqual(per_domain[1].n_elements, 1)
 
     def test_remesh_cli_payload_carries_build_truth_and_mesh_statistics(self) -> None:
         mesh = self._unit_tet_mesh()

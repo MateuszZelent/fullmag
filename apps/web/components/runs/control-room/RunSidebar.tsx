@@ -716,12 +716,6 @@ export default function RunSidebar() {
     const objectId = resolveSelectedObjectId(id, model.sceneDocument ?? model.modelBuilderGraph);
     model.setSelectedSidebarNodeId(id);
     model.setSelectedObjectId(objectId);
-    // P0 fix: selection must NOT reset isolate.
-    // Only update objectViewMode if we're NOT currently in isolate mode,
-    // or if the user explicitly requests it via the isolate pill.
-    if (model.objectViewMode !== "isolate") {
-      model.setObjectViewMode("context");
-    }
     if (id === "universe-airbox" || id === "universe-airbox-mesh") {
       const airPartId = model.airPart?.id ?? null;
       model.setSelectedEntityId(airPartId);

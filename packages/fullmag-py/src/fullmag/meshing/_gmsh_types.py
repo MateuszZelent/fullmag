@@ -31,6 +31,8 @@ class MeshQualityReport:
         avg_quality: Global ``Mesh.AvgQuality`` (ICN) from Gmsh.
         element_sicn: Per-element SICN values (None if not requested).
         element_gamma: Per-element gamma values (None if not requested).
+        element_volume: Per-element volume values aligned to mesh elements.
+        element_tags: Gmsh element tags aligned to per-element quality arrays.
     """
 
     n_elements: int
@@ -49,6 +51,8 @@ class MeshQualityReport:
     avg_quality: float
     element_sicn: list[float] | None = None
     element_gamma: list[float] | None = None
+    element_volume: list[float] | None = None
+    element_tags: list[int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,10 +659,10 @@ class MeshData:
                     "volume_min": q.volume_min,
                     "volume_max": q.volume_max,
                     "volume_mean": q.volume_mean,
-                    "volume_std": q.volume_std,
-                    "avg_quality": q.avg_quality,
-                }
-                for marker, q in self.per_domain_quality.items()
+                        "volume_std": q.volume_std,
+                        "avg_quality": q.avg_quality,
+                    }
+                    for marker, q in self.per_domain_quality.items()
             }
         ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
             _build_mesh_statistics_report(self, mesh_name)
@@ -812,6 +816,11 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                 boundary_face_count=0,
             )
         )
+    scope_label_by_marker = {
+        int(scope.marker): scope.label
+        for scope in scopes
+        if scope.marker is not None
+    }
     worst_elements: list[dict[str, object]] = []
     if mesh.quality is not None and mesh.quality.element_gamma is not None:
         gamma = np.asarray(mesh.quality.element_gamma, dtype=np.float64)
@@ -823,7 +832,17 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
                     {
                         "element_index": elem,
                         "marker": int(mesh.element_markers[elem]),
+                        "scope_label": scope_label_by_marker.get(
+                            int(mesh.element_markers[elem]),
+                            f"Domain {int(mesh.element_markers[elem])}",
+                        ),
                         "gamma": float(gamma[elem]),
+                        "sicn": (
+                            float(mesh.quality.element_sicn[elem])
+                            if mesh.quality.element_sicn is not None
+                            and elem < len(mesh.quality.element_sicn)
+                            else None
+                        ),
                         "volume": float(abs(signed_volumes[elem])),
                         "centroid": np.mean(mesh.nodes[mesh.elements[elem]], axis=0).tolist(),
                     }

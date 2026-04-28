@@ -35,6 +35,10 @@ export default function WorkspaceEntryPage({ stage, initialTabSlug = null }: Wor
   const setCurrentStage = useWorkspaceStore((state) => state.setCurrentStage);
   const setLauncherVisible = useWorkspaceStore((state) => state.setLauncherVisible);
   const activateTab = useWorkspaceStore((state) => state.activateTab);
+  const currentStage = useWorkspaceStore((state) => state.currentStage);
+  const activeWorkspaceTabId = useWorkspaceStore(
+    (state) => state.activeWorkspaceTabByStage[effectiveStage],
+  );
 
   useEffect(() => {
     if (!workspaceTreeEnabled || !workspaceEntryEnabled) {
@@ -60,13 +64,20 @@ export default function WorkspaceEntryPage({ stage, initialTabSlug = null }: Wor
     });
     setLaunchIntent(enrichedIntent);
     setActiveProjectId(enrichedIntent.resumeProjectId ?? enrichedIntent.entryPath ?? null);
-    setCurrentStage(effectiveStage);
+    if (currentStage !== effectiveStage) {
+      setCurrentStage(effectiveStage);
+    }
     if (initialTabSlug) {
-      activateTab(effectiveStage, coreTabIdForWorkspaceRouteSlug(initialTabSlug));
+      const nextTabId = coreTabIdForWorkspaceRouteSlug(initialTabSlug);
+      if (activeWorkspaceTabId !== nextTabId) {
+        activateTab(effectiveStage, nextTabId);
+      }
     }
     setLauncherVisible(false);
   }, [
+    activeWorkspaceTabId,
     activateTab,
+    currentStage,
     effectiveStage,
     initialTabSlug,
     intent,

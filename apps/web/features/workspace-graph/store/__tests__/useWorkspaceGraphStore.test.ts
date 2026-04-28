@@ -148,6 +148,7 @@ describe("workspace graph store", () => {
     expect(snapshot.datasets[0]?.sourceSolutionId).toBe("sol-1");
     expect(snapshot.derivedValues[0]?.quantityId).toBe("e_total");
     expect(snapshot.selection.activeViewportDocumentId).toBe("viewport:study:core:3d");
+    expect(snapshot.viewportDocuments["viewport:study:core:3d"]?.camera).toBeNull();
   });
 
   it("applies patches and viewport document upserts deterministically", () => {
@@ -188,6 +189,7 @@ describe("workspace graph store", () => {
       selectedDatasetId: "ds-1",
       selectedResultNodeId: "dv-1",
       renderMode: "surface",
+      camera: null,
       overlayToggles: {
         telemetryHudVisible: true,
         previewNoticesVisible: false,
@@ -198,6 +200,40 @@ describe("workspace graph store", () => {
     expect(snapshot.selection.activeNodeId).toBe("res-dataset-ds-1");
     expect(snapshot.viewportDocuments["viewport:study:core:2d"]?.plane).toBe("xz");
     expect(snapshot.viewportDocuments["viewport:study:core:2d"]?.selectedDatasetId).toBe("ds-1");
+  });
+
+  it("does not publish a new snapshot for identical viewport document upserts", () => {
+    const document = {
+      id: "viewport:study:core:2d",
+      workspaceMode: "study" as const,
+      tabId: "core:2d",
+      viewMode: "2D" as const,
+      quantityId: "m",
+      component: "x",
+      plane: "xz" as const,
+      sliceIndex: 4,
+      selectedDatasetId: "ds-1",
+      selectedResultNodeId: "dv-1",
+      renderMode: "surface",
+      camera: {
+        position: [1, 2, 3] as [number, number, number],
+        target: [0, 0, 0] as [number, number, number],
+        up: [0, 1, 0] as [number, number, number],
+        projection: "perspective" as const,
+        navigation: "trackball" as const,
+        lastFocusedObjectId: null,
+      },
+      overlayToggles: {
+        telemetryHudVisible: true,
+        previewNoticesVisible: false,
+      },
+    };
+
+    useWorkspaceGraphStore.getState().upsertViewportDocument(document);
+    const firstSnapshot = useWorkspaceGraphStore.getState().snapshot;
+    useWorkspaceGraphStore.getState().upsertViewportDocument({ ...document });
+
+    expect(useWorkspaceGraphStore.getState().snapshot).toBe(firstSnapshot);
   });
 
   it("preserves active viewport dataset selection when rebuilding the snapshot", () => {
@@ -248,12 +284,25 @@ describe("workspace graph store", () => {
             ...firstSnapshot.viewportDocuments["viewport:study:core:3d"]!,
             selectedDatasetId: "ds-1",
             selectedResultNodeId: "ds-1",
+            camera: {
+              position: [3, 2, 1],
+              target: [0, 0, 0],
+              up: [0, 1, 0],
+              projection: "perspective",
+              navigation: "trackball",
+              lastFocusedObjectId: "free",
+            },
           },
         },
       },
     );
 
     expect(rebuilt.viewportDocuments["viewport:study:core:3d"]?.selectedDatasetId).toBe("ds-1");
+    expect(rebuilt.viewportDocuments["viewport:study:core:3d"]?.camera?.position).toEqual([
+      3,
+      2,
+      1,
+    ]);
     expect(rebuilt.selection.activeResultNodeId).toBe("ds-1");
   });
 

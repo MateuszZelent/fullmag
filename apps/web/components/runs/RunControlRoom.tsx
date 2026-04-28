@@ -355,6 +355,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const launchIntent = useWorkspaceStore((state) => state.launchIntent);
   const rightInspectorOpen = useWorkspaceStore((state) => state.rightInspectorOpen);
   const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
+  const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
   const activeCoreTab = useWorkspaceStore((state) => state.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((state) => state.setActiveCoreTab);
   const setActiveContextualTab = useWorkspaceStore((state) => state.setActiveContextualTab);
@@ -1176,9 +1177,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [ctx, hasSharedAirboxDomain, openMeshNode]);
 
   const handleOpenMeshStatistics = useCallback(() => {
-    openMeshNode(hasSharedAirboxDomain ? "mesh-statistics" : "universe-mesh-statistics");
-    ctx.handleViewModeChange("3D");
-  }, [ctx, hasSharedAirboxDomain, openMeshNode]);
+    const nodeId = hasSharedAirboxDomain ? "mesh-statistics" : "universe-mesh-statistics";
+    ctx.setSelectedSidebarNodeId(nodeId);
+    setRightInspectorOpen(true);
+    setRightInspectorTab("properties");
+  }, [ctx, hasSharedAirboxDomain, setRightInspectorOpen, setRightInspectorTab]);
 
   const handleOpenMeshQuality = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-quality" : "universe-mesh-quality");

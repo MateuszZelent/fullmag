@@ -119,17 +119,14 @@ export function applyWorkspaceTabSelection(
 
   if (tab.kind === "viewport-3d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    if (api.effectiveViewMode !== "3D") api.handleViewModeChange("3D");
     return;
   }
   if (tab.kind === "viewport-2d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    if (api.effectiveViewMode !== "2D") api.handleViewModeChange("2D");
     return;
   }
   if (tab.kind === "viewport-mesh") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    if (api.effectiveViewMode !== "3D") api.handleViewModeChange("3D");
     return;
   }
   if (tab.kind === "viewport-charts") {

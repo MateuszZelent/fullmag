@@ -6,8 +6,11 @@ import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
  * CPU/GPU work and browser memory instead of running in the background.
  */
 export function shouldRenderWorkspaceTabPanel(
-  tab: Pick<WorkspaceTab, "id">,
+  tab: Pick<WorkspaceTab, "id" | "lifecycle">,
   activeTabId: string | null | undefined,
 ): boolean {
-  return Boolean(activeTabId) && tab.id === activeTabId;
+  if (!activeTabId) {
+    return false;
+  }
+  return tab.id === activeTabId || tab.lifecycle === "warm";
 }

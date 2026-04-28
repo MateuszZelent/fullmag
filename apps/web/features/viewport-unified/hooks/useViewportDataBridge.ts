@@ -63,6 +63,7 @@ import type { Vec3, Quat } from "@/components/runs/control-room/viewportUtils";
 import { deriveFemLayerRenderState } from "@/components/runs/control-room/viewportLayers";
 import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
+import type { ViewportCameraState } from "@/features/workspace-graph";
 
 /* ── Debug flag ───────────────────────────────────────────────────── */
 const DEBUG_GIZMO_SYNC =
@@ -98,6 +99,47 @@ function meshWorkspaceRenderModeToFem(
   if (mode === "solid+wireframe") return "surface+edges";
   if (mode === "wireframe" || mode === "points") return mode;
   return "surface";
+}
+
+export function buildViewportFitSeed(args: {
+  resolvedFemTopologyKey: string | null;
+  scaledFemMeshData:
+    | {
+        nNodes: number;
+        nElements: number;
+        boundaryFaces: ArrayLike<number>;
+      }
+    | null
+    | undefined;
+}): string {
+  const sampleKey = args.scaledFemMeshData
+    ? `${args.scaledFemMeshData.nNodes}:${args.scaledFemMeshData.nElements}:${args.scaledFemMeshData.boundaryFaces.length}`
+    : "none";
+  return [args.resolvedFemTopologyKey ?? "no-topology", sampleKey].join("|");
+}
+
+function tupleClose(
+  a: readonly number[] | null | undefined,
+  b: readonly number[] | null | undefined,
+): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => Math.abs(value - (b[index] ?? Number.NaN)) < 1e-9);
+}
+
+function viewportCameraStatesEqual(
+  a: ViewportCameraState | null | undefined,
+  b: ViewportCameraState | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    tupleClose(a.position, b.position) &&
+    tupleClose(a.target, b.target) &&
+    tupleClose(a.up, b.up) &&
+    a.projection === b.projection &&
+    a.navigation === b.navigation &&
+    a.lastFocusedObjectId === b.lastFocusedObjectId
+  );
 }
 
 export function resolveEffectiveMeshEntityRenderMode(args: {
@@ -354,11 +396,29 @@ export function useViewportDataBridge() {
     const id = state.snapshot.selection.activeViewportDocumentId;
     return id ? state.snapshot.viewportDocuments[id] ?? null : null;
   });
+  const upsertViewportDocument = useWorkspaceGraphStore((state) => state.upsertViewportDocument);
   const graphActiveResultNodeId = useWorkspaceGraphStore((state) =>
     state.snapshot.selection.activeResultNodeId,
   );
   const graphViewportResultNodeId =
     graphActiveViewportDocument?.selectedResultNodeId ?? graphActiveResultNodeId;
+  const graphActiveViewportDocumentId = graphActiveViewportDocument?.id ?? null;
+  const graphActiveViewportCameraState = graphActiveViewportDocument?.camera ?? null;
+  const persistViewportCameraState = useCallback(
+    (cameraState: ViewportCameraState | null) => {
+      if (!graphActiveViewportDocument || !cameraState) {
+        return;
+      }
+      if (viewportCameraStatesEqual(graphActiveViewportDocument.camera, cameraState)) {
+        return;
+      }
+      upsertViewportDocument({
+        ...graphActiveViewportDocument,
+        camera: cameraState,
+      });
+    },
+    [graphActiveViewportDocument, upsertViewportDocument],
+  );
 
   /* ── Derived values from ctx ── */
   const effectiveViewMode = ctx.effectiveViewMode;
@@ -1315,23 +1375,14 @@ export function useViewportDataBridge() {
     return null;
   }, [ctx.femTopologyKey, scaledFemMeshData?.meshGenerationId]);
 
-  const viewportFitSeed = useMemo(() => {
-    const sampleKey = scaledFemMeshData
-      ? `${scaledFemMeshData.nNodes}:${scaledFemMeshData.nElements}:${scaledFemMeshData.boundaryFaces.length}`
-      : "none";
-    return [
-      effectiveViewMode,
-      resolvedFemTopologyKey ?? "no-topology",
-      sampleKey,
-      ctx.focusObjectRequest?.objectId ?? "none",
-      String(ctx.focusObjectRequest?.revision ?? 0),
-    ].join("|");
-  }, [
-    scaledFemMeshData,
-    effectiveViewMode,
-    resolvedFemTopologyKey,
-    ctx.focusObjectRequest,
-  ]);
+  const viewportFitSeed = useMemo(
+    () =>
+      buildViewportFitSeed({
+        resolvedFemTopologyKey,
+        scaledFemMeshData,
+      }),
+    [resolvedFemTopologyKey, scaledFemMeshData],
+  );
 
   /* ── Viewport route determination ── */
   const isVectorSurface3DActive =
@@ -1499,8 +1550,8 @@ export function useViewportDataBridge() {
       vectorsVisible: ctx.meshShowArrows,
       legendVisible: ctx.viewportLegendVisible,
       partExplorerVisible: selectedSubmeshesToolboxOpen,
-      projection: "perspective",
-      navProfile: "trackball",
+      projection: graphActiveViewportCameraState?.projection ?? "perspective",
+      navProfile: graphActiveViewportCameraState?.navigation ?? "trackball",
     },
     model: {
       discretization: femDiscretization ? "fem" : "fdm",
@@ -1756,6 +1807,8 @@ export function useViewportDataBridge() {
     renderFemMeshData,
     resolvedFemTopologyKey,
     viewportFitSeed,
+    graphActiveViewportDocumentId,
+    graphActiveViewportCameraState,
     isVectorSurface3DActive,
     isVectorSurfaceMeshActive,
     showVectorSurface3D,
@@ -1797,6 +1850,7 @@ export function useViewportDataBridge() {
     patchMeshPartViewState,
     openSelectedSubmeshesToolbox,
     applyTextureTransform,
+    persistViewportCameraState,
     viewportSelectedObjectId,
   } as const;
 }

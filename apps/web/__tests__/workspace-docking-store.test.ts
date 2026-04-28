@@ -159,11 +159,13 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 
-  it("uses explicit cold lifecycle defaults for heavy viewport panels", () => {
+  it("keeps core 3D and 2D tabs warm while leaving charts cold", () => {
     const defaults = getDefaultWorkspaceTabsByStage();
     const studyTabs = defaults.study;
-    expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("unmount-on-hide");
-    expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("unmount-on-hide");
+    expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("warm");
+    expect(studyTabs.find((tab) => tab.id === "core:3d")?.keepAlive).toBe(true);
+    expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("warm");
+    expect(studyTabs.find((tab) => tab.id === "core:2d")?.keepAlive).toBe(true);
     expect(studyTabs.some((tab) => tab.id === "core:mesh")).toBe(false);
     expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("unmount-on-hide");
     expect(studyTabs.find((tab) => tab.id === "core:charts")?.keepAlive).toBe(false);
@@ -197,7 +199,7 @@ describe("workspace docking store", () => {
     expect(chartsTab?.keepAlive).toBe(false);
   });
 
-  it("normalizes explicit warm lifecycle inputs back to cold tabs", () => {
+  it("normalizes non-core warm lifecycle inputs back to cold tabs", () => {
     const warmId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:charts-clone",
       kind: "viewport-charts",
@@ -215,6 +217,8 @@ describe("workspace docking store", () => {
     expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("unmount-on-hide");
     expect(tabs.find((tab) => tab.id === coldId)?.keepAlive).toBe(false);
     expect(tabs.find((tab) => tab.id === coldId)?.lifecycle).toBe("unmount-on-hide");
+    expect(tabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("warm");
+    expect(tabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("warm");
   });
 
   it("keeps simple UI setters idempotent for unchanged values", () => {

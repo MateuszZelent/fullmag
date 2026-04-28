@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,8 @@ def _extract_mesh_data(
     node_index = {int(tag): idx for idx, tag in enumerate(node_tags)}
     nodes = np.asarray(coords, dtype=np.float64).reshape(-1, 3)
 
+    extracted_element_tags: list[int] = []
+
     if has_physical_groups:
         # ── Region-aware extraction via physical groups ──
         elements_list: list[list[int]] = []
@@ -62,15 +65,18 @@ def _extract_mesh_data(
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3):
             entities = gmsh.model.getEntitiesForPhysicalGroup(3, phys_tag)
             for entity in entities:
-                elem_types, _elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
-                for etype, nids in zip(elem_types, node_ids):
+                elem_types, elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
+                for etype, tags, nids in zip(elem_types, elem_tags, node_ids):
                     _, _, _, num_nodes, _, npn = gmsh.model.mesh.getElementProperties(int(etype))
                     if npn < 4:
                         continue
                     flat = [node_index[int(t)] for t in nids]
-                    for start in range(0, len(flat), num_nodes):
+                    block_tags = [int(tag) for tag in tags]
+                    for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
                         elements_list.append(flat[start : start + 4])
                         markers_list.append(phys_tag)
+                        if element_offset < len(block_tags):
+                            extracted_element_tags.append(block_tags[element_offset])
 
         bfaces_list: list[list[int]] = []
         bmarkers_list: list[int] = []
@@ -110,6 +116,8 @@ def _extract_mesh_data(
     else:
         # ── Legacy single-region path ──
         element_blocks = gmsh.model.mesh.getElements(dim=3)
+        for block in element_blocks[1]:
+            extracted_element_tags.extend(int(tag) for tag in block)
         elements = _extract_gmsh_connectivity(
             gmsh, element_blocks, node_index, nodes_per_element=4
         )
@@ -122,15 +130,103 @@ def _extract_mesh_data(
         element_markers = np.ones(elements.shape[0], dtype=np.int32)
         boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
 
+    aligned_quality = _align_quality_report_to_element_tags(
+        quality,
+        extracted_element_tags,
+    )
+    aligned_per_domain_quality = (
+        build_per_domain_quality_from_mesh_arrays(
+            nodes,
+            elements,
+            element_markers,
+            aligned_quality,
+        )
+        if aligned_quality is not None
+        else per_domain_quality
+    )
+
     return MeshData(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,
         boundary_faces=boundary_faces,
         boundary_markers=boundary_markers,
-        quality=quality,
-        per_domain_quality=per_domain_quality,
+        quality=aligned_quality,
+        per_domain_quality=aligned_per_domain_quality,
     )
+
+
+def _align_quality_report_to_element_tags(
+    quality: MeshQualityReport | None,
+    extracted_element_tags: list[int],
+) -> MeshQualityReport | None:
+    """Align per-element Gmsh quality arrays to the extracted MeshData element order."""
+    if quality is None:
+        return None
+    source_tags = quality.element_tags
+    if (
+        not source_tags
+        or not extracted_element_tags
+        or len(source_tags) != len(extracted_element_tags)
+        or source_tags == extracted_element_tags
+    ):
+        return quality
+
+    tag_to_index = {int(tag): index for index, tag in enumerate(source_tags)}
+    try:
+        order = [tag_to_index[int(tag)] for tag in extracted_element_tags]
+    except KeyError:
+        return quality
+
+    def reorder(values: list[float] | None) -> list[float] | None:
+        if values is None or len(values) != len(order):
+            return values
+        return [float(values[index]) for index in order]
+
+    return replace(
+        quality,
+        element_sicn=reorder(quality.element_sicn),
+        element_gamma=reorder(quality.element_gamma),
+        element_volume=reorder(quality.element_volume),
+        element_tags=[int(tag) for tag in extracted_element_tags],
+    )
+
+
+def _tetra_abs_volumes(
+    nodes: NDArray[np.float64],
+    elements: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    if elements.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    pts = nodes[elements]
+    signed = np.einsum(
+        "ij,ij->i",
+        pts[:, 1] - pts[:, 0],
+        np.cross(pts[:, 2] - pts[:, 0], pts[:, 3] - pts[:, 0]),
+    ) / 6.0
+    return np.abs(signed)
+
+
+def build_per_domain_quality_from_mesh_arrays(
+    nodes: NDArray[np.float64],
+    elements: NDArray[np.int32],
+    element_markers: NDArray[np.int32],
+    quality: MeshQualityReport | None,
+) -> dict[int, MeshQualityReport] | None:
+    """Build per-domain quality from final mesh markers and aligned element arrays."""
+    if quality is None or quality.element_sicn is None or quality.element_gamma is None:
+        return None
+    sicn = np.asarray(quality.element_sicn, dtype=np.float64)
+    gamma = np.asarray(quality.element_gamma, dtype=np.float64)
+    markers = np.asarray(element_markers, dtype=np.int32)
+    if sicn.size != elements.shape[0] or gamma.size != elements.shape[0] or markers.size != elements.shape[0]:
+        return None
+    volumes = (
+        np.asarray(quality.element_volume, dtype=np.float64)
+        if quality.element_volume is not None and len(quality.element_volume) == elements.shape[0]
+        else _tetra_abs_volumes(nodes, elements)
+    )
+    return extract_per_domain_quality(markers, sicn, gamma, volumes)
 
 
 def extract_per_domain_quality(
@@ -234,6 +330,8 @@ def _extract_quality_metrics(
         avg_quality=float(avg_q),
         element_sicn=sicn.tolist() if opts.per_element_quality else None,
         element_gamma=gamma.tolist() if opts.per_element_quality else None,
+        element_volume=vols.tolist() if opts.per_element_quality else None,
+        element_tags=[int(tag) for tag in all_tags],
     ), (
         extract_per_domain_quality(
             resolved_markers,

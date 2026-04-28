@@ -193,54 +193,89 @@ export function buildAuthoredMagnetizationPreview(args: {
   selectedSidebarNodeId: string | null | undefined;
   selectedObjectId: string | null | undefined;
   activeTransformScope: "object" | "texture" | null;
+  includeAllObjects?: boolean;
 }): AuthoredMagnetizationPreview | null {
-  const { scene, mesh, selectedSidebarNodeId, selectedObjectId, activeTransformScope } = args;
+  const {
+    scene,
+    mesh,
+    selectedSidebarNodeId,
+    selectedObjectId,
+    activeTransformScope,
+    includeAllObjects = false,
+  } = args;
   if (!scene || !mesh) return null;
-  if (activeTransformScope !== "texture" && !selectedSidebarNodeId?.startsWith("mag-")) return null;
-  const object = resolveMagneticTextureObject(scene, selectedSidebarNodeId, selectedObjectId);
-  if (!object?.magnetization_ref) return null;
-  const asset = scene.magnetization_assets.find((entry) => entry.id === object.magnetization_ref);
-  if (!asset) return null;
-  const normalizedAsset = normalizeMagnetizationAsset(asset);
-  const presetKind =
-    normalizedAsset.kind === "preset_texture"
-      ? normalizedAsset.preset_kind ?? "preset_texture"
-      : normalizedAsset.kind;
   const nodeCount =
     mesh.node_count
     ?? (mesh.topology_buffers?.nodes ? Math.floor(mesh.topology_buffers.nodes.length / 3) : mesh.nodes.length);
   if (!nodeCount) return null;
-  const nodeIndices = nodeIndicesForObject(mesh, object).filter((index) => index >= 0 && index < nodeCount);
-  if (!nodeIndices.length) return null;
+
+  const selectedObject = resolveMagneticTextureObject(scene, selectedSidebarNodeId, selectedObjectId);
+  const shouldUseSelectedOnly =
+    Boolean(selectedObject) &&
+    (includeAllObjects || activeTransformScope === "texture" || Boolean(selectedSidebarNodeId?.startsWith("mag-")));
+  if (!includeAllObjects && !shouldUseSelectedOnly) return null;
+
+  const objects = shouldUseSelectedOnly && selectedObject
+    ? [selectedObject]
+    : scene.objects.filter((object) => Boolean(object.magnetization_ref));
+  if (!objects.length) return null;
+
   const vectors = new Float64Array(nodeCount * 3);
-  const mappingSpace = normalizedAsset.mapping?.space === "world" ? "world" : "object";
-  const projection = normalizedAsset.mapping?.projection ?? "object_local";
-  for (const nodeIndex of nodeIndices) {
-    const world = meshNode(mesh, nodeIndex);
-    if (!world) continue;
-    let point = mappingSpace === "world" ? world : inverseObjectTransform(world, object.transform);
-    if (projection === "planar_xy") point = [point[0], point[1], 0];
-    if (projection === "planar_xz") point = [point[0], point[2], 0];
-    if (projection === "planar_yz") point = [point[1], point[2], 0];
-    point = inverseTextureTransform(point, normalizedAsset.texture_transform);
-    const value = samplePreset(normalizedAsset, point);
-    if (!value) continue;
-    vectors[nodeIndex * 3] = value[0];
-    vectors[nodeIndex * 3 + 1] = value[1];
-    vectors[nodeIndex * 3 + 2] = value[2];
-  }
-  return {
-    vectors,
-    objectId: object.id,
-    presetKind,
-    revision: [
-      "authored-magnetization",
-      scene.revision,
+  const revisionParts: string[] = [
+    "authored-magnetization",
+    String(scene.revision),
+    mesh.generation_id ?? mesh.mesh_id ?? "no-mesh-generation",
+    String(nodeCount),
+  ];
+  let sampledObjects = 0;
+  let primaryObjectId = selectedObject?.id ?? objects[0]?.id ?? "none";
+  let primaryPresetKind = "none";
+
+  for (const object of objects) {
+    if (!object.magnetization_ref) continue;
+    const asset = scene.magnetization_assets.find((entry) => entry.id === object.magnetization_ref);
+    if (!asset) continue;
+    const normalizedAsset = normalizeMagnetizationAsset(asset);
+    if (normalizedAsset.kind !== "preset_texture") continue;
+    const presetKind = normalizedAsset.preset_kind ?? "preset_texture";
+    if (sampledObjects === 0) {
+      primaryObjectId = object.id;
+      primaryPresetKind = presetKind;
+    }
+    const nodeIndices = nodeIndicesForObject(mesh, object).filter((index) => index >= 0 && index < nodeCount);
+    if (!nodeIndices.length) continue;
+    const mappingSpace = normalizedAsset.mapping?.space === "world" ? "world" : "object";
+    const projection = normalizedAsset.mapping?.projection ?? "object_local";
+    for (const nodeIndex of nodeIndices) {
+      const world = meshNode(mesh, nodeIndex);
+      if (!world) continue;
+      let point = mappingSpace === "world" ? world : inverseObjectTransform(world, object.transform);
+      if (projection === "planar_xy") point = [point[0], point[1], 0];
+      if (projection === "planar_xz") point = [point[0], point[2], 0];
+      if (projection === "planar_yz") point = [point[1], point[2], 0];
+      point = inverseTextureTransform(point, normalizedAsset.texture_transform);
+      const value = samplePreset(normalizedAsset, point);
+      if (!value) continue;
+      vectors[nodeIndex * 3] = value[0];
+      vectors[nodeIndex * 3 + 1] = value[1];
+      vectors[nodeIndex * 3 + 2] = value[2];
+    }
+    sampledObjects += 1;
+    revisionParts.push(
       object.id,
       object.magnetization_ref,
       presetKind,
       JSON.stringify(asset.preset_params ?? {}),
       JSON.stringify(asset.texture_transform),
-    ].join(":"),
+    );
+  }
+
+  if (sampledObjects === 0) return null;
+
+  return {
+    vectors,
+    objectId: primaryObjectId,
+    presetKind: primaryPresetKind,
+    revision: revisionParts.join(":"),
   };
 }

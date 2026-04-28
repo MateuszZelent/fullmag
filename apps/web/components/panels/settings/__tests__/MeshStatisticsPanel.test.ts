@@ -113,6 +113,7 @@ describe("MeshStatisticsPanel backend truth parsers", () => {
         id: "worst:7:0",
         elementIndex: 7,
         marker: 0,
+        scopeLabel: null,
         gamma: 0.12,
         sicn: null,
         volume: 1e-27,

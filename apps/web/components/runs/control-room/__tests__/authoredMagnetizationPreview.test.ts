@@ -107,4 +107,91 @@ describe("buildAuthoredMagnetizationPreview", () => {
     expect(values[5]).toBeCloseTo(0);
     expect(values.slice(6)).toEqual([0, 0, 0]);
   });
+
+  it("can resample all authored textures after a mesh rebuild without a texture node selection", () => {
+    const scene = {
+      revision: 7,
+      objects: [{
+        id: "free",
+        name: "free",
+        geometry: { geometry_kind: "cylinder", geometry_params: {} },
+        transform: identityTransform(),
+        material_ref: "mat:free",
+        region_name: null,
+        magnetization_ref: "mag:free",
+        physics_stack: [],
+        object_mesh: null,
+        mesh_override: null,
+        visible: true,
+        locked: false,
+        tags: [],
+      }],
+      magnetization_assets: [{
+        id: "mag:free",
+        name: "free magnetization",
+        kind: "preset_texture",
+        value: null,
+        seed: null,
+        source_path: null,
+        source_format: null,
+        dataset: null,
+        sample_index: null,
+        mapping: { space: "object", projection: "object_local", clamp_mode: "none" },
+        texture_transform: identityTransform(),
+        preset_kind: "vortex",
+        preset_params: { circulation: 1, core_polarity: 1, core_radius: 1e-9, plane: "xy" },
+        preset_version: 1,
+        ui_label: null,
+      }],
+    } as Partial<SceneDocument> as SceneDocument;
+    const mesh = {
+      mesh_id: "mesh-a",
+      generation_id: "generation-after-rebuild",
+      mesh_name: "test",
+      nodes: [[1, 0, 0], [0, 1, 0], [3, 3, 3]],
+      elements: [],
+      boundary_faces: [],
+      topology_buffers: null,
+      node_count: 3,
+      element_count: 0,
+      boundary_face_count: 0,
+      object_segments: [],
+      mesh_parts: [{
+        id: "part:free",
+        label: "free",
+        role: "magnetic_object",
+        object_id: "free",
+        geometry_id: "free",
+        material_id: null,
+        element_start: 0,
+        element_count: 0,
+        boundary_face_start: 0,
+        boundary_face_count: 0,
+        boundary_face_indices: [],
+        node_start: 0,
+        node_count: 2,
+        node_indices: [1, 0],
+        surface_faces: [],
+        bounds_min: null,
+        bounds_max: null,
+      }],
+    } as Partial<FemLiveMesh> as FemLiveMesh;
+
+    const preview = buildAuthoredMagnetizationPreview({
+      scene,
+      mesh,
+      selectedSidebarNodeId: "mesh-statistics",
+      selectedObjectId: null,
+      activeTransformScope: null,
+      includeAllObjects: true,
+    });
+
+    expect(preview?.revision).toContain("generation-after-rebuild");
+    const values = Array.from(preview?.vectors ?? []);
+    expect(values[0]).toBeCloseTo(0);
+    expect(values[1]).toBeCloseTo(1);
+    expect(values[3]).toBeCloseTo(-1);
+    expect(values[4]).toBeCloseTo(0);
+    expect(values.slice(6)).toEqual([0, 0, 0]);
+  });
 });

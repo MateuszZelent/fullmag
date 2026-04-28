@@ -87,6 +87,18 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
 }
 
+export function resolveHeatmapTooltipValue(params: unknown): [number, number, number] | null {
+  const source = Array.isArray(params) ? params[0] : params;
+  if (!source || typeof source !== "object") return null;
+  const value = (source as { value?: unknown }).value;
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const x = Number(value[0]);
+  const y = Number(value[1]);
+  const sample = Number(value[2]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(sample)) return null;
+  return [x, y, sample];
+}
+
 function extractComponent(
   vectors: Float64Array,
   comp: VectorComponent,
@@ -238,8 +250,11 @@ export default function MagnetizationSlice2D({
         tooltip: {
           position: "top",
           confine: true,
-          formatter: (params: Record<string, unknown>) => {
-            const v = params.value as number[];
+          formatter: (params: unknown) => {
+            const v = resolveHeatmapTooltipValue(params);
+            if (!v) {
+              return `<strong>${quantityLabel}.${component}</strong><br/>No sample`;
+            }
             return [
               `<strong>${quantityLabel}.${component}</strong>`,
               `${axisLabel}: ${v[0]}`,
@@ -374,7 +389,11 @@ export default function MagnetizationSlice2D({
       { notMerge: true },
     );
 
-    return () => {};
+    return () => {
+      if (chart && !chart.isDisposed()) {
+        chart.dispatchAction({ type: "hideTip" });
+      }
+    };
   }, [data, xLen, yLen, dMin, dMax, quantityId, quantityLabel, component, plane]);
 
   // ─── Resize observer ──────────────────────────────────────────────

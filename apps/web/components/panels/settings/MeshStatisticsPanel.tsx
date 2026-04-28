@@ -29,10 +29,20 @@ export interface WorstElementView {
   id: string;
   elementIndex: number;
   marker: number | null;
+  scopeLabel: string | null;
   gamma: number | null;
   sicn: number | null;
   volume: number | null;
   centroid: number[] | null;
+}
+
+type DiagnosticSeverity = "error" | "warn" | "info";
+
+interface MeshDiagnosticView {
+  category: "Artifact freshness" | "Quality source" | "Airbox" | "Objects" | "Backend operations" | "Quality";
+  severity: DiagnosticSeverity;
+  message: string;
+  recommendation: string;
 }
 
 export interface MeshOperationStatusView {
@@ -488,6 +498,7 @@ function computeMeshQualityFallback(mesh: FemLiveMesh | null | undefined): Compu
       id: `computed-worst:${entry.elementIndex}`,
       elementIndex: entry.elementIndex,
       marker: entry.marker,
+      scopeLabel: null,
       gamma: entry.gamma,
       sicn: entry.sicn,
       volume: entry.volume,
@@ -544,6 +555,7 @@ export function parseWorstElements(report: Record<string, unknown> | null | unde
       id: `worst:${elementIndex}:${index}`,
       elementIndex,
       marker: finiteNumber(record.marker),
+      scopeLabel: stringOrNull(record.scope_label),
       gamma: finiteNumber(record.gamma),
       sicn: finiteNumber(record.sicn),
       volume: finiteNumber(record.volume),
@@ -775,6 +787,25 @@ function OperationStatusBadge({ status }: { status: string }) {
   );
 }
 
+function DiagnosticSeverityBadge({ severity }: { severity: DiagnosticSeverity }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[0.58rem] font-bold uppercase tracking-wider",
+        severity === "error" && "bg-error/15 text-error",
+        severity === "warn" && "bg-warning/15 text-warning",
+        severity === "info" && "bg-primary/10 text-primary",
+      )}
+    >
+      {severity}
+    </span>
+  );
+}
+
+function diagnosticSeverityFromRow(status: DomainStatisticsRow["status"]): DiagnosticSeverity {
+  return status === "error" ? "error" : status === "warn" ? "warn" : "info";
+}
+
 export default function MeshStatisticsPanel() {
   const model = useModel();
   const cmd = useCommand();
@@ -786,9 +817,28 @@ export default function MeshStatisticsPanel() {
   const meshStatisticsGlobal = asRecord(meshStatistics?.global);
   const reportQualitySource = stringOrNull(meshStatistics?.quality_source);
   const reportHasExtractedQuality = Boolean(reportQualitySource && reportQualitySource !== "topology");
+  const globalQuality = meshQualityData
+    ? {
+        n_elements: meshQualityData.nElements,
+        sicn_min: meshQualityData.sicnMin,
+        sicn_max: meshQualityData.sicnMax,
+        sicn_mean: meshQualityData.sicnMean,
+        sicn_p5: meshQualityData.sicnP5,
+        sicn_histogram: meshQualityData.sicnHistogram,
+        gamma_min: meshQualityData.gammaMin,
+        gamma_mean: meshQualityData.gammaMean,
+        gamma_histogram: meshQualityData.gammaHistogram,
+        volume_min: meshQualityData.volumeMin,
+        volume_max: meshQualityData.volumeMax,
+        volume_mean: meshQualityData.volumeMean,
+        volume_std: meshQualityData.volumeStd,
+        avg_quality: meshQualityData.avgQuality,
+      } satisfies MeshQualityStats
+    : null;
+  const hasBackendQualitySummary = Boolean(globalQuality);
   const computedQualityFallback = useMemo(
-    () => reportHasExtractedQuality ? null : computeMeshQualityFallback(mesh),
-    [mesh, reportHasExtractedQuality],
+    () => reportHasExtractedQuality || hasBackendQualitySummary ? null : computeMeshQualityFallback(mesh),
+    [hasBackendQualitySummary, mesh, reportHasExtractedQuality],
   );
   const perDomainRows = useMemo(
     () => {
@@ -809,25 +859,6 @@ export default function MeshStatisticsPanel() {
     [computedQualityFallback?.worstElements, meshStatistics, reportHasExtractedQuality],
   );
 
-  const globalQuality = meshQualityData
-    ? {
-        n_elements: meshQualityData.nElements,
-        sicn_min: meshQualityData.sicnMin,
-        sicn_max: meshQualityData.sicnMax,
-        sicn_mean: meshQualityData.sicnMean,
-        sicn_p5: meshQualityData.sicnP5,
-        sicn_histogram: meshQualityData.sicnHistogram,
-        gamma_min: meshQualityData.gammaMin,
-        gamma_mean: meshQualityData.gammaMean,
-        gamma_histogram: meshQualityData.gammaHistogram,
-        volume_min: meshQualityData.volumeMin,
-        volume_max: meshQualityData.volumeMax,
-        volume_mean: meshQualityData.volumeMean,
-        volume_std: meshQualityData.volumeStd,
-        avg_quality: meshQualityData.avgQuality,
-      } satisfies MeshQualityStats
-    : null;
-
   const structuredSummary = meshWorkspace?.mesh_quality_summary ?? null;
   const operationStatuses = useMemo(
     () => parseOperationStatuses(meshWorkspace?.last_build_summary),
@@ -843,7 +874,9 @@ export default function MeshStatisticsPanel() {
   const primaryHistogramQuality = statisticsGlobalQuality ?? globalQuality ?? computedQualityFallback?.globalQuality ?? perDomainRows[0]?.quality ?? null;
   const qualitySource = reportHasExtractedQuality
     ? reportQualitySource
-    : computedQualityFallback
+    : hasBackendQualitySummary
+      ? "gmsh-summary"
+      : computedQualityFallback
       ? "frontend-topology"
       : reportQualitySource;
   const qualityVerdict = verdictFromQuality(primaryHistogramQuality, qualitySource);
@@ -853,30 +886,126 @@ export default function MeshStatisticsPanel() {
   const frontendFallbackWarning = computedQualityFallback && !reportHasExtractedQuality
     ? "Tetra quality was computed in the browser from mesh topology because the current artifact lacks backend Gmsh quality metrics; rebuild to persist backend statistics."
     : null;
-  const backendWarnings = [
-    ...operationStatuses
-      .filter((status) => status.status === "fallback" || status.status === "failed" || status.status === "skipped")
-      .map((status) => `${status.kind} (${status.scope}) ${status.status}${status.reason ? `: ${status.reason}` : ""}`),
-    ...thinFilmDiagnostics.flatMap((diagnostic) =>
-      diagnostic.warnings.map((warning) => `${diagnostic.geometryName}: ${warning}`),
-    ),
-  ];
-  const globalWarnings = [
-    ...(model.meshConfigDirty ? ["Displayed mesh is stale relative to current mesh-affecting settings; rebuild the solver mesh to refresh statistics."] : []),
-    ...(model.meshOptions.optimizeIters > 1 && !model.meshOptions.optimize.trim()
-      ? ["Optimize iterations are configured but no optimizer method is selected; iterations will be ignored."]
-      : []),
-    ...thinFilmWarnings(
+  const diagnostics = useMemo<MeshDiagnosticView[]>(() => {
+    const entries: MeshDiagnosticView[] = [];
+    if (model.meshConfigDirty) {
+      entries.push({
+        category: "Artifact freshness",
+        severity: "warn",
+        message: "Displayed mesh is stale relative to current mesh-affecting settings.",
+        recommendation: "Rebuild mesh before accepting the quality verdict.",
+      });
+    }
+    if (frontendFallbackWarning) {
+      entries.push({
+        category: "Quality source",
+        severity: model.meshConfigDirty ? "warn" : "error",
+        message: frontendFallbackWarning,
+        recommendation: "Use Rebuild Solver Mesh so backend Gmsh statistics are persisted.",
+      });
+    }
+    if (missingTetraQualityWarning) {
+      entries.push({
+        category: "Quality source",
+        severity: "warn",
+        message: missingTetraQualityWarning,
+        recommendation: "Enable quality extraction and rebuild the solver mesh.",
+      });
+    }
+    if (model.meshOptions.optimizeIters > 1 && !model.meshOptions.optimize.trim()) {
+      entries.push({
+        category: "Backend operations",
+        severity: "warn",
+        message: "Optimize iterations are configured but no optimizer method is selected; iterations will be ignored.",
+        recommendation: "Select Netgen optimizer or set iterations to 0.",
+      });
+    }
+    for (const warning of thinFilmWarnings(
       mesh?.mesh_parts ?? [],
       optionMeters(model.meshOptions.minimumElementSize || model.meshOptions.hmin),
       optionMeters(model.meshOptions.maximumElementSize || model.meshOptions.hmax),
-    ),
-    ...backendWarnings,
-    ...(frontendFallbackWarning ? [frontendFallbackWarning] : []),
-    ...(missingTetraQualityWarning ? [missingTetraQualityWarning] : []),
-    ...(globalQuality ? warningsFor(globalQuality, "global") : []),
-    ...perDomainRows.flatMap((row) => row.warnings.map((warning) => `${row.label}: ${warning}`)),
-  ];
+    )) {
+      entries.push({
+        category: "Objects",
+        severity: "warn",
+        message: warning,
+        recommendation: "Reduce object hmax or use a validation mesh profile for thin-film checks.",
+      });
+    }
+    for (const status of operationStatuses) {
+      if (status.status !== "fallback" && status.status !== "failed" && status.status !== "skipped") continue;
+      entries.push({
+        category: "Backend operations",
+        severity: status.status === "failed" ? "error" : "warn",
+        message: `${status.kind} (${status.scope}) ${status.status}${status.reason ? `: ${status.reason}` : ""}`,
+        recommendation: status.status === "skipped"
+          ? "Check requested method settings."
+          : "Inspect actual method before trusting mesh assumptions.",
+      });
+    }
+    for (const diagnostic of thinFilmDiagnostics) {
+      for (const warning of diagnostic.warnings) {
+        entries.push({
+          category: "Objects",
+          severity: "warn",
+          message: `${diagnostic.geometryName}: ${warning}`,
+          recommendation: "Use enough through-thickness resolution or accept free-tet fallback explicitly.",
+        });
+      }
+    }
+    for (const warning of statisticsGlobalQuality ? warningsFor(statisticsGlobalQuality, "global") : globalQuality ? warningsFor(globalQuality, "global") : []) {
+      entries.push({
+        category: "Quality",
+        severity: warning.includes("invalid") || warning.includes("Very low") ? "error" : "warn",
+        message: warning,
+        recommendation: "Inspect worst elements and compare backend Gmsh statistics after rebuild.",
+      });
+    }
+    for (const row of perDomainRows) {
+      const category = row.role === "air" ? "Airbox" : "Objects";
+      const severity = diagnosticSeverityFromRow(row.status);
+      for (const warning of row.warnings) {
+        entries.push({
+          category,
+          severity,
+          message: `${row.label}: ${warning}`,
+          recommendation: row.role === "air"
+            ? "Increase airbox hmin or reduce abrupt transition-field spread."
+            : "Inspect worst elements in this object and adjust local hmax/optimizer.",
+        });
+      }
+    }
+    return entries;
+  }, [
+    frontendFallbackWarning,
+    globalQuality,
+    mesh?.mesh_parts,
+    missingTetraQualityWarning,
+    model.meshConfigDirty,
+    model.meshOptions.hmax,
+    model.meshOptions.hmin,
+    model.meshOptions.maximumElementSize,
+    model.meshOptions.minimumElementSize,
+    model.meshOptions.optimize,
+    model.meshOptions.optimizeIters,
+    operationStatuses,
+    perDomainRows,
+    statisticsGlobalQuality,
+    thinFilmDiagnostics,
+  ]);
+  const diagnosticCounts = diagnostics.reduce(
+    (counts, diagnostic) => {
+      counts[diagnostic.severity] += 1;
+      return counts;
+    },
+    { error: 0, warn: 0, info: 0 } satisfies Record<DiagnosticSeverity, number>,
+  );
+  const diagnosticsByCategory = diagnostics.reduce((groups, diagnostic) => {
+    const group = groups.get(diagnostic.category);
+    if (group) group.push(diagnostic);
+    else groups.set(diagnostic.category, [diagnostic]);
+    return groups;
+  }, new Map<MeshDiagnosticView["category"], MeshDiagnosticView[]>());
 
   const elementCount =
     mesh?.elements.length ??
@@ -893,11 +1022,10 @@ export default function MeshStatisticsPanel() {
     finiteNumber(meshStatisticsGlobal?.boundary_face_count) ??
     0;
   const meshName = mesh?.mesh_name ?? meshWorkspace?.mesh_summary?.mesh_name ?? "study_domain";
-  const volumeRatioValue = globalQuality
-    ? volumeRatio(globalQuality)
-    : computedQualityFallback
-      ? volumeRatio(computedQualityFallback.globalQuality)
-      : statisticVolumeValue(meshStatisticsGlobal, "ratio");
+  const volumeRatioValue = statisticVolumeValue(meshStatisticsGlobal, "ratio")
+    ?? (statisticsGlobalQuality ? volumeRatio(statisticsGlobalQuality) : null)
+    ?? (globalQuality ? volumeRatio(globalQuality) : null)
+    ?? (computedQualityFallback ? volumeRatio(computedQualityFallback.globalQuality) : null);
   const exportPayload = reportHasExtractedQuality && meshStatistics ? meshStatistics : {
     mesh_name: meshName,
     quality_source: computedQualityFallback ? "frontend-topology" : qualitySource ?? "topology",
@@ -998,6 +1126,12 @@ export default function MeshStatisticsPanel() {
               Export Stats JSON
             </button>
           </div>
+          <div className="grid grid-cols-4 gap-2">
+            <StatTile label="Freshness" value={model.meshConfigDirty ? "stale" : "current"} />
+            <StatTile label="Quality source" value={qualitySource ?? "topology"} />
+            <StatTile label="Errors" value={diagnosticCounts.error.toLocaleString()} />
+            <StatTile label="Warnings" value={diagnosticCounts.warn.toLocaleString()} />
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             <StatTile label="Nodes" value={nodeCount.toLocaleString()} />
@@ -1081,7 +1215,7 @@ export default function MeshStatisticsPanel() {
           <div className="overflow-hidden rounded-lg border border-border/35">
             <div className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
               <span>Element</span>
-              <span>Marker</span>
+              <span>Scope</span>
               <span>Gamma</span>
               <span>Volume</span>
             </div>
@@ -1097,7 +1231,7 @@ export default function MeshStatisticsPanel() {
                     </div>
                   ) : null}
                 </div>
-                <MetricCell value={element.marker == null ? "-" : String(element.marker)} />
+                <MetricCell value={element.scopeLabel ?? perDomainRows.find((row) => row.marker === element.marker)?.label ?? (element.marker == null ? "-" : `marker ${element.marker}`)} />
                 <MetricCell value={formatQuality(element.gamma)} />
                 <MetricCell value={element.volume == null ? "-" : fmtSI(element.volume, "m^3")} />
               </div>
@@ -1172,13 +1306,39 @@ export default function MeshStatisticsPanel() {
         )}
       </SidebarSection>
 
-      <SidebarSection title="Warnings" defaultOpen={globalWarnings.length > 0}>
-        {globalWarnings.length > 0 ? (
-          <div className="grid gap-2">
-            {globalWarnings.map((warning) => (
-              <div key={warning} className="flex gap-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-[0.72rem] leading-relaxed text-warning/90">
-                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                <span>{warning}</span>
+      <SidebarSection title="Warnings" defaultOpen={diagnostics.length > 0}>
+        {diagnostics.length > 0 ? (
+          <div className="grid gap-3">
+            <div className="grid grid-cols-3 gap-2">
+              <StatTile label="Errors" value={diagnosticCounts.error.toLocaleString()} />
+              <StatTile label="Warnings" value={diagnosticCounts.warn.toLocaleString()} />
+              <StatTile label="Info" value={diagnosticCounts.info.toLocaleString()} />
+            </div>
+            {Array.from(diagnosticsByCategory.entries()).map(([category, entries]) => (
+              <div key={category} className="grid gap-2">
+                <div className="text-[0.6rem] font-bold uppercase tracking-wider text-muted-foreground">{category}</div>
+                {entries.map((diagnostic) => (
+                  <div
+                    key={`${diagnostic.category}:${diagnostic.severity}:${diagnostic.message}`}
+                    className={cn(
+                      "grid gap-1 rounded-lg border px-3 py-2 text-[0.72rem] leading-relaxed",
+                      diagnostic.severity === "error" && "border-error/25 bg-error/10 text-error/90",
+                      diagnostic.severity === "warn" && "border-warning/25 bg-warning/10 text-warning/90",
+                      diagnostic.severity === "info" && "border-primary/20 bg-primary/10 text-primary/90",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex gap-2">
+                        <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                        <span>{diagnostic.message}</span>
+                      </div>
+                      <DiagnosticSeverityBadge severity={diagnostic.severity} />
+                    </div>
+                    <div className="pl-5 text-[0.64rem] text-muted-foreground">
+                      {diagnostic.recommendation}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
@@ -1193,10 +1353,10 @@ export default function MeshStatisticsPanel() {
       {globalQuality || meshStatisticsGlobal ? (
         <SidebarSection title="Volume Statistics" defaultOpen={false}>
           <div className="grid gap-1.5 rounded-lg border border-border/30 bg-background/45 p-2.5 text-xs">
-            <InfoLine label="Volume min" value={fmtSI(globalQuality?.volume_min ?? statisticVolumeValue(meshStatisticsGlobal, "min") ?? 0, "m^3")} />
-            <InfoLine label="Volume max" value={fmtSI(globalQuality?.volume_max ?? statisticVolumeValue(meshStatisticsGlobal, "max") ?? 0, "m^3")} />
-            <InfoLine label="Volume mean" value={fmtSI(globalQuality?.volume_mean ?? statisticVolumeValue(meshStatisticsGlobal, "mean") ?? 0, "m^3")} />
-            <InfoLine label="Volume std" value={fmtSI(globalQuality?.volume_std ?? statisticVolumeValue(meshStatisticsGlobal, "std") ?? 0, "m^3")} />
+            <InfoLine label="Volume min" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "min") ?? globalQuality?.volume_min ?? 0, "m^3")} />
+            <InfoLine label="Volume max" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "max") ?? globalQuality?.volume_max ?? 0, "m^3")} />
+            <InfoLine label="Volume mean" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "mean") ?? globalQuality?.volume_mean ?? 0, "m^3")} />
+            <InfoLine label="Volume std" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "std") ?? globalQuality?.volume_std ?? 0, "m^3")} />
           </div>
         </SidebarSection>
       ) : null}
