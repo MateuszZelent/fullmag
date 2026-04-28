@@ -26,6 +26,7 @@ import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useGeometryCapabilities } from "@/src/hooks/resources/useSceneDocument";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
+import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
 
 // ── Registry imports ──
 import {
@@ -91,6 +92,7 @@ interface RibbonBarProps {
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
   selectedObjectOpacity?: number | null;
+  selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
   meshClipEnabled?: boolean | null;
   meshClipAxis?: "x" | "y" | "z" | null;
   meshClipPos?: number | null;
@@ -105,6 +107,9 @@ interface RibbonBarProps {
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
+  slice2DEnabled?: boolean;
+  slice2DToolbar?: Slice2DToolbarState | null;
+  slice2DDiagnostics?: Slice2DDiagnostics | null;
   previewPending?: boolean;
   onQuickPreviewSelect?: (quantityId: string) => void;
   onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
@@ -186,6 +191,8 @@ interface RibbonBarProps {
   onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
+  onSetSelectedObjectRenderMode?: (mode: ViewportMeshRenderMode | "inherit") => void;
+  onClearSelectedDisplayOverrides?: () => void;
   onSetMeshClipEnabled?: (enabled: boolean) => void;
   onSetMeshClipAxis?: (axis: "x" | "y" | "z") => void;
   onSetMeshClipPos?: (position: number) => void;
@@ -201,6 +208,7 @@ interface RibbonBarProps {
     ferromagnetVisibility: "hide" | "ghost";
   }>) => void;
   onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
+  onSetSlice2DToolbar?: (patch: Partial<Slice2DToolbarState>) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -358,6 +366,7 @@ function buildContext(
     meshRenderMode: props.meshRenderMode ?? null,
     meshOpacity: props.meshOpacity ?? null,
     selectedObjectOpacity: props.selectedObjectOpacity ?? null,
+    selectedObjectRenderMode: props.selectedObjectRenderMode ?? null,
     meshClipEnabled: props.meshClipEnabled ?? null,
     meshClipAxis: props.meshClipAxis ?? null,
     meshClipPos: props.meshClipPos ?? null,
@@ -372,6 +381,9 @@ function buildContext(
     femFerromagnetVisibilityMode: props.femFerromagnetVisibilityMode ?? null,
     airMeshOpacity: props.airMeshOpacity ?? null,
     airMeshRenderMode: props.airMeshRenderMode ?? null,
+    slice2DEnabled: Boolean(props.slice2DEnabled),
+    slice2DToolbar: props.slice2DToolbar ?? null,
+    slice2DDiagnostics: props.slice2DDiagnostics ?? null,
 
     antennaSources: props.antennaSources ?? [],
     selectedAntennaName: props.selectedAntennaName ?? null,
@@ -683,6 +695,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.meshRenderMode,
     props.meshOpacity,
     props.selectedObjectOpacity,
+    props.selectedObjectRenderMode,
     props.meshClipEnabled,
     props.meshClipAxis,
     props.meshClipPos,
@@ -697,6 +710,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.femFerromagnetVisibilityMode,
     props.airMeshOpacity,
     props.airMeshRenderMode,
+    props.slice2DEnabled,
+    props.slice2DToolbar,
+    props.slice2DDiagnostics,
     props.antennaSources,
     props.selectedAntennaName,
     props.canSyncScriptBuilder,
@@ -717,6 +733,8 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetMeshRenderMode,
     props.onSetMeshOpacity,
     props.onSetSelectedObjectOpacity,
+    props.onSetSelectedObjectRenderMode,
+    props.onClearSelectedDisplayOverrides,
     props.onSetMeshClipEnabled,
     props.onSetMeshClipAxis,
     props.onSetMeshClipPos,
@@ -724,6 +742,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetMeshShowArrows,
     props.onSetFemArrowStyle,
     props.onSetAirboxDisplay,
+    props.onSetSlice2DToolbar,
     props.onBuilderAddPrimitive,
     props.onBuilderCreateBoolean,
     props.onBuilderBuildGeometry,

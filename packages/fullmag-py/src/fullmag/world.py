@@ -154,6 +154,50 @@ def _coalesce_mesh_size_controls(
     return resolved_hmax, resolved_hmin, resolved_growth_rate
 
 
+def _mesh_api_migration_error(old: str, new: str) -> ValueError:
+    return ValueError(
+        f"{old} is no longer part of the canonical mesh DSL. Use {new}."
+    )
+
+
+def _validate_mesh_control_values(
+    *,
+    maximum_element_size: float | str | None,
+    minimum_element_size: float | None,
+    growth_rate: float | None,
+    narrow_regions: int | None,
+    context: str,
+) -> None:
+    if isinstance(maximum_element_size, str) and maximum_element_size != "auto":
+        raise ValueError(
+            f"{context}: maximum_element_size must be a positive float or \"auto\", "
+            f"got {maximum_element_size!r}"
+        )
+    if isinstance(maximum_element_size, (int, float)):
+        require_positive(float(maximum_element_size), f"{context}.maximum_element_size")
+    if minimum_element_size is not None:
+        require_positive(float(minimum_element_size), f"{context}.minimum_element_size")
+    if isinstance(maximum_element_size, (int, float)) and minimum_element_size is not None:
+        if float(minimum_element_size) > float(maximum_element_size):
+            raise ValueError(
+                f"{context}: minimum_element_size must be <= maximum_element_size"
+            )
+    if growth_rate is not None:
+        rate = float(growth_rate)
+        if not math.isfinite(rate) or rate <= 0.0:
+            raise ValueError(f"{context}: maximum_element_growth_rate must be positive")
+        if rate > 2.5:
+            raise ValueError(
+                f"{context}: maximum_element_growth_rate={rate:g} is outside the "
+                "supported practical range 1.0-2.5"
+            )
+    if narrow_regions is not None:
+        if isinstance(narrow_regions, bool) or not isinstance(narrow_regions, int):
+            raise ValueError(f"{context}: narrow_regions must be an integer >= 0")
+        if narrow_regions < 0:
+            raise ValueError(f"{context}: narrow_regions must be an integer >= 0")
+
+
 # ---------------------------------------------------------------------------
 # Magnet handle — returned by fm.geometry()
 # ---------------------------------------------------------------------------
@@ -534,11 +578,14 @@ class GeometryMeshHandle:
             growth_rate=growth_rate,
             maximum_element_growth_rate=maximum_element_growth_rate,
         )
+        _validate_mesh_control_values(
+            maximum_element_size=resolved_hmax,
+            minimum_element_size=resolved_hmin,
+            growth_rate=resolved_growth_rate,
+            narrow_regions=narrow_regions,
+            context=f"{self._owner._name}.mesh",
+        )
         if resolved_hmax is not None:
-            if isinstance(resolved_hmax, str) and resolved_hmax != "auto":
-                raise ValueError(
-                    f"hmax/maximum_element_size must be a positive float or \"auto\", got {resolved_hmax!r}"
-                )
             spec.hmax = resolved_hmax
         if resolved_hmin is not None:
             spec.hmin = resolved_hmin
@@ -1866,12 +1913,104 @@ def _configure_study_universe(
     return universe
 
 
+class StudyUniverseHandle:
+    """Callable study-domain facade with a separate airbox/domain mesh scope."""
+
+    _MESH_KWARGS = {
+        "airbox_hmax",
+        "airbox_hmin",
+        "airbox_growth_rate",
+        "airbox_grading",
+        "maximum_element_size",
+        "minimum_element_size",
+    }
+
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def __call__(
+        self,
+        *,
+        mode: str | None = None,
+        size: Sequence[float] | None = None,
+        center: Sequence[float] | None = None,
+        padding: Sequence[float] | None = None,
+        **mesh_kwargs: object,
+    ) -> "StudyBuilder":
+        invalid = sorted(key for key in mesh_kwargs if key in self._MESH_KWARGS)
+        if invalid:
+            joined = ", ".join(invalid)
+            raise _mesh_api_migration_error(
+                f"study.universe(..., {joined}=...)",
+                "study.universe(...); study.universe.mesh(...)",
+            )
+        if mesh_kwargs:
+            joined = ", ".join(sorted(mesh_kwargs))
+            raise TypeError(f"study.universe() got unexpected keyword argument(s): {joined}")
+        _configure_study_universe(mode=mode, size=size, center=center, padding=padding)
+        return self._owner
+
+    def mesh(
+        self,
+        *,
+        hmax: float | None = None,
+        hmin: float | None = None,
+        maximum_element_size: float | None = None,
+        minimum_element_size: float | None = None,
+        growth_rate: float | None = None,
+        maximum_element_growth_rate: float | None = None,
+        grading: str | None = None,
+    ) -> "StudyBuilder":
+        resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
+        resolved_hmin = minimum_element_size if minimum_element_size is not None else hmin
+        resolved_growth_rate = (
+            maximum_element_growth_rate
+            if maximum_element_growth_rate is not None
+            else growth_rate
+        )
+        _validate_mesh_control_values(
+            maximum_element_size=resolved_hmax,
+            minimum_element_size=resolved_hmin,
+            growth_rate=resolved_growth_rate,
+            narrow_regions=None,
+            context="study.universe.mesh",
+        )
+        _configure_study_universe(
+            airbox_hmax=resolved_hmax,
+            airbox_hmin=resolved_hmin,
+            airbox_growth_rate=resolved_growth_rate,
+            airbox_grading=grading,
+        )
+        return self._owner
+
+
+class StudyObjectsMeshDefaultsHandle:
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self._owner = owner
+
+    def __call__(self, **kwargs: object) -> "StudyBuilder":
+        _configure_object_mesh_defaults(**kwargs)
+        return self._owner
+
+
+class StudyObjectsMeshHandle:
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self.defaults = StudyObjectsMeshDefaultsHandle(owner)
+
+
+class StudyObjectsHandle:
+    def __init__(self, owner: "StudyBuilder") -> None:
+        self.mesh = StudyObjectsMeshHandle(owner)
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
     def __init__(self, problem_name: str | None = None) -> None:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
+        self.universe = StudyUniverseHandle(self)
+        self.objects = StudyObjectsHandle(self)
         if problem_name is not None:
             name(problem_name)
 
@@ -1921,108 +2060,23 @@ class StudyBuilder:
 
     def mesh(
         self,
-        *,
-        hmax: float | str | None = None,
-        hmin: float | None = None,
-        maximum_element_size: float | str | None = None,
-        minimum_element_size: float | None = None,
-        order: int | None = None,
-        source: str | None = None,
-        calibrate_for: str | None = None,
-        size_preset: str | None = None,
-        algorithm_2d: int | None = None,
-        algorithm_3d: int | None = None,
-        optimize: str | None = None,
-        optimize_iterations: int | None = None,
-        smoothing_steps: int | None = None,
-        size_factor: float | None = None,
-        size_from_curvature: int | None = None,
-        curvature_factor: float | None = None,
-        growth_rate: float | None = None,
-        maximum_element_growth_rate: float | None = None,
-        narrow_regions: int | None = None,
-        narrow_region_resolution: float | None = None,
-        compute_quality: bool | None = None,
-        per_element_quality: bool | None = None,
+        *args: object,
+        **kwargs: object,
     ) -> "StudyBuilder":
-        object_mesh_defaults(
-            hmax=hmax,
-            hmin=hmin,
-            maximum_element_size=maximum_element_size,
-            minimum_element_size=minimum_element_size,
-            order=order,
-            source=source,
-            calibrate_for=calibrate_for,
-            size_preset=size_preset,
-            algorithm_2d=algorithm_2d,
-            algorithm_3d=algorithm_3d,
-            optimize=optimize,
-            optimize_iterations=optimize_iterations,
-            smoothing_steps=smoothing_steps,
-            size_factor=size_factor,
-            size_from_curvature=size_from_curvature,
-            curvature_factor=curvature_factor,
-            growth_rate=growth_rate,
-            maximum_element_growth_rate=maximum_element_growth_rate,
-            narrow_regions=narrow_regions,
-            narrow_region_resolution=narrow_region_resolution,
-            compute_quality=compute_quality,
-            per_element_quality=per_element_quality,
+        raise _mesh_api_migration_error(
+            "study.mesh(...)",
+            "study.objects.mesh.defaults(...) or body.mesh(...)",
         )
-        return self
 
     def object_mesh_defaults(
         self,
-        *,
-        hmax: float | str | None = None,
-        hmin: float | None = None,
-        maximum_element_size: float | str | None = None,
-        minimum_element_size: float | None = None,
-        order: int | None = None,
-        source: str | None = None,
-        calibrate_for: str | None = None,
-        size_preset: str | None = None,
-        algorithm_2d: int | None = None,
-        algorithm_3d: int | None = None,
-        optimize: str | None = None,
-        optimize_iterations: int | None = None,
-        smoothing_steps: int | None = None,
-        size_factor: float | None = None,
-        size_from_curvature: int | None = None,
-        curvature_factor: float | None = None,
-        growth_rate: float | None = None,
-        maximum_element_growth_rate: float | None = None,
-        narrow_regions: int | None = None,
-        narrow_region_resolution: float | None = None,
-        compute_quality: bool | None = None,
-        per_element_quality: bool | None = None,
+        *args: object,
+        **kwargs: object,
     ) -> "StudyBuilder":
-        """Configure shared default mesher settings for magnetic objects in this study."""
-        object_mesh_defaults(
-            hmax=hmax,
-            hmin=hmin,
-            maximum_element_size=maximum_element_size,
-            minimum_element_size=minimum_element_size,
-            order=order,
-            source=source,
-            calibrate_for=calibrate_for,
-            size_preset=size_preset,
-            algorithm_2d=algorithm_2d,
-            algorithm_3d=algorithm_3d,
-            optimize=optimize,
-            optimize_iterations=optimize_iterations,
-            smoothing_steps=smoothing_steps,
-            size_factor=size_factor,
-            size_from_curvature=size_from_curvature,
-            curvature_factor=curvature_factor,
-            growth_rate=growth_rate,
-            maximum_element_growth_rate=maximum_element_growth_rate,
-            narrow_regions=narrow_regions,
-            narrow_region_resolution=narrow_region_resolution,
-            compute_quality=compute_quality,
-            per_element_quality=per_element_quality,
+        raise _mesh_api_migration_error(
+            "study.object_mesh_defaults(...)",
+            "study.objects.mesh.defaults(...)",
         )
-        return self
 
     def hmax(self, value: float | str) -> "StudyBuilder":
         hmax(value)
@@ -2080,37 +2134,6 @@ class StudyBuilder:
         )
         return self
 
-    def universe(
-        self,
-        *,
-        mode: str | None = None,
-        size: Sequence[float] | None = None,
-        center: Sequence[float] | None = None,
-        padding: Sequence[float] | None = None,
-        airbox_hmax: float | None = None,
-        airbox_hmin: float | None = None,
-        airbox_growth_rate: float | None = None,
-        airbox_grading: str | None = None,
-        maximum_element_size: float | None = None,
-        minimum_element_size: float | None = None,
-    ) -> "StudyBuilder":
-        # maximum_element_size / minimum_element_size are UI-exported aliases for
-        # airbox_hmax / airbox_hmin.  Prefer the explicit airbox_hmax/airbox_hmin when
-        # both are supplied.
-        resolved_hmax = airbox_hmax if airbox_hmax is not None else maximum_element_size
-        resolved_hmin = airbox_hmin if airbox_hmin is not None else minimum_element_size
-        _configure_study_universe(
-            mode=mode,
-            size=size,
-            center=center,
-            padding=padding,
-            airbox_hmax=resolved_hmax,
-            airbox_hmin=resolved_hmin,
-            airbox_growth_rate=airbox_growth_rate,
-            airbox_grading=airbox_grading,
-        )
-        return self
-
     def demag(
         self,
         *,
@@ -2121,10 +2144,11 @@ class StudyBuilder:
         demag(model=model, variant=variant, realization=realization)
         return self
 
-    def airbox(self, *, hmax: float | None = None) -> "StudyBuilder":
-        """Configure airbox mesh element size, as a distinct step from the universe geometry."""
-        _configure_study_universe(airbox_hmax=hmax)
-        return self
+    def airbox(self, *args: object, **kwargs: object) -> "StudyBuilder":
+        raise _mesh_api_migration_error(
+            "study.airbox(...)",
+            "study.universe.mesh(...)",
+        )
 
     def domain_mesh(
         self,
@@ -2496,7 +2520,7 @@ def pbc(x: bool = False, y: bool = False, z: bool = False) -> None:
         _state._pbc = (bool(x), bool(y), bool(z))
 
 
-def object_mesh_defaults(
+def _configure_object_mesh_defaults(
     *,
     hmax: float | str | None = None,
     hmin: float | None = None,
@@ -2530,11 +2554,14 @@ def object_mesh_defaults(
         growth_rate=growth_rate,
         maximum_element_growth_rate=maximum_element_growth_rate,
     )
+    _validate_mesh_control_values(
+        maximum_element_size=resolved_hmax,
+        minimum_element_size=resolved_hmin,
+        growth_rate=resolved_growth_rate,
+        narrow_regions=narrow_regions,
+        context="study.objects.mesh.defaults",
+    )
     if resolved_hmax is not None:
-        if isinstance(resolved_hmax, str) and resolved_hmax != "auto":
-            raise ValueError(
-                f"hmax/maximum_element_size must be a positive float or \"auto\", got {resolved_hmax!r}"
-            )
         _state._default_mesh_spec.hmax = resolved_hmax
         _state._hmax = resolved_hmax
     if resolved_hmin is not None:
@@ -2577,6 +2604,13 @@ def object_mesh_defaults(
         _state._default_mesh_spec.per_element_quality = per_element_quality
 
 
+def object_mesh_defaults(*args: object, **kwargs: object) -> None:
+    raise _mesh_api_migration_error(
+        "fm.object_mesh_defaults(...)",
+        "study.objects.mesh.defaults(...)",
+    )
+
+
 def mesh(
     *,
     hmax: float | str | None = None,
@@ -2602,41 +2636,20 @@ def mesh(
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
 ) -> None:
-    """Compatibility alias for ``object_mesh_defaults(...)``."""
-    object_mesh_defaults(
-        hmax=hmax,
-        hmin=hmin,
-        maximum_element_size=maximum_element_size,
-        minimum_element_size=minimum_element_size,
-        order=order,
-        source=source,
-        calibrate_for=calibrate_for,
-        size_preset=size_preset,
-        algorithm_2d=algorithm_2d,
-        algorithm_3d=algorithm_3d,
-        optimize=optimize,
-        optimize_iterations=optimize_iterations,
-        smoothing_steps=smoothing_steps,
-        size_factor=size_factor,
-        size_from_curvature=size_from_curvature,
-        curvature_factor=curvature_factor,
-        growth_rate=growth_rate,
-        maximum_element_growth_rate=maximum_element_growth_rate,
-        narrow_regions=narrow_regions,
-        narrow_region_resolution=narrow_region_resolution,
-        compute_quality=compute_quality,
-        per_element_quality=per_element_quality,
+    raise _mesh_api_migration_error(
+        "fm.mesh(...)",
+        "study.objects.mesh.defaults(...) or body.mesh(...)",
     )
 
 
 def hmax(val: float | str) -> None:
     """Compatibility alias for ``fm.object_mesh_defaults(hmax=...)``."""
-    object_mesh_defaults(hmax=val)
+    raise _mesh_api_migration_error("fm.hmax(...)", "body.mesh(...) or study.objects.mesh.defaults(...)")
 
 
 def fem_order(order: int) -> None:
     """Compatibility alias for ``fm.object_mesh_defaults(order=...)``."""
-    object_mesh_defaults(order=order)
+    raise _mesh_api_migration_error("fm.fem_order(...)", "body.mesh(...) or study.objects.mesh.defaults(...)")
 
 
 def build_mesh() -> None:
@@ -2896,7 +2909,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
             if strict_domain_requirements and not has_shared_base_hmax:
                 raise ValueError(
                     "Generated shared-domain FEM mesh requires an explicit airbox maximum_element_size. "
-                    "Set study.universe(..., maximum_element_size=...) or use the legacy airbox_hmax alias."
+                    "Set study.universe.mesh(maximum_element_size=...)."
                 )
             explicit_hmaxs = _explicit_object_hmaxs()
             if isinstance(shared_hmax, (int, float)):
@@ -2923,7 +2936,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
                 missing_names = ", ".join(repr(name) for name in missing_object_hmax)
                 raise ValueError(
                     "Generated shared-domain FEM mesh requires an explicit object maximum_element_size for every "
-                    "magnetic geometry unless study.object_mesh_defaults(maximum_element_size=...) is set. "
+                    "magnetic geometry unless study.objects.mesh.defaults(maximum_element_size=...) is set. "
                     f"Missing maximum_element_size for: {missing_names}."
                 )
             emit_progress(
@@ -3163,7 +3176,7 @@ def _build_explicit_mesh_assets() -> None:
     fem_hint = _resolve_flat_fem_hint()
     if fem_hint is None:
         raise ValueError(
-            "No FEM mesh configuration available. Set fm.object_mesh_defaults(...), call body.mesh(...), "
+            "No FEM mesh configuration available. Set study.objects.mesh.defaults(...), call body.mesh(...), "
             "or choose the FEM backend before build_mesh()."
         )
 

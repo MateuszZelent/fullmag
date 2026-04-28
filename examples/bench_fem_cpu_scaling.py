@@ -38,8 +38,8 @@ study.universe(
     size=(2.5e-7, 2.5e-7, 6e-8),
     center=(0, 0, 0),
     padding=(0, 0, 0),
-    airbox_hmax=50e-9,
 )
+study.universe.mesh(maximum_element_size=50e-9)
 study.interactive(False)
 
 body = study.geometry(

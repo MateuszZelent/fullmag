@@ -1,10 +1,8 @@
 import {
-  Activity,
   Blend,
   Box,
   BoxSelect,
   Camera,
-  Check,
   Download,
   Hand,
   Info,
@@ -25,6 +23,7 @@ import {
   type RibbonGroup,
 } from "../registry/ribbonRegistry";
 import type { RibbonMenuNode } from "../registry/ribbonMenuTypes";
+import type { ViewportMeshRenderMode } from "@/components/shell/ribbon/command-registry";
 
 const QUANTITY_FALLBACKS = [
   { id: "m", label: "Magnetization / m" },
@@ -64,6 +63,27 @@ function canUse3D(ctx: RibbonBuildContext): { disabled: boolean; reason: string 
   return { disabled: false, reason: null };
 }
 
+function canUse3Dor2D(ctx: RibbonBuildContext): { disabled: boolean; reason: string | null } {
+  const reason = noSessionReason(ctx);
+  if (reason) return { disabled: true, reason };
+  if (ctx.viewMode !== "3D" && ctx.viewMode !== "Mesh" && ctx.viewMode !== "2D") {
+    return { disabled: true, reason: "Viewport is not in 3D/Mesh/2D mode" };
+  }
+  return { disabled: false, reason: null };
+}
+
+function canUse2D(ctx: RibbonBuildContext): { disabled: boolean; reason: string | null } {
+  const reason = noSessionReason(ctx);
+  if (reason) return { disabled: true, reason };
+  if (ctx.viewMode !== "2D") {
+    return { disabled: true, reason: "Switch to 2D Slice to edit slice controls" };
+  }
+  if (!ctx.slice2DToolbar) {
+    return { disabled: true, reason: "2D Slice model is not ready" };
+  }
+  return { disabled: false, reason: null };
+}
+
 function canUseSelected(ctx: RibbonBuildContext): { disabled: boolean; reason: string | null } {
   const global = canUse3D(ctx);
   if (global.disabled) return global;
@@ -86,7 +106,7 @@ function quantityOptions(ctx: RibbonBuildContext) {
 }
 
 function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
-  const global = canUse3D(ctx);
+  const global = canUse3Dor2D(ctx);
   const quantityStatus = ctx.requestedPreviewQuantityDataStatus ?? (ctx.previewPending ? "pending" : "ready");
   const everyN = ctx.requestedPreviewEveryN ?? 4;
   const autoScale = Boolean(ctx.requestedPreviewAutoScale ?? true);
@@ -219,7 +239,7 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 }
 
 function buildVectorsMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
-  const global = canUse3D(ctx);
+  const global = canUse3Dor2D(ctx);
   const visible = Boolean(ctx.meshShowArrows);
   const warning = visible && ctx.previewPending ? "Vectors requested while preview data is pending" : null;
   return [
@@ -493,7 +513,7 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 }
 
 function buildRenderLayersMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
-  const global = canUse3D(ctx);
+  const global = canUse3Dor2D(ctx);
   return [
     {
       type: "radio-group",
@@ -627,6 +647,325 @@ function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
   };
 }
 
+function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
+  const slice = canUse2D(ctx);
+  const toolbar = ctx.slice2DToolbar;
+  const component = toolbar?.component ?? "magnitude";
+  const axis = toolbar?.axis ?? "z";
+  const mode = toolbar?.mode ?? "single";
+  const renderMode = toolbar?.renderMode ?? "heatmap";
+  const showQuantity = toolbar?.showQuantity ?? true;
+  const showPrimitives = toolbar?.showPrimitives ?? true;
+  const showMesh = toolbar?.showMesh ?? false;
+  const showAirbox = toolbar?.showAirbox ?? false;
+  const showVectors = toolbar?.showVectors ?? Boolean(ctx.meshShowArrows);
+  const position = toolbar?.positionPercent ?? ctx.meshClipPos ?? 50;
+  const autoScale = toolbar?.autoContrast ?? Boolean(ctx.requestedPreviewAutoScale ?? true);
+  return {
+    id: "view-slice-2d",
+    title: "2D Slice",
+    subtitle: ctx.viewMode === "2D" ? "Ribbon controls" : "Inactive",
+    tone: "neutral",
+    actions: [
+      {
+        id: "view-slice-quantity",
+        icon: <Sigma size={20} />,
+        label: "Quantity",
+        tooltip: slice.reason ?? "Control 2D slice quantity and component",
+        disabled: slice.disabled,
+        iconColor: "text-sky-300",
+        menu: [
+          { type: "label", id: "slice:quantity:header", label: "Slice quantity", badge: ctx.selectedQuantity ?? toolbar?.quantityId ?? "m" },
+          {
+            type: "radio-group",
+            id: "slice:quantity:source",
+            label: "Quantity source",
+            value: ctx.selectedQuantity ?? toolbar?.quantityId ?? "m",
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (quantityId) => ctx.run({ id: "viewport.set-quantity", quantityId }),
+            items: quantityOptions(ctx),
+          },
+          {
+            type: "radio-group",
+            id: "slice:quantity:component",
+            label: "Component",
+            value: component,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (nextComponent) =>
+              ctx.run({
+                id: "viewport.set-component",
+                component: nextComponent as "x" | "y" | "z" | "magnitude",
+              }),
+            items: [
+              { value: "magnitude", label: "Magnitude |v|" },
+              { value: "x", label: "X" },
+              { value: "y", label: "Y" },
+              { value: "z", label: "Z" },
+            ],
+          },
+          {
+            type: "checkbox",
+            id: "slice:quantity:overlay",
+            label: "Quantity overlay",
+            checked: showQuantity,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-quantity-overlay", visible }),
+          },
+          {
+            type: "checkbox",
+            id: "slice:quantity:auto-scale",
+            label: "Auto-scale range",
+            checked: autoScale,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (enabled) => ctx.run({ id: "viewport.set-auto-scale", enabled }),
+          },
+        ],
+      },
+      {
+        id: "view-slice-vectors",
+        icon: <Zap size={20} />,
+        label: "Vectors",
+        tooltip: slice.reason ?? "Control 2D vector overlay",
+        active: showVectors,
+        disabled: slice.disabled,
+        iconColor: "text-cyan-300",
+        menu: [
+          {
+            type: "checkbox",
+            id: "slice:vectors:visible",
+            label: "Show vectors",
+            checked: showVectors,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) =>
+              ctx.run({
+                id: "viewport.set-slice-render-mode",
+                renderMode: visible ? "vectors" : "heatmap",
+              }),
+          },
+          {
+            type: "slider",
+            id: "slice:vectors:density",
+            label: "Every N",
+            value: ctx.requestedPreviewEveryN ?? 4,
+            min: 1,
+            max: 64,
+            step: 1,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (everyN) => ctx.run({ id: "viewport.set-vector-density", everyN }),
+          },
+          {
+            type: "radio-group",
+            id: "slice:vectors:colors",
+            label: "Vector colors",
+            value: ctx.femArrowColorMode ?? "orientation",
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (colorMode) =>
+              ctx.run({
+                id: "viewport.set-vector-style",
+                patch: { colorMode: colorMode as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome" },
+              }),
+            items: VECTOR_COLOR_ITEMS,
+          },
+        ],
+      },
+      {
+        id: "view-slice-airbox",
+        icon: <Box size={20} />,
+        label: "Airbox",
+        tooltip: slice.reason ?? "Control 2D airbox visibility and rendering",
+        active: showAirbox,
+        disabled: slice.disabled,
+        iconColor: "text-fuchsia-300",
+        menu: [
+          { type: "label", id: "slice:airbox:header", label: "2D airbox", badge: showAirbox ? "visible" : "hidden" },
+          {
+            type: "checkbox",
+            id: "slice:airbox:visible",
+            label: "Airbox on/off",
+            checked: showAirbox,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) => {
+              ctx.run({ id: "viewport.set-slice-airbox", visible });
+              ctx.run({ id: "viewport.set-airbox-display", patch: { visible } });
+            },
+          },
+          {
+            type: "radio-group",
+            id: "slice:airbox:render-mode",
+            label: "Airbox render",
+            value: ctx.airMeshRenderMode ?? "wireframe",
+            disabled: slice.disabled || !showAirbox,
+            disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
+            onValueChange: (meshRenderMode) =>
+              ctx.run({
+                id: "viewport.set-airbox-display",
+                patch: { renderMode: meshRenderMode as "surface" | "wireframe" | "surface+edges" | "points" },
+              }),
+            items: [
+              { value: "surface", label: "Shaded" },
+              { value: "wireframe", label: "Wireframe" },
+              { value: "surface+edges", label: "Shaded + wireframe" },
+              { value: "points", label: "Points" },
+            ],
+          },
+          {
+            type: "checkbox",
+            id: "slice:airbox:vectors",
+            label: "Vectors",
+            checked: showVectors && ctx.femVectorDomainFilter === "airbox_only",
+            disabled: slice.disabled || !showAirbox,
+            disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
+            onCheckedChange: (visible) => {
+              ctx.run({ id: "viewport.set-airbox-display", patch: { vectors: visible } });
+              ctx.run({ id: "viewport.set-slice-render-mode", renderMode: visible ? "vectors" : "heatmap" });
+            },
+          },
+        ],
+      },
+      {
+        id: "view-slice-layers",
+        icon: <Layers3 size={20} />,
+        label: "Layers",
+        tooltip: slice.reason ?? "Control 2D render layers and render mode",
+        disabled: slice.disabled,
+        iconColor: "text-emerald-300",
+        menu: [
+          {
+            type: "checkbox",
+            id: "slice:mesh:primitives",
+            label: "Primitives",
+            checked: showPrimitives,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-primitives", visible }),
+          },
+          {
+            type: "checkbox",
+            id: "slice:mesh:wireframe",
+            label: "Mesh wireframe",
+            checked: showMesh,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-mesh", visible }),
+          },
+          {
+            type: "checkbox",
+            id: "slice:layers:quantity",
+            label: "Quantity overlay",
+            checked: showQuantity,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-quantity-overlay", visible }),
+          },
+          { type: "separator", id: "slice:mesh:s0" },
+          {
+            type: "radio-group",
+            id: "slice:layers:render-mode",
+            label: "Slice render",
+            value: renderMode,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (nextRenderMode) =>
+              ctx.run({
+                id: "viewport.set-slice-render-mode",
+                renderMode: nextRenderMode as "heatmap" | "contour" | "heatmap+contour" | "vectors" | "mesh-overlay",
+              }),
+            items: [
+              { value: "heatmap", label: "Heatmap" },
+              { value: "contour", label: "Contour" },
+              { value: "heatmap+contour", label: "Heatmap + contour" },
+              { value: "vectors", label: "Vectors" },
+              { value: "mesh-overlay", label: "Mesh overlay" },
+            ],
+          },
+          {
+            type: "radio-group",
+            id: "slice:mesh:render-mode",
+            label: "Mesh render mode",
+            value: ctx.meshRenderMode ?? "surface",
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (meshRenderMode) =>
+              ctx.run({
+                id: "viewport.set-global-render-mode",
+                renderMode: meshRenderMode as "surface" | "wireframe" | "surface+edges" | "points",
+              }),
+            items: [
+              { value: "surface", label: "Shaded" },
+              { value: "wireframe", label: "Wireframe" },
+              { value: "surface+edges", label: "Shaded + wireframe" },
+              { value: "points", label: "Points" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "view-slice-plane",
+        icon: <Scissors size={20} />,
+        label: "Plane",
+        tooltip: slice.reason ?? "Set 2D slice axis, mode, and position",
+        disabled: slice.disabled,
+        iconColor: "text-orange-300",
+        menu: [
+          {
+            type: "radio-group",
+            id: "slice:plane:axis",
+            label: "Axis",
+            value: axis,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (nextAxis) => ctx.run({ id: "viewport.set-slice-axis", axis: nextAxis as "x" | "y" | "z" }),
+            items: [
+              { value: "x", label: "X normal / YZ" },
+              { value: "y", label: "Y normal / XZ" },
+              { value: "z", label: "Z normal / XY" },
+            ],
+          },
+          {
+            type: "radio-group",
+            id: "slice:plane:mode",
+            label: "Mode",
+            value: mode,
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (nextMode) =>
+              ctx.run({
+                id: "viewport.set-slice-mode",
+                mode: nextMode as "single" | "slab" | "all_layers",
+              }),
+            items: [
+              { value: "single", label: "Single" },
+              { value: "slab", label: "Slab" },
+              { value: "all_layers", label: "All layers" },
+            ],
+          },
+          {
+            type: "slider",
+            id: "slice:plane:position",
+            label: "Position",
+            value: position,
+            min: 0,
+            max: 100,
+            step: 0.5,
+            unit: "%",
+            disabled: slice.disabled,
+            disabledReason: slice.reason,
+            onValueChange: (positionPercent) => ctx.run({ id: "viewport.set-slice-position", positionPercent }),
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function buildSelectedDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
   const selected = canUseSelected(ctx);
   const selectedOpacity = ctx.selectedObjectOpacity ?? ctx.meshOpacity ?? 100;
@@ -650,15 +989,20 @@ function buildSelectedDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
             type: "radio-group",
             id: "selected:render-mode",
             label: "Render mode",
-            value: "inherit",
+            value: ctx.selectedObjectRenderMode ?? "inherit",
             disabled: selected.disabled,
             disabledReason: selected.reason,
-            onValueChange: () => undefined,
+            onValueChange: (renderMode) =>
+              ctx.run({
+                id: "viewport.set-selected-render-mode",
+                renderMode: renderMode as ViewportMeshRenderMode | "inherit",
+              }),
             items: [
               { value: "inherit", label: "Inherit global" },
-              { value: "surface", label: "Shaded", disabled: true, disabledReason: "Per-object render mode patch is staged for backend VisualizationStateResource" },
-              { value: "wireframe", label: "Wireframe", disabled: true, disabledReason: "Per-object render mode patch is staged for backend VisualizationStateResource" },
-              { value: "points", label: "Points", disabled: true, disabledReason: "Per-object render mode patch is staged for backend VisualizationStateResource" },
+              { value: "surface", label: "Shaded" },
+              { value: "wireframe", label: "Wireframe" },
+              { value: "surface+edges", label: "Shaded + wireframe" },
+              { value: "points", label: "Points" },
             ],
           },
           { type: "item", id: "selected:clear", label: "Clear per-object overrides", disabled: selected.disabled, disabledReason: selected.reason, action: () => ctx.run({ id: "viewport.clear-selected-display-overrides" }) },
@@ -912,6 +1256,7 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
 export function buildViewRibbonGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   return [
     buildGlobalDisplayGroup(ctx),
+    buildSlice2DGroup(ctx),
     buildSelectedDisplayGroup(ctx),
     buildManipulateGroup(ctx),
     buildSnapshotExportGroup(ctx),

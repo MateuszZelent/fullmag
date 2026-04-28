@@ -32,6 +32,7 @@ export interface Slice2DToolbarState {
   autoContrast: boolean;
   showPrimitives: boolean;
   showMesh: boolean;
+  showAirbox: boolean;
   showQuantity: boolean;
   showVectors: boolean;
   renderMode: SliceRenderMode;
@@ -72,6 +73,7 @@ export interface SliceRenderState {
 export interface SliceOverlayState {
   showPrimitives: boolean;
   showMesh: boolean;
+  showAirbox: boolean;
   showQuantity: boolean;
   showVectors: boolean;
 }

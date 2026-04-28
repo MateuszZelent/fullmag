@@ -18,7 +18,8 @@ study = fm.study("nanoflower_fem")
 # Engine
 study.engine("fem")
 study.device("cpu", precision="double")
-study.universe(mode="auto", size=(0.8e-06, 0.8e-06, 3e-07), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=0.9e-07)
+study.universe(mode="auto", size=(0.8e-06, 0.8e-06, 3e-07), center=(0, 0, 0), padding=(0, 0, 0))
+study.universe.mesh(maximum_element_size=0.9e-07)
 study.interactive(True)
 
 # Geometry & Material — 2×2 kwadratowa siatka nanoflowerów
@@ -66,7 +67,7 @@ for idx, (dx, dy) in enumerate(positions_2x2):
               narrow_regions=1, compute_quality=True, per_element_quality=True)
 
 # Mesh
-study.object_mesh_defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
+study.objects.mesh.defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
 study.build_domain_mesh()
 
 # Use Poisson-Robin demag on the managed FEM GPU runtime.

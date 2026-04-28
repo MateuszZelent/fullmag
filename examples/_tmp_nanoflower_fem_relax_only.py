@@ -18,7 +18,8 @@ study = fm.study("nanoflower_fem")
 # Engine
 study.engine("fem")
 study.device("cuda:0", precision="double")
-study.universe(mode="auto", size=(4e-07, 4e-07, 4e-07), center=(0, 0, 0), padding=(0, 0, 0), airbox_hmax=8e-08)
+study.universe(mode="auto", size=(4e-07, 4e-07, 4e-07), center=(0, 0, 0), padding=(0, 0, 0))
+study.universe.mesh(maximum_element_size=8e-08)
 study.interactive(True)
 
 # Geometry & Material
@@ -33,7 +34,7 @@ body.m = (
 )
 
 # Mesh
-study.object_mesh_defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
+study.objects.mesh.defaults(algorithm_2d=6, algorithm_3d=1, size_factor=1, size_from_curvature=0, smoothing_steps=1, optimize_iterations=1, narrow_regions=0, compute_quality=False, per_element_quality=False)
 body.mesh(hmax=20e-09, order=1, algorithm_2d=1, algorithm_3d=1, size_factor=1, size_from_curvature=1, smoothing_steps=1, optimize_iterations=1, narrow_regions=1, compute_quality=True, per_element_quality=True)
 study.build_domain_mesh()
 

@@ -4,6 +4,7 @@ import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type { CapabilityMap } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
+import type { Slice2DToolbarState } from "@/src/features/slice2d";
 
 export type ResultAnalysisKind =
   | "spectrum"
@@ -107,6 +108,8 @@ export interface RibbonCommandContext {
   onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
   onSetMeshOpacity?: (opacity: number) => void;
   onSetSelectedObjectOpacity?: (opacity: number) => void;
+  onSetSelectedObjectRenderMode?: (mode: ViewportMeshRenderMode | "inherit") => void;
+  onClearSelectedDisplayOverrides?: () => void;
   onSetMeshClipEnabled?: (enabled: boolean) => void;
   onSetMeshClipAxis?: (axis: "x" | "y" | "z") => void;
   onSetMeshClipPos?: (position: number) => void;
@@ -122,6 +125,7 @@ export interface RibbonCommandContext {
     ferromagnetVisibility: "hide" | "ghost";
   }>) => void;
   onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
+  onSetSlice2DToolbar?: (patch: Partial<Slice2DToolbarState>) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -221,7 +225,16 @@ export type RibbonCommand =
   | { id: "viewport.set-global-render-mode"; renderMode: ViewportMeshRenderMode }
   | { id: "viewport.set-global-opacity"; opacity: number }
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
+  | { id: "viewport.set-slice-axis"; axis: Slice2DToolbarState["axis"] }
+  | { id: "viewport.set-slice-mode"; mode: Slice2DToolbarState["mode"] }
+  | { id: "viewport.set-slice-position"; positionPercent: number }
+  | { id: "viewport.set-slice-render-mode"; renderMode: Slice2DToolbarState["renderMode"] }
+  | { id: "viewport.set-slice-quantity-overlay"; visible: boolean }
+  | { id: "viewport.set-slice-primitives"; visible: boolean }
+  | { id: "viewport.set-slice-mesh"; visible: boolean }
+  | { id: "viewport.set-slice-airbox"; visible: boolean }
   | { id: "viewport.set-selected-opacity"; opacity: number }
+  | { id: "viewport.set-selected-render-mode"; renderMode: ViewportMeshRenderMode | "inherit" }
   | { id: "viewport.clear-selected-display-overrides" }
   | { id: "viewport.set-control-mode"; mode: "camera" | "select" | "manipulate" }
   | { id: "viewport.set-transform-tool"; tool: "select" | "move" | "rotate" | "scale" }
@@ -357,10 +370,25 @@ export function canExecuteRibbonCommand(
         typeof ctx.onSetMeshClipPos === "function" ||
         typeof ctx.onSetMeshClipFlip === "function"
       );
+    case "viewport.set-slice-axis":
+    case "viewport.set-slice-mode":
+    case "viewport.set-slice-position":
+    case "viewport.set-slice-render-mode":
+    case "viewport.set-slice-quantity-overlay":
+    case "viewport.set-slice-primitives":
+    case "viewport.set-slice-mesh":
+    case "viewport.set-slice-airbox":
+      return typeof ctx.onSetSlice2DToolbar === "function";
     case "viewport.set-selected-opacity":
       return Boolean(ctx.selectedObjectId) && typeof ctx.onSetSelectedObjectOpacity === "function";
+    case "viewport.set-selected-render-mode":
+      return (
+        Boolean(ctx.selectedObjectId)
+        && typeof ctx.onSetSelectedObjectRenderMode === "function"
+      );
     case "viewport.clear-selected-display-overrides":
-      return Boolean(ctx.selectedObjectId);
+      return Boolean(ctx.selectedObjectId)
+        && typeof ctx.onClearSelectedDisplayOverrides === "function";
     case "viewport.set-control-mode":
       if (command.mode === "camera") return true;
       if (command.mode === "select") return typeof ctx.onBuilderSetViewportMode === "function";
@@ -534,13 +562,55 @@ export function executeRibbonCommand(
     case "viewport.set-selected-opacity":
       ctx.onSetSelectedObjectOpacity?.(command.opacity);
       return;
+    case "viewport.set-selected-render-mode":
+      ctx.onSetSelectedObjectRenderMode?.(command.renderMode);
+      return;
     case "viewport.set-global-clip":
       if (typeof command.patch.enabled === "boolean") ctx.onSetMeshClipEnabled?.(command.patch.enabled);
       if (command.patch.axis) ctx.onSetMeshClipAxis?.(command.patch.axis);
       if (typeof command.patch.position === "number") ctx.onSetMeshClipPos?.(command.patch.position);
       if (typeof command.patch.flipped === "boolean") ctx.onSetMeshClipFlip?.(command.patch.flipped);
       return;
+    case "viewport.set-slice-axis":
+      ctx.onSetSlice2DToolbar?.({ axis: command.axis });
+      return;
+    case "viewport.set-slice-mode":
+      ctx.onSetSlice2DToolbar?.({ mode: command.mode });
+      return;
+    case "viewport.set-slice-position":
+      ctx.onSetSlice2DToolbar?.({ positionPercent: command.positionPercent });
+      return;
+    case "viewport.set-slice-render-mode": {
+      const patch: Partial<Slice2DToolbarState> = {
+        renderMode: command.renderMode,
+      };
+      if (command.renderMode === "mesh-overlay") {
+        patch.showMesh = true;
+      } else {
+        patch.showQuantity = true;
+      }
+      if (command.renderMode === "vectors") {
+        patch.showVectors = true;
+      } else {
+        patch.showVectors = false;
+      }
+      ctx.onSetSlice2DToolbar?.(patch);
+      return;
+    }
+    case "viewport.set-slice-quantity-overlay":
+      ctx.onSetSlice2DToolbar?.({ showQuantity: command.visible });
+      return;
+    case "viewport.set-slice-primitives":
+      ctx.onSetSlice2DToolbar?.({ showPrimitives: command.visible });
+      return;
+    case "viewport.set-slice-mesh":
+      ctx.onSetSlice2DToolbar?.({ showMesh: command.visible });
+      return;
+    case "viewport.set-slice-airbox":
+      ctx.onSetSlice2DToolbar?.({ showAirbox: command.visible });
+      return;
     case "viewport.clear-selected-display-overrides":
+      ctx.onClearSelectedDisplayOverrides?.();
       return;
     case "viewport.set-control-mode":
       if (command.mode === "camera") {

@@ -42,7 +42,6 @@ export interface UnifiedViewport2DPresenterProps {
   slice2DModel?: Slice2DModel | null;
   workspaceSelection?: CrossSurfaceSelectionState | null;
   workspaceSync?: WorkspaceSyncState;
-  onSlice2DToolbarChange?: (patch: Partial<Slice2DModel["toolbar"]>) => void;
   shouldUseSliceApi2D: boolean;
   hasSliceScalar: boolean;
   sliceLoading: boolean;
@@ -65,6 +64,10 @@ export interface UnifiedViewport2DPresenterProps {
   femComponent: VectorComponent;
   meshParts: FemMeshPart[];
   meshEntityViewState: MeshEntityViewStateMap;
+  meshRenderMode: "wireframe" | "surface" | "surface+edges" | "points" | null;
+  showPrimitives: boolean;
+  showMesh: boolean;
+  showQuantity: boolean;
   airSegmentVisible: boolean;
   objectViewMode: ObjectViewMode;
   visibleObjectIds: string[];
@@ -88,7 +91,6 @@ export default function UnifiedViewport2DPresenter({
   slice2DModel,
   workspaceSelection,
   workspaceSync,
-  onSlice2DToolbarChange,
   shouldUseSliceApi2D,
   hasSliceScalar,
   sliceLoading,
@@ -111,6 +113,10 @@ export default function UnifiedViewport2DPresenter({
   femComponent,
   meshParts,
   meshEntityViewState,
+  meshRenderMode,
+  showPrimitives,
+  showMesh,
+  showQuantity,
   airSegmentVisible,
   objectViewMode,
   visibleObjectIds,
@@ -129,17 +135,64 @@ export default function UnifiedViewport2DPresenter({
   onShowArrowsChange,
   onPreviewMaxPointsChange,
 }: UnifiedViewport2DPresenterProps) {
+  const toolbar = slice2DModel?.toolbar ?? null;
+  const effectiveShowMesh = toolbar?.renderMode === "mesh-overlay"
+    ? true
+    : toolbar?.showMesh ?? showMesh;
+  const effectiveShowQuantity = toolbar?.renderMode === "mesh-overlay"
+    ? toolbar.showQuantity
+    : toolbar?.showQuantity ?? showQuantity;
+  const effectiveShowPrimitives = toolbar?.showPrimitives ?? showPrimitives;
+  const effectiveShowArrows = toolbar?.showVectors ?? showArrows;
+  const effectiveAirboxVisible = toolbar?.showAirbox ?? airSegmentVisible;
+
   const wrap = (content: ReactNode) =>
     slice2DModel ? (
       <Slice2DShell
         model={slice2DModel}
         selection={workspaceSelection}
         sync={workspaceSync}
-        onToolbarChange={onSlice2DToolbarChange}
       >
         {content}
       </Slice2DShell>
     ) : content;
+
+  if (preferFemMesh && femMeshData) {
+    return wrap(
+      <FemMeshSlice2D
+        meshData={femMeshData}
+        quantityLabel={femQuantityLabel}
+        quantityId={femQuantityId}
+        quantityUnit={femQuantityUnit}
+        quantityOptions={femQuantityOptions}
+        component={femComponent}
+        plane={plane}
+        meshParts={meshParts}
+        meshEntityViewState={meshEntityViewState}
+        meshRenderMode={toolbar?.renderMode === "mesh-overlay" ? "surface+edges" : meshRenderMode ?? "surface"}
+        showPrimitives={effectiveShowPrimitives}
+        showMesh={effectiveShowMesh}
+        showQuantity={effectiveShowQuantity}
+        airSegmentVisible={effectiveAirboxVisible}
+        objectViewMode={objectViewMode}
+        visibleObjectIds={visibleObjectIds}
+        vectorDomainFilter={vectorDomainFilter}
+        clipAxis={clipAxis}
+        clipPos={clipPos}
+        antennaOverlays={antennaOverlays}
+        selectedAntennaId={selectedAntennaId}
+        showArrows={effectiveShowArrows}
+        previewMaxPoints={previewMaxPoints}
+        onQuantityChange={onQuantityChange}
+        onComponentChange={onComponentChange}
+        onPlaneChange={onPlaneChange}
+        onClipAxisChange={onClipAxisChange}
+        onClipPosChange={onClipPosChange}
+        onShowArrowsChange={onShowArrowsChange}
+        onPreviewMaxPointsChange={onPreviewMaxPointsChange}
+      />,
+    );
+  }
 
   if (shouldUseSliceApi2D) {
     if (sliceLoading && !hasSliceScalar) {
@@ -175,39 +228,6 @@ export default function UnifiedViewport2DPresenter({
         component={component}
         plane={plane}
         sliceIndex={sliceIndex}
-      />,
-    );
-  }
-
-  if (preferFemMesh && femMeshData) {
-    return wrap(
-      <FemMeshSlice2D
-        meshData={femMeshData}
-        quantityLabel={femQuantityLabel}
-        quantityId={femQuantityId}
-        quantityUnit={femQuantityUnit}
-        quantityOptions={femQuantityOptions}
-        component={femComponent}
-        plane={plane}
-        meshParts={meshParts}
-        meshEntityViewState={meshEntityViewState}
-        airSegmentVisible={airSegmentVisible}
-        objectViewMode={objectViewMode}
-        visibleObjectIds={visibleObjectIds}
-        vectorDomainFilter={vectorDomainFilter}
-        clipAxis={clipAxis}
-        clipPos={clipPos}
-        antennaOverlays={antennaOverlays}
-        selectedAntennaId={selectedAntennaId}
-        showArrows={showArrows}
-        previewMaxPoints={previewMaxPoints}
-        onQuantityChange={onQuantityChange}
-        onComponentChange={onComponentChange}
-        onPlaneChange={onPlaneChange}
-        onClipAxisChange={onClipAxisChange}
-        onClipPosChange={onClipPosChange}
-        onShowArrowsChange={onShowArrowsChange}
-        onPreviewMaxPointsChange={onPreviewMaxPointsChange}
       />,
     );
   }

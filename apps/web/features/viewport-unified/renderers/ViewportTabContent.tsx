@@ -140,7 +140,6 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
       slice2DModel={bridge.slice2DModel}
       workspaceSelection={bridge.workspaceSelection}
       workspaceSync={workspaceSyncState}
-      onSlice2DToolbarChange={bridge.handleSlice2DToolbarChange}
       shouldUseSliceApi2D={bridge.shouldUseSliceApi2D}
       hasSliceScalar={bridge.hasSliceScalar}
       sliceLoading={bridge.slice2D.loading}
@@ -162,7 +161,11 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
       femQuantityOptions={bridge.femQuantityOptions}
       femComponent={ctx.effectiveVectorComponent}
       meshParts={ctx.meshParts}
-      meshEntityViewState={ctx.meshEntityViewState}
+      meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
+      meshRenderMode={ctx.meshRenderMode}
+      showPrimitives={bridge.femLayerState.showPrimitives}
+      showMesh={bridge.femLayerState.showMesh}
+      showQuantity={bridge.femLayerState.showQuantity}
       airSegmentVisible={ctx.airMeshVisible}
       objectViewMode={ctx.objectViewMode}
       visibleObjectIds={bridge.visibleObjectIds}

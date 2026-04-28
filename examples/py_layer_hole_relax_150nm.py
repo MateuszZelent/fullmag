@@ -16,8 +16,8 @@ study.universe(
     size=(1.5e-6, 1.5e-6, 3e-7),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
-    airbox_hmax=40e-9,
 )
+study.universe.mesh(maximum_element_size=40e-9)
 
 # ── Geometry & Material ─────────────────────────────────────
 layer = study.geometry(

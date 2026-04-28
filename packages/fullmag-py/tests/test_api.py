@@ -417,12 +417,14 @@ class ProblemApiTests(unittest.TestCase):
             size=(60e-9, 40e-9, 20e-9),
             center=(5e-9, 0.0, -1e-9),
             padding=(2e-9, 2e-9, 1e-9),
-            airbox_hmax=50e-9,
-            airbox_hmin=15e-9,
-            airbox_growth_rate=1.4,
-            airbox_grading="linear",
         )
-        study.object_mesh_defaults(hmax=20e-9, order=1)
+        study.universe.mesh(
+            maximum_element_size=50e-9,
+            minimum_element_size=15e-9,
+            growth_rate=1.4,
+            grading="linear",
+        )
+        study.objects.mesh.defaults(maximum_element_size=20e-9, order=1)
 
         body = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9), name="track"), name="track")
         body.Ms = 800e3
@@ -476,10 +478,12 @@ class ProblemApiTests(unittest.TestCase):
                     study.universe(
                         mode="auto",
                         padding=(10e-9, 5e-9, 2e-9),
-                        airbox_hmax=25e-9,
+                    )
+                    study.universe.mesh(
+                        maximum_element_size=25e-9,
                         minimum_element_size=5e-9,
-                        airbox_growth_rate=1.35,
-                        airbox_grading="linear",
+                        growth_rate=1.35,
+                        grading="linear",
                     )
 
                     body = study.geometry(fm.Box(size=(10e-9, 10e-9, 5e-9), name="track"), name="track")
@@ -529,7 +533,11 @@ class ProblemApiTests(unittest.TestCase):
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn('study = fm.study("captured_study")', rewritten)
             self.assertIn(
-                'study.universe(mode="auto", center=(0, 0, 0), padding=(1e-08, 5e-09, 2e-09), maximum_element_size=2.5e-08, minimum_element_size=5e-09, airbox_growth_rate=1.35, airbox_grading="linear")',
+                'study.universe(mode="auto", center=(0, 0, 0), padding=(1e-08, 5e-09, 2e-09))',
+                rewritten,
+            )
+            self.assertIn(
+                'study.universe.mesh(maximum_element_size=2.5e-08, minimum_element_size=5e-09, growth_rate=1.35, grading="linear")',
                 rewritten,
             )
             self.assertIn('study.geometry(fm.Box(1e-08, 1e-08, 5e-09), name="track")', rewritten)
@@ -551,7 +559,11 @@ class ProblemApiTests(unittest.TestCase):
                 },
             )["rendered_source"]
             self.assertIn(
-                'study.universe(mode="manual", size=(8e-08, 6e-08, 4e-08), center=(5e-09, -2e-09, 1e-09), padding=(0, 0, 0), maximum_element_size=3e-08, minimum_element_size=8e-09, airbox_growth_rate=1.5, airbox_grading="geometric")',
+                'study.universe(mode="manual", size=(8e-08, 6e-08, 4e-08), center=(5e-09, -2e-09, 1e-09), padding=(0, 0, 0))',
+                overridden,
+            )
+            self.assertIn(
+                'study.universe.mesh(maximum_element_size=3e-08, minimum_element_size=8e-09, growth_rate=1.5, grading="geometric")',
                 overridden,
             )
 
@@ -591,8 +603,9 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("shared_domain_rewrite")
         study.engine("fem")
-        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9), airbox_hmax=25e-9)
-        study.mesh(hmax=8e-9, order=2)
+        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
+        study.universe.mesh(maximum_element_size=25e-9)
+        study.objects.mesh.defaults(maximum_element_size=8e-9, order=2)
         body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
         body.Ms = 800e3
         body.Aex = 13e-12
@@ -612,7 +625,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(workflow["build_target"], "domain")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("study.object_mesh_defaults(hmax=8e-09, order=2)", rewritten)
+        self.assertIn("study.objects.mesh.defaults(maximum_element_size=8e-09, order=2)", rewritten)
         self.assertIn("study.build_domain_mesh()", rewritten)
         self.assertNotIn("study.mesh(", rewritten)
         self.assertNotIn("study.build_mesh()", rewritten)
@@ -624,7 +637,7 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("shared_domain_alias")
         study.engine("fem")
         study.universe(mode="manual", size=(80e-9, 60e-9, 40e-9))
-        study.mesh(hmax=8e-9, order=2)
+        study.objects.mesh.defaults(maximum_element_size=8e-9, order=2)
         body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
         body.Ms = 800e3
         body.Aex = 13e-12
@@ -656,7 +669,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(materialize_mock.call_count, 1)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("study.object_mesh_defaults(hmax=8e-09, order=2)", rewritten)
+        self.assertIn("study.objects.mesh.defaults(maximum_element_size=8e-09, order=2)", rewritten)
         self.assertNotIn("study.mesh(", rewritten)
 
     def test_py_layer_hole_example_uses_study_shared_domain_fem_contract(self) -> None:
@@ -698,15 +711,16 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("shared_domain_final_state")
         study.engine("fem")
-        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9), airbox_hmax=25e-9)
+        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
+        study.universe.mesh(maximum_element_size=25e-9)
         body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=8e-9, order=1)
+        body.mesh(maximum_element_size=8e-9, order=1)
         study.build_domain_mesh()
-        body.mesh(hmax=4e-9, order=2)
+        body.mesh(maximum_element_size=4e-9, order=2)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -746,13 +760,13 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("shared_domain_airbox_default")
         study.engine("fem")
         study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
-        study.airbox(hmax=80e-9)
+        study.universe.mesh(maximum_element_size=80e-9)
         body = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="body")
         body.Ms = 800e3
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=25e-9, order=1)
+        body.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -783,8 +797,8 @@ class ProblemApiTests(unittest.TestCase):
         right.Aex = 13e-12
         right.alpha = 0.1
         right.m = fm.uniform(1, 0, 0)
-        left.mesh(hmax=25e-9, order=1)
-        right.mesh(hmax=40e-9, order=1)
+        left.mesh(maximum_element_size=25e-9, order=1)
+        right.mesh(maximum_element_size=40e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -802,7 +816,7 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("shared_domain_missing_object_hmax")
         study.engine("fem")
         study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
-        study.airbox(hmax=80e-9)
+        study.universe.mesh(maximum_element_size=80e-9)
         left = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="left")
         left.Ms = 800e3
         left.Aex = 13e-12
@@ -813,7 +827,7 @@ class ProblemApiTests(unittest.TestCase):
         right.Aex = 13e-12
         right.alpha = 0.1
         right.m = fm.uniform(1, 0, 0)
-        left.mesh(hmax=25e-9, order=1)
+        left.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -821,7 +835,7 @@ class ProblemApiTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "study_build_domain_mesh_missing_object_hmax.py"
             path.write_text(textwrap.dedent(script), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "Missing hmax for: 'right'"):
+            with self.assertRaisesRegex(ValueError, "Missing maximum_element_size for: 'right'"):
                 fm.load_problem_from_script(path, lightweight_assets=True)
 
     def test_study_build_domain_mesh_accepts_default_object_hmax_with_partial_overrides(self) -> None:
@@ -831,8 +845,8 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("shared_domain_default_object_hmax")
         study.engine("fem")
         study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
-        study.airbox(hmax=80e-9)
-        study.object_mesh_defaults(hmax=40e-9, order=1)
+        study.universe.mesh(maximum_element_size=80e-9)
+        study.objects.mesh.defaults(maximum_element_size=40e-9, order=1)
         left = study.geometry(fm.Box(20e-9, 20e-9, 10e-9), name="left")
         left.Ms = 800e3
         left.Aex = 13e-12
@@ -843,7 +857,7 @@ class ProblemApiTests(unittest.TestCase):
         right.Aex = 13e-12
         right.alpha = 0.1
         right.m = fm.uniform(1, 0, 0)
-        left.mesh(hmax=25e-9, order=1)
+        left.mesh(maximum_element_size=25e-9, order=1)
         study.build_domain_mesh()
         study.run(1e-12)
         """
@@ -1528,9 +1542,11 @@ class ProblemApiTests(unittest.TestCase):
             mode="manual",
             size=(80e-9, 60e-9, 40e-9),
             center=(5e-9, -2e-9, 1e-9),
+        )
+        study.universe.mesh(
             minimum_element_size=12e-9,
-            airbox_growth_rate=1.25,
-            airbox_grading="linear",
+            growth_rate=1.25,
+            grading="linear",
         )
 
         body = study.geometry(fm.Box(size=(10e-9, 10e-9, 10e-9), name="box"), name="box")
@@ -2005,7 +2021,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25, tol=1e-5, algorithm="llg_overdamped")
         fm.run(4e-12)
@@ -2217,7 +2233,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
         fm.run(4e-12)
@@ -2611,7 +2627,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25)
@@ -2644,7 +2660,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
         fm.run(4e-12)
@@ -2722,7 +2738,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=2).build()
+        body.mesh(maximum_element_size=4e-9, order=2).build()
         fm.solver(dt=1e-13)
         fm.relax(max_steps=25)
         """
@@ -2766,8 +2782,8 @@ class ProblemApiTests(unittest.TestCase):
         a.Aex = 13e-12
         b.Ms = 800e3
         b.Aex = 13e-12
-        a.mesh(hmax=4e-9, order=1)
-        b.mesh(hmax=8e-9, order=1)
+        a.mesh(maximum_element_size=4e-9, order=1)
+        b.mesh(maximum_element_size=8e-9, order=1)
         fm.run(1e-12)
         """
 
@@ -2825,7 +2841,7 @@ class ProblemApiTests(unittest.TestCase):
             ],
         }
         with patch("fullmag.world.build_geometry_assets_for_request", return_value=assets):
-            body.mesh(hmax=4e-9, order=1, compute_quality=True).build()
+            body.mesh(maximum_element_size=4e-9, order=1, compute_quality=True).build()
 
         quality = body.mesh.quality()
         self.assertIsNotNone(quality)
@@ -2842,14 +2858,14 @@ class ProblemApiTests(unittest.TestCase):
         left.Aex = 13e-12
         left.alpha = 0.1
         left.m = fm.uniform(1, 0, 0)
-        left.mesh(hmax=4e-9, order=1).build()
+        left.mesh(maximum_element_size=4e-9, order=1).build()
 
         right = fm.geometry(fm.Box(80e-9, 20e-9, 5e-9).translate((120e-9, 0, 0)), name="right")
         right.Ms = 800e3
         right.Aex = 13e-12
         right.alpha = 0.1
         right.m = fm.uniform(1, 0, 0)
-        right.mesh(hmax=4e-9, order=1).build()
+        right.mesh(maximum_element_size=4e-9, order=1).build()
 
         fm.run(1e-12)
         """
@@ -2861,9 +2877,9 @@ class ProblemApiTests(unittest.TestCase):
                 loaded = fm.load_problem_from_script(path)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("left.mesh(hmax=4e-09, order=1)", rewritten)
+        self.assertIn("left.mesh(maximum_element_size=4e-09, order=1)", rewritten)
         self.assertIn("left.mesh.build()", rewritten)
-        self.assertIn("right.mesh(hmax=4e-09, order=1)", rewritten)
+        self.assertIn("right.mesh(maximum_element_size=4e-09, order=1)", rewritten)
         self.assertIn("right.mesh.build()", rewritten)
 
     def test_study_mesh_builder_preserves_global_and_local_fem_mesh_modes(self) -> None:
@@ -2872,7 +2888,7 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("mesh_modes")
         study.engine("fem")
-        study.mesh(hmax=25e-9, order=1)
+        study.objects.mesh.defaults(maximum_element_size=25e-9, order=1)
 
         a = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="a")
         a.Ms = 800e3
@@ -2885,7 +2901,7 @@ class ProblemApiTests(unittest.TestCase):
         b.Aex = 13e-12
         b.alpha = 0.1
         b.m = fm.uniform(1, 0, 0)
-        b.mesh(hmax=20e-9, order=2)
+        b.mesh(maximum_element_size=20e-9, order=2)
 
         study.run(1e-12)
         """
@@ -2904,10 +2920,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_by_name["b"]["order"], 2)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn('study.object_mesh_defaults(hmax=2.5e-08, order=1)', rewritten)
+        self.assertIn('study.objects.mesh.defaults(maximum_element_size=2.5e-08, order=1)', rewritten)
         self.assertNotIn("study.mesh(", rewritten)
         self.assertNotIn("a.mesh(", rewritten)
-        self.assertIn("b.mesh(hmax=2e-08, order=2)", rewritten)
+        self.assertIn("b.mesh(maximum_element_size=2e-08, order=2)", rewritten)
 
     def test_study_mesh_builder_does_not_infer_global_mesh_from_local_override(self) -> None:
         script = """
@@ -2921,7 +2937,7 @@ class ProblemApiTests(unittest.TestCase):
         a.Aex = 13e-12
         a.alpha = 0.1
         a.m = fm.uniform(1, 0, 0)
-        a.mesh(hmax=4e-9, order=1)
+        a.mesh(maximum_element_size=4e-9, order=1)
 
         study.run(1e-12)
         """
@@ -2937,9 +2953,9 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(draft["geometries"][0]["mesh"]["hmax"], "4e-09")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertNotIn("study.object_mesh_defaults(", rewritten)
+        self.assertNotIn("study.objects.mesh.defaults(", rewritten)
         self.assertNotIn("study.mesh(", rewritten)
-        self.assertIn("a.mesh(hmax=4e-09, order=1)", rewritten)
+        self.assertIn("a.mesh(maximum_element_size=4e-09, order=1)", rewritten)
 
     def test_study_mesh_build_request_without_local_override_stays_inherit(self) -> None:
         script = """
@@ -2947,8 +2963,9 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("build_request_inherit")
         study.engine("fem")
-        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9), airbox_hmax=25e-9)
-        study.mesh(hmax=8e-9, order=1)
+        study.universe(mode="auto", padding=(10e-9, 10e-9, 10e-9))
+        study.universe.mesh(maximum_element_size=25e-9)
+        study.objects.mesh.defaults(maximum_element_size=8e-9, order=1)
 
         body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
         body.Ms = 800e3
@@ -2972,8 +2989,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertTrue(mesh_entry["build_requested"])
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn('study.object_mesh_defaults(hmax=8e-09, order=1)', rewritten)
-        self.assertNotIn("body.mesh(hmax=", rewritten)
+        self.assertIn('study.objects.mesh.defaults(maximum_element_size=8e-09, order=1)', rewritten)
+        self.assertNotIn("body.mesh(maximum_element_size=", rewritten)
         self.assertIn("body.mesh.build()", rewritten)
 
     def test_study_mesh_builder_exports_full_per_object_mesh_details(self) -> None:
@@ -2982,7 +2999,7 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("object_mesh_details")
         study.engine("fem")
-        study.mesh(hmax=25e-9, growth_rate=1.8, narrow_regions=2)
+        study.objects.mesh.defaults(maximum_element_size=25e-9, growth_rate=1.8, narrow_regions=2)
 
         body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
         body.Ms = 800e3
@@ -3039,16 +3056,16 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_entry["operations"][0]["kind"], "smooth")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("study.object_mesh_defaults(hmax=2.5e-08, growth_rate=1.8, narrow_regions=2)", rewritten)
+        self.assertIn("study.objects.mesh.defaults(maximum_element_size=2.5e-08, maximum_element_growth_rate=1.8, narrow_regions=2)", rewritten)
         self.assertNotIn("study.mesh(", rewritten)
-        self.assertIn("body.mesh(hmax=2e-08, hmin=5e-09, order=2", rewritten)
+        self.assertIn("body.mesh(maximum_element_size=2e-08, minimum_element_size=5e-09, order=2", rewritten)
         self.assertIn("algorithm_2d=5", rewritten)
         self.assertIn("algorithm_3d=10", rewritten)
         self.assertIn("size_factor=0.75", rewritten)
         self.assertIn("size_from_curvature=24", rewritten)
         self.assertIn("smoothing_steps=4", rewritten)
         self.assertIn("optimize_iterations=3", rewritten)
-        self.assertIn("growth_rate=1.4", rewritten)
+        self.assertIn("maximum_element_growth_rate=1.4", rewritten)
         self.assertIn("narrow_regions=3", rewritten)
         self.assertIn('optimize="Netgen"', rewritten)
         self.assertIn("compute_quality=True", rewritten)
@@ -3063,7 +3080,7 @@ class ProblemApiTests(unittest.TestCase):
 
         study = fm.study("comsol_size_semantics")
         study.engine("fem")
-        study.mesh(
+        study.objects.mesh.defaults(
             hmax=25e-9,
             calibrate_for="general_physics",
             size_preset="finer",
@@ -3102,27 +3119,26 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(workflow["per_geometry"][0]["size_preset"], "fine")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn('study.object_mesh_defaults(hmax=2.5e-08, calibrate_for="general_physics", size_preset="finer", curvature_factor=0.4, narrow_region_resolution=0.7)', rewritten)
-        self.assertIn('body.mesh(hmax=2e-08, calibrate_for="general_physics", size_preset="fine", curvature_factor=0.5, narrow_region_resolution=0.6)', rewritten)
+        self.assertIn('study.objects.mesh.defaults(maximum_element_size=2.5e-08, calibrate_for="general_physics", size_preset="finer", curvature_factor=0.4, narrow_region_resolution=0.7)', rewritten)
+        self.assertIn('body.mesh(maximum_element_size=2e-08, calibrate_for="general_physics", size_preset="fine", curvature_factor=0.5, narrow_region_resolution=0.6)', rewritten)
         self.assertNotIn("study.mesh(", rewritten)
 
-    def test_object_mesh_defaults_alias_matches_legacy_study_mesh_behavior(self) -> None:
+    def test_legacy_study_mesh_entrypoints_raise_migration_errors(self) -> None:
         fm.reset()
-        study = fm.study("object_mesh_defaults_alias")
+        study = fm.study("legacy_mesh_entrypoints")
         study.engine("fem")
-        study.object_mesh_defaults(hmax=12e-9, order=2, growth_rate=1.6)
-
-        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
-        body.Ms = 800e3
-        body.Aex = 13e-12
-        body.alpha = 0.1
-        body.m = fm.uniform(1, 0, 0)
-
-        problem = flat_world._build_problem()
-        workflow = problem.runtime_metadata["mesh_workflow"]
-        self.assertEqual(workflow["default_mesh"]["hmax"], 12e-9)
-        self.assertEqual(workflow["default_mesh"]["order"], 2)
-        self.assertEqual(workflow["mesh_options"]["growth_rate"], 1.6)
+        with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
+            study.object_mesh_defaults(hmax=12e-9, order=2, growth_rate=1.6)
+        with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
+            study.mesh(maximum_element_size=12e-9, order=2)
+        with self.assertRaisesRegex(ValueError, "study.universe.mesh"):
+            study.airbox(hmax=80e-9)
+        with self.assertRaisesRegex(ValueError, "study.universe.mesh"):
+            study.universe(mode="auto", airbox_hmax=80e-9)
+        with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
+            fm.object_mesh_defaults(hmax=12e-9)
+        with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
+            fm.mesh(maximum_element_size=12e-9)
 
     def test_builder_draft_exports_geometry_bounds_for_translated_box(self) -> None:
         script = """
@@ -3202,7 +3218,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.adaptive_mesh(
             policy="auto",
             theta=0.25,
@@ -3238,7 +3254,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.adaptive_mesh(policy="auto", theta=0.25, max_passes=4, error_tolerance=1e-3)
         fm.run(2e-12)
         """
@@ -3483,7 +3499,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25)
@@ -3894,7 +3910,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.uniform(1, 0, 0)
-        body.mesh(hmax=4e-9, order=1).build()
+        body.mesh(maximum_element_size=4e-9, order=1).build()
         fm.solver(dt=1e-13)
         fm.save("m", every=1e-12)
         fm.relax(max_steps=25)

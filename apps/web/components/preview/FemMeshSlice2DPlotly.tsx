@@ -2,17 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PlotHoverEvent, PlotMouseEvent } from "plotly.js";
-import type { FemMeshData, FemVectorDomainFilter } from "./FemMeshView3D";
+import type { FemMeshData, FemVectorDomainFilter, RenderMode } from "./FemMeshView3D";
 import type { AntennaOverlay } from "../runs/control-room/shared";
 import Plot from "../plots/DynamicPlot";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
-import type { FemMeshPart, MeshEntityViewStateMap } from "../../lib/session/types";
+import { defaultMeshEntityViewState, type FemMeshPart, type MeshEntityViewStateMap } from "../../lib/session/types";
 import type { ObjectViewMode } from "../runs/control-room/shared";
 import {
   buildSliceVisibilityState,
   clipAxisToPlane,
   normalizedClipToWorld,
-  planeToClipAxis,
 } from "./fem/femSliceUtils";
 import {
   axisIndices,
@@ -21,11 +20,7 @@ import {
   type VectorComponent,
 } from "./fem/femSliceGeometry";
 import {
-  glyphBudgetToMaxPoints,
   maxPointsToGlyphBudget,
-  GLYPH_BUDGET_MAX,
-  GLYPH_BUDGET_MIN,
-  GLYPH_BUDGET_STEP,
   PREVIEW_MAX_POINTS_DEFAULT,
 } from "./fem/vectorDensityBudget";
 import { POSITIVE_PALETTE } from "../../lib/colorPalettes";
@@ -36,14 +31,13 @@ import {
 } from "./fem/femSliceColorScale";
 import type { FemSliceQuery } from "./fem/femSliceQuery";
 import { useFemSliceSampling } from "./fem/useFemSliceSampling";
-import { ViewportToolbar3D } from "./ViewportToolbar3D";
-import { ViewportToolGroup, ViewportToolSeparator } from "./ViewportToolGroup";
-import { ViewportIconAction } from "./ViewportIconAction";
-import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "./ViewportPopoverPanel";
-import { ArrowUpRight, Layers, Scissors, SlidersHorizontal } from "lucide-react";
 
 interface Props {
   meshData: FemMeshData;
+  meshRenderMode?: RenderMode;
+  showPrimitives?: boolean;
+  showMesh?: boolean;
+  showQuantity?: boolean;
   quantityLabel: string;
   quantityId?: string;
   quantityUnit?: string;
@@ -157,6 +151,43 @@ function colorForDomain(partId: string | null): string {
   }
   const hue = hash % 360;
   return `hsla(${hue} 55% 62% / 0.34)`;
+}
+
+function edgeColorForPart(part: FemMeshPart | null | undefined): string {
+  if (part?.role === "air" || part?.role === "outer_boundary") {
+    return "rgba(137, 220, 235, 0.82)";
+  }
+  if (part?.role === "interface") {
+    return "rgba(250, 179, 135, 0.86)";
+  }
+  return "rgba(205, 214, 244, 0.78)";
+}
+
+function edgeDashForPart(part: FemMeshPart | null | undefined): Plotly.Dash {
+  return part?.role === "air" || part?.role === "outer_boundary" ? "dot" : "solid";
+}
+
+function isAirboxPart(part: FemMeshPart | null | undefined): boolean {
+  return part?.role === "air" || part?.role === "outer_boundary";
+}
+
+function resolvedVectorDomainFilter(
+  vectorDomainFilter: FemVectorDomainFilter,
+  quantityDomain: FemMeshData["quantityDomain"],
+): "magnetic_only" | "full_domain" | "airbox_only" {
+  if (vectorDomainFilter === "airbox_only") return "airbox_only";
+  if (vectorDomainFilter === "full_domain") return "full_domain";
+  if (vectorDomainFilter === "magnetic_only") return "magnetic_only";
+  return quantityDomain === "full_domain" ? "full_domain" : "magnetic_only";
+}
+
+function shouldShowVectorArrow(
+  part: FemMeshPart | null | undefined,
+  domain: "magnetic_only" | "full_domain" | "airbox_only",
+): boolean {
+  if (domain === "full_domain") return true;
+  if (domain === "airbox_only") return isAirboxPart(part);
+  return part?.role === "magnetic_object" || part == null;
 }
 
 function formatProbeValue(value: number | null): string {
@@ -321,10 +352,13 @@ function sampleArrows(
 
 export default function FemMeshSlice2DPlotly({
   meshData,
+  meshRenderMode = "surface",
+  showPrimitives = true,
+  showMesh = false,
+  showQuantity = true,
   quantityLabel,
   quantityId,
   quantityUnit,
-  quantityOptions = [],
   component,
   plane,
   meshParts = [],
@@ -339,27 +373,31 @@ export default function FemMeshSlice2DPlotly({
   selectedAntennaId,
   showArrows,
   previewMaxPoints = PREVIEW_MAX_POINTS_DEFAULT,
-  onQuantityChange,
   onComponentChange,
-  onPlaneChange,
-  onClipAxisChange,
-  onClipPosChange,
-  onShowArrowsChange,
-  onPreviewMaxPointsChange,
 }: Props) {
-  const [internalShowArrows, setInternalShowArrows] = useState(false);
-  const [internalPreviewMaxPoints, setInternalPreviewMaxPoints] = useState(PREVIEW_MAX_POINTS_DEFAULT);
-  const [openPopover, setOpenPopover] = useState<string | null>(null);
   const [hoverProbe, setHoverProbe] = useState<SliceProbe | null>(null);
   const [pinnedProbe, setPinnedProbe] = useState<SliceProbe | null>(null);
 
-  const arrowsVisible = showArrows ?? internalShowArrows;
-  const effectivePreviewMaxPoints = onPreviewMaxPointsChange ? previewMaxPoints : internalPreviewMaxPoints;
+  const arrowsVisible = Boolean(showArrows);
+  const effectivePreviewMaxPoints = previewMaxPoints;
   const arrowBudget = maxPointsToGlyphBudget(effectivePreviewMaxPoints);
+  const vectorDomain = resolvedVectorDomainFilter(vectorDomainFilter, meshData.quantityDomain);
   const fieldNComp = meshData.fieldNComp ?? 3;
   const hasField = Boolean(meshData.fieldData);
   const hasVectorField = hasField && fieldNComp >= 3;
   const isMagnetizationQuantity = !quantityId || quantityId === "m";
+  const resolvedMeshRenderMode = meshRenderMode === "wireframe" || meshRenderMode === "surface+edges" || meshRenderMode === "surface" || meshRenderMode === "points"
+    ? meshRenderMode
+    : "surface";
+  const effectiveMeshRenderMode = resolvedMeshRenderMode === "surface" && showMesh
+    ? "surface+edges"
+    : resolvedMeshRenderMode === "surface+edges" && !showMesh
+      ? "surface"
+      : resolvedMeshRenderMode;
+  const showPolygonFill = (effectiveMeshRenderMode === "surface" || effectiveMeshRenderMode === "surface+edges") && showPrimitives;
+  const showSegments = effectiveMeshRenderMode === "surface+edges" || effectiveMeshRenderMode === "wireframe";
+  const showPoints = effectiveMeshRenderMode === "points";
+  const shouldShowColorbar = hasField && showQuantity && showPolygonFill;
   const componentOptions: VectorComponent[] = fieldNComp >= 3
     ? (isMagnetizationQuantity ? ["x", "y", "z"] : ["magnitude", "x", "y", "z"])
     : ["magnitude"];
@@ -404,11 +442,7 @@ export default function FemMeshSlice2DPlotly({
         objectViewMode,
         visibleObjectIds,
         vectorDomainFilter:
-          vectorDomainFilter === "auto"
-            ? meshData.quantityDomain === "full_domain"
-              ? "full_domain"
-              : "magnetic_only"
-            : vectorDomainFilter,
+          "full_domain",
       }),
     [
       airSegmentVisible,
@@ -416,7 +450,6 @@ export default function FemMeshSlice2DPlotly({
       meshEntityViewState,
       meshParts,
       objectViewMode,
-      vectorDomainFilter,
       visibleObjectIds,
     ],
   );
@@ -486,68 +519,155 @@ export default function FemMeshSlice2DPlotly({
   );
 
   const sampledArrows = useMemo(
-    () => sampleArrows(slice.arrows.filter((arrow) => arrow.magnitude > 1e-12), arrowBudget),
-    [arrowBudget, slice.arrows],
+    () =>
+      sampleArrows(
+        slice.arrows.filter((arrow) => {
+          const part = arrow.partId ? visibilityState.partById.get(arrow.partId) ?? null : null;
+          return arrow.magnitude > 1e-12 && shouldShowVectorArrow(part, vectorDomain);
+        }),
+        arrowBudget,
+      ),
+    [arrowBudget, slice.arrows, vectorDomain, visibilityState.partById],
   );
 
   const traces = useMemo(() => {
     const items: Plotly.Data[] = [];
+    const polygonWireframes = new Map<
+      string,
+      { part: FemMeshPart | null; x: Array<number | null>; y: Array<number | null> }
+    >();
+    const pointBuckets = new Map<
+      string,
+      { part: FemMeshPart | null; x: number[]; y: number[] }
+    >();
 
     for (const polygon of slice.polygons) {
       if (polygon.points.length < 3) continue;
       const closed = [...polygon.points, polygon.points[0]];
+      const part = polygon.partId ? visibilityState.partById.get(polygon.partId) ?? null : null;
+      const bucketKey = part?.role ?? polygon.partId ?? "unknown";
+      const viewState = part ? meshEntityViewState[part.id] ?? defaultMeshEntityViewState(part) : null;
+      const basePartRenderMode = viewState?.renderMode ?? effectiveMeshRenderMode;
+      const partRenderMode =
+        !isAirboxPart(part) && basePartRenderMode === "surface" && showMesh
+          ? "surface+edges"
+          : !isAirboxPart(part) && basePartRenderMode === "surface+edges" && !showMesh
+            ? "surface"
+            : basePartRenderMode;
+      const partShowPolygonFill =
+        (partRenderMode === "surface" || partRenderMode === "surface+edges") && showPrimitives;
+      const partShowSegments = partRenderMode === "surface+edges" || partRenderMode === "wireframe";
+      const partShowPoints = partRenderMode === "points";
       const polygonWorldPoint = polygon.worldPoint ?? [
         axisValue(effectivePlane, slice.planeCoord, "x", closed[0][0], closed[0][1]),
         axisValue(effectivePlane, slice.planeCoord, "y", closed[0][0], closed[0][1]),
         axisValue(effectivePlane, slice.planeCoord, "z", closed[0][0], closed[0][1]),
       ];
       const polygonWorldVector = polygon.worldVector ?? null;
+      if (partShowPolygonFill) {
+        items.push({
+          type: "scatter",
+          mode: "lines",
+          x: closed.map((point) => point[0]),
+          y: closed.map((point) => point[1]),
+          fill: "toself",
+          fillcolor: showQuantity && hasField && !isAirboxPart(part)
+            ? colorForValue(polygon.value, colorScale, resolvedPalette)
+            : colorForDomain(polygon.partId),
+          line: {
+            color: hasField ? "rgba(0,0,0,0.18)" : "rgba(166,173,200,0.55)",
+            width: hasField ? 0.7 : 1.1,
+          },
+          hovertemplate:
+            [
+              `<b>${quantityTitle}</b>`,
+              `x %{customdata[0]:.3e} m`,
+              `y %{customdata[1]:.3e} m`,
+              `z %{customdata[2]:.3e} m`,
+              `${slice.uLabel} %{x:.3e} m`,
+              `${slice.vLabel} %{y:.3e} m`,
+              `${worldComponentSymbol(quantityId, quantityLabel, effectiveComponent)} %{customdata[6]:.4e}${quantityUnit ? ` ${quantityUnit}` : ""}`,
+              polygonWorldVector
+                ? `world vector [%{customdata[3]:.3e}, %{customdata[4]:.3e}, %{customdata[5]:.3e}]${quantityUnit ? ` ${quantityUnit}` : ""}`
+                : null,
+              "<extra>volume</extra>",
+            ]
+              .filter(Boolean)
+              .join("<br>"),
+          customdata: closed.map(() => [
+            polygonWorldPoint[0],
+            polygonWorldPoint[1],
+            polygonWorldPoint[2],
+            polygonWorldVector?.[0] ?? null,
+            polygonWorldVector?.[1] ?? null,
+            polygonWorldVector?.[2] ?? null,
+            polygon.value,
+            polygonWorldVector
+              ? Math.hypot(polygonWorldVector[axisIndices(effectivePlane).u], polygonWorldVector[axisIndices(effectivePlane).v])
+              : null,
+          ]),
+          showlegend: false,
+        } as Plotly.Data);
+      }
+
+      if (partShowSegments) {
+        const bucket = polygonWireframes.get(bucketKey) ?? {
+          part,
+          x: [],
+          y: [],
+        };
+        for (const point of closed) {
+          bucket.x.push(point[0]);
+          bucket.y.push(point[1]);
+        }
+        bucket.x.push(null);
+        bucket.y.push(null);
+        polygonWireframes.set(bucketKey, bucket);
+      }
+
+      if (partShowPoints) {
+        const bucket = pointBuckets.get(bucketKey) ?? { part, x: [], y: [] };
+        for (const point of polygon.points) {
+          bucket.x.push(point[0]);
+          bucket.y.push(point[1]);
+        }
+        pointBuckets.set(bucketKey, bucket);
+      }
+    }
+
+    for (const bucket of polygonWireframes.values()) {
       items.push({
         type: "scatter",
         mode: "lines",
-        x: closed.map((point) => point[0]),
-        y: closed.map((point) => point[1]),
-        fill: "toself",
-        fillcolor: hasField
-          ? colorForValue(polygon.value, colorScale, resolvedPalette)
-          : colorForDomain(polygon.partId),
+        x: bucket.x,
+        y: bucket.y,
         line: {
-          color: hasField ? "rgba(0,0,0,0.18)" : "rgba(166,173,200,0.55)",
-          width: hasField ? 0.7 : 1.1,
+          color: edgeColorForPart(bucket.part),
+          width: bucket.part?.role === "air" || bucket.part?.role === "outer_boundary" ? 1.2 : 0.9,
+          dash: edgeDashForPart(bucket.part),
         },
-        hovertemplate:
-          [
-            `<b>${quantityTitle}</b>`,
-            `x %{customdata[0]:.3e} m`,
-            `y %{customdata[1]:.3e} m`,
-            `z %{customdata[2]:.3e} m`,
-            `${slice.uLabel} %{x:.3e} m`,
-            `${slice.vLabel} %{y:.3e} m`,
-            `${worldComponentSymbol(quantityId, quantityLabel, effectiveComponent)} %{customdata[6]:.4e}${quantityUnit ? ` ${quantityUnit}` : ""}`,
-            polygonWorldVector
-              ? `world vector [%{customdata[3]:.3e}, %{customdata[4]:.3e}, %{customdata[5]:.3e}]${quantityUnit ? ` ${quantityUnit}` : ""}`
-              : null,
-            "<extra>volume</extra>",
-          ]
-            .filter(Boolean)
-            .join("<br>"),
-        customdata: closed.map(() => [
-          polygonWorldPoint[0],
-          polygonWorldPoint[1],
-          polygonWorldPoint[2],
-          polygonWorldVector?.[0] ?? null,
-          polygonWorldVector?.[1] ?? null,
-          polygonWorldVector?.[2] ?? null,
-          polygon.value,
-          polygonWorldVector
-            ? Math.hypot(polygonWorldVector[axisIndices(effectivePlane).u], polygonWorldVector[axisIndices(effectivePlane).v])
-            : null,
-        ]),
+        hoverinfo: "skip",
         showlegend: false,
       } as Plotly.Data);
     }
 
-    if (slice.segments.length > 0) {
+    for (const bucket of pointBuckets.values()) {
+      items.push({
+        type: "scatter",
+        mode: "markers",
+        x: bucket.x,
+        y: bucket.y,
+        marker: {
+          size: bucket.part?.role === "air" || bucket.part?.role === "outer_boundary" ? 3.2 : 4,
+          color: edgeColorForPart(bucket.part),
+          opacity: 0.82,
+        },
+        hoverinfo: "skip",
+        showlegend: false,
+      } as Plotly.Data);
+    }
+
+    if (showSegments && slice.segments.length > 0) {
       items.push({
         type: "scatter",
         mode: "lines",
@@ -556,6 +676,22 @@ export default function FemMeshSlice2DPlotly({
         line: {
           color: hasField ? "rgba(205,214,244,0.7)" : "rgba(166,173,200,0.7)",
           width: hasField ? 2 : 1.6,
+        },
+        hoverinfo: "skip",
+        showlegend: false,
+      } as Plotly.Data);
+    }
+
+    if (showPoints && slice.segments.length > 0) {
+      items.push({
+        type: "scatter",
+        mode: "markers",
+        x: slice.segments.flatMap((segment) => [segment.a[0], segment.b[0]]),
+        y: slice.segments.flatMap((segment) => [segment.a[1], segment.b[1]]),
+        marker: {
+          size: 4,
+          color: "rgba(137, 220, 235, 0.84)",
+          opacity: 0.82,
         },
         hoverinfo: "skip",
         showlegend: false,
@@ -592,7 +728,7 @@ export default function FemMeshSlice2DPlotly({
       } as Plotly.Data);
     }
 
-    if (hasField) {
+    if (shouldShowColorbar) {
       items.push({
         type: "scatter",
         mode: "markers",
@@ -702,20 +838,27 @@ export default function FemMeshSlice2DPlotly({
     effectivePlane,
     hasField,
     hasVectorField,
+    resolvedPalette,
     quantityId,
     quantityLabel,
     quantityUnit,
     quantityTitle,
-    resolvedPalette,
     sampledArrows,
     slice,
+    showMesh,
+    showPoints,
+    showPolygonFill,
+    showQuantity,
+    showSegments,
+    shouldShowColorbar,
+    visibilityState,
   ]);
 
   const layout = useMemo(
     (): Partial<Plotly.Layout> => ({
       paper_bgcolor: BG,
       plot_bgcolor: "rgba(17,17,27,0.72)",
-      margin: { l: 68, r: hasField ? 104 : 20, t: 92, b: 84 },
+      margin: { l: 68, r: shouldShowColorbar ? 104 : 20, t: 92, b: 84 },
       font: {
         family: "IBM Plex Mono, monospace",
         size: 11,
@@ -784,6 +927,7 @@ export default function FemMeshSlice2DPlotly({
     [
       fieldKey,
       hasField,
+      shouldShowColorbar,
       topologyKey,
       quantityTitle,
       slice,
@@ -829,208 +973,6 @@ export default function FemMeshSlice2DPlotly({
         }}
       />
       <ViewportOverlayLayout>
-        <ViewportOverlayLayout.TopLeft>
-          <div className="pointer-events-auto">
-            <ViewportToolbar3D compact>
-              {quantityOptions.length > 0 && onQuantityChange ? (
-                <>
-                  <ViewportToolGroup label="Results" compact>
-                    <ViewportPopoverTrigger preferredHorizontal="left">
-                      <ViewportIconAction
-                        icon={<Layers size={14} />}
-                        label={quantityOptions.find((option) => option.id === quantityId)?.shortLabel ?? "Qty"}
-                        showCaret
-                        active={openPopover === "quantity"}
-                        onClick={() => setOpenPopover(openPopover === "quantity" ? null : "quantity")}
-                        title="Slice quantity"
-                      />
-                      {openPopover === "quantity" && (
-                        <ViewportPopoverPanel anchorRef={{ current: null }} title="Quantity">
-                          <div className="grid min-w-[220px] grid-cols-2 gap-1">
-                            {quantityOptions
-                              .map((option) => (
-                                <ViewportIconAction
-                                  key={option.id}
-                                  active={option.id === quantityId}
-                                  onClick={() => {
-                                    if (!option.available) return;
-                                    onQuantityChange(option.id);
-                                    setOpenPopover(null);
-                                  }}
-                                  label={option.shortLabel}
-                                  className={`justify-start px-2 py-1.5${!option.available ? " opacity-40 cursor-not-allowed" : ""}`}
-                                  title={!option.available ? `${option.label ?? option.shortLabel} unavailable in this viewport` : (option.label ?? option.shortLabel)}
-                                />
-                              ))}
-                          </div>
-                        </ViewportPopoverPanel>
-                      )}
-                    </ViewportPopoverTrigger>
-                    {fieldNComp >= 3 ? (
-                      <ViewportPopoverTrigger preferredHorizontal="left">
-                        <ViewportIconAction
-                          icon={<Layers size={14} />}
-                          label={effectiveComponent === "magnitude" ? "|v|" : effectiveComponent}
-                          showCaret
-                          active={openPopover === "component"}
-                          onClick={() => setOpenPopover(openPopover === "component" ? null : "component")}
-                          title="Slice component"
-                        />
-                        {openPopover === "component" && (
-                          <ViewportPopoverPanel anchorRef={{ current: null }} title="Component">
-                            <div className="flex flex-wrap gap-1">
-                              {componentOptions.map((option) => (
-                                <ViewportIconAction
-                                  key={option}
-                                  active={option === effectiveComponent}
-                                  onClick={() => {
-                                    onComponentChange?.(option);
-                                    setOpenPopover(null);
-                                  }}
-                                  label={option === "magnitude" ? "|v|" : option}
-                                  className="px-3"
-                                />
-                              ))}
-                            </div>
-                          </ViewportPopoverPanel>
-                        )}
-                      </ViewportPopoverTrigger>
-                    ) : null}
-                  </ViewportToolGroup>
-                  <ViewportToolSeparator />
-                </>
-              ) : null}
-
-              <ViewportToolGroup label="Section" compact>
-                <ViewportIconAction
-                  icon={<Scissors size={14} />}
-                  active
-                  title="Slice plane"
-                />
-                <ViewportPopoverTrigger preferredHorizontal="left">
-                  <ViewportIconAction
-                    icon={<SlidersHorizontal size={14} />}
-                    active={openPopover === "section"}
-                    showCaret
-                    onClick={() => setOpenPopover(openPopover === "section" ? null : "section")}
-                    title="Slice plane settings"
-                  />
-                  {openPopover === "section" && (
-                    <ViewportPopoverPanel anchorRef={{ current: null }} title="Slice Plane">
-                      <ViewportPopoverRow label="Plane">
-                        <div className="flex gap-1">
-                          {(["xy", "xz", "yz"] as const).map((candidatePlane) => (
-                            <ViewportIconAction
-                              key={candidatePlane}
-                              active={effectivePlane === candidatePlane}
-                              onClick={() => {
-                                onPlaneChange?.(candidatePlane);
-                                onClipAxisChange?.(planeToClipAxis(candidatePlane));
-                              }}
-                              label={candidatePlane.toUpperCase()}
-                              className="px-3"
-                            />
-                          ))}
-                        </div>
-                      </ViewportPopoverRow>
-                      <ViewportPopoverRow label="Position">
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          step={0.1}
-                          value={clipPos}
-                          onChange={(event) => onClipPosChange?.(Number(event.target.value))}
-                          className="flex-1 max-w-[180px]"
-                        />
-                      </ViewportPopoverRow>
-                    </ViewportPopoverPanel>
-                  )}
-                </ViewportPopoverTrigger>
-              </ViewportToolGroup>
-
-              {hasVectorField ? (
-                <>
-                  <ViewportToolSeparator />
-                  <ViewportToolGroup label="Vectors" compact>
-                    <ViewportIconAction
-                      icon={<ArrowUpRight size={14} />}
-                      active={arrowsVisible}
-                      onClick={() => {
-                        const next = !arrowsVisible;
-                        if (onShowArrowsChange) {
-                          onShowArrowsChange(next);
-                        } else {
-                          setInternalShowArrows(next);
-                        }
-                      }}
-                      title="Toggle vectors"
-                    />
-                    <ViewportPopoverTrigger preferredHorizontal="left">
-                      <ViewportIconAction
-                        icon={<SlidersHorizontal size={14} />}
-                        active={openPopover === "vectors"}
-                        showCaret
-                        onClick={() => setOpenPopover(openPopover === "vectors" ? null : "vectors")}
-                        title="Vector settings"
-                      />
-                      {openPopover === "vectors" && (
-                        <ViewportPopoverPanel anchorRef={{ current: null }} title="Vectors">
-                          <ViewportPopoverRow label="Visible">
-                            <div className="flex gap-1">
-                              <ViewportIconAction
-                                active={arrowsVisible}
-                                onClick={() => {
-                                  if (onShowArrowsChange) {
-                                    onShowArrowsChange(true);
-                                  } else {
-                                    setInternalShowArrows(true);
-                                  }
-                                }}
-                                label="Show"
-                                className="px-3"
-                              />
-                              <ViewportIconAction
-                                active={!arrowsVisible}
-                                onClick={() => {
-                                  if (onShowArrowsChange) {
-                                    onShowArrowsChange(false);
-                                  } else {
-                                    setInternalShowArrows(false);
-                                  }
-                                }}
-                                label="Hide"
-                                className="px-3"
-                              />
-                            </div>
-                          </ViewportPopoverRow>
-                          <ViewportPopoverRow label="Density">
-                            <input
-                              type="range"
-                              min={GLYPH_BUDGET_MIN}
-                              max={GLYPH_BUDGET_MAX}
-                              step={GLYPH_BUDGET_STEP}
-                              value={arrowBudget}
-                              onChange={(event) => {
-                                const nextMaxPoints = glyphBudgetToMaxPoints(Number(event.target.value));
-                                if (onPreviewMaxPointsChange) {
-                                  onPreviewMaxPointsChange(nextMaxPoints);
-                                } else {
-                                  setInternalPreviewMaxPoints(nextMaxPoints);
-                                }
-                              }}
-                              className="flex-1 max-w-[180px]"
-                            />
-                          </ViewportPopoverRow>
-                        </ViewportPopoverPanel>
-                      )}
-                    </ViewportPopoverTrigger>
-                  </ViewportToolGroup>
-                </>
-              ) : null}
-            </ViewportToolbar3D>
-          </div>
-        </ViewportOverlayLayout.TopLeft>
         {(hoverProbe || pinnedProbe) && (
           <ViewportOverlayLayout.TopRight>
             <div className="min-w-[190px] rounded-xl border border-border/30 bg-background/78 px-3 py-2 text-[0.68rem] font-mono text-slate-200 shadow-lg backdrop-blur-md pointer-events-auto">

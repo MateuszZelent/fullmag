@@ -35,8 +35,8 @@ study.universe(
     size=(150e-9, 150e-9, 20e-9),
     center=(0, 0, 0),
     padding=(0, 0, 0),
-    airbox_hmax=20e-9,
 )
+study.universe.mesh(maximum_element_size=20e-9)
 study.interactive(True)
 
 # ── 2. Geometry & Material (CoFeB/NiFe free layer) ───────
@@ -58,7 +58,7 @@ free.m = fm.uniform(1, 0, 0)
 
 
 # ── 3. Mesh ──────────────────────────────────────────────
-study.object_mesh_defaults(
+study.objects.mesh.defaults(
     algorithm_2d=6,
     algorithm_3d=1,
     size_factor=1,

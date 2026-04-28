@@ -94,13 +94,16 @@ function shouldShowPart(
   airSegmentVisible: boolean,
   objectViewMode: ObjectViewMode,
   visibleObjectIds: ReadonlySet<string>,
-  vectorDomainFilter: FemVectorDomainFilter,
 ): boolean {
+  const isAirboxPart = part.role === "air" || part.role === "outer_boundary";
+  const hasExplicitViewState = Object.prototype.hasOwnProperty.call(meshEntityViewState, part.id);
   const baseViewState = meshEntityViewState[part.id] ?? defaultMeshEntityViewState(part);
-  if (!baseViewState.visible) return false;
-  if (part.role === "air" && !airSegmentVisible) return false;
-  if (vectorDomainFilter === "magnetic_only" && part.role === "air") return false;
-  if (vectorDomainFilter === "airbox_only" && part.role !== "air") return false;
+  if (isAirboxPart) {
+    if (!airSegmentVisible) return false;
+    if (hasExplicitViewState && !baseViewState.visible) return false;
+  } else if (!baseViewState.visible) {
+    return false;
+  }
   if (
     objectViewMode === "isolate" &&
     part.role === "magnetic_object" &&
@@ -156,7 +159,6 @@ export function buildSliceVisibilityState(args: {
       airSegmentVisible,
       objectViewMode,
       visibleObjectIdSet,
-      vectorDomainFilter,
     );
     if (show) visiblePartIds.add(part.id);
 

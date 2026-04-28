@@ -3,6 +3,25 @@ import { describe, expect, it, vi } from "vitest";
 import { buildViewRibbonGroups } from "../view";
 import type { RibbonBuildContext } from "../../registry/ribbonRegistry";
 import type { RibbonMenuNode } from "../../registry/ribbonMenuTypes";
+import type { Slice2DToolbarState } from "@/src/features/slice2d";
+
+const slice2DToolbar: Slice2DToolbarState = {
+  quantityId: "m",
+  component: "magnitude",
+  axis: "z",
+  mode: "single",
+  layerIndex: 0,
+  positionPercent: 50,
+  thicknessPercent: null,
+  colormap: "viridis",
+  autoContrast: true,
+  showPrimitives: true,
+  showMesh: true,
+  showAirbox: false,
+  showQuantity: true,
+  showVectors: true,
+  renderMode: "heatmap",
+};
 
 function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildContext {
   return {
@@ -43,6 +62,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     meshRenderMode: "surface+edges",
     meshOpacity: 80,
     selectedObjectOpacity: 55,
+    selectedObjectRenderMode: "inherit",
     meshClipEnabled: false,
     meshClipAxis: "z",
     meshClipPos: 50,
@@ -57,6 +77,9 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     femFerromagnetVisibilityMode: "ghost",
     airMeshOpacity: 28,
     airMeshRenderMode: "surface+edges",
+    slice2DEnabled: false,
+    slice2DToolbar,
+    slice2DDiagnostics: null,
     antennaSources: [],
     selectedAntennaName: null,
     canSyncScriptBuilder: false,
@@ -90,11 +113,58 @@ describe("View ribbon contribution", () => {
     const groups = buildViewRibbonGroups(baseContext());
     expect(groups.map((group) => group.id)).toEqual([
       "view-global-display",
+      "view-slice-2d",
       "view-selected-display",
       "view-manipulate",
       "view-snapshot-export",
       "view-display",
     ]);
+  });
+
+  it("exposes 2D slice controls through the View ribbon", () => {
+    const run = vi.fn();
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        run,
+        viewMode: "2D",
+        slice2DEnabled: true,
+        slice2DToolbar: { ...slice2DToolbar, axis: "y", mode: "slab", showAirbox: true },
+      }),
+    )[1];
+
+    expect(sliceGroup.id).toBe("view-slice-2d");
+    expect(sliceGroup.actions.every((action) => !action.disabled)).toBe(true);
+
+    const axis = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:axis");
+    const mode = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:mode");
+    expect(sliceGroup.actions.map((action) => action.id)).toEqual([
+      "view-slice-quantity",
+      "view-slice-vectors",
+      "view-slice-airbox",
+      "view-slice-layers",
+      "view-slice-plane",
+    ]);
+
+    const render = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [], "slice:layers:render-mode");
+    const airbox = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [], "slice:airbox:visible");
+    const vectors = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-vectors")?.menu ?? [], "slice:vectors:visible");
+
+    expect(axis).toMatchObject({ type: "radio-group", value: "y" });
+    expect(mode).toMatchObject({ type: "radio-group", value: "slab" });
+    expect(render).toMatchObject({ type: "radio-group", value: "heatmap" });
+    expect(airbox).toMatchObject({ type: "checkbox", checked: true });
+    expect(vectors).toMatchObject({ type: "checkbox", checked: true });
+
+    axis?.onValueChange?.("x");
+    expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-axis", axis: "x" });
+  });
+
+  it("keeps 2D slice controls visible but disabled outside 2D mode", () => {
+    const sliceGroup = buildViewRibbonGroups(baseContext({ viewMode: "3D", slice2DEnabled: false }))[1];
+
+    expect(sliceGroup.id).toBe("view-slice-2d");
+    expect(sliceGroup.actions.every((action) => action.disabled)).toBe(true);
+    expect(sliceGroup.actions[0].tooltip).toBe("Switch to 2D Slice to edit slice controls");
   });
 
   it("exposes rich quantity controls and keeps disabled quantity reasons", () => {
@@ -117,7 +187,7 @@ describe("View ribbon contribution", () => {
   });
 
   it("keeps selected opacity per-object rather than reading global opacity", () => {
-    const selected = buildViewRibbonGroups(baseContext())[1];
+    const selected = buildViewRibbonGroups(baseContext())[2];
     const opacity = selected.actions.find((action) => action.id === "view-selected-opacity");
     const slider = findNode(opacity?.menu ?? [], "selected-opacity:slider");
 
@@ -125,7 +195,7 @@ describe("View ribbon contribution", () => {
   });
 
   it("keeps selected display visible but disabled without selection", () => {
-    const selected = buildViewRibbonGroups(baseContext({ selectedObjectId: null }))[1];
+    const selected = buildViewRibbonGroups(baseContext({ selectedObjectId: null }))[2];
     expect(selected.actions.every((action) => action.disabled)).toBe(true);
     expect(selected.actions[0].tooltip).toBe("Select object to edit object display");
   });
@@ -179,5 +249,28 @@ describe("View ribbon contribution", () => {
       type: "checkbox",
       checked: true,
     });
+  });
+
+  it("enables selected render mode controls and dispatches the selected-render command", () => {
+    const run = vi.fn();
+    const selected = buildViewRibbonGroups(baseContext({ run, selectedObjectRenderMode: "wireframe" }))[2];
+    const render = findNode(selected.actions.find((action) => action.id === "view-selected-render")?.menu ?? [], "selected:render-mode");
+    expect(render).toMatchObject({
+      type: "radio-group",
+      disabled: false,
+      value: "wireframe",
+    });
+    expect((render as any).items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "inherit" }),
+        expect.objectContaining({ value: "surface" }),
+        expect.objectContaining({ value: "wireframe" }),
+        expect.objectContaining({ value: "surface+edges" }),
+        expect.objectContaining({ value: "points" }),
+      ]),
+    );
+
+    render?.onValueChange?.("points");
+    expect(run).toHaveBeenCalledWith({ id: "viewport.set-selected-render-mode", renderMode: "points" });
   });
 });

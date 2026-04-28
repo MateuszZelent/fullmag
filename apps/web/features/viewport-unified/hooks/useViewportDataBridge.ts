@@ -15,6 +15,7 @@ import {
   useSubmitMeshBuildCommand,
 } from "@/src/hooks/resources/useMeshResources";
 import { useSlice2DModel } from "@/src/hooks/resources/useSliceResource";
+import { useSlice2DToolbarStore } from "@/src/features/slice2d";
 import { selectionFromControlRoomState } from "@/src/features/workspaceSync";
 import type { MeshWorkspaceModel } from "@/src/features/meshWorkspace";
 import type { Slice2DModel } from "@/src/features/slice2d";
@@ -52,7 +53,7 @@ import {
 } from "@/components/runs/control-room/viewportUtils";
 import type { Vec3, Quat } from "@/components/runs/control-room/viewportUtils";
 import { deriveFemLayerRenderState } from "@/components/runs/control-room/viewportLayers";
-import type { MeshEntityViewStateMap } from "@/lib/session/types";
+import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 
 /* ── Debug flag ───────────────────────────────────────────────────── */
@@ -89,6 +90,14 @@ function meshWorkspaceRenderModeToFem(
   if (mode === "solid+wireframe") return "surface+edges";
   if (mode === "wireframe" || mode === "points") return mode;
   return "surface";
+}
+
+export function resolveEffectiveMeshEntityRenderMode(args: {
+  currentRenderMode: MeshEntityViewState["renderMode"];
+}): MeshEntityViewState["renderMode"] {
+  const { currentRenderMode } = args;
+  // Keep the user-requested render mode unchanged for all roles.
+  return currentRenderMode;
 }
 
 function toViewportInteractionMode(tool: string): Viewport3DInteractionMode {
@@ -240,9 +249,8 @@ export function useViewportDataBridge() {
   const [meshWorkspaceToolbarPatch, setMeshWorkspaceToolbarPatch] = useState<
     Partial<MeshWorkspaceModel["toolbar"]>
   >({});
-  const [slice2DToolbarPatch, setSlice2DToolbarPatch] = useState<
-    Partial<Slice2DModel["toolbar"]>
-  >({});
+  const slice2DToolbarPatch = useSlice2DToolbarStore((state) => state.patch);
+  const patchSlice2DToolbar = useSlice2DToolbarStore((state) => state.patchToolbar);
 
   /* ── Workspace selection ── */
   const workspaceSelection = useMemo(
@@ -716,21 +724,34 @@ export function useViewportDataBridge() {
   const effectiveFemMeshEntityViewState = useMemo(() => {
     if (!femDiscretization || ctx.meshParts.length === 0) return ctx.meshEntityViewState;
     const next: MeshEntityViewStateMap = { ...ctx.meshEntityViewState };
+    const resolvedGlobalMeshRenderMode: MeshEntityViewState["renderMode"] =
+      ctx.meshRenderMode === "wireframe" || ctx.meshRenderMode === "surface+edges"
+        || ctx.meshRenderMode === "surface"
+        || ctx.meshRenderMode === "points"
+        ? ctx.meshRenderMode
+        : "surface";
     for (const part of ctx.meshParts) {
       const current = next[part.id] ?? defaultMeshEntityViewState(part);
       const airboxScoped = part.role === "air" || part.role === "outer_boundary";
-      const renderMode =
-        airboxScoped
-          ? current.renderMode
-          : femLayerState.showMesh && current.renderMode === "surface"
-          ? "surface+edges"
-          : !femLayerState.showMesh && current.renderMode === "surface+edges"
-            ? "surface"
-            : current.renderMode;
+      const hasExplicitState = Object.prototype.hasOwnProperty.call(next, part.id);
+      const baseRenderMode = airboxScoped
+        ? resolveEffectiveMeshEntityRenderMode({ currentRenderMode: current.renderMode })
+        : hasExplicitState
+          ? resolveEffectiveMeshEntityRenderMode({ currentRenderMode: current.renderMode })
+          : resolvedGlobalMeshRenderMode;
+      const effectiveRenderMode = baseRenderMode === "surface" && femLayerState.showMesh
+        ? "surface+edges"
+        : baseRenderMode === "surface+edges" && !femLayerState.showMesh
+          ? "surface"
+          : baseRenderMode;
       next[part.id] = {
         ...current,
-        renderMode,
-        opacity: airboxScoped ? current.opacity : ctx.meshOpacity,
+        renderMode: effectiveRenderMode,
+        opacity: airboxScoped
+          ? current.opacity
+          : hasExplicitState
+            ? current.opacity
+            : ctx.meshOpacity,
         colorField:
           femLayerState.showQuantity && part.role === "magnetic_object"
             ? current.colorField
@@ -833,14 +854,7 @@ export function useViewportDataBridge() {
 
   const handleSlice2DToolbarChange = useCallback(
     (patch: Partial<Slice2DModel["toolbar"]>) => {
-      setSlice2DToolbarPatch((previous) => ({
-        ...previous,
-        showPrimitives: patch.showPrimitives ?? previous.showPrimitives,
-        showMesh: patch.showMesh ?? previous.showMesh,
-        showQuantity: patch.showQuantity ?? previous.showQuantity,
-        showVectors: patch.showVectors ?? previous.showVectors,
-        renderMode: patch.renderMode ?? previous.renderMode,
-      }));
+      patchSlice2DToolbar(patch);
       if (patch.quantityId) requestDisplayQuantity(patch.quantityId);
       if (patch.component) handleFemSliceComponentChange(patch.component);
       if (patch.axis) setPlane(planeFromSliceAxis(patch.axis));
@@ -859,10 +873,33 @@ export function useViewportDataBridge() {
         setMeshShowArrows(patch.showVectors);
         void patchDisplay({ vector_glyphs: patch.showVectors });
       }
+      if (typeof patch.showPrimitives === "boolean") {
+        ctx.setFemViewportLayers((previous) => ({
+          ...previous,
+          showPrimitives: patch.showPrimitives ?? previous.showPrimitives,
+        }));
+      }
+      if (typeof patch.showMesh === "boolean") {
+        ctx.setFemViewportLayers((previous) => ({
+          ...previous,
+          showMesh: patch.showMesh ?? previous.showMesh,
+        }));
+      }
+      if (typeof patch.showAirbox === "boolean") {
+        ctx.setAirMeshVisible(patch.showAirbox);
+      }
+      if (typeof patch.showQuantity === "boolean") {
+        ctx.setFemViewportLayers((previous) => ({
+          ...previous,
+          showQuantity: patch.showQuantity ?? previous.showQuantity,
+        }));
+      }
     },
     [
+      ctx,
       handleFemSliceComponentChange,
       patchDisplay,
+      patchSlice2DToolbar,
       requestDisplayQuantity,
       setMeshShowArrows,
       setPlane,
@@ -1038,7 +1075,16 @@ export function useViewportDataBridge() {
   });
 
   const slice2DModel = useMemo<Slice2DModel>(() => {
-    const toolbar = { ...slice2DBaseModel.toolbar, ...slice2DToolbarPatch };
+    const layerControlledToolbar = femDiscretization
+      ? {
+          ...slice2DBaseModel.toolbar,
+          showPrimitives: ctx.femViewportLayers.showPrimitives,
+          showMesh: ctx.femViewportLayers.showMesh,
+          showAirbox: ctx.airMeshVisible,
+          showQuantity: ctx.femViewportLayers.showQuantity,
+        }
+      : slice2DBaseModel.toolbar;
+    const toolbar = { ...layerControlledToolbar, ...slice2DToolbarPatch };
     return {
       ...slice2DBaseModel,
       toolbar,
@@ -1046,11 +1092,12 @@ export function useViewportDataBridge() {
         ...slice2DBaseModel.overlays,
         showPrimitives: toolbar.showPrimitives,
         showMesh: toolbar.showMesh,
+        showAirbox: toolbar.showAirbox,
         showQuantity: toolbar.showQuantity,
         showVectors: toolbar.showVectors,
       },
     };
-  }, [slice2DBaseModel, slice2DToolbarPatch]);
+  }, [ctx.airMeshVisible, ctx.femViewportLayers, femDiscretization, slice2DBaseModel, slice2DToolbarPatch]);
 
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,

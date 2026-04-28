@@ -519,24 +519,29 @@ def _render_runtime(
             if padding is not None:
                 universe_kwargs.append(f"padding={_py_tuple3(padding)}")
             airbox_hmax = universe.get("airbox_hmax")
+            airbox_hmin = universe.get("airbox_hmin")
+            airbox_growth_rate = universe.get("airbox_growth_rate")
+            airbox_grading = universe.get("airbox_grading")
+            lines.append(f"{_surface_call(surface, 'universe')}({', '.join(universe_kwargs)})")
+            universe_mesh_kwargs: list[str] = []
             if airbox_hmax is not None:
-                universe_kwargs.append(
+                universe_mesh_kwargs.append(
                     f"maximum_element_size={_py_number(float(airbox_hmax))}"
                 )  # type: ignore[arg-type]
-            airbox_hmin = universe.get("airbox_hmin")
             if airbox_hmin is not None:
-                universe_kwargs.append(
+                universe_mesh_kwargs.append(
                     f"minimum_element_size={_py_number(float(airbox_hmin))}"
                 )  # type: ignore[arg-type]
-            airbox_growth_rate = universe.get("airbox_growth_rate")
             if airbox_growth_rate is not None:
-                universe_kwargs.append(
-                    f"airbox_growth_rate={_py_number(float(airbox_growth_rate))}"
+                universe_mesh_kwargs.append(
+                    f"growth_rate={_py_number(float(airbox_growth_rate))}"
                 )  # type: ignore[arg-type]
-            airbox_grading = universe.get("airbox_grading")
             if isinstance(airbox_grading, str) and airbox_grading:
-                universe_kwargs.append(f"airbox_grading={_py_repr(airbox_grading)}")
-            lines.append(f"{_surface_call(surface, 'universe')}({', '.join(universe_kwargs)})")
+                universe_mesh_kwargs.append(f"grading={_py_repr(airbox_grading)}")
+            if universe_mesh_kwargs:
+                lines.append(
+                    f"{_surface_call(surface, 'universe')}.mesh({', '.join(universe_mesh_kwargs)})"
+                )
     if runtime_metadata.get("interactive_session_requested") is True:
         lines.append(f"{_surface_call(surface, 'interactive')}(True)")
     if runtime_metadata.get("wait_for_solve") is True:
@@ -1345,7 +1350,7 @@ def _render_study_mesh_workflow(
     global_kwargs = _render_mesh_kwargs(global_mesh, source_root=source_root)
     global_build_requested = bool(global_mesh.get("build_requested", False))
     if global_kwargs:
-        lines.append(f"study.object_mesh_defaults({', '.join(global_kwargs)})")
+        lines.append(f"study.objects.mesh.defaults({', '.join(global_kwargs)})")
 
     for magnet_name, mesh_config in _study_geometry_mesh_configs(problem, overrides):
         if not _mesh_entry_requires_explicit_render(mesh_config):

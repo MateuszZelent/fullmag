@@ -16,10 +16,12 @@ study.universe(
     size=(2e-07, 2e-07, 9e-08),
     center=(0, 0, 0),
     padding=(0, 0, 0),
-    airbox_hmax=5.5e-08,
-    airbox_hmin=7e-09,
-    airbox_growth_rate=1.22,
-    airbox_grading="geometric",
+)
+study.universe.mesh(
+    maximum_element_size=5.5e-08,
+    minimum_element_size=3e-09,
+    growth_rate=1.22,
+    grading="geometric",
 )
 study.interactive(True)
 study.wait_for_solve(True)
@@ -38,23 +40,46 @@ study.b_ext(0, 0, 1.02)
 study.demag(realization="poisson_robin")
 
 # Mesh
-study.object_mesh_defaults(
+body.mesh(
     maximum_element_size=1.2e-08,
     minimum_element_size=3e-09,
+    order=1,
+    # Surface mesher for CAD faces; Gmsh values include 1 MeshAdapt, 2 Automatic,
+    # 5 Delaunay, 6 Frontal-Delaunay, 7 BAMG, and 8 Frontal-Quad.
     algorithm_2d=6,
+    # Volume mesher for tetrahedralization; Gmsh values include 1 Delaunay,
+    # 4 Frontal, 7 MMG3D, and 10 HXT. HXT is usually the robust modern choice.
     algorithm_3d=10,
+    # Multiplies all size targets after calibration; must be positive.
+    # 1.0 keeps requested sizes, lower refines globally, higher coarsens globally.
     size_factor=1,
-    size_from_curvature=32,
-    smoothing_steps=1,
-    optimize_iterations=1,
-    curvature_factor=0.25,
+    # Curvature sampling density in points per full turn; 0 disables this direct
+    # Gmsh control, practical positive values are about 6-64, higher refines curves.
+    size_from_curvature=64,
+    # Laplacian smoothing passes after meshing; non-negative integer, commonly 0-20.
+    # Higher values can improve regularity but may distort small or thin features.
+    smoothing_steps=0,
+    # Mesh optimizer iteration budget; non-negative integer, commonly 1-10.
+    # Used only when an optimizer mode is enabled by the lower meshing layer.
+    optimize_iterations=10,
+    # COMSOL-style curvature factor used when size_from_curvature is 0.
+    # Effective range is clamped to 0.05-2.0; smaller values mean stronger refinement.
+    curvature_factor=1.0,
+    # Maximum growth ratio between neighboring size targets; positive float,
+    # practical range is about 1.1-2.5. Closer to 1 gives smoother/finer transitions.
     maximum_element_growth_rate=1.22,
-    narrow_regions=5,
+    # Minimum number of elements across narrow gaps; 0 disables explicit narrow-gap
+    # refinement. Positive integers are direct counts, usually 1-12.
+    narrow_regions=0,
+    # Heuristic narrow-gap refinement strength used when narrow_regions is 0.
+    # Positive float clamped to 0.1-2.0; higher requests more elements through gaps.
     narrow_region_resolution=0.7,
+    # Enables global mesh quality metrics in the realized mesh report.
     compute_quality=True,
+    # Stores per-element quality arrays; useful for diagnostics, heavier than summary
+    # quality metrics, and meaningful mainly when compute_quality is enabled.
     per_element_quality=True,
 )
-body.mesh(maximum_element_size=1.2e-08, minimum_element_size=3e-09, order=1, compute_quality=True)
 study.build_domain_mesh()
 
 # Solver

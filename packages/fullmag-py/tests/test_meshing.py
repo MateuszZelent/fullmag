@@ -47,6 +47,7 @@ from fullmag.model.discretization import PerObjectMeshRecipe
 from fullmag.meshing.gmsh_bridge import (
     ALGO_3D_HXT,
     ALGO_3D_MMG3D,
+    AirboxOptions,
     MESH_SIZE_PRESETS,
     MeshData,
     MeshOptions,
@@ -58,6 +59,7 @@ from fullmag.meshing.gmsh_bridge import (
     _extract_gmsh_connectivity,
     _normalize_gmsh_log_line,
     _resolve_gmsh_thread_count,
+    generate_cylinder_mesh,
     resolve_mesh_size_controls,
 )
 from fullmag.meshing.remesh_cli import _geometry_from_ir, _mesh_result_payload, _size_field_from_dict
@@ -744,6 +746,61 @@ class MeshScaffoldTests(unittest.TestCase):
             )
         )
 
+    def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
+        try:
+            mesh = generate_cylinder_mesh(
+                radius=20e-9,
+                height=8e-9,
+                hmax=20e-9,
+                order=1,
+                airbox=AirboxOptions(
+                    size=(120e-9, 120e-9, 80e-9),
+                    center=(0.0, 0.0, 0.0),
+                    maximum_element_size=45e-9,
+                    minimum_element_size=8e-9,
+                    grading_ratio=1.25,
+                    grading_mode="geometric",
+                ),
+                options=MeshOptions(
+                    algorithm_2d=6,
+                    algorithm_3d=ALGO_3D_HXT,
+                    size_from_curvature=32,
+                    growth_rate=1.25,
+                    compute_quality=False,
+                ),
+            )
+        except ImportError as exc:
+            self.skipTest(f"gmsh not available: {exc}")
+
+        tetra = np.asarray(mesh.nodes[mesh.elements], dtype=np.float64)
+        centroids = tetra.mean(axis=1)
+        radial = np.sqrt(centroids[:, 0] ** 2 + centroids[:, 1] ** 2)
+        edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+        mean_edge = np.mean(
+            np.stack(
+                [
+                    np.linalg.norm(tetra[:, start] - tetra[:, end], axis=1)
+                    for start, end in edge_pairs
+                ],
+                axis=1,
+            ),
+            axis=1,
+        )
+
+        near_curvature = (
+            (radial >= 18e-9)
+            & (radial <= 32e-9)
+            & (np.abs(centroids[:, 2]) <= 12e-9)
+        )
+        far_airbox = (radial >= 45e-9) | (np.abs(centroids[:, 2]) >= 22e-9)
+
+        self.assertGreater(np.count_nonzero(near_curvature), 20)
+        self.assertGreater(np.count_nonzero(far_airbox), 20)
+        self.assertLess(
+            float(np.percentile(mean_edge[near_curvature], 75)),
+            float(np.percentile(mean_edge[far_airbox], 25)),
+        )
+
     def test_meshdata_to_ir_has_canonical_shape(self) -> None:
         mesh = self._unit_tet_mesh()
 
@@ -1068,6 +1125,9 @@ class MeshScaffoldTests(unittest.TestCase):
             with patch(
                 "fullmag.meshing.voxelization._import_trimesh",
                 side_effect=ImportError("missing trimesh"),
+            ), patch(
+                "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
+                side_effect=RuntimeError("force direct STL fallback"),
             ):
                 voxels_with_units = voxelize_geometry(
                     geometry_with_units,
@@ -1576,7 +1636,7 @@ class MeshScaffoldTests(unittest.TestCase):
         fallback_options = generate_mesh_from_file.call_args.kwargs["options"]
         fallback_kinds = [field.get("kind") for field in fallback_options.size_fields]
         self.assertIn("Box", fallback_kinds)
-        self.assertIn("BoundsSurfaceThreshold", fallback_kinds)
+        self.assertNotIn("BoundsSurfaceThreshold", fallback_kinds)
         self.assertNotIn("ComponentVolumeConstant", fallback_kinds)
         self.assertNotIn("InterfaceShellThreshold", fallback_kinds)
         self.assertNotIn("TransitionShellThreshold", fallback_kinds)

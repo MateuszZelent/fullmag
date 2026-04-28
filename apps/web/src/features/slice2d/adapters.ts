@@ -44,6 +44,7 @@ export function slice2DToolbarFromDisplay(
     autoContrast: quantity.autoContrast,
     showPrimitives: true,
     showMesh: false,
+    showAirbox: false,
     showQuantity: true,
     showVectors: display.vector_glyphs,
     renderMode: display.vector_glyphs ? "vectors" : DEFAULT_RENDER_MODE,
@@ -116,6 +117,7 @@ export function buildSlice2DModel(args: {
     overlays: {
       showPrimitives: toolbar.showPrimitives,
       showMesh: toolbar.showMesh,
+      showAirbox: toolbar.showAirbox,
       showQuantity: toolbar.showQuantity,
       showVectors: toolbar.showVectors,
     },

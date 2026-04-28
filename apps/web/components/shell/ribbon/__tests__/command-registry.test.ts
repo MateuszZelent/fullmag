@@ -75,4 +75,80 @@ describe("ribbon viewport commands", () => {
     expect(onSetAirboxDisplay).toHaveBeenCalledWith({ renderMode: "points", vectors: true });
     expect(onSetMeshRenderMode).not.toHaveBeenCalled();
   });
+
+  it("dispatches selected render mode changes for object override", () => {
+    const onSetSelectedObjectRenderMode = vi.fn();
+    const ctx = context({ onSetSelectedObjectRenderMode });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-selected-render-mode",
+      renderMode: "wireframe",
+    });
+
+    expect(onSetSelectedObjectRenderMode).toHaveBeenCalledWith("wireframe");
+  });
+
+  it("requires an override callback for selected render override commands", () => {
+    expect(
+      canExecuteRibbonCommand(context({ onSetSelectedObjectRenderMode: vi.fn() }), {
+        id: "viewport.set-selected-render-mode",
+        renderMode: "wireframe",
+      }),
+    ).toBe(true);
+    expect(
+      canExecuteRibbonCommand(context({ onSetSelectedObjectRenderMode: undefined }), {
+        id: "viewport.set-selected-render-mode",
+        renderMode: "inherit",
+      }),
+    ).toBe(false);
+  });
+
+  it("dispatches selected display override clear through callback", () => {
+    const onClearSelectedDisplayOverrides = vi.fn();
+    const ctx = context({ onClearSelectedDisplayOverrides });
+
+    executeRibbonCommand(ctx, { id: "viewport.clear-selected-display-overrides" });
+
+    expect(onClearSelectedDisplayOverrides).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides selected clear when no selected override callback exists", () => {
+    expect(canExecuteRibbonCommand(context({ onClearSelectedDisplayOverrides: undefined }), { id: "viewport.clear-selected-display-overrides" })).toBe(false);
+  });
+
+  it("dispatches 2D slice toolbar commands through the slice callback", () => {
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({ onSetSlice2DToolbar });
+
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-axis", axis: "x" });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-mode", mode: "slab" });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-position", positionPercent: 42 });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox", visible: true });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" });
+
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { axis: "x" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { mode: "slab" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { positionPercent: 42 });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { showAirbox: true });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, {
+      renderMode: "mesh-overlay",
+      showMesh: true,
+      showVectors: false,
+    });
+  });
+
+  it("requires the 2D slice callback for slice commands", () => {
+    expect(
+      canExecuteRibbonCommand(context({ onSetSlice2DToolbar: undefined }), {
+        id: "viewport.set-slice-mesh",
+        visible: true,
+      }),
+    ).toBe(false);
+    expect(
+      canExecuteRibbonCommand(context({ onSetSlice2DToolbar: vi.fn() }), {
+        id: "viewport.set-slice-mesh",
+        visible: true,
+      }),
+    ).toBe(true);
+  });
 });

@@ -14,7 +14,7 @@
  * so that `ViewportPanels.tsx` can switch incrementally.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { FemMeshData, FemVectorDomainFilter } from "./fem/femMeshTypes";
 import type { FemMeshPart, MeshEntityViewStateMap } from "../../lib/session/types";
 import type { ObjectViewMode, AntennaOverlay } from "../runs/control-room/shared";
@@ -26,7 +26,7 @@ import {
 import { computeExactSlice, type SliceResult } from "./fem/femSliceExact";
 import { resolveColorScale, type ResolvedColorScale } from "./fem/femSliceColorScale";
 import { buildSliceVisibilityState, type SliceVisibilityState } from "./fem/femSliceUtils";
-import { FemSliceToolbar, FemSliceTitleBar } from "./fem/FemSliceToolbar";
+import { FemSliceTitleBar } from "./fem/FemSliceTitleBar";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";
 
 // ── Props ────────────────────────────────────────────────────────
@@ -176,8 +176,6 @@ export default function FemSlice2DViewport({
   );
 
   // ── Compact detection ──────────────────────────────
-  const [compact, setCompact] = useState(false);
-
   return (
     <div className="relative h-full min-h-[360px] w-full overflow-hidden rounded-[8px] bg-[#1e1e2e]">
       {/* Placeholder: the actual renderer will be integrated here.
@@ -200,9 +198,6 @@ export default function FemSlice2DViewport({
           <FemSliceTitleBar model={model} />
         </ViewportOverlayLayout.TopLeft>
 
-        <ViewportOverlayLayout.BottomCenter>
-          <FemSliceToolbar model={model} compact={compact} />
-        </ViewportOverlayLayout.BottomCenter>
       </ViewportOverlayLayout>
     </div>
   );

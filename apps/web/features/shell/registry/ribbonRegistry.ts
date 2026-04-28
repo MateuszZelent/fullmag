@@ -23,6 +23,7 @@ import type {
   ViewportMeshRenderMode,
 } from "@/components/shell/ribbon/command-registry";
 import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
+import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
 import type { RibbonMenuNode, RibbonNodeState } from "./ribbonMenuTypes";
 
 // ---------------------------------------------------------------------------
@@ -176,6 +177,7 @@ export interface RibbonBuildContext {
   meshRenderMode?: string | null;
   meshOpacity?: number | null;
   selectedObjectOpacity?: number | null;
+  selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
   meshClipEnabled?: boolean | null;
   meshClipAxis?: "x" | "y" | "z" | null;
   meshClipPos?: number | null;
@@ -190,6 +192,9 @@ export interface RibbonBuildContext {
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
+  slice2DEnabled: boolean;
+  slice2DToolbar: Slice2DToolbarState | null;
+  slice2DDiagnostics: Slice2DDiagnostics | null;
 
   // ── Antenna context ──
   antennaSources: Array<{
