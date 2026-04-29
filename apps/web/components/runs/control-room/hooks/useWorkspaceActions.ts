@@ -100,6 +100,21 @@ export function shouldPatchDisplayForQuantitySwitch(args: {
   return previewControlsActive && cacheState === "display-patch";
 }
 
+const FEM_COMPUTE_FIELDS_QUANTITY_FALLBACKS: Readonly<Record<string, string>> = {
+  H_ant: "H_eff",
+};
+
+export function resolveComputeFieldsQuantity(args: {
+  femDiscretization: boolean;
+  selectedQuantity: string;
+}): string {
+  const { femDiscretization, selectedQuantity } = args;
+  if (!femDiscretization) {
+    return selectedQuantity;
+  }
+  return FEM_COMPUTE_FIELDS_QUANTITY_FALLBACKS[selectedQuantity] ?? selectedQuantity;
+}
+
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 
 function normalizeSessionExportProfile(value: string): SaveProfile {
@@ -486,6 +501,26 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
     if (action === "compute_fields") {
+      const computeQuantity = resolveComputeFieldsQuantity({
+        femDiscretization,
+        selectedQuantity,
+      });
+      if (computeQuantity !== selectedQuantity) {
+        setSelectedQuantity(computeQuantity);
+        setPreviewMessage(
+          `${selectedQuantity} is antenna-only in native FEM preview; computing ${computeQuantity} instead.`,
+        );
+        void patchDisplay({ active_quantity_id: computeQuantity })
+          .then(() => enqueueCommand({ kind: "compute_fields" }))
+          .catch((error) => {
+            setCommandErrorMessage(
+              error instanceof Error
+                ? `Compute fields failed before start: ${error.message}`
+                : "Compute fields failed before start",
+            );
+          });
+        return;
+      }
       void enqueueCommand({ kind: "compute_fields" });
       return;
     }
@@ -552,8 +587,11 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     }
   }, [
     enqueueCommand,
+    femDiscretization,
     handleCompute,
+    patchDisplay,
     runUntilInput,
+    selectedQuantity,
     solverSettings.fixedTimestep,
     solverSettings.integrator,
     solverSettings.energyTolerance,
@@ -561,6 +599,9 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     solverSettings.relaxAlgorithm,
     solverSettings.relaxAlpha,
     solverSettings.torqueTolerance,
+    setCommandErrorMessage,
+    setPreviewMessage,
+    setSelectedQuantity,
     workspaceStatus,
   ]);
 

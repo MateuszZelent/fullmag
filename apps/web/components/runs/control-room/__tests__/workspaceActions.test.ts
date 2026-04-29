@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveComputeFieldsQuantity,
   resolveQuantitySwitchCacheState,
   shouldPatchDisplayForQuantitySwitch,
 } from "../hooks/useWorkspaceActions";
@@ -49,5 +50,31 @@ describe("workspace quantity switch helpers", () => {
         previewControlsActive: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("workspace compute fields quantity guard", () => {
+  it("redirects native FEM compute fields away from antenna-only preview quantity", () => {
+    expect(
+      resolveComputeFieldsQuantity({
+        femDiscretization: true,
+        selectedQuantity: "H_ant",
+      }),
+    ).toBe("H_eff");
+  });
+
+  it("keeps supported native FEM and non-FEM quantities unchanged", () => {
+    expect(
+      resolveComputeFieldsQuantity({
+        femDiscretization: true,
+        selectedQuantity: "H_demag",
+      }),
+    ).toBe("H_demag");
+    expect(
+      resolveComputeFieldsQuantity({
+        femDiscretization: false,
+        selectedQuantity: "H_ant",
+      }),
+    ).toBe("H_ant");
   });
 });
