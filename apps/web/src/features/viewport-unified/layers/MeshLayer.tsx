@@ -8,11 +8,12 @@ export interface MeshLayerProps {
 }
 
 export function MeshLayer({ visible = true, children = null }: MeshLayerProps) {
-  if (!visible) {
-    return <>{children}</>;
-  }
   return (
-    <div className="h-full min-h-0 w-full" data-viewport-layer="explicit-topology">
+    <div
+      className="h-full min-h-0 w-full"
+      data-viewport-layer="explicit-topology"
+      data-viewport-layer-visible={visible ? "true" : "false"}
+    >
       {children}
     </div>
   );

@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useReducer } from "react";
+import { useRef, type Dispatch } from "react";
+import { useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
 import { PREVIEW_MAX_POINTS_DEFAULT } from "./vectorDensityBudget";
 import type {
   FemViewportNavigation,
@@ -181,39 +183,96 @@ export function femViewportStoreReducer(
   }
 }
 
-export function useFemViewportStore(initial?: Partial<FemViewportStoreState>) {
-  const hydrated = useMemo<FemViewportStoreState>(() => {
-    if (!initial) {
-      return INITIAL_FEM_VIEWPORT_STORE_STATE;
-    }
-    return {
-      view: {
-        ...INITIAL_FEM_VIEWPORT_STORE_STATE.view,
-        ...(initial.view ?? {}),
-        clip: {
-          ...INITIAL_FEM_VIEWPORT_STORE_STATE.view.clip,
-          ...(initial.view?.clip ?? {}),
-        },
+function mergeFemViewportStoreState(
+  base: FemViewportStoreState,
+  initial?: Partial<FemViewportStoreState>,
+): FemViewportStoreState {
+  if (!initial) {
+    return base;
+  }
+  return {
+    view: {
+      ...base.view,
+      ...(initial.view ?? {}),
+      clip: {
+        ...base.view.clip,
+        ...(initial.view?.clip ?? {}),
       },
-      panels: {
-        ...INITIAL_FEM_VIEWPORT_STORE_STATE.panels,
-        ...(initial.panels ?? {}),
-      },
-      runtime: {
-        ...INITIAL_FEM_VIEWPORT_STORE_STATE.runtime,
-        ...(initial.runtime ?? {}),
-      },
-      toolbar: {
-        ...INITIAL_FEM_VIEWPORT_STORE_STATE.toolbar,
-        ...(initial.toolbar ?? {}),
-      },
-      selection: {
-        ...INITIAL_FEM_VIEWPORT_STORE_STATE.selection,
-        ...(initial.selection ?? {}),
-      },
-    };
-  }, [initial]);
+    },
+    panels: {
+      ...base.panels,
+      ...(initial.panels ?? {}),
+    },
+    runtime: {
+      ...base.runtime,
+      ...(initial.runtime ?? {}),
+    },
+    toolbar: {
+      ...base.toolbar,
+      ...(initial.toolbar ?? {}),
+    },
+    selection: {
+      ...base.selection,
+      ...(initial.selection ?? {}),
+    },
+  };
+}
 
-  const [state, dispatch] = useReducer(femViewportStoreReducer, hydrated);
-  return { state, dispatch };
+interface FemViewportZustandStore {
+  state: FemViewportStoreState;
+  dispatch: Dispatch<FemViewportStoreAction>;
+  dispatchMany: (actions: FemViewportStoreAction[]) => void;
+  hydrateInitial: (initial?: Partial<FemViewportStoreState>) => void;
+}
+
+let hydratedFemViewportStore = false;
+
+export const femViewportZustandStore = createStore<FemViewportZustandStore>((set) => ({
+  state: INITIAL_FEM_VIEWPORT_STORE_STATE,
+  dispatch: (action) => {
+    set((current) => ({
+      state: femViewportStoreReducer(current.state, action),
+    }));
+  },
+  dispatchMany: (actions) => {
+    if (actions.length === 0) {
+      return;
+    }
+    set((current) => ({
+      state: actions.reduce(femViewportStoreReducer, current.state),
+    }));
+  },
+  hydrateInitial: (initial) => {
+    if (hydratedFemViewportStore) {
+      return;
+    }
+    hydratedFemViewportStore = true;
+    set((current) => ({
+      state: mergeFemViewportStoreState(current.state, initial),
+    }));
+  },
+}));
+
+export function resetFemViewportZustandStoreForTests(
+  initial: FemViewportStoreState = INITIAL_FEM_VIEWPORT_STORE_STATE,
+): void {
+  hydratedFemViewportStore = false;
+  femViewportZustandStore.setState({
+    state: initial,
+    dispatch: femViewportZustandStore.getState().dispatch,
+    dispatchMany: femViewportZustandStore.getState().dispatchMany,
+    hydrateInitial: femViewportZustandStore.getState().hydrateInitial,
+  });
+}
+
+export function useFemViewportStore(initial?: Partial<FemViewportStoreState>) {
+  const initializedRef = useRef(false);
+  if (!initializedRef.current) {
+    femViewportZustandStore.getState().hydrateInitial(initial);
+    initializedRef.current = true;
+  }
+  const state = useStore(femViewportZustandStore, (store) => store.state);
+  const dispatch = useStore(femViewportZustandStore, (store) => store.dispatch);
+  const dispatchMany = useStore(femViewportZustandStore, (store) => store.dispatchMany);
+  return { state, dispatch, dispatchMany };
 }

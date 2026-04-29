@@ -8,11 +8,12 @@ export interface BoundsLayerProps {
 }
 
 export function BoundsLayer({ visible = true, children = null }: BoundsLayerProps) {
-  if (!visible) {
-    return <>{children}</>;
-  }
   return (
-    <div className="h-full min-h-0 w-full" data-viewport-layer="bounds">
+    <div
+      className="h-full min-h-0 w-full"
+      data-viewport-layer="bounds"
+      data-viewport-layer-visible={visible ? "true" : "false"}
+    >
       {children}
     </div>
   );

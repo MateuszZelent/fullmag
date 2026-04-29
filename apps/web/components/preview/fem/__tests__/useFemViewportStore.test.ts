@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  femViewportZustandStore,
   femViewportStoreReducer,
   INITIAL_FEM_VIEWPORT_STORE_STATE,
+  resetFemViewportZustandStoreForTests,
   type FemViewportStoreAction,
 } from "../useFemViewportStore";
 
@@ -11,6 +13,10 @@ function reduce(action: FemViewportStoreAction) {
 }
 
 describe("femViewportStoreReducer", () => {
+  afterEach(() => {
+    resetFemViewportZustandStoreForTests();
+  });
+
   it("updates draw mode without mutating clip or vector state", () => {
     const base = {
       ...INITIAL_FEM_VIEWPORT_STORE_STATE,
@@ -106,5 +112,50 @@ describe("femViewportStoreReducer", () => {
     });
     expect(next.view.renderMode).toBe("points");
     expect(next.view.legendOpen).toBe(true);
+  });
+
+  it("keeps the zustand viewport state outside component mount lifetime", () => {
+    const dispatch = femViewportZustandStore.getState().dispatch;
+
+    dispatch({ type: "setRenderMode", value: "points" });
+    dispatch({ type: "setClipEnabled", value: true });
+    dispatch({ type: "setClipPosition", value: 72 });
+
+    const snapshot = femViewportZustandStore.getState().state;
+    expect(snapshot.view.renderMode).toBe("points");
+    expect(snapshot.view.clip).toMatchObject({
+      enabled: true,
+      position: 72,
+    });
+  });
+
+  it("batches multiple store actions into one state update", () => {
+    femViewportZustandStore.getState().dispatchMany([
+      { type: "setArrowColorMode", value: "x" },
+      { type: "setToolbarArrowColorField", value: "x" },
+    ]);
+
+    const snapshot = femViewportZustandStore.getState().state;
+    expect(snapshot.view.arrowColorMode).toBe("x");
+    expect(snapshot.toolbar.arrowColorField).toBe("x");
+  });
+
+  it("hydrates initial values only once so remounts do not wipe user state", () => {
+    const store = femViewportZustandStore.getState();
+    store.hydrateInitial({
+      view: {
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.view,
+        renderMode: "wireframe",
+      },
+    });
+    store.dispatch({ type: "setRenderMode", value: "points" });
+    store.hydrateInitial({
+      view: {
+        ...INITIAL_FEM_VIEWPORT_STORE_STATE.view,
+        renderMode: "surface",
+      },
+    });
+
+    expect(femViewportZustandStore.getState().state.view.renderMode).toBe("points");
   });
 });

@@ -4,8 +4,10 @@ interface ResolveFemGeometryRenderPassesInput {
   renderMode: RenderMode;
   hasGeometry: boolean;
   hasEdgesGeometry: boolean;
+  showSurfacePass: boolean;
   showSurfaceHiddenEdgesPass: boolean;
   showSurfaceVisibleEdgesPass: boolean;
+  showPointsPass: boolean;
 }
 
 export interface FemGeometryRenderPasses {
@@ -21,12 +23,14 @@ export function resolveFemGeometryRenderPasses({
   renderMode,
   hasGeometry,
   hasEdgesGeometry,
+  showSurfacePass,
   showSurfaceHiddenEdgesPass,
   showSurfaceVisibleEdgesPass,
+  showPointsPass,
 }: ResolveFemGeometryRenderPassesInput): FemGeometryRenderPasses {
-  const showSurface = renderMode === "surface" || renderMode === "surface+edges";
+  const showSurface = showSurfacePass && (renderMode === "surface" || renderMode === "surface+edges");
   const showWireOnlyEdges = renderMode === "wireframe" && hasEdgesGeometry;
-  const showWireOnlyMesh = renderMode === "wireframe" && hasGeometry && !hasEdgesGeometry;
+  const showWireOnlyMesh = renderMode === "wireframe" && hasGeometry;
   const showSurfaceEdges = renderMode === "surface+edges" && hasEdgesGeometry;
   const showSurfaceEdgeFallback =
     showSurfaceEdges && !showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass;
@@ -34,9 +38,9 @@ export function resolveFemGeometryRenderPasses({
   return {
     showSurface,
     showWireOnlyEdges,
-    showWireOnlyMesh,
+    showWireOnlyMesh: showWireOnlyMesh && !showWireOnlyEdges,
     showSurfaceEdges,
     showSurfaceEdgeFallback,
-    showPoints: renderMode === "points",
+    showPoints: showPointsPass && renderMode === "points",
   };
 }

@@ -154,7 +154,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showSurfaceVisibleEdgesPass: false,
     showVolumeHiddenEdgesPass: false,
     showVolumeVisibleEdgesPass: false,
-    showPointsPass: false,
+    showPointsPass: true,
     airboxDisabledByDefault: true,
     enableGeometryCompaction: true,
     enableGeometryNormals: true,
@@ -306,6 +306,8 @@ function normalizeFrontendDiagnosticFlags(
   normalized.shell.showViewportBar = false;
   normalized.viewportRouting.enableUnifiedViewportToolbar = true;
   normalized.femViewport.showToolbar = false;
+  normalized.femViewport.showSurfacePass = true;
+  normalized.femViewport.showPointsPass = true;
   return normalized;
 }
 

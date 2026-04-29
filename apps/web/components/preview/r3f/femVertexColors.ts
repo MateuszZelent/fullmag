@@ -12,8 +12,16 @@ import { applyMagnetizationHsl } from "../magnetizationColor";
 const BASE_VERTEX_COLOR_CACHE = new WeakMap<object, Map<string, Float32Array>>();
 const FIELD_DATA_ID_CACHE = new WeakMap<object, number>();
 const QUALITY_PER_FACE_ID_CACHE = new WeakMap<object, number>();
+const FIELD_VALUE_SCALE_CACHE = new WeakMap<object, Map<string, FieldValueScales>>();
 let NEXT_FIELD_DATA_CACHE_ID = 1;
 let NEXT_QUALITY_PER_FACE_CACHE_ID = 1;
+
+interface FieldValueScales {
+  x: number;
+  y: number;
+  z: number;
+  magnitude: number;
+}
 
 function fieldDataCacheId(fieldData: FemMeshData["fieldData"] | undefined): string {
   if (!fieldData || typeof fieldData !== "object") {
@@ -38,6 +46,48 @@ function qualityPerFaceCacheId(qualityPerFace: number[] | null | undefined): str
     QUALITY_PER_FACE_ID_CACHE.set(qualityPerFace, id);
   }
   return String(id);
+}
+
+function resolveFieldValueScales(
+  fieldValues: FemMeshData["fieldData"],
+  nNodes: number,
+  fieldNComp: number,
+): FieldValueScales {
+  if (!fieldValues || typeof fieldValues !== "object") {
+    return { x: 1, y: 1, z: 1, magnitude: 1 };
+  }
+  const cacheKey = `nodes:${nNodes}:ncomp:${fieldNComp}`;
+  let cache = FIELD_VALUE_SCALE_CACHE.get(fieldValues);
+  if (!cache) {
+    cache = new Map<string, FieldValueScales>();
+    FIELD_VALUE_SCALE_CACHE.set(fieldValues, cache);
+  }
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  let maxAbsX = 0;
+  let maxAbsY = 0;
+  let maxAbsZ = 0;
+  let maxMag = 0;
+  for (let nodeIndex = 0; nodeIndex < nNodes; nodeIndex += 1) {
+    const fx = fieldValues.x[nodeIndex] ?? 0;
+    const fy = fieldNComp >= 3 ? fieldValues.y[nodeIndex] ?? 0 : 0;
+    const fz = fieldNComp >= 3 ? fieldValues.z[nodeIndex] ?? 0 : 0;
+    maxAbsX = Math.max(maxAbsX, Math.abs(fx));
+    maxAbsY = Math.max(maxAbsY, Math.abs(fy));
+    maxAbsZ = Math.max(maxAbsZ, Math.abs(fz));
+    maxMag = Math.max(maxMag, Math.sqrt(fx * fx + fy * fy + fz * fz));
+  }
+  const next = {
+    x: maxAbsX > 1e-12 ? maxAbsX : 1,
+    y: maxAbsY > 1e-12 ? maxAbsY : 1,
+    z: maxAbsZ > 1e-12 ? maxAbsZ : 1,
+    magnitude: maxMag > 1e-12 ? maxMag : 1,
+  };
+  cache.set(cacheKey, next);
+  return next;
 }
 
 export function computeVertexColors(
@@ -118,29 +168,7 @@ export function computeVertexColors(
   }
 
   const fieldValues = fieldData;
-  let scaleX = 1;
-  let scaleY = 1;
-  let scaleZ = 1;
-  let scaleMagnitude = 1;
-  if (fieldValues) {
-    let maxAbsX = 0;
-    let maxAbsY = 0;
-    let maxAbsZ = 0;
-    let maxMag = 0;
-    for (let nodeIndex = 0; nodeIndex < nNodes; nodeIndex += 1) {
-      const fx = fieldValues.x[nodeIndex] ?? 0;
-      const fy = fieldNComp >= 3 ? fieldValues.y[nodeIndex] ?? 0 : 0;
-      const fz = fieldNComp >= 3 ? fieldValues.z[nodeIndex] ?? 0 : 0;
-      maxAbsX = Math.max(maxAbsX, Math.abs(fx));
-      maxAbsY = Math.max(maxAbsY, Math.abs(fy));
-      maxAbsZ = Math.max(maxAbsZ, Math.abs(fz));
-      maxMag = Math.max(maxMag, Math.sqrt(fx * fx + fy * fy + fz * fz));
-    }
-    scaleX = maxAbsX > 1e-12 ? maxAbsX : 1;
-    scaleY = maxAbsY > 1e-12 ? maxAbsY : 1;
-    scaleZ = maxAbsZ > 1e-12 ? maxAbsZ : 1;
-    scaleMagnitude = maxMag > 1e-12 ? maxMag : 1;
-  }
+  const scales = resolveFieldValueScales(fieldValues, nNodes, fieldNComp);
 
   for (let nodeIndex = 0; nodeIndex < nNodes; nodeIndex += 1) {
     if (!fieldValues || field === "none") {
@@ -154,20 +182,20 @@ export function computeVertexColors(
           if (fieldNComp >= 3) {
             applyMagnetizationHsl(fx, fy, fz, color);
           } else {
-            magnitudeColor(Math.abs(fx) / scaleX, color);
+            magnitudeColor(Math.abs(fx) / scales.x, color);
           }
           break;
         case "x":
-          divergingColor(fx / scaleX, color);
+          divergingColor(fx / scales.x, color);
           break;
         case "y":
-          divergingColor(fy / scaleY, color);
+          divergingColor(fy / scales.y, color);
           break;
         case "z":
-          divergingColor(fz / scaleZ, color);
+          divergingColor(fz / scales.z, color);
           break;
         case "magnitude":
-          magnitudeColor(Math.sqrt(fx * fx + fy * fy + fz * fz) / scaleMagnitude, color);
+          magnitudeColor(Math.sqrt(fx * fx + fy * fy + fz * fz) / scales.magnitude, color);
           break;
       }
     }

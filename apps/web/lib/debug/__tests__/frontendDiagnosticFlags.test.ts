@@ -75,6 +75,22 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(loaded.viewportRouting.enableUnifiedViewportToolbar).toBe(true);
   });
 
+  it("normalizes critical FEM render passes even when persisted diagnostic flags disable them", () => {
+    memoryStorage.setItem(
+      "fullmag.frontend_diagnostic_flags.v1",
+      JSON.stringify({
+        femViewport: {
+          showSurfacePass: false,
+          showPointsPass: false,
+        },
+      }),
+    );
+
+    const loaded = loadFrontendDiagnosticFlagsFromStorage();
+    expect(loaded.femViewport.showSurfacePass).toBe(true);
+    expect(loaded.femViewport.showPointsPass).toBe(true);
+  });
+
   it("contains workspace graph bridge flag in defaults", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     expect(defaults.workspace.enableWorkspaceGraphBridge).toBe(true);

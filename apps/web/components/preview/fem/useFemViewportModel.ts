@@ -127,7 +127,7 @@ export function useFemViewportModel({
     SUPPORTED_ARROW_COLOR_FIELDS.has(colorField as FemArrowColorMode)
       ? (colorField as FemArrowColorMode)
       : "orientation";
-  const { state, dispatch } = useFemViewportStore({
+  const { state, dispatch, dispatchMany } = useFemViewportStore({
     view: {
       renderMode: "surface",
       opacity: 100,
@@ -373,9 +373,11 @@ export function useFemViewportModel({
       SUPPORTED_ARROW_COLOR_FIELDS.has(colorField as FemArrowColorMode)
         ? (colorField as FemArrowColorMode)
         : "orientation";
-    dispatch({ type: "setArrowColorMode", value: next });
-    dispatch({ type: "setToolbarArrowColorField", value: next });
-  }, [colorField, controlledArrowColorMode, dispatch]);
+    dispatchMany([
+      { type: "setArrowColorMode", value: next },
+      { type: "setToolbarArrowColorField", value: next },
+    ]);
+  }, [colorField, controlledArrowColorMode, dispatchMany]);
 
   useEffect(() => {
     dispatch({ type: "setSurfaceColorField", value: colorField });

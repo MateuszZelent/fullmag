@@ -9,8 +9,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "wireframe",
         hasGeometry: true,
         hasEdgesGeometry: true,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: false,
@@ -28,8 +30,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "wireframe",
         hasGeometry: true,
         hasEdgesGeometry: false,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: false,
@@ -47,8 +51,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "surface+edges",
         hasGeometry: true,
         hasEdgesGeometry: true,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: true,
@@ -64,8 +70,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "surface+edges",
         hasGeometry: true,
         hasEdgesGeometry: false,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: true,
@@ -79,8 +87,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "surface",
         hasGeometry: true,
         hasEdgesGeometry: false,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: true,
@@ -97,8 +107,10 @@ describe("resolveFemGeometryRenderPasses", () => {
         renderMode: "points",
         hasGeometry: true,
         hasEdgesGeometry: true,
+        showSurfacePass: true,
         showSurfaceHiddenEdgesPass: true,
         showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
       }),
     ).toMatchObject({
       showSurface: false,
@@ -106,6 +118,38 @@ describe("resolveFemGeometryRenderPasses", () => {
       showWireOnlyMesh: false,
       showSurfaceEdges: false,
       showPoints: true,
+    });
+  });
+
+  it("honors diagnostic surface and points pass gates", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "surface",
+        hasGeometry: true,
+        hasEdgesGeometry: false,
+        showSurfacePass: false,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showPoints: false,
+    });
+
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "points",
+        hasGeometry: true,
+        hasEdgesGeometry: false,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: false,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showPoints: false,
     });
   });
 });

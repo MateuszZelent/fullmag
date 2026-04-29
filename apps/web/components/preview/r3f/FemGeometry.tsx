@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import type { FemMeshData, FemColorField, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
@@ -163,10 +163,12 @@ export const FemGeometry = memo(function FemGeometry({
   onFaceHover,
   onFaceUnhover,
   onFaceContextMenu,
+  showSurfacePass = true,
   showSurfaceHiddenEdgesPass = true,
   showSurfaceVisibleEdgesPass = true,
   showVolumeHiddenEdgesPass = true,
   showVolumeVisibleEdgesPass = true,
+  showPointsPass = true,
   enableGeometryCompaction = true,
   enableGeometryNormals = true,
   enableGeometryVertexColors = true,
@@ -586,12 +588,22 @@ export const FemGeometry = memo(function FemGeometry({
   // emergency fallback because it has proven unreliable after ribbon mode
   // changes in the hosted viewport.
   const edgesGeometry = useMemo(() => {
-    const needsEdges = renderMode === "surface+edges" || renderMode === "wireframe";
+    const needsEdges =
+      renderMode === "wireframe" ||
+      (
+        renderMode === "surface+edges" &&
+        (showSurfaceHiddenEdgesPass || showSurfaceVisibleEdgesPass)
+    );
     if (!needsEdges || !geometry) return null;
-    const wireGeometry = new THREE.WireframeGeometry(geometry);
-    wireGeometry.computeBoundingSphere();
-    return wireGeometry;
-  }, [geometry, renderMode]);
+    try {
+      const wireGeometry = new THREE.WireframeGeometry(geometry);
+      wireGeometry.computeBoundingSphere();
+      return wireGeometry;
+    } catch (error) {
+      console.warn("[fem-geometry] WireframeGeometry construction failed; falling back to material wireframe", error);
+      return null;
+    }
+  }, [geometry, renderMode, showSurfaceHiddenEdgesPass, showSurfaceVisibleEdgesPass]);
 
   // Volume-edge wireframes are intentionally disabled in this surface mesh
   // renderer. Building tetrahedral edge buffers during UI mode switches can
@@ -826,7 +838,7 @@ export const FemGeometry = memo(function FemGeometry({
     t: THREE.BufferGeometry | null;
     p: THREE.BufferGeometry | null;
   }>({ g: null, e: null, t: null, p: null });
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (prevGeomsRef.current.g && prevGeomsRef.current.g !== geometry) {
       prevGeomsRef.current.g.dispose();
     }
@@ -864,8 +876,10 @@ export const FemGeometry = memo(function FemGeometry({
     renderMode,
     hasGeometry: geometry != null,
     hasEdgesGeometry: edgesGeometry != null,
+    showSurfacePass,
     showSurfaceHiddenEdgesPass,
     showSurfaceVisibleEdgesPass,
+    showPointsPass,
   });
 
   useEffect(() => {
@@ -899,6 +913,8 @@ export const FemGeometry = memo(function FemGeometry({
         activeMask: meshData.activeMask?.length ?? null,
         quantityDomain: meshData.quantityDomain,
         fieldRevision,
+        showSurfacePass,
+        showPointsPass,
       },
       geometry: {
         hasGeometry: Boolean(geometry),
@@ -937,7 +953,9 @@ export const FemGeometry = memo(function FemGeometry({
     opacity,
     pointsGeometry,
     renderMode,
+    showPointsPass,
     showPoints,
+    showSurfacePass,
     showSurface,
     showSurfaceEdgeFallback,
     showSurfaceEdges,
