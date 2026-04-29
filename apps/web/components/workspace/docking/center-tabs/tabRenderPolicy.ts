@@ -4,6 +4,7 @@ type RenderPolicyTab = Pick<WorkspaceTab, "id" | "kind" | "lifecycle">;
 
 export interface WorkspaceTabRenderPolicyOptions {
   enableWebGLWarmKeepAlive?: boolean;
+  warmWebGLTabIds?: ReadonlySet<string> | readonly string[] | null;
   /** @deprecated Hidden WebGL warm keepalive now retains every WebGL tab. */
   recentWebGLTabId?: string | null;
   webGLWarmKeepAliveDisabledByContextLoss?: boolean;
@@ -43,9 +44,16 @@ export function resolveWorkspaceTabRenderDecision(
     return { render: true, visible: true, forceMount: tab.lifecycle === "warm", reason: "active" };
   }
   if (isWebGLWorkspaceTab(tab)) {
+    const warmTabIds = options.warmWebGLTabIds;
+    const tabWithinWarmBudget =
+      !warmTabIds ||
+      ("has" in warmTabIds
+        ? warmTabIds.has(tab.id)
+        : warmTabIds.includes(tab.id));
     const canWarmMount =
       options.enableWebGLWarmKeepAlive === true &&
-      !options.webGLWarmKeepAliveDisabledByContextLoss;
+      !options.webGLWarmKeepAliveDisabledByContextLoss &&
+      tabWithinWarmBudget;
     if (canWarmMount) {
       return { render: true, visible: false, forceMount: true, reason: "warm-hidden" };
     }

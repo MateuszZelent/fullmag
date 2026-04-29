@@ -22,6 +22,7 @@ import { DockCenterPreviewNotices } from "./center-tabs/DockCenterPreviewNotices
 import { DockCenterTabContent } from "./center-tabs/DockCenterTabContent";
 import { DockCenterTabHeader } from "./center-tabs/DockCenterTabHeader";
 import {
+  isWebGLWorkspaceTab,
   resolveWorkspaceTabRenderDecision,
 } from "./center-tabs/tabRenderPolicy";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
@@ -145,6 +146,31 @@ export default function DockCenterTabs() {
   const previewNoticesVisible =
     FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
   const activeTabIsCharts = activeTab?.kind === "viewport-charts";
+  const warmWebGLTabIds = useMemo(() => {
+    if (
+      !dockCenterFlags.enableWebGLWarmKeepAlive ||
+      webGLWarmKeepAliveDisabledByContextLoss ||
+      !activeTab
+    ) {
+      return null;
+    }
+    const budget = Math.max(0, dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit ?? 2);
+    const ids = new Set<string>();
+    for (let index = tabs.length - 1; index >= 0 && ids.size < budget; index -= 1) {
+      const tab = tabs[index];
+      if (!tab || tab.id === activeTab.id || !isWebGLWorkspaceTab(tab)) {
+        continue;
+      }
+      ids.add(tab.id);
+    }
+    return ids;
+  }, [
+    activeTab,
+    dockCenterFlags.enableWebGLWarmKeepAlive,
+    dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit,
+    tabs,
+    webGLWarmKeepAliveDisabledByContextLoss,
+  ]);
 
   const renderTabContent = (tab: WorkspaceTab, viewportVisible = tab.id === activeTab?.id) => (
     <DockCenterTabContent
@@ -245,6 +271,7 @@ export default function DockCenterTabs() {
       {tabs.map((tab) => {
         const renderDecision = resolveWorkspaceTabRenderDecision(tab, activeTab?.id, {
           enableWebGLWarmKeepAlive: dockCenterFlags.enableWebGLWarmKeepAlive,
+          warmWebGLTabIds,
           webGLWarmKeepAliveDisabledByContextLoss,
         });
         if (!renderDecision.render) {

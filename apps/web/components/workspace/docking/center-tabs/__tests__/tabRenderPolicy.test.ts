@@ -112,6 +112,40 @@ describe("workspace center tab render policy", () => {
     });
   });
 
+  it("honors the warm WebGL tab budget", () => {
+    expect(
+      resolveWorkspaceTabRenderDecision(
+        { id: "core:3d", kind: "viewport-3d", lifecycle: "warm" },
+        "core:charts",
+        {
+          enableWebGLWarmKeepAlive: true,
+          warmWebGLTabIds: new Set(["core:3d"]),
+        },
+      ),
+    ).toEqual({
+      render: true,
+      visible: false,
+      forceMount: true,
+      reason: "warm-hidden",
+    });
+
+    expect(
+      resolveWorkspaceTabRenderDecision(
+        { id: "core:2d", kind: "viewport-2d", lifecycle: "warm" },
+        "core:charts",
+        {
+          enableWebGLWarmKeepAlive: true,
+          warmWebGLTabIds: new Set(["core:3d"]),
+        },
+      ),
+    ).toEqual({
+      render: false,
+      visible: false,
+      forceMount: false,
+      reason: "warm-disabled",
+    });
+  });
+
   it("falls back to unmounting hidden WebGL tabs after warm keepalive context loss", () => {
     expect(
       resolveWorkspaceTabRenderDecision(

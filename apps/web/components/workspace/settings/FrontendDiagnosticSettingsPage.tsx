@@ -67,6 +67,8 @@ const DESCRIPTIONS: Record<string, string> = {
   "dockCenterTabs.enableAnalyzeViewport": "Enable AnalyzeViewport for analyze/result tabs.",
   "dockCenterTabs.enableViewportCanvas": "Enable ViewportCanvasArea for viewport/result-quantity tabs.",
   "dockCenterTabs.enablePinOverlayButton": "Enable bottom-right Pin/Unpin overlay button in tab panel.",
+  "dockCenterTabs.enableWebGLWarmKeepAlive": "Keep hidden WebGL tabs mounted to avoid destructive canvas remounts.",
+  "dockCenterTabs.webGLWarmKeepAliveHiddenTabLimit": "Maximum hidden WebGL tabs to keep warm-mounted.",
   "magnetizationAuthoring.enablePresetTextureBackendSync": "Immediately sync preset texture edits to backend scene state.",
   "magnetizationAuthoring.showPresetTextureBackendSyncProgress": "Show progress card for backend texture sync.",
   "magnetizationAuthoring.presetTextureBackendSyncDebounceMs": "Debounce window for texture sync requests (ms).",
