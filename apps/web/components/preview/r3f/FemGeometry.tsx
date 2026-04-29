@@ -109,6 +109,36 @@ function hasFinitePositionTriples(values: Float32Array | ArrayLike<number>): boo
   return true;
 }
 
+export function resolveFemClipPlane({
+  enabled,
+  axis,
+  clipPos,
+  size,
+}: {
+  enabled?: boolean;
+  axis?: "x" | "y" | "z";
+  clipPos?: number;
+  size: THREE.Vector3;
+}): THREE.Plane | null {
+  if (!enabled) {
+    return null;
+  }
+  const axisSize = axis === "y" ? size.y : axis === "z" ? size.z : size.x;
+  if (!Number.isFinite(axisSize) || axisSize <= 0) {
+    return null;
+  }
+  const resolvedClipPos =
+    typeof clipPos === "number" && Number.isFinite(clipPos) ? clipPos : 50;
+  const planePosition = ((resolvedClipPos / 100) - 0.5) * axisSize;
+  const normal =
+    axis === "y"
+      ? new THREE.Vector3(0, -1, 0)
+      : axis === "z"
+        ? new THREE.Vector3(0, 0, -1)
+        : new THREE.Vector3(-1, 0, 0);
+  return new THREE.Plane(normal, planePosition);
+}
+
 /* ── Helper: compute vertex colors from field data ─────────────────── */
 export const FemGeometry = memo(function FemGeometry({
   meshData,
@@ -332,7 +362,6 @@ export const FemGeometry = memo(function FemGeometry({
     mark("post-center");
 
     const isVolumetric = elements.length >= 4;
-    const doVolumeClip = isVolumetric && clipEnabled;
     const doShrink = isVolumetric && shrinkFactor && shrinkFactor < 0.999;
     const baseElementOffsets = preferredElementIndices
       ? (() => {
@@ -358,25 +387,7 @@ export const FemGeometry = memo(function FemGeometry({
     let vMap: Int32Array | null = null;
     let faceIndexMap: Int32Array | null = null;
 
-    const getAxisIdx = () => clipAxis === "y" ? 1 : clipAxis === "z" ? 2 : 0;
-    const clipAxisSize = clipAxis === "y" ? size.y : clipAxis === "z" ? size.z : size.x;
-    const posReal = ((clipPos ?? 50) / 100 - 0.5) * clipAxisSize;
-    const axisIdx = getAxisIdx();
-    const activeElementOffsets = clipEnabled && isVolumetric
-      ? baseElementOffsets.filter((elementOffset) => {
-          const a = elements[elementOffset];
-          const b = elements[elementOffset + 1];
-          const cIdx = elements[elementOffset + 2];
-          const d = elements[elementOffset + 3];
-          const cx = (
-            positions[a * 3 + axisIdx] +
-            positions[b * 3 + axisIdx] +
-            positions[cIdx * 3 + axisIdx] +
-            positions[d * 3 + axisIdx]
-          ) / 4;
-          return cx <= posReal;
-        })
-      : baseElementOffsets;
+    const activeElementOffsets = baseElementOffsets;
     mark("post-selection");
 
     if (doShrink) {
@@ -416,34 +427,6 @@ export const FemGeometry = memo(function FemGeometry({
             vIdx++;
           }
         }
-      }
-    } else if (doVolumeClip) {
-      const faceMap = new Map<bigint, [number, number, number]>();
-      const addFace = (a: number, b: number, c: number) => {
-        let v1 = a, v2 = b, v3 = c;
-        if (v2 < v1 && v2 < v3) { v1 = b; v2 = c; v3 = a; }
-        else if (v3 < v1 && v3 < v2) { v1 = c; v2 = a; v3 = b; }
-        const key = BigInt(v1) | (BigInt(Math.min(v2, v3)) << 20n) | (BigInt(Math.max(v2, v3)) << 40n);
-        if (faceMap.has(key)) faceMap.delete(key);
-        else faceMap.set(key, [a, b, c]);
-      };
-
-      for (const elementOffset of activeElementOffsets) {
-        const a = elements[elementOffset];
-        const b = elements[elementOffset + 1];
-        const cIdx = elements[elementOffset + 2];
-        const d = elements[elementOffset + 3];
-        addFace(a, b, d);
-        addFace(b, cIdx, d);
-        addFace(cIdx, a, d);
-        addFace(a, cIdx, b);
-      }
-      finalIndices = new Uint32Array(faceMap.size * 3);
-      let idx = 0;
-      for (const face of faceMap.values()) {
-        finalIndices[idx++] = face[0];
-        finalIndices[idx++] = face[1];
-        finalIndices[idx++] = face[2];
       }
     } else {
       const sourceFaceIndices = preferredFaceIndices
@@ -542,7 +525,7 @@ export const FemGeometry = memo(function FemGeometry({
               nNodes,
               nElements,
               compacted: Boolean(vMap),
-              clipped: Boolean(clipEnabled),
+              clipped: false,
             },
           });
           prev = end;
@@ -550,7 +533,7 @@ export const FemGeometry = memo(function FemGeometry({
       }
       sample("topologyTotal", totalStart, {
         compacted: Boolean(vMap),
-        clipped: Boolean(clipEnabled),
+        clipped: false,
       });
     }
 
@@ -580,9 +563,6 @@ export const FemGeometry = memo(function FemGeometry({
     nNodes,
     nodes,
     customBoundaryFaces,
-    clipAxis,
-    clipEnabled,
-    clipPos,
     displayBoundaryFaceIndices,
     displayElementIndices,
     enableGeometryCompaction,
@@ -590,6 +570,16 @@ export const FemGeometry = memo(function FemGeometry({
     enableGeometryVertexColors,
     shrinkFactor,
   ]);
+
+  const clippingPlanes = useMemo(() => {
+    const plane = resolveFemClipPlane({
+      enabled: clipEnabled,
+      axis: clipAxis,
+      clipPos,
+      size: geoSize,
+    });
+    return plane ? [plane] : null;
+  }, [clipAxis, clipEnabled, clipPos, geoSize.x, geoSize.y, geoSize.z]);
 
   // ── Edges geometry memo: used for shaded surface edge overlays and
   // wireframe-only mode. The direct material wireframe path is kept only as an
@@ -960,6 +950,7 @@ export const FemGeometry = memo(function FemGeometry({
     scheduleInvalidate();
   }, [
     edgesGeometry,
+    clippingPlanes,
     pointsGeometry,
     renderMode,
     scheduleInvalidate,
@@ -1070,6 +1061,7 @@ export const FemGeometry = memo(function FemGeometry({
               polygonOffset={surfacePolicy.polygonOffset}
               polygonOffsetFactor={surfacePolicy.polygonOffsetFactor}
               polygonOffsetUnits={surfacePolicy.polygonOffsetUnits}
+              clippingPlanes={clippingPlanes}
             />
           ) : (
             <meshBasicMaterial
@@ -1083,6 +1075,7 @@ export const FemGeometry = memo(function FemGeometry({
               polygonOffset={surfacePolicy.polygonOffset}
               polygonOffsetFactor={surfacePolicy.polygonOffsetFactor}
               polygonOffsetUnits={surfacePolicy.polygonOffsetUnits}
+              clippingPlanes={clippingPlanes}
             />
           )}
         </mesh>
@@ -1096,6 +1089,7 @@ export const FemGeometry = memo(function FemGeometry({
             transparent
             depthWrite={false}
             depthTest={false}
+            clippingPlanes={clippingPlanes}
           />
         </lineSegments>
       ) : null}
@@ -1110,6 +1104,7 @@ export const FemGeometry = memo(function FemGeometry({
             depthWrite={false}
             depthTest={false}
             side={THREE.DoubleSide}
+            clippingPlanes={clippingPlanes}
           />
         </mesh>
       ) : null}
@@ -1124,6 +1119,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
                 depthTest={edgePolicy.depthTest}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1135,6 +1131,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={hiddenEdgePolicy.transparent}
                 depthWrite={hiddenEdgePolicy.depthWrite}
                 depthTest={hiddenEdgePolicy.depthTest}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1146,6 +1143,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
                 depthTest={edgePolicy.depthTest}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1160,6 +1158,7 @@ export const FemGeometry = memo(function FemGeometry({
             transparent={selectionEdgePolicy.transparent}
             depthWrite={selectionEdgePolicy.depthWrite}
             depthTest={false}
+            clippingPlanes={clippingPlanes}
           />
         </lineSegments>
       ) : null}
@@ -1178,6 +1177,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
                 depthTest={false}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1193,6 +1193,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={hiddenEdgePolicy.transparent}
                 depthWrite={hiddenEdgePolicy.depthWrite}
                 depthTest={hiddenEdgePolicy.depthTest}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1208,6 +1209,7 @@ export const FemGeometry = memo(function FemGeometry({
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
                 depthTest={edgePolicy.depthTest}
+                clippingPlanes={clippingPlanes}
               />
             </lineSegments>
           ) : null}
@@ -1225,6 +1227,7 @@ export const FemGeometry = memo(function FemGeometry({
             depthWrite={pointPolicy.depthWrite}
             depthTest={false}
             opacity={Math.max(opacityVal, 0.82)} 
+            clippingPlanes={clippingPlanes}
           />
         </points>
       )}
