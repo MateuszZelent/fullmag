@@ -33,6 +33,23 @@ interface UseStageExecutionResult {
   refresh: () => Promise<void>;
 }
 
+export function shouldFetchStageExecutionResource(args: {
+  enabled: boolean;
+  sessionKey: string | null;
+  revision: number | null;
+  fetchIdentity: string | null;
+  notFoundIdentity: string | null;
+}): boolean {
+  return Boolean(
+    args.enabled &&
+      args.sessionKey &&
+      args.revision != null &&
+      args.revision > 0 &&
+      args.fetchIdentity &&
+      args.notFoundIdentity !== args.fetchIdentity,
+  );
+}
+
 export function useStageExecution(options?: {
   enabled?: boolean;
   sessionKey?: string | null;
@@ -46,14 +63,26 @@ export function useStageExecution(options?: {
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
   const lastFetchedIdentityRef = useRef<string | null>(null);
+  const notFoundIdentityRef = useRef<string | null>(null);
 
   const fetchIdentity = sessionKey
     ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
     : null;
 
   const fetchStageExecution = useCallback(async () => {
-    if (!enabled || !sessionKey) {
+    if (
+      !shouldFetchStageExecutionResource({
+        enabled,
+        sessionKey,
+        revision,
+        fetchIdentity,
+        notFoundIdentity: notFoundIdentityRef.current,
+      })
+    ) {
       if (mountedRef.current) {
+        if (fetchIdentity && notFoundIdentityRef.current === fetchIdentity) {
+          lastFetchedIdentityRef.current = fetchIdentity;
+        }
         setStageExecution(null);
         setError(null);
         setLoading(false);
@@ -68,6 +97,7 @@ export function useStageExecution(options?: {
         return;
       }
       lastFetchedIdentityRef.current = `${sessionKey}:${resource.revision}`;
+      notFoundIdentityRef.current = null;
       setStageExecution(mapStageExecutionResource(resource));
       setError(null);
       setLoading(false);
@@ -80,6 +110,7 @@ export function useStageExecution(options?: {
           ? err
           : LiveApiError.networkError("stage-execution", err);
       if (apiError.status === 404) {
+        notFoundIdentityRef.current = fetchIdentity;
         lastFetchedIdentityRef.current = fetchIdentity;
         setStageExecution(null);
         setError(null);
@@ -90,12 +121,13 @@ export function useStageExecution(options?: {
       setError(apiError);
       setLoading(false);
     }
-  }, [enabled, fetchIdentity, sessionKey]);
+  }, [enabled, fetchIdentity, revision, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
-    if (!enabled || !sessionKey) {
+    if (!enabled || !sessionKey || revision == null || revision <= 0) {
       lastFetchedIdentityRef.current = null;
+      notFoundIdentityRef.current = null;
       setStageExecution(null);
       setError(null);
       setLoading(false);

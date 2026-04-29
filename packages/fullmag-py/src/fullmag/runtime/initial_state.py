@@ -143,7 +143,7 @@ def prepare_initial_magnetization(
 
     Supports all IR kinds:
     - ``"uniform"`` — fills every point with the same direction
-    - ``"random_seeded"`` — deterministic pseudo-random per point
+    - ``"random"`` / ``"random_seeded"`` — deterministic pseudo-random per point
     - ``"sampled_field"`` — returns the stored values (no re-sampling)
     - ``"preset_texture"`` — evaluates analytic preset after applying the
       inverse texture transform
@@ -174,9 +174,9 @@ def prepare_initial_magnetization(
             direction /= norm
         return np.tile(direction, (n, 1))
 
-    elif kind == "random_seeded":
+    elif kind in {"random", "random_seeded"}:
         result = evaluate_preset_texture(
-            "random_seeded",
+            "random",
             {"seed": int(spec.get("seed", 1))},
             pts.tolist(),
         )

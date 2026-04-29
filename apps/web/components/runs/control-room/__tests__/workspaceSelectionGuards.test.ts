@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveFailedWorkspaceSelectionPersistence,
   resolvePersistedWorkspaceSelection,
   resolveRemoteWorkspaceSelectionHydration,
   workspaceSelectionIdentity,
@@ -82,5 +83,24 @@ describe("workspaceSelectionGuards", () => {
         pendingIdentity,
       }),
     ).toEqual({ accepted: false, clearPending: false });
+  });
+
+  it("clears an optimistic persisted identity after a failed selection persist so the same selection can retry", () => {
+    const attemptedIdentity = workspaceSelectionIdentity({ selected_node_id: "objects/body" });
+    const previousIdentity = workspaceSelectionIdentity({ selected_node_id: "study-root" });
+
+    expect(
+      resolveFailedWorkspaceSelectionPersistence({
+        attemptedIdentity,
+        lastPersistedIdentity: attemptedIdentity,
+      }),
+    ).toBeNull();
+
+    expect(
+      resolveFailedWorkspaceSelectionPersistence({
+        attemptedIdentity,
+        lastPersistedIdentity: previousIdentity,
+      }),
+    ).toBe(previousIdentity);
   });
 });

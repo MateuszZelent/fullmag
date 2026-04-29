@@ -12,6 +12,7 @@ import type { TextureTransform3D } from "@/lib/textureTransform";
 
 export type MagneticPresetKind =
   | "uniform"
+  | "random"
   | "random_seeded"
   | "vortex"
   | "antivortex"
@@ -34,7 +35,7 @@ export interface MagnetizationMapping {
 
 export interface MagnetizationAsset {
   id: string;
-  kind: "uniform" | "random_seeded" | "analytic_texture" | "sampled_field" | "external_dataset";
+  kind: "uniform" | "random" | "random_seeded" | "analytic_texture" | "sampled_field" | "external_dataset";
   presetKind: MagneticPresetKind | null;
   presetParams: Record<string, unknown>;
   mapping: MagnetizationMapping;

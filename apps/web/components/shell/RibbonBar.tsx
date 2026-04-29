@@ -818,7 +818,7 @@ export default function RibbonBar(props: RibbonBarProps) {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex flex-col w-full bg-card/10 border-b border-border/15 backdrop-blur-xl shrink-0 z-30">
+      <div className="flex h-[130px] w-full shrink-0 flex-col overflow-hidden border-b border-border/15 bg-card/10 backdrop-blur-xl z-30">
         <RibbonTabStrip
           visibleTabs={visibleTabs}
           activeTab={activeTab}

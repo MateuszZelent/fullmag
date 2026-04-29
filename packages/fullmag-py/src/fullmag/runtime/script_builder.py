@@ -737,7 +737,7 @@ def _render_geometries_from_override(
                     lines.append(f"{var_name}.m = fm.texture.uniform({_py_number(float(val[0]))}, {_py_number(float(val[1]))}, {_py_number(float(val[2]))})")
             elif mag_kind == "random":
                 seed = mag.get("seed")
-                lines.append(f"{var_name}.m = fm.texture.random_seeded(seed={int(str(seed)) if seed is not None else 1})")
+                lines.append(f"{var_name}.m = fm.texture.random(seed={int(str(seed)) if seed is not None else 1})")
             elif mag_kind in {"file", "sampled"}:
                 src = str(mag.get("source_path", ""))
                 if src:
@@ -2165,7 +2165,7 @@ def _render_initial_magnetization(
     if isinstance(initializer, UniformMagnetization):
         return f"{magnet_var}.m = fm.texture.uniform({_py_number(initializer.value[0])}, {_py_number(initializer.value[1])}, {_py_number(initializer.value[2])})"
     if isinstance(initializer, RandomMagnetization):
-        return f"{magnet_var}.m = fm.texture.random_seeded(seed={initializer.seed})"
+        return f"{magnet_var}.m = fm.texture.random(seed={initializer.seed})"
     if isinstance(initializer, SampledMagnetization):
         if initializer.source_path:
             kwargs = []
@@ -3052,6 +3052,7 @@ _DEFAULT_TEXTURE_TRANSFORM = {
 
 _DEFAULT_TEXTURE_PREVIEW_PROXY = {
     "uniform": "none",
+    "random": "none",
     "random_seeded": "none",
     "vortex": "disc",
     "antivortex": "disc",
@@ -3077,9 +3078,9 @@ def _render_texture_factory_call(
         if isinstance(direction, list) and len(direction) == 3:
             return f"fm.texture.uniform{_render_vector_literal(direction)}"
         return "fm.texture.uniform((1.0, 0.0, 0.0))"
-    if preset_kind == "random_seeded":
+    if preset_kind in {"random", "random_seeded"}:
         seed = params.get("seed")
-        return f"fm.texture.random_seeded(seed={int(str(seed)) if seed is not None else 1})"
+        return f"fm.texture.random(seed={int(str(seed)) if seed is not None else 1})"
     if preset_kind in {"vortex", "antivortex"}:
         kwargs = [
             f"circulation={int(str(params.get('circulation', 1)))}",

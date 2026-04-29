@@ -1,5 +1,6 @@
 export type MagneticPresetKind =
   | "uniform"
+  | "random"
   | "random_seeded"
   | "vortex"
   | "antivortex"
@@ -58,7 +59,7 @@ export const MAGNETIC_PRESET_CATALOG: MagneticPresetDescriptor[] = [
     ],
   },
   {
-    kind: "random_seeded",
+    kind: "random",
     label: "Random",
     category: "basic",
     icon: "⋯",

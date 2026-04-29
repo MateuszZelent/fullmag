@@ -51,6 +51,8 @@ export function normalizeCommandRequest(
       return { kind: "save_vtk" };
     case "solve":
       return { kind: "solve" };
+    case "compute_fields":
+      return { kind: "compute_fields" };
     case "close":
       return { kind: "close" };
     default:
@@ -64,6 +66,7 @@ export function normalizeCommandRequest(
 export function solverActionToCommand(action: string): string {
   const mapping: Record<string, string> = {
     compute: "solve",
+    compute_fields: "compute_fields",
     run: "run",
     relax: "relax",
     pause: "pause",

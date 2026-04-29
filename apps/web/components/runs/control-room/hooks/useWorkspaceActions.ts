@@ -485,6 +485,11 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
+    if (action === "compute_fields") {
+      void enqueueCommand({ kind: "compute_fields" });
+      return;
+    }
+
     if (action === "compute" || action === "solve") {
       handleCompute();
       return;

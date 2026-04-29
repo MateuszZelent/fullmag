@@ -35,7 +35,7 @@ export function RibbonTabStrip({
   meshConfigDirty,
 }: RibbonTabStripProps) {
   return (
-    <div className="flex items-end px-2 pt-1.5 gap-0.5 border-b border-border/30 bg-card/40">
+    <div className="flex h-[34px] items-end overflow-hidden px-2 pt-1.5 gap-0.5 border-b border-border/30 bg-card/40">
       {visibleTabs.map((tab) => {
         const isActive = String(tab) === String(activeTab);
         return (
@@ -44,7 +44,7 @@ export function RibbonTabStrip({
             type="button"
             onClick={() => onTabClick(tab)}
             className={cn(
-              "relative px-3.5 py-1.5 text-[0.75rem] font-medium uppercase tracking-wide transition-colors cursor-pointer rounded-t-sm",
+              "relative h-[28px] px-3.5 text-[0.75rem] font-medium uppercase tracking-wide transition-colors cursor-pointer rounded-t-sm",
               isActive
                 ? "text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-primary after:rounded-t"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
@@ -56,7 +56,7 @@ export function RibbonTabStrip({
       })}
 
       {contextualTabs.length > 0 ? (
-        <div className="ml-auto mb-1 flex items-center gap-1 pl-4">
+        <div className="ml-auto mb-1 flex h-[24px] items-center gap-1 overflow-hidden pl-4">
           <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             Context
           </span>
@@ -81,7 +81,7 @@ export function RibbonTabStrip({
       {activeTab === "Mesh" && (
         <div
           className={cn(
-            "mb-1 flex items-center gap-2 pl-4",
+            "mb-1 flex h-[24px] items-center gap-2 overflow-hidden pl-4",
             contextualTabs.length > 0 ? "border-l border-border/40 ml-1" : "ml-auto",
           )}
         >
@@ -100,7 +100,7 @@ export function RibbonTabStrip({
           >
             {meshGenerating ? "Building" : meshConfigDirty ? "Out of date" : "Up to date"}
           </span>
-          <span className="text-[0.68rem] text-muted-foreground">
+          <span className="truncate text-[0.68rem] text-muted-foreground">
             {meshGenerating
               ? "Live meshing progress."
               : meshConfigDirty

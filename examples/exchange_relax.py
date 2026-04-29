@@ -25,7 +25,7 @@ def build() -> fm.Problem:
         name="strip",
         geometry=strip,
         material=mat,
-        m0=fm.texture.random_seeded(seed=42),
+        m0=fm.texture.random(seed=42),
     )
 
     return fm.Problem(

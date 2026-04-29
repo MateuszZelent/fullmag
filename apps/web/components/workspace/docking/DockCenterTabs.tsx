@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
@@ -11,6 +11,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
+import { useWebGLWarmKeepAliveDisabledForSession } from "@/lib/viewport/webglWarmKeepAliveGuard";
 import { type WorkspaceTab, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import {
   workspaceHrefForTabSlug,
@@ -20,7 +21,10 @@ import {
 import { DockCenterPreviewNotices } from "./center-tabs/DockCenterPreviewNotices";
 import { DockCenterTabContent } from "./center-tabs/DockCenterTabContent";
 import { DockCenterTabHeader } from "./center-tabs/DockCenterTabHeader";
-import { shouldRenderWorkspaceTabPanel } from "./center-tabs/tabRenderPolicy";
+import {
+  isWebGLWorkspaceTab,
+  resolveWorkspaceTabRenderDecision,
+} from "./center-tabs/tabRenderPolicy";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
 
 export default function DockCenterTabs() {
@@ -36,6 +40,9 @@ export default function DockCenterTabs() {
   const closeTab = useWorkspaceStore((state) => state.closeTab);
   const pinTab = useWorkspaceStore((state) => state.pinTab);
   const openTab = useWorkspaceStore((state) => state.openTab);
+  const webGLWarmKeepAliveDisabledByContextLoss = useWebGLWarmKeepAliveDisabledForSession();
+  const previousActiveTabRef = useRef<WorkspaceTab | null>(null);
+  const [recentInactiveWebGLTabId, setRecentInactiveWebGLTabId] = useState<string | null>(null);
 
   const vp = useViewport();
   const model = useModel();
@@ -62,6 +69,27 @@ export default function DockCenterTabs() {
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null,
     [activeTabId, tabs],
   );
+
+  useEffect(() => {
+    const previousActiveTab = previousActiveTabRef.current;
+    if (
+      previousActiveTab &&
+      previousActiveTab.id !== activeTab?.id &&
+      isWebGLWorkspaceTab(previousActiveTab)
+    ) {
+      setRecentInactiveWebGLTabId(previousActiveTab.id);
+    }
+    previousActiveTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (
+      recentInactiveWebGLTabId &&
+      !tabs.some((tab) => tab.id === recentInactiveWebGLTabId)
+    ) {
+      setRecentInactiveWebGLTabId(null);
+    }
+  }, [recentInactiveWebGLTabId, tabs]);
 
   useEffect(() => {
     if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableAutoActivateEffect) {
@@ -142,12 +170,13 @@ export default function DockCenterTabs() {
     FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
   const activeTabIsCharts = activeTab?.kind === "viewport-charts";
 
-  const renderTabContent = (tab: WorkspaceTab) => (
+  const renderTabContent = (tab: WorkspaceTab, viewportVisible = tab.id === activeTab?.id) => (
     <DockCenterTabContent
       tab={tab}
       flags={dockCenterFlags}
       chartsDisabled={chartsDisabled}
       preview3dDisabled={preview3dDisabled}
+      viewportVisible={viewportVisible}
     />
   );
 
@@ -218,7 +247,7 @@ export default function DockCenterTabs() {
           <ViewportBar />
         ) : null}
         {previewNotices}
-        <div className="min-h-0 min-w-0 flex-1">{renderTabContent(tab)}</div>
+        <div className="min-h-0 min-w-0 flex-1">{renderTabContent(tab, true)}</div>
       </div>
     );
   }
@@ -238,17 +267,23 @@ export default function DockCenterTabs() {
       />
 
       {tabs.map((tab) => {
-        if (!shouldRenderWorkspaceTabPanel(tab, activeTab?.id)) {
+        const renderDecision = resolveWorkspaceTabRenderDecision(tab, activeTab?.id, {
+          enableWebGLWarmKeepAlive: dockCenterFlags.enableWebGLWarmKeepAlive,
+          recentWebGLTabId: recentInactiveWebGLTabId,
+          webGLWarmKeepAliveDisabledByContextLoss,
+        });
+        if (!renderDecision.render) {
           return null;
         }
         return (
           <TabsContent
             key={tab.id}
             value={tab.id}
-            forceMount={tab.lifecycle === "warm"}
+            forceMount={renderDecision.forceMount}
+            hidden={!renderDecision.visible}
             className="relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
           >
-            {renderTabContent(tab)}
+            {renderTabContent(tab, renderDecision.visible)}
 
             {dockCenterFlags.enablePinOverlayButton && tab.closable ? (
               <div className="pointer-events-none absolute bottom-2 right-2 z-20 hidden md:block">

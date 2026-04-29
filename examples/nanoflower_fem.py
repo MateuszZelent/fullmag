@@ -30,7 +30,7 @@ body.alpha = 0.1
 body.m = (
     fm.load_magnetization(RELAXED_STATE_ZARR, format="zarr")
     if USE_SAVED_RELAXED_STATE
-    else fm.texture.random_seeded(seed=1) 
+    else fm.texture.random(seed=1) 
 )
 
 # Mesh

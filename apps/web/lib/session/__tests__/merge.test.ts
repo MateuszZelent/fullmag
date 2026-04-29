@@ -199,6 +199,34 @@ describe("mergeSessionState", () => {
     expect(merged.latest_fields.frames.m?.domain).toBe("magnetic_only");
   });
 
+  it("advances live magnetization frame metadata with solver step", () => {
+    const prev = makeSessionState({
+      sceneRevision: 2,
+      latestMagnetization: [1, 0, 0],
+      liveMagnetization: [1, 0, 0],
+    });
+    prev.live_state!.step = 1;
+    prev.live_state!.time = 1e-12;
+    prev.latest_fields.frames.m!.source_step = 1;
+    prev.latest_fields.frames.m!.field_revision = 1;
+    prev.latest_fields.frames.m!.source_time = 1e-12;
+
+    const next = makeSessionState({
+      sceneRevision: 2,
+      latestMagnetization: undefined,
+      liveMagnetization: [0, 1, 0],
+    });
+    next.live_state!.step = 2;
+    next.live_state!.time = 2e-12;
+
+    const merged = mergeSessionState(prev, next);
+
+    expect(Array.from(merged.latest_fields.frames.m?.values ?? [])).toEqual([0, 1, 0]);
+    expect(merged.latest_fields.frames.m?.source_step).toBe(2);
+    expect(merged.latest_fields.frames.m?.field_revision).toBe(2);
+    expect(merged.latest_fields.frames.m?.source_time).toBe(2e-12);
+  });
+
   it("does not keep stale scene/model content when revision is reused", () => {
     const prev = makeSessionState({
       sceneRevision: 1,

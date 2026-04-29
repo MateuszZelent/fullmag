@@ -18,9 +18,13 @@ export function deriveFemLayerRenderState<TOverlay>(args: {
   showArrows: boolean;
 }): FemLayerRenderState<TOverlay> {
   const { layers, objectOverlays, meshOpacity, colorField, magneticTextureColorField, showArrows } = args;
+  const surfaceVisible =
+    layers.showMesh ||
+    layers.showQuantity ||
+    layers.showMagneticTexture;
   return {
     objectOverlays: layers.showPrimitives ? objectOverlays : [],
-    meshOpacity: layers.showMesh ? meshOpacity : 0,
+    meshOpacity: surfaceVisible ? meshOpacity : 0,
     magneticColorField: layers.showQuantity
       ? colorField
       : layers.showMagneticTexture

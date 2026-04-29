@@ -11,7 +11,9 @@ import { applyMagnetizationHsl } from "../magnetizationColor";
 
 const BASE_VERTEX_COLOR_CACHE = new WeakMap<object, Map<string, Float32Array>>();
 const FIELD_DATA_ID_CACHE = new WeakMap<object, number>();
+const QUALITY_PER_FACE_ID_CACHE = new WeakMap<object, number>();
 let NEXT_FIELD_DATA_CACHE_ID = 1;
+let NEXT_QUALITY_PER_FACE_CACHE_ID = 1;
 
 function fieldDataCacheId(fieldData: FemMeshData["fieldData"] | undefined): string {
   if (!fieldData || typeof fieldData !== "object") {
@@ -22,6 +24,18 @@ function fieldDataCacheId(fieldData: FemMeshData["fieldData"] | undefined): stri
   if (!id) {
     id = NEXT_FIELD_DATA_CACHE_ID++;
     FIELD_DATA_ID_CACHE.set(key, id);
+  }
+  return String(id);
+}
+
+function qualityPerFaceCacheId(qualityPerFace: number[] | null | undefined): string {
+  if (!qualityPerFace || typeof qualityPerFace !== "object") {
+    return "none";
+  }
+  let id = QUALITY_PER_FACE_ID_CACHE.get(qualityPerFace);
+  if (!id) {
+    id = NEXT_QUALITY_PER_FACE_CACHE_ID++;
+    QUALITY_PER_FACE_ID_CACHE.set(qualityPerFace, id);
   }
   return String(id);
 }
@@ -184,51 +198,38 @@ export function getSharedVertexColors(args: {
   const { meshData, field, fieldData = meshData.fieldData, uniformColor, qualityPerFace } = args;
   const baseVertexColorCache = getBaseVertexColorCache(meshData);
   const nNodes = meshData.nNodes;
-  const cacheableField = field !== "quality" && field !== "sicn";
-
-  if (cacheableField) {
-    const fieldDataId = fieldDataCacheId(fieldData);
-    const fieldRevision = meshData.fieldRevision ?? "none";
-    const cacheKey =
-      field === "none"
-        ? (uniformColor ? `none:uniform:${uniformColor}` : "none:default")
-        : `field:${field}:ncomp:${meshData.fieldNComp ?? 3}:rev:${fieldRevision}:data:${fieldDataId}`;
-    const cached = baseVertexColorCache.get(cacheKey);
-    if (cached && cached.length === nNodes * 3) {
-      return cached;
-    }
-    const computed =
-      field === "none" && uniformColor
-        ? (() => {
-            const tint = new THREE.Color(uniformColor);
-            const colors = new Float32Array(nNodes * 3);
-            for (let index = 0; index < nNodes; index += 1) {
-              colors[index * 3] = tint.r;
-              colors[index * 3 + 1] = tint.g;
-              colors[index * 3 + 2] = tint.b;
-            }
-            return colors;
-          })()
-        : computeVertexColors(
-            meshData.nNodes,
-            field,
-            fieldData,
-            meshData.fieldNComp ?? 3,
-            meshData.nodes,
-            meshData.boundaryFaces,
-            qualityPerFace,
-          );
-    baseVertexColorCache.set(cacheKey, computed);
-    return computed;
+  const fieldDataId = fieldDataCacheId(fieldData);
+  const fieldRevision = meshData.fieldRevision ?? "none";
+  const qualityRevision = qualityPerFaceCacheId(qualityPerFace);
+  const cacheKey =
+    field === "none"
+      ? (uniformColor ? `none:uniform:${uniformColor}` : "none:default")
+      : `field:${field}:ncomp:${meshData.fieldNComp ?? 3}:rev:${fieldRevision}:data:${fieldDataId}:quality:${qualityRevision}`;
+  const cached = baseVertexColorCache.get(cacheKey);
+  if (cached && cached.length === nNodes * 3) {
+    return cached;
   }
-
-  return computeVertexColors(
-    meshData.nNodes,
-    field,
-    fieldData,
-    meshData.fieldNComp ?? 3,
-    meshData.nodes,
-    meshData.boundaryFaces,
-    qualityPerFace,
-  );
+  const computed =
+    field === "none" && uniformColor
+      ? (() => {
+          const tint = new THREE.Color(uniformColor);
+          const colors = new Float32Array(nNodes * 3);
+          for (let index = 0; index < nNodes; index += 1) {
+            colors[index * 3] = tint.r;
+            colors[index * 3 + 1] = tint.g;
+            colors[index * 3 + 2] = tint.b;
+          }
+          return colors;
+        })()
+      : computeVertexColors(
+          meshData.nNodes,
+          field,
+          fieldData,
+          meshData.fieldNComp ?? 3,
+          meshData.nodes,
+          meshData.boundaryFaces,
+          qualityPerFace,
+        );
+  baseVertexColorCache.set(cacheKey, computed);
+  return computed;
 }

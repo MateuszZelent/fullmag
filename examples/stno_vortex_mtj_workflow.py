@@ -81,7 +81,7 @@ body.Ms = 700000
 body.Aex = 1.2e-11
 body.alpha = 0.01
 # body.m = fm.texture.vortex(circulation=1, core_polarity=1)
-body.m = fm.texture.random_seeded(seed=1)
+body.m = fm.texture.uniform(0, 0, 1)
 
 
 # External field

@@ -2389,7 +2389,7 @@ function _magnetizationLabel(
         return `(${direction.slice(0, 3).map((v) => Number(v).toFixed(2)).join(", ")})`;
       }
     }
-    if (mag.preset_kind === "random_seeded") {
+    if (mag.preset_kind === "random" || mag.preset_kind === "random_seeded") {
       const seed =
         typeof mag.preset_params?.seed === "number"
           ? mag.preset_params.seed

@@ -49,3 +49,12 @@ export function resolvePersistedWorkspaceSelection(args: {
   }
   return { accepted: false, clearPending: false };
 }
+
+export function resolveFailedWorkspaceSelectionPersistence(args: {
+  attemptedIdentity: string;
+  lastPersistedIdentity: string | null;
+}): string | null {
+  return args.lastPersistedIdentity === args.attemptedIdentity
+    ? null
+    : args.lastPersistedIdentity;
+}

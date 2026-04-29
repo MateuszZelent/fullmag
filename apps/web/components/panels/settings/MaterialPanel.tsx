@@ -604,7 +604,7 @@ export default function MaterialPanel({
     updateMagnetization((asset) => ({
       ...asset,
       kind: "preset_texture",
-      preset_kind: "random_seeded",
+      preset_kind: "random",
       preset_params: {
         ...(asset.preset_params ?? {}),
         seed: parsed,
@@ -617,8 +617,10 @@ export default function MaterialPanel({
   const selectedPresetKind =
     (magnetizationAsset?.preset_kind as MagneticPresetKind | null | undefined) ??
     null;
+  const selectedPresetCatalogKind =
+    selectedPresetKind === "random_seeded" ? "random" : selectedPresetKind;
   const selectedPresetDescriptor: MagneticPresetDescriptor | null = selectedPresetKind
-    ? MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === selectedPresetKind) ?? null
+    ? MAGNETIC_PRESET_CATALOG.find((entry) => entry.kind === selectedPresetCatalogKind) ?? null
     : null;
 
   const [presetTextureSync, setPresetTextureSync] = useState<PresetTextureSyncState>({
@@ -1472,7 +1474,7 @@ export default function MaterialPanel({
                 </div>
               ) : null}
 
-              {mag.kind === "preset_texture" && selectedPresetKind === "random_seeded" ? (
+              {mag.kind === "preset_texture" && (selectedPresetKind === "random" || selectedPresetKind === "random_seeded") ? (
                 <TextField label="Random Seed" placeholder="Random (Seeded)" defaultValue={String(Number(presetParams.seed ?? 1))} onchange={(e) => handleRandomSeed(e.target.value)} mono tooltip="Fixed integer seed to reproduce the exact same thermalized noise pattern." />
               ) : null}
 

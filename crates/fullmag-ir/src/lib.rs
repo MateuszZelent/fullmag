@@ -483,6 +483,7 @@ pub enum InitialMagnetizationIR {
     Uniform {
         value: [f64; 3],
     },
+    #[serde(alias = "random")]
     RandomSeeded {
         seed: u64,
     },
@@ -4543,6 +4544,14 @@ mod tests {
         assert!(errors
             .iter()
             .any(|error| error.contains("random_seeded seed must be positive")));
+    }
+
+    #[test]
+    fn random_initial_magnetization_alias_deserializes_to_seeded_variant() {
+        let json = r#"{"kind":"random","seed":7}"#;
+        let decoded: InitialMagnetizationIR =
+            serde_json::from_str(json).expect("random alias should deserialize");
+        assert_eq!(decoded, InitialMagnetizationIR::RandomSeeded { seed: 7 });
     }
 
     #[test]

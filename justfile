@@ -165,6 +165,19 @@ run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
         echo "Run: just rebuild-fem-runtime" >&2; \
         exit 2; \
     fi
+    if [ -x '{{local_bin}}/fullmag-bin' ] && [ '{{local_bin}}/fullmag-bin' -nt '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is stale: {{gpu_runtime_bin}}" >&2; \
+        echo "The local launcher is newer: {{local_bin}}/fullmag-bin" >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 3; \
+    fi
+    stale_source="$(find crates/fullmag-cli crates/fullmag-runner crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
+    if [ -n "$stale_source" ]; then \
+        echo "Managed FEM runtime bundle is stale: {{gpu_runtime_bin}}" >&2; \
+        echo "Newer runtime source detected: $stale_source" >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 3; \
+    fi
     if [ "{{cpu_threads}}" = "auto" ]; then \
         FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     else \

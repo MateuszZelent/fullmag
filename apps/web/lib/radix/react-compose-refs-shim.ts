@@ -2,17 +2,27 @@ import * as React from "react";
 
 type PossibleRef<T> = React.Ref<T> | undefined;
 type RefCleanup = (() => void) | void;
+type CallbackRef = (value: unknown) => RefCleanup;
 
-const CALLBACK_REF_LAST_VALUE = new WeakMap<(value: unknown) => unknown, unknown>();
+const CALLBACK_REF_LAST_VALUE = new WeakMap<
+  CallbackRef,
+  { cleanup: RefCleanup; value: unknown }
+>();
 
 function setRef<T>(ref: PossibleRef<T>, value: T | null): RefCleanup {
   if (typeof ref === "function") {
-    const lastValue = CALLBACK_REF_LAST_VALUE.get(ref as (value: unknown) => unknown);
-    if (Object.is(lastValue, value)) {
+    const callbackRef = ref as CallbackRef;
+    if (value === null) {
+      CALLBACK_REF_LAST_VALUE.delete(callbackRef);
       return;
     }
-    CALLBACK_REF_LAST_VALUE.set(ref as (value: unknown) => unknown, value);
-    return ref(value);
+    const previous = CALLBACK_REF_LAST_VALUE.get(callbackRef);
+    if (previous && Object.is(previous.value, value)) {
+      return previous.cleanup;
+    }
+    const cleanup = callbackRef(value);
+    CALLBACK_REF_LAST_VALUE.set(callbackRef, { cleanup, value });
+    return cleanup;
   }
   if (ref != null) {
     (ref as React.MutableRefObject<T | null>).current = value;
@@ -40,13 +50,16 @@ export function composeRefs<T>(...refs: PossibleRef<T>[]) {
           const cleanup = cleanups[index];
           if (typeof cleanup === "function") {
             cleanup();
+            const ref = refs[index];
+            if (typeof ref === "function") {
+              CALLBACK_REF_LAST_VALUE.delete(ref as CallbackRef);
+            }
             continue;
           }
-          // React 19 callback refs can return cleanup callbacks.
-          // Clearing plain callback refs here may trigger state updates during
-          // commit (e.g. setState ref setters) and cause update-depth loops.
-          // We only clear object refs ourselves; callback refs are expected to
-          // manage teardown through their returned cleanup when needed.
+          // React 19 callback refs can return cleanup callbacks. Plain callback
+          // refs are not cleared through null because Radix uses state-setting
+          // ref callbacks, and calling those during detach can recurse through
+          // commit. Object refs still need explicit clearing.
           const ref = refs[index];
           if (isRefObject(ref)) {
             ref.current = null;
@@ -58,12 +71,12 @@ export function composeRefs<T>(...refs: PossibleRef<T>[]) {
 }
 
 export function useComposedRefs<T>(...refs: PossibleRef<T>[]) {
-  const refsRef = React.useRef<PossibleRef<T>[]>(refs);
+  const refsRef = React.useRef(refs);
+  refsRef.current = refs;
 
-  React.useLayoutEffect(() => {
-    refsRef.current = refs;
-  }, [refs]);
-
+  // Radix passes inline callback refs that can update internal state. In React
+  // 19, changing the composed callback identity every render detaches and
+  // reattaches those refs during commit, which can produce update-depth loops.
   return React.useCallback((node: T | null): RefCleanup => {
     return composeRefs(...refsRef.current)(node);
   }, []);

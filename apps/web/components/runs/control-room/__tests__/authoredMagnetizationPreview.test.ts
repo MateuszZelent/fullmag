@@ -184,7 +184,7 @@ describe("buildAuthoredMagnetizationPreview", () => {
 
   it("samples random seeded texture with visible nanoscale variation", () => {
     const scene = buildScene({
-      preset_kind: "random_seeded",
+      preset_kind: "random",
       preset_params: { seed: 7 },
     });
     const mesh = buildMesh([
@@ -201,7 +201,7 @@ describe("buildAuthoredMagnetizationPreview", () => {
       activeTransformScope: null,
     });
 
-    expect(preview?.presetKind).toBe("random_seeded");
+    expect(preview?.presetKind).toBe("random");
     expect(preview?.vectors.length).toBe(9);
     const dot01 =
       preview!.vectors[0] * preview!.vectors[3] +

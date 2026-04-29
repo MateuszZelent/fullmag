@@ -797,6 +797,10 @@ export interface SolveCommandRequest {
   kind: "solve";
 }
 
+export interface ComputeFieldsCommandRequest {
+  kind: "compute_fields";
+}
+
 export interface CloseCommandRequest {
   kind: "close";
 }
@@ -814,6 +818,7 @@ export type StructuredCommandRequest =
   | SkipCommandRequest
   | SaveVtkCommandRequest
   | SolveCommandRequest
+  | ComputeFieldsCommandRequest
   | CloseCommandRequest
   | MeshBuildStructuredCommandRequest;
 

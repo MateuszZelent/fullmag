@@ -26,7 +26,7 @@ describe("deriveFemLayerRenderState", () => {
     expect(result.showArrows).toBe(true);
   });
 
-  it("hides primitives and mesh when their layers are disabled", () => {
+  it("keeps the FEM surface visible when quantity or magnetic texture layers are active", () => {
     const result = deriveFemLayerRenderState({
       layers: {
         showPrimitives: false,
@@ -42,10 +42,30 @@ describe("deriveFemLayerRenderState", () => {
     });
 
     expect(result.objectOverlays).toEqual([]);
-    expect(result.meshOpacity).toBe(0);
+    expect(result.meshOpacity).toBe(90);
     expect(result.magneticColorField).toBe("x");
     expect(result.airColorField).toBe("x");
     expect(result.showArrows).toBe(true);
+  });
+
+  it("hides the FEM surface only when mesh, quantity and magnetic texture are all disabled", () => {
+    const result = deriveFemLayerRenderState({
+      layers: {
+        showPrimitives: true,
+        showMesh: false,
+        showMagneticTexture: false,
+        showQuantity: false,
+      },
+      objectOverlays: [{ id: "obj-1" }],
+      meshOpacity: 90,
+      colorField: "x",
+      magneticTextureColorField: "orientation",
+      showArrows: true,
+    });
+
+    expect(result.meshOpacity).toBe(0);
+    expect(result.magneticColorField).toBe("none");
+    expect(result.airColorField).toBe("none");
   });
 
   it("keeps arrows independent and falls back to magnetic texture when quantity layer is disabled", () => {

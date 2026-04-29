@@ -2641,6 +2641,25 @@ fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitForSolveCommandAction {
+    RefreshFields,
+    StartSolver,
+    Remesh,
+    Stop,
+    Ignore,
+}
+
+fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
+    match kind {
+        "compute_fields" => WaitForSolveCommandAction::RefreshFields,
+        "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
+        "remesh" => WaitForSolveCommandAction::Remesh,
+        "stop" => WaitForSolveCommandAction::Stop,
+        _ => WaitForSolveCommandAction::Ignore,
+    }
+}
+
 fn sanitize_stage_file_name(file_name: &str) -> String {
     Path::new(file_name)
         .file_name()
@@ -3775,7 +3794,34 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     continue;
                 }
-                "solve" | "compute" => {
+                _ => {}
+            }
+
+            match classify_wait_for_solve_command(cmd.kind.as_str()) {
+                WaitForSolveCommandAction::RefreshFields => {
+                    eprintln!("[fullmag] compute_fields requested — refreshing field snapshots");
+                    live_workspace.push_log(
+                        "system",
+                        "Compute fields requested — evaluating current magnetization",
+                    );
+                    let display_selection = display_selection_handle.display_selection_snapshot();
+                    match refresh_problem_preview_state(
+                        &stages[0].ir,
+                        continuation_magnetization.as_deref(),
+                        &display_selection,
+                        &live_workspace,
+                        true,
+                    ) {
+                        Ok(()) => live_workspace.push_log(
+                            "success",
+                            "Field snapshots computed for the current magnetization",
+                        ),
+                        Err(error) => live_workspace
+                            .push_log("error", format!("Compute fields failed: {}", error)),
+                    }
+                    continue;
+                }
+                WaitForSolveCommandAction::StartSolver => {
                     eprintln!("[fullmag] compute requested — starting solver");
                     live_workspace.push_log("system", "Compute requested — starting solver");
                     live_workspace.update(|state| {
@@ -3786,7 +3832,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     });
                     break;
                 }
-                "remesh" => {
+                WaitForSolveCommandAction::Remesh => {
                     execute_manual_interactive_remesh(
                         &cmd,
                         &stages[0].ir,
@@ -3800,7 +3846,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &current_adaptive_runtime_state,
                     )?;
                 }
-                "stop" => {
+                WaitForSolveCommandAction::Stop => {
                     eprintln!("[fullmag] aborted by user during wait_for_solve");
                     live_workspace.push_log("system", "Aborted by user");
                     live_workspace.update(|state| {
@@ -3810,10 +3856,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     });
                     return Ok(());
                 }
-                other => {
+                WaitForSolveCommandAction::Ignore => {
                     eprintln!(
                         "[fullmag] ignoring command '{}' during wait_for_solve",
-                        other
+                        cmd.kind
                     );
                 }
             }
@@ -4503,6 +4549,25 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             };
 
             if interactive_runtime_host.handle_display_sync(&command, &live_workspace) {
+                continue;
+            }
+
+            if command.kind == "compute_fields" {
+                eprintln!("[fullmag] compute_fields requested — refreshing field snapshots");
+                live_workspace.push_log(
+                    "system",
+                    "Compute fields requested — evaluating current magnetization",
+                );
+                match interactive_runtime_host
+                    .compute_current_fields(continuation_magnetization.as_deref(), &live_workspace)
+                {
+                    Ok(()) => live_workspace.push_log(
+                        "success",
+                        "Field snapshots computed for the current magnetization",
+                    ),
+                    Err(error) => live_workspace
+                        .push_log("error", format!("Compute fields failed: {}", error)),
+                }
                 continue;
             }
 
@@ -5770,9 +5835,10 @@ pub(crate) fn prepare_live_workspace_for_ui(
 mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
-        default_domain_region_markers, execute_synthetic_stage, fem_mesh_payload_from_backend_plan,
-        has_heavy_live_payload, wait_for_solve_prompt, wait_for_solve_supported,
-        LiveProgressCadence, LIVE_PROGRESS_PUBLISH_INTERVAL,
+        classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
+        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
+        wait_for_solve_supported, LiveProgressCadence, WaitForSolveCommandAction,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -6359,6 +6425,30 @@ mod tests {
         assert!(
             !wait_for_solve_prompt(&tiny_fdm_plan()).contains("adjust mesh"),
             "FDM wait message should stay generic"
+        );
+    }
+
+    #[test]
+    fn wait_for_solve_command_classification_handles_compute_fields_and_run() {
+        assert_eq!(
+            classify_wait_for_solve_command("compute_fields"),
+            WaitForSolveCommandAction::RefreshFields
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("run"),
+            WaitForSolveCommandAction::StartSolver
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("solve"),
+            WaitForSolveCommandAction::StartSolver
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("compute"),
+            WaitForSolveCommandAction::StartSolver
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("display_sync"),
+            WaitForSolveCommandAction::Ignore
         );
     }
 

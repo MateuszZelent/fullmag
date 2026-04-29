@@ -61,6 +61,7 @@ async fn validate_authoring_gate_for_command(
         StructuredCommandRequest::Run { .. }
             | StructuredCommandRequest::Relax { .. }
             | StructuredCommandRequest::Solve
+            | StructuredCommandRequest::ComputeFields
     );
     if !should_check_mesh && !should_check_run {
         return Ok(None);
@@ -317,6 +318,9 @@ fn command_from_structured(
         }
         StructuredCommandRequest::Solve => {
             new_session_command(command_id, "solve", created_at_unix_ms)
+        }
+        StructuredCommandRequest::ComputeFields => {
+            new_session_command(command_id, "compute_fields", created_at_unix_ms)
         }
         StructuredCommandRequest::Close => {
             new_session_command(command_id, "close", created_at_unix_ms)

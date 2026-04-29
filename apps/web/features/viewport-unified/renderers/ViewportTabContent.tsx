@@ -49,11 +49,15 @@ const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
 
 export interface ViewportTabContentProps {
   bridge: ViewportDataBridge;
+  viewportVisible?: boolean;
 }
 
 /* ── Component ── */
 
-export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
+export function ViewportTabContent({
+  bridge,
+  viewportVisible = true,
+}: ViewportTabContentProps) {
   const ctx = bridge.ctx;
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
   const viewportSelectedObjectId = bridge.viewportSelectedObjectId;
@@ -124,7 +128,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             onRequestObjectSelect: bridge.handleRequestObjectSelect,
             viewport3DModel: bridge.hostedFemBoundsViewportModel,
             toolbarMode: bridge.vectorToolbarMode,
-            viewportVisible: true,
+            viewportVisible,
           }}
         />
       </Viewport3DHost>
@@ -211,6 +215,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
           <FemMeshView3D
             topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
             meshData={bridge.renderFemMeshData!}
+            viewportVisible={viewportVisible}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             quantityId={ctx.requestedPreviewQuantity}
@@ -329,6 +334,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             <FemMeshView3D
               topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
               meshData={bridge.renderFemMeshData!}
+              viewportVisible={viewportVisible}
               selectedSidebarNodeId={ctx.selectedSidebarNodeId}
               viewportFitSeed={bridge.viewportFitSeed}
               fieldLabel={
@@ -453,7 +459,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
             viewport3DModel: bridge.hostedVectorSurfaceViewportModel,
             vectors: geometryViewportPresetActive ? null : bridge.vectorSurfaceVectors,
             toolbarMode: bridge.vectorToolbarMode,
-            viewportVisible: true,
+            viewportVisible,
             viewportAxesScope: ctx.viewportAxesScope,
             universeWireframeVisible: ctx.universeWireframeVisible,
           }}
@@ -472,6 +478,7 @@ export function ViewportTabContent({ bridge }: ViewportTabContentProps) {
           <FemMeshView3D
             topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
             meshData={bridge.scaledFemMeshData ?? ctx.femMeshData}
+            viewportVisible={viewportVisible}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             colorField="none"

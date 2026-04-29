@@ -1,6 +1,5 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
 import type {
   FemMeshData,
   FemColorField,
@@ -12,6 +11,7 @@ import { applyMagnetizationHsl } from "../magnetizationColor";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { isNodeActive, maskKind } from "../fem/femNodeMask";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
+import { useBatchedInvalidate } from "./useBatchedInvalidate";
 
 export type ArrowLengthMode = "constant" | "magnitude" | "sqrt" | "log";
 
@@ -36,9 +36,13 @@ interface FemArrowsProps {
 }
 
 /* ── Arrow template geometry — only depends on maxDim ───────────────── */
-function useArrowTemplate(maxDim: number) {
+export function resolveFemArrowTemplateScale(maxDim: number): number {
+  return Number.isFinite(maxDim) && maxDim > 0 ? maxDim * 0.035 : 0;
+}
+
+function useArrowTemplate() {
   return useMemo(() => {
-    const arrowLen = maxDim * 0.035;
+    const arrowLen = 1;
     const shaftRadius = arrowLen * 0.08;
     const headRadius = arrowLen * 0.20;
     const headLen = arrowLen * 0.35;
@@ -82,7 +86,7 @@ function useArrowTemplate(maxDim: number) {
     shaft.dispose();
     head.dispose();
     return merged;
-  }, [maxDim]);
+  }, []);
 }
 
 /* ── Sample candidate nodes adaptively ─────────────────────────────── */
@@ -211,7 +215,7 @@ export function FemArrows({
   onSampledCount,
 }: FemArrowsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
-  const { invalidate } = useThree();
+  const scheduleInvalidate = useBatchedInvalidate();
   const glyphPolicy = RENDER_POLICIES_V2.glyphs;
   const clampedAlpha = Math.max(0.05, Math.min(1, alpha));
   const material = useMemo(
@@ -235,7 +239,14 @@ export function FemArrows({
     ],
   );
 
-  const templateGeometry = useArrowTemplate(maxDim);
+  const templateGeometry = useArrowTemplate();
+  const arrowTemplateScale = resolveFemArrowTemplateScale(maxDim);
+
+  useEffect(() => {
+    return () => {
+      templateGeometry.dispose();
+    };
+  }, [templateGeometry]);
 
   useEffect(() => {
     return () => {
@@ -405,9 +416,9 @@ export function FemArrows({
         } else if (lengthMode === "log") {
           s = 0.2 + 0.8 * Math.log1p(len / scaleMag * 9) / Math.log(10);
         }
-        scalesList[i * 3] = s * clampedThickness;
-        scalesList[i * 3 + 1] = s * clampedThickness;
-        scalesList[i * 3 + 2] = s * clampedLengthScale;
+        scalesList[i * 3] = s * clampedThickness * arrowTemplateScale;
+        scalesList[i * 3 + 1] = s * clampedThickness * arrowTemplateScale;
+        scalesList[i * 3 + 2] = s * clampedLengthScale * arrowTemplateScale;
         _dir.set(vx, vy, vz).normalize();
         _dummyQ.setFromUnitVectors(_defaultUp, _dir);
       }
@@ -480,6 +491,7 @@ export function FemArrows({
     lengthMode,
     lengthScale,
     thickness,
+    arrowTemplateScale,
     sampledNodes,
   ]);
   const capacity = Math.max(count, 1);
@@ -489,28 +501,14 @@ export function FemArrows({
     return attribute;
   }, [capacity]);
 
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) {
-      return;
-    }
-    mesh.instanceColor = instanceColorAttribute;
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.count = count;
-    if (mesh.instanceColor) {
-      mesh.instanceColor.needsUpdate = true;
-    }
-    invalidate();
-  }, [count, glyphPolicy.renderOrder, instanceColorAttribute, invalidate, material]);
-
   // Apply instance matrices and per-instance colors using the same low-level
   // buffer path that already works reliably in FDM preview rendering.
   useLayoutEffect(() => {
     const mesh = meshRef.current;
     if (!mesh) return;
-    if (!mesh.instanceColor) {
-      mesh.instanceColor = instanceColorAttribute;
-    }
+    mesh.instanceColor = instanceColorAttribute;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.renderOrder = glyphPolicy.renderOrder;
     const meshInstanceColor = mesh.instanceColor;
     if (!meshInstanceColor) return;
     const matrixArray = mesh.instanceMatrix.array as Float32Array;
@@ -540,15 +538,15 @@ export function FemArrows({
     mesh.count = count;
     mesh.instanceMatrix.needsUpdate = true;
     meshInstanceColor.needsUpdate = true;
-    invalidate();
+    scheduleInvalidate();
   }, [
     colors,
     count,
+    glyphPolicy.renderOrder,
     instanceColorAttribute,
     positions,
-    invalidate,
-    material,
     quaternions,
+    scheduleInvalidate,
     scales,
   ]);
 

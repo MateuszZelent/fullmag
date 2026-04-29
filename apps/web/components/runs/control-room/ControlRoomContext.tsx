@@ -158,6 +158,7 @@ import {
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
 import {
+  resolveFailedWorkspaceSelectionPersistence,
   resolvePersistedWorkspaceSelection,
   resolveRemoteWorkspaceSelectionHydration,
   workspaceSelectionIdentity,
@@ -518,7 +519,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     revision: runtimeResourceRevisions?.scene_revision ?? null,
   });
   const { stageExecution: resourceStageExecution } = useStageExecution({
-    enabled: true,
+    enabled: Boolean(
+      sceneResourceSessionKey &&
+        runtimeResourceRevisions?.stages_revision &&
+        runtimeResourceRevisions.stages_revision > 0,
+    ),
     sessionKey: sceneResourceSessionKey,
     revision: runtimeResourceRevisions?.stages_revision ?? null,
   });
@@ -1436,6 +1441,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
             persistedIdentity,
           });
         }
+        return;
+      }
+      if (lastPersistedWorkspaceSelectionRef.current === nextIdentity) {
+        lastPersistedWorkspaceSelectionRef.current = resolveFailedWorkspaceSelectionPersistence({
+          attemptedIdentity: nextIdentity,
+          lastPersistedIdentity: lastPersistedWorkspaceSelectionRef.current,
+        });
       }
     });
   }, [
@@ -2262,7 +2274,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       });
       return;
     }
-    setSelectedBinaryFieldFrame(null);
     const controller = new AbortController();
     void liveApi
       .getFieldVectorBinary(activeQuantityId, { signal: controller.signal })
@@ -2298,9 +2309,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) {
-          setSelectedBinaryFieldFrame(null);
-        }
+        // Keep the last valid frame visible while a replacement binary frame is unavailable.
       });
     return () => controller.abort();
   }, [
@@ -2333,7 +2342,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       setSelectedScopedBinaryFieldFrame(cached);
       return;
     }
-    setSelectedScopedBinaryFieldFrame(null);
     const controller = new AbortController();
     void Promise.all(
       scopedFemVectorScopes.map(async (scope): Promise<ScopedFemVectorFrame> => {
@@ -2389,9 +2397,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) {
-          setSelectedScopedBinaryFieldFrame(null);
-        }
+        // Keep the last valid scoped frame visible while a replacement frame is unavailable.
       });
     return () => controller.abort();
   }, [

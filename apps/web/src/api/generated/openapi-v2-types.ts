@@ -2747,6 +2747,9 @@ export interface components {
             kind: "solve";
         } | {
             /** @enum {string} */
+            kind: "compute_fields";
+        } | {
+            /** @enum {string} */
             kind: "close";
         } | {
             /** @enum {string} */

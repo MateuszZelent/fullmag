@@ -26,7 +26,7 @@ def build() -> fm.Problem:
         name="body",
         geometry=body,
         material=material,
-        m0=fm.texture.random_seeded(seed=11),
+        m0=fm.texture.random(seed=11),
     )
 
     return fm.Problem(

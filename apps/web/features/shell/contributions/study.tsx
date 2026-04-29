@@ -4,7 +4,7 @@
 
 import {
   Cog, ListChecks, Target, Play, Sparkles, Magnet,
-  FunctionSquare, Layers3, Binary, Zap, Plus, RefreshCw,
+  FunctionSquare, Layers3, Binary, Zap, Plus, RefreshCw, Calculator,
   Pause, Square, SkipForward,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const hasStageSelection = studyNode?.kind === "study-stage";
   const placement = hasStageSelection ? "after" : "append";
   const canRun = ctx.can({ id: "solver.control", action: "run" });
+  const canComputeFields = ctx.can({ id: "solver.control", action: "compute_fields" });
   const canPause = ctx.can({ id: "solver.control", action: "pause" });
   const canStop = ctx.can({ id: "solver.control", action: "stop" });
   const canSkip = ctx.can({ id: "solver.control", action: "skip" });
@@ -225,6 +226,17 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
       subtitle: "Execute pipeline",
       tone: "compute",
       actions: [
+        {
+          id: "study-compute-fields",
+          icon: <Calculator size={20} />,
+          label: "Fields",
+          tooltip: canComputeFields
+            ? "Compute current-state fields without running relaxation"
+            : ctx.runDisabledReason ?? "Field computation is unavailable",
+          disabled: !canComputeFields,
+          action: () => ctx.run({ id: "solver.control", action: "compute_fields" }),
+          iconColor: "text-emerald-400",
+        },
         {
           id: "study-compute-run",
           icon: <Play size={20} fill="currentColor" />,

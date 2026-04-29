@@ -997,7 +997,7 @@ fn canonicalize_script_builder_magnetization(
             sample_index: None,
             mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
             texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
-            preset_kind: Some("random_seeded".to_string()),
+            preset_kind: Some("random".to_string()),
             preset_params: Some(preset_random_seed_params(
                 magnetization.preset_params.as_ref(),
                 magnetization.seed,
@@ -1020,7 +1020,7 @@ fn canonicalize_script_builder_magnetization(
                     magnetization.preset_params.as_ref(),
                     magnetization.value.as_ref(),
                 ),
-                "random_seeded" => preset_random_seed_params(
+                "random" | "random_seeded" => preset_random_seed_params(
                     magnetization.preset_params.as_ref(),
                     magnetization.seed,
                 ),
@@ -1038,21 +1038,21 @@ fn canonicalize_script_builder_magnetization(
                 dataset: None,
                 sample_index: None,
                 mapping: Some(magnetization.mapping.clone().unwrap_or_default()),
-                texture_transform: Some(magnetization.texture_transform.clone().unwrap_or_default()),
+                texture_transform: Some(
+                    magnetization.texture_transform.clone().unwrap_or_default(),
+                ),
                 preset_kind: Some(preset_kind.clone()),
                 preset_params: Some(preset_params),
                 preset_version: Some(magnetization.preset_version.unwrap_or(1)),
-                ui_label: Some(
-                    magnetization.ui_label.clone().unwrap_or_else(|| {
-                        if preset_kind == "uniform" {
-                            "Uniform".to_string()
-                        } else if preset_kind == "random_seeded" {
-                            "Random".to_string()
-                        } else {
-                            preset_kind.clone()
-                        }
-                    }),
-                ),
+                ui_label: Some(magnetization.ui_label.clone().unwrap_or_else(|| {
+                    if preset_kind == "uniform" {
+                        "Uniform".to_string()
+                    } else if preset_kind == "random" || preset_kind == "random_seeded" {
+                        "Random".to_string()
+                    } else {
+                        preset_kind.clone()
+                    }
+                })),
             }
         }
         "file" | "sampled" => ScriptBuilderMagnetizationState {

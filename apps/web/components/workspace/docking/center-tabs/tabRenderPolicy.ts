@@ -1,16 +1,78 @@
 import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
 
+type RenderPolicyTab = Pick<WorkspaceTab, "id" | "kind" | "lifecycle">;
+
+export interface WorkspaceTabRenderPolicyOptions {
+  enableWebGLWarmKeepAlive?: boolean;
+  recentWebGLTabId?: string | null;
+  webGLWarmKeepAliveDisabledByContextLoss?: boolean;
+}
+
+export type WorkspaceTabRenderReason =
+  | "active"
+  | "warm-hidden"
+  | "warm-disabled"
+  | "unmounted";
+
+export interface WorkspaceTabRenderDecision {
+  render: boolean;
+  visible: boolean;
+  forceMount: boolean;
+  reason: WorkspaceTabRenderReason;
+}
+
+export function isWebGLWorkspaceTab(tab: Pick<WorkspaceTab, "kind">): boolean {
+  return (
+    tab.kind === "viewport-3d" ||
+    tab.kind === "viewport-2d" ||
+    tab.kind === "viewport-mesh" ||
+    tab.kind === "result-quantity"
+  );
+}
+
+export function resolveWorkspaceTabRenderDecision(
+  tab: RenderPolicyTab,
+  activeTabId: string | null | undefined,
+  options: WorkspaceTabRenderPolicyOptions = {},
+): WorkspaceTabRenderDecision {
+  if (!activeTabId) {
+    return { render: false, visible: false, forceMount: false, reason: "unmounted" };
+  }
+  if (tab.id === activeTabId) {
+    return { render: true, visible: true, forceMount: tab.lifecycle === "warm", reason: "active" };
+  }
+  if (isWebGLWorkspaceTab(tab)) {
+    const canWarmMount =
+      options.enableWebGLWarmKeepAlive === true &&
+      !options.webGLWarmKeepAliveDisabledByContextLoss &&
+      options.recentWebGLTabId === tab.id;
+    if (canWarmMount) {
+      return { render: true, visible: false, forceMount: true, reason: "warm-hidden" };
+    }
+    return {
+      render: false,
+      visible: false,
+      forceMount: false,
+      reason: options.enableWebGLWarmKeepAlive ? "warm-disabled" : "unmounted",
+    };
+  }
+  if (tab.lifecycle === "warm") {
+    return { render: true, visible: false, forceMount: true, reason: "warm-hidden" };
+  }
+  return { render: false, visible: false, forceMount: false, reason: "unmounted" };
+}
+
 /**
  * Center-tab panels can own WebGL canvases, Plotly charts, timers, observers,
  * and live subscriptions. Hidden panels must unmount so changing tabs releases
- * CPU/GPU work and browser memory instead of running in the background.
+ * CPU/GPU work and browser memory instead of running in the background. WebGL
+ * viewport tabs keep their camera/presentation state in stores by default; the
+ * feature-flagged warm keepalive path only preserves the most recent hidden
+ * WebGL tab and can be disabled for the session after hidden context loss.
  */
 export function shouldRenderWorkspaceTabPanel(
-  tab: Pick<WorkspaceTab, "id" | "lifecycle">,
+  tab: RenderPolicyTab,
   activeTabId: string | null | undefined,
 ): boolean {
-  if (!activeTabId) {
-    return false;
-  }
-  return tab.id === activeTabId || tab.lifecycle === "warm";
+  return resolveWorkspaceTabRenderDecision(tab, activeTabId).render;
 }

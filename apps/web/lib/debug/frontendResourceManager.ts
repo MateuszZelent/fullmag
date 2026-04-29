@@ -43,13 +43,27 @@ export function updateFrontendResourceBucket(args: {
   estimatedBytes: number;
   capacity?: number | null;
 }): void {
+  const nextEntries = Math.max(0, Math.trunc(args.entries));
+  const nextEstimatedBytes = Math.max(0, Math.trunc(args.estimatedBytes));
+  const nextCapacity = args.capacity ?? null;
+  const previous = resourceBuckets.get(args.id);
+  if (
+    previous &&
+    previous.label === args.label &&
+    previous.entries === nextEntries &&
+    previous.estimatedBytes === nextEstimatedBytes &&
+    previous.capacity === nextCapacity
+  ) {
+    return;
+  }
+
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
   resourceBuckets.set(args.id, {
     id: args.id,
     label: args.label,
-    entries: Math.max(0, Math.trunc(args.entries)),
-    estimatedBytes: Math.max(0, Math.trunc(args.estimatedBytes)),
-    capacity: args.capacity ?? null,
+    entries: nextEntries,
+    estimatedBytes: nextEstimatedBytes,
+    capacity: nextCapacity,
     updatedAt: now,
   });
   refreshResourceSnapshot();

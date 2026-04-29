@@ -14,6 +14,7 @@ interface DockCenterTabContentProps {
   flags: DockCenterTabFlags;
   chartsDisabled: boolean;
   preview3dDisabled: boolean;
+  viewportVisible?: boolean;
 }
 
 function DisabledPanel({ label }: { label: string }) {
@@ -29,6 +30,7 @@ export function DockCenterTabContent({
   flags,
   chartsDisabled,
   preview3dDisabled,
+  viewportVisible = true,
 }: DockCenterTabContentProps) {
   if (!flags.enableTabContent) {
     return <DisabledPanel label="Tab content disabled by diagnostic flag" />;
@@ -56,5 +58,5 @@ export function DockCenterTabContent({
     return <DisabledPanel label="ViewportCanvasArea disabled by diagnostic flag" />;
   }
 
-  return <ViewportTabPanel />;
+  return <ViewportTabPanel viewportVisible={viewportVisible} />;
 }

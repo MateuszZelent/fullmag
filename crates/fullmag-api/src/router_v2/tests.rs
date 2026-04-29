@@ -4193,6 +4193,38 @@ async fn commands_endpoint_enqueues_single_command() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_enqueues_compute_fields_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "compute_fields"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue.front().map(|command| command.kind.as_str()),
+        Some("compute_fields")
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_reuses_response_for_same_request_id() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());

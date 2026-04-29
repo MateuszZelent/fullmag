@@ -2,10 +2,10 @@
 
 import { ViewportCanvasArea } from "@/components/runs/control-room/ViewportPanels";
 
-export function ViewportTabPanel() {
+export function ViewportTabPanel({ viewportVisible = true }: { viewportVisible?: boolean }) {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
-      <ViewportCanvasArea />
+      <ViewportCanvasArea viewportVisible={viewportVisible} />
     </div>
   );
 }

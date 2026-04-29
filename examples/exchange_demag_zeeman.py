@@ -23,7 +23,7 @@ def build() -> fm.Problem:
         name="film",
         geometry=film,
         material=mat,
-        m0=fm.texture.random_seeded(seed=7),
+        m0=fm.texture.random(seed=7),
     )
 
     return fm.Problem(

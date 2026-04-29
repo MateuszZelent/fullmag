@@ -37,7 +37,7 @@ def add_nanoflower(name: str, offset_x: float, seed: int):
     flower.Ms = 752e3       # saturation magnetisation [A/m]
     flower.Aex = 15.5e-12   # exchange stiffness [J/m]
     flower.alpha = 0.1      # Gilbert damping
-    flower.m = fm.texture.random_seeded(seed=seed)
+    flower.m = fm.texture.random(seed=seed)
     flower.mesh(hmax=20e-9, order=1).build()
     return flower
 

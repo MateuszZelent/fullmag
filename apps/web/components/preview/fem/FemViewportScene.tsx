@@ -8,6 +8,7 @@ import { FemArrows } from "../r3f/FemArrows";
 import { FemHighlightView } from "../r3f/FemHighlightView";
 import { getSharedVertexColors } from "../r3f/femVertexColors";
 import SceneAxes3D from "../r3f/SceneAxes3D";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "../../../lib/debug/frontendDiagnosticFlags";
 import type { AntennaOverlay, BuilderObjectOverlay } from "../../runs/control-room/shared";
 import type {
   ArrowSamplingMode,
@@ -31,6 +32,39 @@ export interface FemViewportRenderLayer {
   isSelected: boolean;
   meshColor: string;
   edgeColor: string;
+}
+
+const COLOR_FIELD_KEY_SEPARATOR = "\u001f";
+
+export function femViewportLayerColorFieldsKey(visibleLayers: readonly FemViewportRenderLayer[]): string {
+  return visibleLayers.map((layer) => layer.viewState.colorField).join(COLOR_FIELD_KEY_SEPARATOR);
+}
+
+export function collectFemViewportSharedColorFields({
+  hasMeshParts,
+  visibleLayers,
+  airColorField,
+  magneticColorField,
+  magneticVisibilityMode,
+  quantityDomain,
+}: {
+  hasMeshParts: boolean;
+  visibleLayers: readonly FemViewportRenderLayer[];
+  airColorField: FemColorField;
+  magneticColorField: FemColorField;
+  magneticVisibilityMode: "hide" | "ghost";
+  quantityDomain: FemMeshData["quantityDomain"];
+}): FemColorField[] {
+  const fields = new Set<FemColorField>();
+  if (hasMeshParts) {
+    for (const layer of visibleLayers) {
+      fields.add(layer.viewState.colorField);
+    }
+  } else {
+    fields.add(quantityDomain === "full_domain" ? airColorField : "none");
+    fields.add(magneticVisibilityMode === "ghost" ? "none" : magneticColorField);
+  }
+  return Array.from(fields);
 }
 
 function antennaOverlayColors(role: AntennaOverlay["conductors"][number]["role"], selected: boolean) {
@@ -371,18 +405,96 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showSceneAxes?: boolean;
   onArrowSampledCount?: (count: number | undefined) => void;
 }) {
-  const sharedVertexColorsByField = React.useMemo(() => {
-    const fields = new Set<FemColorField>();
-    if (hasMeshParts) {
-      for (const layer of visibleLayers) {
-        fields.add(layer.viewState.colorField);
-      }
-    } else {
-      fields.add(meshData.quantityDomain === "full_domain" ? airColorField : "none");
-      fields.add(magneticVisibilityMode === "ghost" ? "none" : magneticColorField);
+  React.useEffect(() => {
+    if (!FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+      return;
     }
+    console.debug("[fem-viewport-scene]", JSON.stringify({
+      renderMode,
+      field,
+      hasMeshParts,
+      visibleLayers: visibleLayers.map((layer) => ({
+        id: layer.part.id,
+        role: layer.part.role,
+        visible: layer.viewState.visible,
+        renderMode:
+          layer.part.role === "air" || layer.part.role === "outer_boundary"
+            ? layer.viewState.renderMode
+            : renderMode,
+        colorField: layer.viewState.colorField,
+        opacity: layer.viewState.opacity,
+        faces: Array.isArray(layer.boundaryFaceIndices) ? layer.boundaryFaceIndices.length : "all",
+        elements: Array.isArray(layer.elementIndices) ? layer.elementIndices.length : "all",
+        surfaceFaces: Array.isArray(layer.surfaceFaces) ? layer.surfaceFaces.length : null,
+        selected: layer.isSelected,
+      })),
+      mesh: {
+        nNodes: meshData.nNodes,
+        nElements: meshData.nElements,
+        boundaryFaces: Math.floor(meshData.boundaryFaces.length / 3),
+        quantityDomain: meshData.quantityDomain,
+        hasFieldData: Boolean(meshData.fieldData),
+        hasShaderFieldData: Boolean(meshData.shaderFieldData),
+        activeMask: meshData.activeMask?.length ?? null,
+      },
+      gates: {
+        showSceneGeometry,
+        showPerPartGeometry,
+        showAirGeometry,
+        showMagneticGeometry,
+        shouldRenderAirGeometry,
+        shouldRenderMagneticGeometry,
+        showSurfacePass,
+        showSurfaceHiddenEdgesPass,
+        showSurfaceVisibleEdgesPass,
+        showPointsPass,
+      },
+    }));
+  }, [
+    field,
+    hasMeshParts,
+    meshData,
+    renderMode,
+    shouldRenderAirGeometry,
+    shouldRenderMagneticGeometry,
+    showAirGeometry,
+    showMagneticGeometry,
+    showPerPartGeometry,
+    showPointsPass,
+    showSceneGeometry,
+    showSurfaceHiddenEdgesPass,
+    showSurfacePass,
+    showSurfaceVisibleEdgesPass,
+    visibleLayers,
+  ]);
+
+  const visibleLayerColorFieldsKey = React.useMemo(
+    () => femViewportLayerColorFieldsKey(visibleLayers),
+    [visibleLayers],
+  );
+  const sharedColorFields = React.useMemo(
+    () =>
+      collectFemViewportSharedColorFields({
+        hasMeshParts,
+        visibleLayers,
+        airColorField,
+        magneticColorField,
+        magneticVisibilityMode,
+        quantityDomain: meshData.quantityDomain,
+      }),
+    [
+      airColorField,
+      hasMeshParts,
+      magneticColorField,
+      magneticVisibilityMode,
+      meshData.quantityDomain,
+      visibleLayerColorFieldsKey,
+    ],
+  );
+
+  const sharedVertexColorsByField = React.useMemo(() => {
     const next = new Map<FemColorField, Float32Array>();
-    for (const colorField of fields) {
+    for (const colorField of sharedColorFields) {
       next.set(
         colorField,
         getSharedVertexColors({
@@ -401,7 +513,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       );
     }
     return next;
-  }, [field, hasMeshParts, magneticVisibilityMode, meshData, qualityPerFace, visibleLayers]);
+  }, [meshData, qualityPerFace, sharedColorFields]);
 
   return (
     <>

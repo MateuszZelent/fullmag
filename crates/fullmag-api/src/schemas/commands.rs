@@ -40,6 +40,7 @@ pub enum StructuredCommandRequest {
     Skip,
     SaveVtk,
     Solve,
+    ComputeFields,
     Close,
     MeshBuild {
         #[schema(value_type = Object, nullable)]

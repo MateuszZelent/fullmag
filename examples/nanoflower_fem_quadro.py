@@ -59,7 +59,7 @@ for idx, (dx, dy) in enumerate(positions_2x2):
     body.alpha = common_alpha
     
     # Magnetyzacja: losowa z różnym seedem dla każdej kopii (dla nietrywialnego warunku początkowego)
-    body.m = fm.texture.random_seeded(seed=10 + idx)
+    body.m = fm.texture.random(seed=10 + idx)
 
     # Mesh — wymagany explicit hmax dla każdego obiektu magnetycznego
     body.mesh(hmax=19e-09, order=1, algorithm_2d=1, algorithm_3d=1, size_factor=1,

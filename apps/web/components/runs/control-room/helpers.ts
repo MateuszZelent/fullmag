@@ -214,6 +214,7 @@ export function commandKindLabel(kind: string | null | undefined): string {
     case "stop":
     case "break": return "Stop";
     case "solve": return "Compute";
+    case "compute_fields": return "Compute fields";
     case "remesh": return "Remesh";
     case "save_vtk": return "Export VTK";
     default: return kind && kind.trim().length > 0 ? kind : "Command";

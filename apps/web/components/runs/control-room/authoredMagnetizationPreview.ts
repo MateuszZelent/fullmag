@@ -115,7 +115,7 @@ function samplePreset(asset: MagnetizationAsset, point: Vec3): Vec3 | null {
       : [1, 0, 0] as Vec3;
     return normalize(raw);
   }
-  if (kind === "random_seeded") {
+  if (kind === "random" || kind === "random_seeded") {
     const seedBase = numericParam(params, "seed", 1);
     const x = point[0] * 1e9;
     const y = point[1] * 1e9;

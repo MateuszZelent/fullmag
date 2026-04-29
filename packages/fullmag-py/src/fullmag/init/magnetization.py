@@ -28,7 +28,7 @@ class RandomMagnetization:
         object.__setattr__(self, "seed", require_positive_int(self.seed, "seed"))
 
     def to_ir(self) -> dict[str, object]:
-        return {"kind": "random_seeded", "seed": self.seed}
+        return {"kind": "random", "seed": self.seed}
 
 
 @dataclass(frozen=True, slots=True)

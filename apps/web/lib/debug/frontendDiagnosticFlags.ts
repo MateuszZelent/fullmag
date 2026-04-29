@@ -37,6 +37,9 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableAnalyzeViewport: true,
     enableViewportCanvas: true,
     enablePinOverlayButton: true,
+    // Opt-in only: keep one recently hidden WebGL viewport mounted with frameloop=never.
+    // Disabled by default because Firefox can lose contexts when multiple canvases stay alive.
+    enableWebGLWarmKeepAlive: false,
   },
   session: {
     enableLiveWebSocket: true,
@@ -159,6 +162,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableGeometryPointerInteractions: true,
     enableGeometryHoverInteractions: false,
     enableGeometryPerfLogging: false,
+    enableGeometryRenderLogging: false,
     // Keep the layer available so the toolbar toggle can actually show vectors.
     // The arrows are still off by default at the viewport state level.
     showArrowLayer: true,

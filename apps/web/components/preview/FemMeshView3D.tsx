@@ -176,6 +176,7 @@ interface Props {
   onVisibleSubmeshSnapshotChange?: (snapshot: VisibleSubmeshSnapshot | null) => void;
   selectedSidebarNodeId?: string | null;
   liveRenderDebugData?: FemLiveRenderDebugData | null;
+  viewportVisible?: boolean;
   viewportDocumentId?: string | null;
   persistedCameraState?: ViewportCameraState | null;
   onPersistCameraState?: (state: ViewportCameraState) => void;
@@ -270,6 +271,7 @@ function FemMeshView3DInner({
   onVisibleSubmeshSnapshotChange,
   selectedSidebarNodeId = null,
   liveRenderDebugData = null,
+  viewportVisible = true,
   viewportDocumentId = null,
   persistedCameraState = null,
   onPersistCameraState,
@@ -845,9 +847,13 @@ function FemMeshView3DInner({
         navigation={navigationMode}
         qualityProfile={runtimeQualityProfile}
         renderPolicy={{
-          mode: interactionActive || captureActive ? "always" : "demand",
-          hidden: false,
-          interactionActive,
+          mode: viewportVisible
+            ? interactionActive || captureActive
+              ? "always"
+              : "demand"
+            : "paused",
+          hidden: !viewportVisible,
+          interactionActive: viewportVisible && interactionActive,
         }}
         onInteractionChange={setInteractionActive}
         target={shellTarget}

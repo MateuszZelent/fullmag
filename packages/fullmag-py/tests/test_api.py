@@ -384,12 +384,12 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["cpu_threads"], 8)
 
     def test_random_initializer_serializes_to_ir(self) -> None:
-        initializer = fm.texture.random_seeded(seed=42)
+        initializer = fm.texture.random(seed=42)
         self.assertEqual(
             initializer.to_ir(),
             {
                 "kind": "preset_texture",
-                "preset_kind": "random_seeded",
+                "preset_kind": "random",
                 "preset_params": {"seed": 42},
                 "mapping": {
                     "space": "object",
@@ -406,6 +406,9 @@ class ProblemApiTests(unittest.TestCase):
                 "preview_proxy": "none",
             },
         )
+
+    def test_legacy_random_seeded_initializer_aliases_to_random(self) -> None:
+        self.assertEqual(fm.texture.random_seeded(seed=42).to_ir(), fm.texture.random(seed=42).to_ir())
 
     def test_magnetization_state_roundtrip_across_formats(self) -> None:
         values = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -475,6 +478,34 @@ class ProblemApiTests(unittest.TestCase):
             rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
 
             self.assertIn('flower.m.loadfile("state.json")', rewritten)
+
+    def test_script_builder_rewrites_random_initial_state_with_random_factory(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "builder_random.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    fm.engine("fdm")
+                    fm.cell(5e-9, 5e-9, 5e-9)
+
+                    body = fm.geometry(fm.Box(size=(5e-9, 5e-9, 5e-9), name="body"), name="body")
+                    body.Ms = 800e3
+                    body.Aex = 13e-12
+                    body.alpha = 0.2
+                    body.m = fm.texture.random(seed=1)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+            self.assertIn("body.m = fm.texture.random(seed=1)", rewritten)
+            self.assertNotIn("random_seeded", rewritten)
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()

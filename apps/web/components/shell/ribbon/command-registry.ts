@@ -214,7 +214,7 @@ export type RibbonCommand =
   | { id: "visualization.create-preset" }
   | { id: "viewport.toggle-sidebar" }
   | { id: "viewport.focus-selected-object" }
-  | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" | "skip" }
+  | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" | "skip" | "compute_fields" }
   | { id: "preview.select-quantity"; quantityId: string }
   | { id: "viewport.set-quantity"; quantityId: string }
   | { id: "viewport.set-component"; component: "3D" | "x" | "y" | "z" | "magnitude" }
@@ -358,6 +358,7 @@ export function canExecuteRibbonCommand(
     case "solver.control":
       if (typeof ctx.onSimAction !== "function") return false;
       if (command.action === "run") return Boolean(ctx.canRun);
+      if (command.action === "compute_fields") return Boolean(ctx.canRun);
       if (command.action === "relax") return Boolean(ctx.canRelax);
       if (command.action === "pause") return Boolean(ctx.canPause);
       if (command.action === "skip") return Boolean(ctx.canSkip);

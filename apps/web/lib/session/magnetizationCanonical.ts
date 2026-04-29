@@ -171,7 +171,7 @@ export function normalizeScriptBuilderMagnetization(
       sample_index: null,
       mapping: cloneMapping(magnetization.mapping),
       texture_transform: cloneTextureTransform(magnetization.texture_transform),
-      preset_kind: "random_seeded",
+      preset_kind: "random",
       preset_params: buildRandomPresetParams(
         magnetization.seed,
         magnetization.preset_params,
@@ -190,7 +190,7 @@ export function normalizeScriptBuilderMagnetization(
               : magnetization.value,
             DEFAULT_UNIFORM_DIRECTION,
           )
-        : presetKind === "random_seeded"
+        : presetKind === "random" || presetKind === "random_seeded"
           ? buildRandomPresetParams(magnetization.seed, magnetization.preset_params)
           : (magnetization.preset_params ?? {});
     return {
@@ -208,7 +208,7 @@ export function normalizeScriptBuilderMagnetization(
       preset_version: magnetization.preset_version ?? 1,
       ui_label:
         magnetization.ui_label
-        ?? (presetKind === "random_seeded" ? "Random" : presetKind === "uniform" ? "Uniform" : null),
+        ?? (presetKind === "random" || presetKind === "random_seeded" ? "Random" : presetKind === "uniform" ? "Uniform" : null),
     };
   }
   const canonicalKind = kind === "file" ? "sampled" : kind;

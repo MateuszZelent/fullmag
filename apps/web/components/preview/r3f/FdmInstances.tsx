@@ -1,8 +1,7 @@
 "use client";
 
-import { memo, useRef, useEffect, useMemo } from "react";
+import { memo, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { COMP_NEGATIVE, COMP_NEUTRAL, COMP_POSITIVE } from "./colorUtils";
@@ -14,6 +13,7 @@ import type {
   VectorSurfaceViewportVoxelSampling as VoxelSampling,
 } from "../fdm/fdmViewportSettingsTypes";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { useBatchedInvalidate } from "./useBatchedInvalidate";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -72,6 +72,26 @@ const _tempScale = new THREE.Vector3();
 const _tempQuat = new THREE.Quaternion();
 const _tempMatrix = new THREE.Matrix4();
 const _color = new THREE.Color();
+
+export function resolveFdmMaterialOpacity({
+  mode,
+  voxelOpacity,
+  sceneOpacityMultiplier,
+  geometryPreviewOpacity = null,
+}: {
+  mode: RenderMode;
+  voxelOpacity: number;
+  sceneOpacityMultiplier: number;
+  geometryPreviewOpacity?: number | null;
+}) {
+  const baseOpacity =
+    geometryPreviewOpacity ?? (mode === "voxel" ? voxelOpacity : 1);
+  const effectiveOpacity = baseOpacity * sceneOpacityMultiplier;
+  return {
+    effectiveOpacity,
+    transparent: effectiveOpacity < 0.999,
+  };
+}
 
 /* ── Color helpers ─────────────────────────────────────────────────── */
 
@@ -193,36 +213,47 @@ function FdmInstances({
 }: FdmInstancesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const displayToCellRef = useRef<Uint32Array | null>(null);
-  const { invalidate } = useThree();
+  const scheduleInvalidate = useBatchedInvalidate();
   const [nx, ny, nz] = grid;
   const count = nx * ny * nz;
-  const mode = settings.renderMode;
+  const {
+    quality,
+    renderMode: mode,
+    sampling,
+    voxelColorMode,
+    voxelOpacity,
+    voxelGap,
+    voxelThreshold,
+    topoEnabled,
+    topoComponent,
+    topoMultiplier,
+  } = settings;
+  const expectedVectorCount = nx * ny * nz * 3;
+  const hasRenderableVectors = Boolean(vectors && vectors.length >= expectedVectorCount);
 
   /* ── Geometry (memoized per quality + mode) ───────────────────── */
   const geometry = useMemo(() => {
-    const cfg = QUALITY_CONFIGS[settings.quality];
+    const cfg = QUALITY_CONFIGS[quality];
     return mode === "voxel" ? createVoxelGeometry() : createArrowGeometry(cfg.segments);
-  }, [mode, settings.quality]);
+  }, [mode, quality]);
 
-  /* ── Material (memoized per mode + quality + opacity) ─────────── */
+  /* ── Material (memoized per mode + quality) ───────────────────── */
   const material = useMemo(() => {
-    const cfg = QUALITY_CONFIGS[settings.quality];
-    const effectiveOpacity = settings.voxelOpacity * sceneOpacityMultiplier;
-    const isTransparent = effectiveOpacity < 0.999;
+    const cfg = QUALITY_CONFIGS[quality];
     if (mode === "voxel") {
       return cfg.useLighting
         ? new THREE.MeshPhongMaterial({
             side: THREE.FrontSide,
-            transparent: isTransparent,
-            opacity: effectiveOpacity,
+            transparent: false,
+            opacity: 1,
             depthWrite: true,
             shininess: 24,
             specular: new THREE.Color(0x24334c),
           })
         : new THREE.MeshBasicMaterial({
             side: THREE.FrontSide,
-            transparent: isTransparent,
-            opacity: effectiveOpacity,
+            transparent: false,
+            opacity: 1,
             depthWrite: true,
           });
     }
@@ -231,17 +262,17 @@ function FdmInstances({
           side: THREE.FrontSide,
           shininess: 60,
           specular: new THREE.Color(0x444444),
-          transparent: sceneOpacityMultiplier < 0.999,
-          opacity: sceneOpacityMultiplier,
+          transparent: false,
+          opacity: 1,
           depthWrite: true,
         })
       : new THREE.MeshBasicMaterial({
           side: THREE.FrontSide,
-          transparent: sceneOpacityMultiplier < 0.999,
-          opacity: sceneOpacityMultiplier,
+          transparent: false,
+          opacity: 1,
           depthWrite: true,
         });
-  }, [mode, settings.quality, settings.voxelOpacity, sceneOpacityMultiplier]);
+  }, [mode, quality]);
 
   useEffect(() => {
     return () => {
@@ -249,6 +280,39 @@ function FdmInstances({
       material.dispose();
     };
   }, [geometry, material]);
+
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    const materials = mesh
+      ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material])
+      : [material];
+    const { effectiveOpacity, transparent } = resolveFdmMaterialOpacity({
+      mode,
+      voxelOpacity,
+      sceneOpacityMultiplier,
+      geometryPreviewOpacity: geometryMode && !hasRenderableVectors ? 0.85 : null,
+    });
+    for (const currentMaterial of materials) {
+      if (
+        currentMaterial instanceof THREE.MeshPhongMaterial ||
+        currentMaterial instanceof THREE.MeshBasicMaterial
+      ) {
+        currentMaterial.opacity = effectiveOpacity;
+        currentMaterial.transparent = transparent;
+        currentMaterial.depthWrite = true;
+        currentMaterial.needsUpdate = true;
+      }
+    }
+    scheduleInvalidate();
+  }, [
+    geometryMode,
+    hasRenderableVectors,
+    material,
+    mode,
+    scheduleInvalidate,
+    sceneOpacityMultiplier,
+    voxelOpacity,
+  ]);
 
   /* ── Initialize instanceColor on mount ────────────────────────── */
   useEffect(() => {
@@ -277,7 +341,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
-      invalidate();
+      scheduleInvalidate();
       return;
     }
 
@@ -289,8 +353,7 @@ function FdmInstances({
     }
     const displayToCell = displayToCellRef.current;
 
-    const expectedVectorCount = nx * ny * nz * 3;
-    const hasVectors = vectors && vectors.length >= expectedVectorCount;
+    const hasVectors = hasRenderableVectors;
 
     const minIx = Math.max(0, Math.floor(isolateGridBounds?.minIx ?? 0));
     const maxIx = Math.min(nx - 1, Math.ceil(isolateGridBounds?.maxIx ?? nx - 1));
@@ -304,7 +367,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
-      invalidate();
+      scheduleInvalidate();
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
         scope: "FdmInstances",
@@ -314,7 +377,7 @@ function FdmInstances({
         meta: {
           visible: 0,
           mode,
-          quality: settings.quality,
+          quality,
         },
       });
       return;
@@ -325,7 +388,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
-      invalidate();
+      scheduleInvalidate();
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
         scope: "FdmInstances",
@@ -335,14 +398,14 @@ function FdmInstances({
         meta: {
           visible: 0,
           mode,
-          quality: settings.quality,
+          quality,
         },
       });
       return;
     }
 
     if (!hasVectors && geometryMode) {
-      const gapScale = Math.max(0.12, 1 - settings.voxelGap);
+      const gapScale = Math.max(0.12, 1 - voxelGap);
       const depthS = nz > 1 ? gapScale : Math.max(0.22, gapScale * 0.42);
       _color.setHSL(210 / 360, 0.08, 0.55);
       let visible = 0;
@@ -379,15 +442,7 @@ function FdmInstances({
       onVisibleCount?.(visible);
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
-      if (!Array.isArray(mesh.material)) {
-        const materialRef = mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial;
-        const effectiveOpacity = 0.85 * sceneOpacityMultiplier;
-        materialRef.opacity = effectiveOpacity;
-        materialRef.transparent = effectiveOpacity < 0.999;
-        materialRef.depthWrite = true;
-        materialRef.needsUpdate = true;
-      }
-      invalidate();
+      scheduleInvalidate();
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
         scope: "FdmInstances",
@@ -397,21 +452,12 @@ function FdmInstances({
         meta: {
           visible,
           mode,
-          quality: settings.quality,
+          quality,
         },
       });
       return;
     }
 
-    const {
-      sampling,
-      voxelColorMode,
-      voxelGap,
-      voxelThreshold,
-      topoEnabled,
-      topoComponent,
-      topoMultiplier,
-    } = settings;
     const isVoxel = mode === "voxel";
     const step = sampling;
     const baseScale = isVoxel ? Math.max(0.12, step * (1 - voxelGap)) : 1;
@@ -509,19 +555,7 @@ function FdmInstances({
     mesh.instanceMatrix.needsUpdate = true;
     instanceColor.needsUpdate = true;
 
-    if (!Array.isArray(mesh.material)) {
-      const materialRef = mesh.material as THREE.MeshPhongMaterial | THREE.MeshBasicMaterial;
-      if (isVoxel) {
-        const effectiveOpacity = settings.voxelOpacity * sceneOpacityMultiplier;
-        materialRef.opacity = effectiveOpacity;
-        materialRef.transparent = effectiveOpacity < 0.999;
-      } else {
-        materialRef.opacity = sceneOpacityMultiplier;
-        materialRef.transparent = sceneOpacityMultiplier < 0.999;
-      }
-      materialRef.depthWrite = true;
-    }
-    invalidate();
+    scheduleInvalidate();
     const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     recordFrontendPerfSample({
       scope: "FdmInstances",
@@ -531,10 +565,32 @@ function FdmInstances({
       meta: {
         visible,
         mode,
-        quality: settings.quality,
+        quality,
       },
     });
-  }, [vectors, grid, settings, geometryMode, activeMask, mode, count, nx, ny, nz, onVisibleCount, sceneOpacityMultiplier, isolateGridBounds, vectorsVisible, invalidate]);
+  }, [
+    activeMask,
+    count,
+    geometryMode,
+    hasRenderableVectors,
+    isolateGridBounds,
+    mode,
+    nx,
+    ny,
+    nz,
+    onVisibleCount,
+    quality,
+    sampling,
+    scheduleInvalidate,
+    topoComponent,
+    topoEnabled,
+    topoMultiplier,
+    vectors,
+    vectorsVisible,
+    voxelColorMode,
+    voxelGap,
+    voxelThreshold,
+  ]);
 
   if (count === 0) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {

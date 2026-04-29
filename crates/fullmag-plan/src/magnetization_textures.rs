@@ -172,7 +172,11 @@ fn apply_inverse_transform(point: [f64; 3], transform: &TextureTransform3DIR) ->
     } else {
         1.0
     };
-    [p[0] / sx + pivot[0], p[1] / sy + pivot[1], p[2] / sz + pivot[2]]
+    [
+        p[0] / sx + pivot[0],
+        p[1] / sy + pivot[1],
+        p[2] / sz + pivot[2],
+    ]
 }
 
 fn wrap_repeat(x: f64) -> f64 {
@@ -240,10 +244,8 @@ fn eval_random_seeded(params: &BTreeMap<String, Value>, point: [f64; 3]) -> [f64
     let x = point[0] * 1.0e9;
     let y = point[1] * 1.0e9;
     let z = point[2] * 1.0e9;
-    let angle1 = (seed * 12.9898 + x * 78.233 + y * 37.719 + z * 11.137).sin()
-        * 43758.5453;
-    let angle2 = (seed * 4.1414 + x * 93.989 + y * 67.345 + z * 45.678).sin()
-        * 43758.5453;
+    let angle1 = (seed * 12.9898 + x * 78.233 + y * 37.719 + z * 11.137).sin() * 43758.5453;
+    let angle2 = (seed * 4.1414 + x * 93.989 + y * 67.345 + z * 45.678).sin() * 43758.5453;
     let u1 = angle1 - angle1.floor();
     let u2 = angle2 - angle2.floor();
     let phi = u1 * std::f64::consts::TAU;
@@ -378,7 +380,7 @@ fn eval_preset(
 ) -> Result<[f64; 3], String> {
     match preset_kind {
         "uniform" => eval_uniform(params),
-        "random_seeded" => Ok(normalize(eval_random_seeded(params, point))),
+        "random" | "random_seeded" => Ok(normalize(eval_random_seeded(params, point))),
         "vortex" => eval_vortex(params, point, false),
         "antivortex" => eval_vortex(params, point, true),
         "bloch_skyrmion" => eval_skyrmion(params, point, 0.5 * std::f64::consts::PI),
@@ -499,7 +501,13 @@ mod tests {
 
         let dot01 = dot(values[0], values[1]).abs();
         let dot12 = dot(values[1], values[2]).abs();
-        assert!(dot01 < 0.999, "first two random vectors are nearly identical: {dot01}");
-        assert!(dot12 < 0.999, "last two random vectors are nearly identical: {dot12}");
+        assert!(
+            dot01 < 0.999,
+            "first two random vectors are nearly identical: {dot01}"
+        );
+        assert!(
+            dot12 < 0.999,
+            "last two random vectors are nearly identical: {dot12}"
+        );
     }
 }

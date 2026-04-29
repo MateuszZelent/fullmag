@@ -542,6 +542,46 @@ impl InteractiveRuntimeHost {
         true
     }
 
+    pub(super) fn compute_current_fields(
+        &mut self,
+        continuation_magnetization: Option<&[[f64; 3]]>,
+        live_workspace: &LocalLiveWorkspace,
+    ) -> Result<()> {
+        let display_selection = self.control.display_selection_snapshot();
+        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
+
+        if let Some(runtime) = self.runtime.as_mut() {
+            refresh_interactive_preview_runtime_display(
+                runtime,
+                &display_selection,
+                live_workspace,
+            )?;
+            let quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+            let cached_fields = runtime
+                .snapshot_vector_fields(&quantities, &display_selection.preview_request())?;
+            live_workspace.update(|state| {
+                replace_cached_preview_fields(state, cached_fields.clone());
+            });
+            return Ok(());
+        }
+
+        refresh_interactive_preview_snapshot(
+            &self.base_problem,
+            continuation_magnetization,
+            &display_selection.preview_request(),
+            live_workspace,
+        )?;
+        let cached_fields = refresh_interactive_preview_fields(
+            &self.base_problem,
+            continuation_magnetization,
+            &display_selection.preview_request(),
+        )?;
+        live_workspace.update(|state| {
+            replace_cached_preview_fields(state, cached_fields.clone());
+        });
+        Ok(())
+    }
+
     pub(super) fn ensure_runtime_for_problem(
         &mut self,
         problem: &ProblemIR,

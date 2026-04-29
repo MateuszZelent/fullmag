@@ -221,12 +221,16 @@ class texture:
         )
 
     @staticmethod
-    def random_seeded(seed: int) -> PresetTexture:
+    def random(seed: int) -> PresetTexture:
         return PresetTexture(
-            preset_kind="random_seeded",
+            preset_kind="random",
             params={"seed": int(seed)},
             preview_proxy="none",
         )
+
+    @staticmethod
+    def random_seeded(seed: int) -> PresetTexture:
+        return texture.random(seed)
 
     @staticmethod
     def vortex(

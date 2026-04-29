@@ -233,19 +233,19 @@ function syncLatestMagnetizationFrameFromLiveState(
           fallbackFrame?.topology_signature ??
           null,
         field_revision:
-          state.latest_fields.frames.m?.field_revision ??
-          fallbackFrame?.field_revision ??
           state.live_state?.step ??
+          fallbackFrame?.field_revision ??
+          state.latest_fields.frames.m?.field_revision ??
           null,
         source_step:
-          state.latest_fields.frames.m?.source_step ??
-          fallbackFrame?.source_step ??
           state.live_state?.step ??
+          fallbackFrame?.source_step ??
+          state.latest_fields.frames.m?.source_step ??
           null,
         source_time:
-          state.latest_fields.frames.m?.source_time ??
-          fallbackFrame?.source_time ??
           state.live_state?.time ??
+          fallbackFrame?.source_time ??
+          state.latest_fields.frames.m?.source_time ??
           null,
       },
     },

@@ -20,7 +20,7 @@ export function ribbonActionTriggerClassName(
 ): string {
   const isPrimaryAction = action.accent && !action.disabled;
   return cn(
-    "flex min-h-[52px] min-w-[58px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
+    "flex h-[52px] min-w-[58px] max-w-[74px] flex-col items-center justify-center gap-1 rounded-md border p-1 transition-all",
     action.active
       ? "border-primary/20 bg-primary/10 text-primary shadow-inner"
       : isPrimaryAction
@@ -52,7 +52,7 @@ function RibbonActionTriggerContent({ action }: { action: RibbonAction }) {
       </span>
       <span
         className={cn(
-          "text-[0.62rem] font-medium leading-none text-center",
+          "max-w-full truncate text-center text-[0.62rem] font-medium leading-none",
           isPrimaryAction
             ? "text-primary-foreground"
             : action.active
@@ -177,19 +177,19 @@ export interface RibbonGroupsRowProps {
 
 export function RibbonGroupsRow({ groups, previewPending }: RibbonGroupsRowProps) {
   return (
-    <div className="flex items-stretch overflow-x-auto scrollbar-none py-2 px-2 gap-0.5 bg-card/30 border-b border-border/20">
+    <div className="flex h-[96px] items-stretch overflow-x-auto overflow-y-hidden scrollbar-none px-2 py-2 gap-0.5 bg-card/30 border-b border-border/20">
       {groups
         .filter((g) => g.actions.some((a) => !a.hidden))
         .map((group, gi) => (
-          <div key={group.id} className="flex items-stretch shrink-0">
+          <div key={group.id} className="flex h-full items-stretch shrink-0">
             {gi > 0 && <div className="w-px bg-border/40 mx-1.5 self-stretch my-2" />}
             <div
               className={cn(
-                "flex min-h-[64px] flex-col justify-between items-center rounded-md border px-1.5 py-1 shrink-0",
+                "flex h-full flex-col items-center justify-between rounded-md border px-1.5 py-1 shrink-0",
                 ribbonGroupToneClass(group.tone),
               )}
             >
-              <div className="flex items-center gap-0.5">
+              <div className="flex h-[54px] items-center gap-0.5 overflow-hidden">
                 {group.actions.filter((a) => !a.hidden).map((action) =>
                   (action.menu?.length ?? action.menuItems?.length ?? 0) > 0 ? (
                     <RibbonActionMenu
@@ -217,12 +217,12 @@ export function RibbonGroupsRow({ groups, previewPending }: RibbonGroupsRowProps
                   ),
                 )}
               </div>
-              <div className="mt-0.5 w-full border-t border-border/40 pt-0.5 text-center">
-                <span className="block text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
+              <div className="mt-0.5 flex h-[24px] w-full flex-col justify-center border-t border-border/40 pt-0.5 text-center">
+                <span className="block truncate text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                   {group.title}
                 </span>
                 {group.subtitle ? (
-                  <span className="block text-[0.54rem] font-medium text-muted-foreground/70">
+                  <span className="block truncate text-[0.54rem] font-medium leading-none text-muted-foreground/70">
                     {group.subtitle}
                   </span>
                 ) : null}

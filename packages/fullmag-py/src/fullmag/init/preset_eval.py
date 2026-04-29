@@ -184,7 +184,7 @@ def evaluate_preset_texture(
     for point in points:
         if preset_kind == "uniform":
             values.append(_normalize(params["direction"]))
-        elif preset_kind == "random_seeded":
+        elif preset_kind in {"random", "random_seeded"}:
             # Use a deterministic per-point seed derived from the global seed + point coords
             x, y, z = float(point[0]) * 1e9, float(point[1]) * 1e9, float(point[2]) * 1e9
             seed = int(params.get("seed", 1))

@@ -68,7 +68,7 @@ export function applyMagnetizationHsl(
 ): THREE.Color {
   const magnitude = Math.sqrt(mx * mx + my * my + mz * mz);
   if (magnitude <= 1e-30) {
-    return color.setRGB(0, 0, 0);
+    return color.setHSL(0, 0, 0.6);
   }
   const nx = mx / magnitude;
   const ny = my / magnitude;

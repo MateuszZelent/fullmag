@@ -7,7 +7,11 @@ import { ViewportTabContent } from "@/features/viewport-unified/renderers/Viewpo
 
 export { ViewportBar } from "./ViewportBar";
 
-export const ViewportCanvasArea = memo(function ViewportCanvasArea() {
+export const ViewportCanvasArea = memo(function ViewportCanvasArea({
+  viewportVisible = true,
+}: {
+  viewportVisible?: boolean;
+}) {
   const bridge = useViewportDataBridge();
-  return <ViewportTabContent bridge={bridge} />;
+  return <ViewportTabContent bridge={bridge} viewportVisible={viewportVisible} />;
 });

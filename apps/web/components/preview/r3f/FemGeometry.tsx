@@ -1,12 +1,13 @@
 import React, { memo, useMemo, useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
-import { useThree } from "@react-three/fiber";
 import type { FemMeshData, FemColorField, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
 import { computeVertexColors, getSharedVertexColors } from "./femVertexColors";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
+import { useBatchedInvalidate } from "./useBatchedInvalidate";
 
 interface FemGeometryProps {
   meshData: FemMeshData;
@@ -142,7 +143,7 @@ export const FemGeometry = memo(function FemGeometry({
   enableGeometryPointerInteractions = true,
   enableGeometryHoverInteractions = true,
 }: FemGeometryProps) {
-  const { invalidate } = useThree();
+  const scheduleInvalidate = useBatchedInvalidate();
   const {
     nodes,
     elements,
@@ -590,11 +591,12 @@ export const FemGeometry = memo(function FemGeometry({
     shrinkFactor,
   ]);
 
-  // ── Edges geometry memo: only used for shaded surface edge overlays.
-  // Wireframe-only renders directly from the surface geometry to avoid a large
-  // transient WireframeGeometry allocation during mode switches.
+  // ── Edges geometry memo: used for shaded surface edge overlays and
+  // wireframe-only mode. The direct material wireframe path is kept only as an
+  // emergency fallback because it has proven unreliable after ribbon mode
+  // changes in the hosted viewport.
   const edgesGeometry = useMemo(() => {
-    const needsEdges = renderMode === "surface+edges";
+    const needsEdges = renderMode === "surface+edges" || renderMode === "wireframe";
     if (!needsEdges || !geometry) return null;
     const wireGeometry = new THREE.WireframeGeometry(geometry);
     wireGeometry.computeBoundingSphere();
@@ -675,8 +677,8 @@ export const FemGeometry = memo(function FemGeometry({
 
   // Invalidate the R3F frame when topology geometry rebuilds
   useEffect(() => {
-    if (geometry) invalidate();
-  }, [geometry, invalidate]);
+    if (geometry) scheduleInvalidate();
+  }, [geometry, scheduleInvalidate]);
 
   // ── Color update ──────────────────────────────────────────────────
   useEffect(() => {
@@ -758,7 +760,7 @@ export const FemGeometry = memo(function FemGeometry({
       const pointsApplyStart = perfEnabled ? performance.now() : 0;
       const pointsColorAttr = pointsGeometry.getAttribute("color") as THREE.BufferAttribute | undefined;
       if (!pointsColorAttr) {
-        invalidate();
+        scheduleInvalidate();
         return;
       }
       if (pointsVertexMap) {
@@ -779,7 +781,7 @@ export const FemGeometry = memo(function FemGeometry({
       pointsColorAttr.needsUpdate = true;
       mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
     }
-    invalidate();
+    scheduleInvalidate();
     mark("colorTotal", totalStart);
     recordFrontendPerfSample({
       scope: "QuantitySwitch",
@@ -803,7 +805,7 @@ export const FemGeometry = memo(function FemGeometry({
     field,
     fieldData,
     geometry,
-    invalidate,
+    scheduleInvalidate,
     meshBoundaryFaces,
     nElements,
     nNodes,
@@ -861,15 +863,114 @@ export const FemGeometry = memo(function FemGeometry({
     };
   }, []);
 
-  const showSurface = renderMode === "surface" || renderMode === "surface+edges";
-  const showWire = renderMode === "surface+edges" || renderMode === "wireframe";
-  const showWireOnly = renderMode === "wireframe";
+  const {
+    showSurface,
+    showWireOnlyEdges,
+    showWireOnlyMesh,
+    showSurfaceEdges,
+    showSurfaceEdgeFallback,
+    showPoints,
+  } = resolveFemGeometryRenderPasses({
+    renderMode,
+    hasGeometry: geometry != null,
+    hasEdgesGeometry: edgesGeometry != null,
+    showSurfaceHiddenEdgesPass,
+    showSurfaceVisibleEdgesPass,
+  });
+
+  useEffect(() => {
+    if (!FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+      return;
+    }
+    const positionAttribute = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;
+    const colorAttribute = geometry?.getAttribute("color") as THREE.BufferAttribute | undefined;
+    console.debug("[fem-geometry]", JSON.stringify({
+      renderMode,
+      field,
+      passes: {
+        showSurface,
+        showWireOnlyEdges,
+        showWireOnlyMesh,
+        showSurfaceEdges,
+        showSurfaceEdgeFallback,
+        showPoints,
+      },
+      input: {
+        nNodes,
+        nElements,
+        boundaryFaces: Math.floor(meshBoundaryFaces.length / 3),
+        customBoundaryFaces: customBoundaryFaces?.length ?? null,
+        displayBoundaryFaceIndices: Array.isArray(displayBoundaryFaceIndices)
+          ? displayBoundaryFaceIndices.length
+          : "all",
+        displayElementIndices: Array.isArray(displayElementIndices)
+          ? displayElementIndices.length
+          : "all",
+        activeMask: meshData.activeMask?.length ?? null,
+        quantityDomain: meshData.quantityDomain,
+        fieldRevision,
+      },
+      geometry: {
+        hasGeometry: Boolean(geometry),
+        vertexCount: positionAttribute?.count ?? 0,
+        colorCount: colorAttribute?.count ?? 0,
+        indexCount: geometry?.index?.count ?? 0,
+        hasEdgesGeometry: Boolean(edgesGeometry),
+        hasPointsGeometry: Boolean(pointsGeometry),
+      },
+      material: {
+        opacity,
+        uniformColor,
+        edgeColor,
+        highlight,
+        enableGeometryVertexColors,
+        enableGeometryNormals,
+      },
+    }));
+  }, [
+    customBoundaryFaces,
+    displayBoundaryFaceIndices,
+    displayElementIndices,
+    edgeColor,
+    edgesGeometry,
+    enableGeometryNormals,
+    enableGeometryVertexColors,
+    field,
+    fieldRevision,
+    geometry,
+    highlight,
+    meshBoundaryFaces.length,
+    meshData.activeMask,
+    meshData.quantityDomain,
+    nElements,
+    nNodes,
+    opacity,
+    pointsGeometry,
+    renderMode,
+    showPoints,
+    showSurface,
+    showSurfaceEdgeFallback,
+    showSurfaceEdges,
+    showWireOnlyEdges,
+    showWireOnlyMesh,
+    uniformColor,
+  ]);
+
+  useEffect(() => {
+    scheduleInvalidate();
+  }, [
+    edgesGeometry,
+    pointsGeometry,
+    renderMode,
+    scheduleInvalidate,
+    showPoints,
+    showSurface,
+    showSurfaceEdges,
+    showWireOnlyEdges,
+    showWireOnlyMesh,
+  ]);
+
   const showVolumeWire = false;
-  const showPoints = renderMode === "points";
-  const showSurfaceEdgeFallback =
-    showWire &&
-    edgesGeometry != null &&
-    (showWireOnly || (!showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass));
   const showVolumeEdgeFallback =
     showVolumeWire &&
     (tetraEdgesGeometry ?? edgesGeometry) != null &&
@@ -987,28 +1088,42 @@ export const FemGeometry = memo(function FemGeometry({
         </mesh>
       )}
       
-      {showWire && edgesGeometry && (
+      {showWireOnlyEdges && edgesGeometry ? (
+        <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
+          <lineBasicMaterial
+            color={resolvedEdgeColor}
+            opacity={highlight ? 0.98 : 0.86}
+            transparent
+            depthWrite={false}
+            depthTest={false}
+          />
+        </lineSegments>
+      ) : null}
+
+      {showWireOnlyMesh ? (
+        <mesh geometry={geometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
+          <meshBasicMaterial
+            color={resolvedEdgeColor}
+            wireframe
+            transparent
+            opacity={highlight ? 0.98 : 0.86}
+            depthWrite={false}
+            depthTest={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ) : null}
+
+      {showSurfaceEdges && edgesGeometry && (
         <>
-          {showWireOnly && geometry ? (
-            <mesh geometry={geometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
-              <meshBasicMaterial
-                color={resolvedEdgeColor}
-                wireframe
-                transparent
-                opacity={highlight ? 0.98 : 0.86}
-                depthWrite={false}
-                depthTest={false}
-                side={THREE.DoubleSide}
-              />
-            </mesh>
-          ) : showSurfaceEdgeFallback ? (
+          {showSurfaceEdgeFallback ? (
             <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder} frustumCulled={false}>
               <lineBasicMaterial
                 color={resolvedEdgeColor}
-                opacity={(showWireOnly ? (highlight ? 0.98 : 0.82) : (highlight ? 0.95 : 0.58)) * Math.max(opacityVal, showWireOnly ? 0.75 : 0)}
+                opacity={(highlight ? 0.95 : 0.58) * opacityVal}
                 transparent={edgePolicy.transparent}
                 depthWrite={edgePolicy.depthWrite}
-                depthTest={showWireOnly ? false : edgePolicy.depthTest}
+                depthTest={edgePolicy.depthTest}
               />
             </lineSegments>
           ) : null}
