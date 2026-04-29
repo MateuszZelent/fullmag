@@ -81,6 +81,26 @@ describe("resolveFemGeometryRenderPasses", () => {
     });
   });
 
+  it("renders shaded edge fallback when explicit hidden and visible edge passes are disabled", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "surface+edges",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: false,
+        showSurfaceVisibleEdgesPass: false,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: true,
+      showSurfaceEdges: true,
+      showSurfaceEdgeFallback: true,
+      showWireOnlyMesh: false,
+      showPoints: false,
+    });
+  });
+
   it("renders surface without edges geometry", () => {
     expect(
       resolveFemGeometryRenderPasses({

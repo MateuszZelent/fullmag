@@ -590,10 +590,7 @@ export const FemGeometry = memo(function FemGeometry({
   const edgesGeometry = useMemo(() => {
     const needsEdges =
       renderMode === "wireframe" ||
-      (
-        renderMode === "surface+edges" &&
-        (showSurfaceHiddenEdgesPass || showSurfaceVisibleEdgesPass)
-    );
+      renderMode === "surface+edges";
     if (!needsEdges || !geometry) return null;
     try {
       const wireGeometry = new THREE.WireframeGeometry(geometry);
@@ -603,7 +600,7 @@ export const FemGeometry = memo(function FemGeometry({
       console.warn("[fem-geometry] WireframeGeometry construction failed; falling back to material wireframe", error);
       return null;
     }
-  }, [geometry, renderMode, showSurfaceHiddenEdgesPass, showSurfaceVisibleEdgesPass]);
+  }, [geometry, renderMode]);
 
   // Volume-edge wireframes are intentionally disabled in this surface mesh
   // renderer. Building tetrahedral edge buffers during UI mode switches can
