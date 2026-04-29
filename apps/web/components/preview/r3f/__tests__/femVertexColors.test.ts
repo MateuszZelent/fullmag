@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FemMeshData } from "../../fem/femMeshTypes";
-import { getSharedVertexColors } from "../femVertexColors";
+import { getSharedVertexColors, shouldUseVertexColorWorker } from "../femVertexColors";
 
 function meshData(): FemMeshData {
   return {
@@ -50,5 +50,42 @@ describe("getSharedVertexColors", () => {
     });
 
     expect(second).not.toBe(first);
+  });
+});
+
+describe("shouldUseVertexColorWorker", () => {
+  it("uses the worker only for enabled large non-uniform color work", () => {
+    expect(
+      shouldUseVertexColorWorker({
+        enabled: true,
+        nNodes: 100_000,
+        field: "magnitude",
+        hasUniformColor: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseVertexColorWorker({
+        enabled: true,
+        nNodes: 99_999,
+        field: "magnitude",
+        hasUniformColor: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseVertexColorWorker({
+        enabled: true,
+        nNodes: 200_000,
+        field: "none",
+        hasUniformColor: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseVertexColorWorker({
+        enabled: false,
+        nNodes: 200_000,
+        field: "magnitude",
+        hasUniformColor: false,
+      }),
+    ).toBe(false);
   });
 });

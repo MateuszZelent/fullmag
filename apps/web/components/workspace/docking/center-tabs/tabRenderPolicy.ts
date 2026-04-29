@@ -4,6 +4,7 @@ type RenderPolicyTab = Pick<WorkspaceTab, "id" | "kind" | "lifecycle">;
 
 export interface WorkspaceTabRenderPolicyOptions {
   enableWebGLWarmKeepAlive?: boolean;
+  /** @deprecated Hidden WebGL warm keepalive now retains every WebGL tab. */
   recentWebGLTabId?: string | null;
   webGLWarmKeepAliveDisabledByContextLoss?: boolean;
 }
@@ -44,8 +45,7 @@ export function resolveWorkspaceTabRenderDecision(
   if (isWebGLWorkspaceTab(tab)) {
     const canWarmMount =
       options.enableWebGLWarmKeepAlive === true &&
-      !options.webGLWarmKeepAliveDisabledByContextLoss &&
-      options.recentWebGLTabId === tab.id;
+      !options.webGLWarmKeepAliveDisabledByContextLoss;
     if (canWarmMount) {
       return { render: true, visible: false, forceMount: true, reason: "warm-hidden" };
     }
@@ -67,8 +67,8 @@ export function resolveWorkspaceTabRenderDecision(
  * and live subscriptions. Hidden panels must unmount so changing tabs releases
  * CPU/GPU work and browser memory instead of running in the background. WebGL
  * viewport tabs keep their camera/presentation state in stores by default; the
- * feature-flagged warm keepalive path only preserves the most recent hidden
- * WebGL tab and can be disabled for the session after hidden context loss.
+ * feature-flagged warm keepalive path preserves hidden WebGL tabs and can be
+ * disabled for the session after hidden context loss.
  */
 export function shouldRenderWorkspaceTabPanel(
   tab: RenderPolicyTab,

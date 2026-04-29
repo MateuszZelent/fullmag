@@ -1296,6 +1296,8 @@ export function useViewportDataBridge() {
   );
 
   /* ── Scaled FEM mesh data ── */
+  const femFieldData = femMeshData?.fieldData;
+  const femShaderFieldData = femMeshData?.shaderFieldData;
   const scaledFemMeshData = useMemo(() => {
     if (!femMeshData || scaleFactor === 1.0 || !femMeshData.fieldData) return femMeshData;
     const fld = femMeshData.fieldData;
@@ -1308,7 +1310,25 @@ export function useViewportDataBridge() {
         z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) : null,
       },
     } as typeof femMeshData;
-  }, [femMeshData, scaleFactor]);
+  }, [
+    femMeshData?.activeMask,
+    femMeshData?.boundaryFaces,
+    femMeshData?.elements,
+    femMeshData?.fieldNComp,
+    femMeshData?.fieldRevision,
+    femFieldData?.x,
+    femFieldData?.y,
+    femFieldData?.z,
+    femMeshData?.meshGenerationId,
+    femMeshData?.nElements,
+    femMeshData?.nNodes,
+    femMeshData?.nodes,
+    femMeshData?.quantityDomain,
+    femShaderFieldData?.x,
+    femShaderFieldData?.y,
+    femShaderFieldData?.z,
+    scaleFactor,
+  ]);
 
   const scopedFetchedFemMeshData = useMemo(() => {
     if (

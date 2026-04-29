@@ -6,7 +6,7 @@ import {
 } from "../tabRenderPolicy";
 
 describe("workspace center tab render policy", () => {
-  it("keeps WebGL viewport tabs active-only even when their state lifecycle is warm", () => {
+  it("keeps WebGL viewport tabs active-only by default even when their state lifecycle is warm", () => {
     expect(
       shouldRenderWorkspaceTabPanel(
         { id: "core:3d", kind: "viewport-3d", lifecycle: "warm" },
@@ -78,7 +78,7 @@ describe("workspace center tab render policy", () => {
     });
   });
 
-  it("warm-mounts only the most recent hidden WebGL tab when explicitly enabled", () => {
+  it("warm-mounts every hidden WebGL tab when explicitly enabled", () => {
     expect(
       resolveWorkspaceTabRenderDecision(
         { id: "core:3d", kind: "viewport-3d", lifecycle: "warm" },
@@ -105,10 +105,10 @@ describe("workspace center tab render policy", () => {
         },
       ),
     ).toEqual({
-      render: false,
+      render: true,
       visible: false,
-      forceMount: false,
-      reason: "warm-disabled",
+      forceMount: true,
+      reason: "warm-hidden",
     });
   });
 

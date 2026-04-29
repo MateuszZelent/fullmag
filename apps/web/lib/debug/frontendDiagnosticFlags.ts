@@ -218,6 +218,8 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     chartWorkerDecimation: false,
     /** PR-8: Worker-based FEM 2D slice topology/field sampling. */
     femSliceWorkerSampling: false,
+    /** P-06: Worker-based vertex color computation for large FEM meshes. */
+    femVertexColorWorker: true,
     /** PR-1: Frontend diagnostics panel. */
     frontendDiagnosticsPanel: true,
   },

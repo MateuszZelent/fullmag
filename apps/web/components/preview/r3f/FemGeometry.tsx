@@ -2,7 +2,12 @@ import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback }
 import * as THREE from "three";
 import type { FemMeshData, FemColorField, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
-import { computeVertexColors, getSharedVertexColors } from "./femVertexColors";
+import {
+  computeVertexColors,
+  computeVertexColorsOffThread,
+  getSharedVertexColors,
+  shouldUseVertexColorWorker,
+} from "./femVertexColors";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
@@ -729,14 +734,15 @@ export const FemGeometry = memo(function FemGeometry({
     return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
   }, [renderMode, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
 
-  // Invalidate the R3F frame when topology geometry rebuilds
+  // ── Color update (and geometry-only invalidation when vertex colors are off) ──
   useEffect(() => {
-    if (geometry) scheduleInvalidate();
-  }, [geometry, scheduleInvalidate]);
-
-  // ── Color update ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (!geometry || !enableGeometryVertexColors) return;
+    if (!geometry) return;
+    // When vertex colors are disabled, just invalidate and bail out.
+    if (!enableGeometryVertexColors) {
+      scheduleInvalidate();
+      return;
+    }
+    let cancelled = false;
     const quantityUploadStart = performance.now();
     recordFrontendPerfSample({
       scope: "QuantitySwitch",
@@ -770,90 +776,122 @@ export const FemGeometry = memo(function FemGeometry({
         },
       });
     };
-    const baseColorStart = perfEnabled ? performance.now() : 0;
-    const baseColors: Float32Array =
-      sharedBaseVertexColors && sharedBaseVertexColors.length === nNodes * 3
-        ? sharedBaseVertexColors
-        : customBoundaryFaces
-          ? computeVertexColors(
-              nNodes,
-              field,
-              fieldData,
-              meshData.fieldNComp ?? 3,
-              nodes,
-              flattenBoundaryFaces(customBoundaryFaces),
-              qualityPerFace,
-            )
-          : getSharedVertexColors({
-              meshData,
-              field,
-              uniformColor,
-              qualityPerFace,
-            });
-    mark("colorBaseCompute", baseColorStart);
-    
-    // Sub-select or map colors
-    const meshApplyStart = perfEnabled ? performance.now() : 0;
-    const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
-    if (vertexMap) {
-      for (let i = 0; i < vertexMap.length; i++) {
-        const orig = vertexMap[i];
-        colorAttr.array[i*3] = baseColors[orig*3];
-        colorAttr.array[i*3+1] = baseColors[orig*3+1];
-        colorAttr.array[i*3+2] = baseColors[orig*3+2];
-      }
-    } else {
-      const posCount = geometry.getAttribute("position").count;
-      for (let i = 0; i < posCount * 3; i++) {
-        colorAttr.array[i] = baseColors[i];
-      }
-    }
-    colorAttr.needsUpdate = true;
-    mark("colorMeshApply", meshApplyStart, { mapped: Boolean(vertexMap) });
-    if (pointsGeometry) {
-      const pointsApplyStart = perfEnabled ? performance.now() : 0;
-      const pointsColorAttr = pointsGeometry.getAttribute("color") as THREE.BufferAttribute | undefined;
-      if (!pointsColorAttr) {
-        scheduleInvalidate();
-        return;
-      }
-      if (pointsVertexMap) {
-        for (let i = 0; i < pointsVertexMap.length; i += 1) {
-          const orig = pointsVertexMap[i];
-          pointsColorAttr.array[i * 3] = baseColors[orig * 3];
-          pointsColorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
-          pointsColorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
+    const runColorUpload = async () => {
+      const baseColorStart = perfEnabled ? performance.now() : 0;
+      const boundaryFacesForColor = customBoundaryFaces
+        ? flattenBoundaryFaces(customBoundaryFaces)
+        : meshData.boundaryFaces;
+      const workerEligible =
+        !sharedBaseVertexColors &&
+        shouldUseVertexColorWorker({
+          enabled: FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.femVertexColorWorker,
+          nNodes,
+          field,
+          hasUniformColor: Boolean(uniformColor),
+        });
+      const workerColors = workerEligible
+        ? await computeVertexColorsOffThread({
+            nNodes,
+            field,
+            fieldData,
+            fieldNComp: meshData.fieldNComp ?? 3,
+            nodes,
+            boundaryFaces: boundaryFacesForColor,
+            qualityPerFace,
+          })
+        : null;
+      if (cancelled) return;
+      const baseColors: Float32Array =
+        sharedBaseVertexColors && sharedBaseVertexColors.length === nNodes * 3
+          ? sharedBaseVertexColors
+          : workerColors && workerColors.length === nNodes * 3
+            ? workerColors
+            : customBoundaryFaces
+              ? computeVertexColors(
+                  nNodes,
+                  field,
+                  fieldData,
+                  meshData.fieldNComp ?? 3,
+                  nodes,
+                  boundaryFacesForColor,
+                  qualityPerFace,
+                )
+              : getSharedVertexColors({
+                  meshData,
+                  field,
+                  uniformColor,
+                  qualityPerFace,
+                });
+      mark("colorBaseCompute", baseColorStart, { worker: Boolean(workerColors) });
+
+      // Sub-select or map colors
+      const meshApplyStart = perfEnabled ? performance.now() : 0;
+      const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
+      if (vertexMap) {
+        for (let i = 0; i < vertexMap.length; i++) {
+          const orig = vertexMap[i];
+          colorAttr.array[i * 3] = baseColors[orig * 3];
+          colorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
+          colorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
         }
       } else {
-        const colorCount = Math.min(pointsColorAttr.count, Math.floor(baseColors.length / 3));
-        for (let i = 0; i < colorCount; i += 1) {
-          pointsColorAttr.array[i * 3] = baseColors[i * 3];
-          pointsColorAttr.array[i * 3 + 1] = baseColors[i * 3 + 1];
-          pointsColorAttr.array[i * 3 + 2] = baseColors[i * 3 + 2];
+        const posCount = geometry.getAttribute("position").count;
+        for (let i = 0; i < posCount * 3; i++) {
+          colorAttr.array[i] = baseColors[i];
         }
       }
-      pointsColorAttr.needsUpdate = true;
-      mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
-    }
-    scheduleInvalidate();
-    mark("colorTotal", totalStart);
-    recordFrontendPerfSample({
-      scope: "QuantitySwitch",
-      phase: "geometry-color-upload-done",
-      durationMs: performance.now() - quantityUploadStart,
-      timestampMs: performance.now(),
-      meta: {
-        field,
-        mapped: Boolean(vertexMap),
-        pointsMapped: Boolean(pointsVertexMap),
-        fieldRevision:
-          fieldRevision == null
-            ? null
-            : typeof fieldRevision === "string"
-              ? fieldRevision
-              : String(fieldRevision),
-      },
-    });
+      colorAttr.needsUpdate = true;
+      mark("colorMeshApply", meshApplyStart, { mapped: Boolean(vertexMap) });
+      if (pointsGeometry) {
+        const pointsApplyStart = perfEnabled ? performance.now() : 0;
+        const pointsColorAttr = pointsGeometry.getAttribute("color") as THREE.BufferAttribute | undefined;
+        if (!pointsColorAttr) {
+          scheduleInvalidate();
+          return;
+        }
+        if (pointsVertexMap) {
+          for (let i = 0; i < pointsVertexMap.length; i += 1) {
+            const orig = pointsVertexMap[i];
+            pointsColorAttr.array[i * 3] = baseColors[orig * 3];
+            pointsColorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
+            pointsColorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
+          }
+        } else {
+          const colorCount = Math.min(pointsColorAttr.count, Math.floor(baseColors.length / 3));
+          for (let i = 0; i < colorCount; i += 1) {
+            pointsColorAttr.array[i * 3] = baseColors[i * 3];
+            pointsColorAttr.array[i * 3 + 1] = baseColors[i * 3 + 1];
+            pointsColorAttr.array[i * 3 + 2] = baseColors[i * 3 + 2];
+          }
+        }
+        pointsColorAttr.needsUpdate = true;
+        mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
+      }
+      scheduleInvalidate();
+      mark("colorTotal", totalStart);
+      recordFrontendPerfSample({
+        scope: "QuantitySwitch",
+        phase: "geometry-color-upload-done",
+        durationMs: performance.now() - quantityUploadStart,
+        timestampMs: performance.now(),
+        meta: {
+          field,
+          mapped: Boolean(vertexMap),
+          pointsMapped: Boolean(pointsVertexMap),
+          worker: Boolean(workerColors),
+          fieldRevision:
+            fieldRevision == null
+              ? null
+              : typeof fieldRevision === "string"
+                ? fieldRevision
+                : String(fieldRevision),
+        },
+      });
+    };
+    void runColorUpload();
+    return () => {
+      cancelled = true;
+    };
   }, [
     customBoundaryFaces,
     field,
@@ -1015,21 +1053,6 @@ export const FemGeometry = memo(function FemGeometry({
     showWireOnlyEdges,
     showWireOnlyMesh,
     uniformColor,
-  ]);
-
-  useEffect(() => {
-    scheduleInvalidate();
-  }, [
-    edgesGeometry,
-    clippingPlanes,
-    pointsGeometry,
-    renderMode,
-    scheduleInvalidate,
-    showPoints,
-    showSurface,
-    showSurfaceEdges,
-    showWireOnlyEdges,
-    showWireOnlyMesh,
   ]);
 
   const showVolumeWire = false;

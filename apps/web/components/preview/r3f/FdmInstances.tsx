@@ -24,6 +24,13 @@ export interface IsolateGridBounds {
   minIz: number; maxIz: number;
 }
 
+export interface ResolvedFdmGridBounds {
+  minIx: number; maxIx: number;
+  minIy: number; maxIy: number;
+  minIz: number; maxIz: number;
+  empty: boolean;
+}
+
 interface FdmInstancesProps {
   grid: [number, number, number];
   vectors: Float64Array | null;
@@ -90,6 +97,28 @@ export function resolveFdmMaterialOpacity({
   return {
     effectiveOpacity,
     transparent: effectiveOpacity < 0.999,
+  };
+}
+
+export function resolveFdmGridBounds(
+  grid: [number, number, number],
+  isolateGridBounds: IsolateGridBounds | null | undefined,
+): ResolvedFdmGridBounds {
+  const [nx, ny, nz] = grid;
+  const minIx = Math.max(0, Math.floor(isolateGridBounds?.minIx ?? 0));
+  const maxIx = Math.min(nx - 1, Math.ceil(isolateGridBounds?.maxIx ?? nx - 1));
+  const minIy = Math.max(0, Math.floor(isolateGridBounds?.minIy ?? 0));
+  const maxIy = Math.min(ny - 1, Math.ceil(isolateGridBounds?.maxIy ?? ny - 1));
+  const minIz = Math.max(0, Math.floor(isolateGridBounds?.minIz ?? 0));
+  const maxIz = Math.min(nz - 1, Math.ceil(isolateGridBounds?.maxIz ?? nz - 1));
+  return {
+    minIx,
+    maxIx,
+    minIy,
+    maxIy,
+    minIz,
+    maxIz,
+    empty: minIx > maxIx || minIy > maxIy || minIz > maxIz,
   };
 }
 
@@ -230,6 +259,20 @@ function FdmInstances({
   } = settings;
   const expectedVectorCount = nx * ny * nz * 3;
   const hasRenderableVectors = Boolean(vectors && vectors.length >= expectedVectorCount);
+  const gridBounds = useMemo(
+    () => resolveFdmGridBounds([nx, ny, nz], isolateGridBounds),
+    [
+      isolateGridBounds?.maxIx,
+      isolateGridBounds?.maxIy,
+      isolateGridBounds?.maxIz,
+      isolateGridBounds?.minIx,
+      isolateGridBounds?.minIy,
+      isolateGridBounds?.minIz,
+      nx,
+      ny,
+      nz,
+    ],
+  );
 
   /* ── Geometry (memoized per quality + mode) ───────────────────── */
   const geometry = useMemo(() => {
@@ -355,14 +398,9 @@ function FdmInstances({
 
     const hasVectors = hasRenderableVectors;
 
-    const minIx = Math.max(0, Math.floor(isolateGridBounds?.minIx ?? 0));
-    const maxIx = Math.min(nx - 1, Math.ceil(isolateGridBounds?.maxIx ?? nx - 1));
-    const minIy = Math.max(0, Math.floor(isolateGridBounds?.minIy ?? 0));
-    const maxIy = Math.min(ny - 1, Math.ceil(isolateGridBounds?.maxIy ?? ny - 1));
-    const minIz = Math.max(0, Math.floor(isolateGridBounds?.minIz ?? 0));
-    const maxIz = Math.min(nz - 1, Math.ceil(isolateGridBounds?.maxIz ?? nz - 1));
+    const { minIx, maxIx, minIy, maxIy, minIz, maxIz } = gridBounds;
 
-    if (minIx > maxIx || minIy > maxIy || minIz > maxIz) {
+    if (gridBounds.empty) {
       mesh.count = 0;
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
@@ -573,7 +611,7 @@ function FdmInstances({
     count,
     geometryMode,
     hasRenderableVectors,
-    isolateGridBounds,
+    gridBounds,
     mode,
     nx,
     ny,

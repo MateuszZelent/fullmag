@@ -154,7 +154,7 @@ const TabsContent = React.forwardRef<HTMLDivElement, TabsContentProps>(
         className={cn(
           "mt-2 ring-offset-[var(--ide-bg)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ide-accent)] focus-visible:ring-offset-2",
-          "data-[state=inactive]:hidden",
+          !forceMount && "data-[state=inactive]:hidden",
           className,
         )}
         {...props}

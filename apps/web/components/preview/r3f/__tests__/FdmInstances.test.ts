@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveFdmMaterialOpacity } from "../FdmInstances";
+import { resolveFdmGridBounds, resolveFdmMaterialOpacity } from "../FdmInstances";
 
 describe("resolveFdmMaterialOpacity", () => {
   it("combines voxel opacity with scene opacity for voxel mode", () => {
@@ -40,5 +40,33 @@ describe("resolveFdmMaterialOpacity", () => {
       effectiveOpacity: 0.425,
       transparent: true,
     });
+  });
+});
+
+describe("resolveFdmGridBounds", () => {
+  it("clamps isolate bounds to the grid", () => {
+    expect(
+      resolveFdmGridBounds(
+        [8, 6, 4],
+        { minIx: -2.1, maxIx: 3.2, minIy: 1.1, maxIy: 99, minIz: 0, maxIz: 2.4 },
+      ),
+    ).toEqual({
+      minIx: 0,
+      maxIx: 4,
+      minIy: 1,
+      maxIy: 5,
+      minIz: 0,
+      maxIz: 3,
+      empty: false,
+    });
+  });
+
+  it("marks non-overlapping bounds as empty", () => {
+    expect(
+      resolveFdmGridBounds(
+        [8, 6, 4],
+        { minIx: 9, maxIx: 10, minIy: 0, maxIy: 1, minIz: 0, maxIz: 1 },
+      ).empty,
+    ).toBe(true);
   });
 });

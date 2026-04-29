@@ -15,12 +15,115 @@ const QUALITY_PER_FACE_ID_CACHE = new WeakMap<object, number>();
 const FIELD_VALUE_SCALE_CACHE = new WeakMap<object, Map<string, FieldValueScales>>();
 let NEXT_FIELD_DATA_CACHE_ID = 1;
 let NEXT_QUALITY_PER_FACE_CACHE_ID = 1;
+const VERTEX_COLOR_WORKER_NODE_THRESHOLD = 100_000;
+let femVertexColorWorker: Worker | null = null;
+let femVertexColorWorkerDisabled = false;
+let nextVertexColorWorkerRequestId = 1;
+const vertexColorWorkerRequests = new Map<
+  number,
+  {
+    resolve: (colors: Float32Array | null) => void;
+  }
+>();
 
 interface FieldValueScales {
   x: number;
   y: number;
   z: number;
   magnitude: number;
+}
+
+interface VertexColorWorkerRequest {
+  id: number;
+  type: "compute";
+  payload: {
+    nNodes: number;
+    field: FemColorField;
+    fieldData: FemMeshData["fieldData"] | undefined;
+    fieldNComp: number;
+    nodes: ArrayLike<number>;
+    boundaryFaces: ArrayLike<number>;
+    qualityPerFace?: number[] | null;
+  };
+}
+
+type VertexColorWorkerResponse =
+  | { id: number; ok: true; colors: Float32Array }
+  | { id: number; ok: false; error: string };
+
+function resolveVertexColorWorkerRequest(id: number, colors: Float32Array | null): void {
+  const request = vertexColorWorkerRequests.get(id);
+  if (!request) return;
+  vertexColorWorkerRequests.delete(id);
+  request.resolve(colors);
+}
+
+function disableVertexColorWorker(): void {
+  femVertexColorWorkerDisabled = true;
+  femVertexColorWorker?.terminate();
+  femVertexColorWorker = null;
+  for (const id of vertexColorWorkerRequests.keys()) {
+    resolveVertexColorWorkerRequest(id, null);
+  }
+}
+
+function getFemVertexColorWorker(): Worker | null {
+  if (femVertexColorWorkerDisabled || typeof window === "undefined" || typeof Worker === "undefined") {
+    return null;
+  }
+  if (!femVertexColorWorker) {
+    try {
+      femVertexColorWorker = new Worker(new URL("./femVertexColors.worker.ts", import.meta.url), {
+        type: "module",
+        name: "fem-vertex-colors",
+      });
+      femVertexColorWorker.onmessage = (event: MessageEvent<VertexColorWorkerResponse>) => {
+        const message = event.data;
+        if (message.ok) {
+          resolveVertexColorWorkerRequest(message.id, message.colors);
+        } else {
+          resolveVertexColorWorkerRequest(message.id, null);
+        }
+      };
+      femVertexColorWorker.onerror = () => {
+        disableVertexColorWorker();
+      };
+    } catch {
+      disableVertexColorWorker();
+    }
+  }
+  return femVertexColorWorker;
+}
+
+export function shouldUseVertexColorWorker(args: {
+  enabled: boolean;
+  nNodes: number;
+  field: FemColorField;
+  hasUniformColor: boolean;
+}): boolean {
+  return (
+    args.enabled &&
+    args.nNodes >= VERTEX_COLOR_WORKER_NODE_THRESHOLD &&
+    !(args.field === "none" && args.hasUniformColor)
+  );
+}
+
+export function computeVertexColorsOffThread(args: VertexColorWorkerRequest["payload"]): Promise<Float32Array | null> {
+  const worker = getFemVertexColorWorker();
+  if (!worker) return Promise.resolve(null);
+  const id = nextVertexColorWorkerRequestId++;
+  return new Promise((resolve) => {
+    vertexColorWorkerRequests.set(id, { resolve });
+    try {
+      worker.postMessage({
+        id,
+        type: "compute",
+        payload: args,
+      } satisfies VertexColorWorkerRequest);
+    } catch {
+      resolveVertexColorWorkerRequest(id, null);
+    }
+  });
 }
 
 function fieldDataCacheId(fieldData: FemMeshData["fieldData"] | undefined): string {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
@@ -22,7 +22,6 @@ import { DockCenterPreviewNotices } from "./center-tabs/DockCenterPreviewNotices
 import { DockCenterTabContent } from "./center-tabs/DockCenterTabContent";
 import { DockCenterTabHeader } from "./center-tabs/DockCenterTabHeader";
 import {
-  isWebGLWorkspaceTab,
   resolveWorkspaceTabRenderDecision,
 } from "./center-tabs/tabRenderPolicy";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
@@ -41,8 +40,6 @@ export default function DockCenterTabs() {
   const pinTab = useWorkspaceStore((state) => state.pinTab);
   const openTab = useWorkspaceStore((state) => state.openTab);
   const webGLWarmKeepAliveDisabledByContextLoss = useWebGLWarmKeepAliveDisabledForSession();
-  const previousActiveTabRef = useRef<WorkspaceTab | null>(null);
-  const [recentInactiveWebGLTabId, setRecentInactiveWebGLTabId] = useState<string | null>(null);
 
   const vp = useViewport();
   const model = useModel();
@@ -69,27 +66,6 @@ export default function DockCenterTabs() {
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null,
     [activeTabId, tabs],
   );
-
-  useEffect(() => {
-    const previousActiveTab = previousActiveTabRef.current;
-    if (
-      previousActiveTab &&
-      previousActiveTab.id !== activeTab?.id &&
-      isWebGLWorkspaceTab(previousActiveTab)
-    ) {
-      setRecentInactiveWebGLTabId(previousActiveTab.id);
-    }
-    previousActiveTabRef.current = activeTab;
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (
-      recentInactiveWebGLTabId &&
-      !tabs.some((tab) => tab.id === recentInactiveWebGLTabId)
-    ) {
-      setRecentInactiveWebGLTabId(null);
-    }
-  }, [recentInactiveWebGLTabId, tabs]);
 
   useEffect(() => {
     if (!dockCenterFlags.enableInternalTree || !dockCenterFlags.enableAutoActivateEffect) {
@@ -269,7 +245,6 @@ export default function DockCenterTabs() {
       {tabs.map((tab) => {
         const renderDecision = resolveWorkspaceTabRenderDecision(tab, activeTab?.id, {
           enableWebGLWarmKeepAlive: dockCenterFlags.enableWebGLWarmKeepAlive,
-          recentWebGLTabId: recentInactiveWebGLTabId,
           webGLWarmKeepAliveDisabledByContextLoss,
         });
         if (!renderDecision.render) {
@@ -280,8 +255,14 @@ export default function DockCenterTabs() {
             key={tab.id}
             value={tab.id}
             forceMount={renderDecision.forceMount}
-            hidden={!renderDecision.visible}
-            className="relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col"
+            hidden={false}
+            aria-hidden={!renderDecision.visible}
+            className={[
+              "relative mt-0 flex min-h-0 min-w-0 flex-1 flex-col",
+              renderDecision.visible
+                ? ""
+                : "pointer-events-none absolute inset-0 h-full w-full overflow-hidden opacity-0 [visibility:hidden]",
+            ].join(" ")}
           >
             {renderTabContent(tab, renderDecision.visible)}
 
