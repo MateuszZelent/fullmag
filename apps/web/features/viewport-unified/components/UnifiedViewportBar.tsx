@@ -25,6 +25,7 @@ const MESH_RENDER_MODES: Array<{
 }> = [
   { value: "solid", label: "shaded" },
   { value: "wireframe", label: "wireframe" },
+  { value: "mesh", label: "mesh" },
   { value: "solid+wireframe", label: "shaded+wireframe" },
   { value: "points", label: "points" },
 ];

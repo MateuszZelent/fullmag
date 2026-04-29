@@ -140,7 +140,8 @@ export interface FemViewportToolbarProps {
 const RENDER_OPTIONS: { value: RenderMode; icon: React.ReactNode; label: string; title: string }[] = [
   { value: "surface", icon: <Box size={14} />, label: "Shaded", title: "Shaded" },
   { value: "surface+edges", icon: <Grid3X3 size={14} />, label: "Shaded + Edges", title: "Shaded + Edges" },
-  { value: "wireframe", icon: <Grid2X2 size={14} />, label: "Wireframe", title: "Wireframe" },
+  { value: "wireframe", icon: <Grid2X2 size={14} />, label: "Wireframe", title: "Surface Wireframe" },
+  { value: "mesh", icon: <Layers size={14} />, label: "Mesh", title: "Internal Mesh (volume edges)" },
   { value: "points", icon: <Grip size={14} />, label: "Nodes", title: "Nodes" },
 ];
 

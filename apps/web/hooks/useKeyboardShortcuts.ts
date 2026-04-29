@@ -111,8 +111,8 @@ export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
       if (e.key === "z" && !ctrl && !shift) {
         e.preventDefault();
         setMeshRenderMode((current) => {
-          const cycle: Array<"surface" | "surface+edges" | "wireframe" | "points"> = [
-            "surface", "surface+edges", "wireframe", "points",
+          const cycle: Array<"surface" | "surface+edges" | "wireframe" | "mesh" | "points"> = [
+            "surface", "surface+edges", "wireframe", "mesh", "points",
           ];
           const idx = cycle.indexOf(current);
           return cycle[(idx + 1) % cycle.length];

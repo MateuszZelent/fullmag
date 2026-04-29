@@ -17,6 +17,8 @@ export interface FemGeometryRenderPasses {
   showSurfaceEdges: boolean;
   showSurfaceEdgeFallback: boolean;
   showPoints: boolean;
+  /** Show internal (volume) mesh edges — active in "mesh" render mode. */
+  showMeshEdges: boolean;
 }
 
 export function resolveFemGeometryRenderPasses({
@@ -28,19 +30,28 @@ export function resolveFemGeometryRenderPasses({
   showSurfaceVisibleEdgesPass,
   showPointsPass,
 }: ResolveFemGeometryRenderPassesInput): FemGeometryRenderPasses {
-  const showSurface = showSurfacePass && (renderMode === "surface" || renderMode === "surface+edges");
+  const isSurfaceMode = renderMode === "surface" || renderMode === "surface+edges";
+  const showSurface = showSurfacePass && isSurfaceMode;
+
+  // Wireframe: prefer dedicated WireframeGeometry (clean lines via lineSegments),
+  // but ALWAYS fall back to material wireframe so we never show nothing.
   const showWireOnlyEdges = renderMode === "wireframe" && hasEdgesGeometry;
   const showWireOnlyMesh = renderMode === "wireframe" && hasGeometry;
+
   const showSurfaceEdges = renderMode === "surface+edges" && hasEdgesGeometry;
   const showSurfaceEdgeFallback =
     showSurfaceEdges && !showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass;
 
+  // "mesh" mode — show surface as transparent ghost + volume wireframe edges
+  const showMeshEdges = renderMode === "mesh" && hasGeometry;
+
   return {
-    showSurface,
+    showSurface: showSurface || (renderMode === "mesh" && hasGeometry && showSurfacePass),
     showWireOnlyEdges,
     showWireOnlyMesh: showWireOnlyMesh && !showWireOnlyEdges,
     showSurfaceEdges,
     showSurfaceEdgeFallback,
     showPoints: showPointsPass && renderMode === "points",
+    showMeshEdges,
   };
 }

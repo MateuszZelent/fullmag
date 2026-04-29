@@ -101,6 +101,7 @@ export type DisplayStyle =
   | "surface"
   | "surface-edges"
   | "wireframe"
+  | "mesh"
   | "points"
   | "glyphs"
   | "voxels";
@@ -114,6 +115,7 @@ export const DISPLAY_STYLE_CAPABILITIES: Record<
     surface: false,
     "surface-edges": false,
     wireframe: false,
+    mesh: false,
     points: false,
     glyphs: true,
     voxels: true,
@@ -122,6 +124,7 @@ export const DISPLAY_STYLE_CAPABILITIES: Record<
     surface: true,
     "surface-edges": true,
     wireframe: true,
+    mesh: true,
     points: true,
     glyphs: false,
     voxels: false,
@@ -324,7 +327,7 @@ export const VIEWPORT_THEME = {
 
   // ── FEM settings defaults ──
   fem: {
-    defaultRenderMode: "surface" as "surface" | "surface+edges" | "wireframe" | "points",
+    defaultRenderMode: "surface" as "surface" | "surface+edges" | "wireframe" | "mesh" | "points",
     defaultColorField: "orientation" as ColorField,
     defaultClipPos: 50,
     defaultShrinkFactor: 1,

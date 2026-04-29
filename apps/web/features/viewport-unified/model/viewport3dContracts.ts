@@ -14,6 +14,7 @@ export type Viewport3DComponent = "3D" | "x" | "y" | "z" | "|v|";
 export type Viewport3DRenderMode =
   | "shaded"
   | "wireframe"
+  | "mesh"
   | "shaded+wireframe"
   | "points";
 export type Viewport3DInteractionMode =

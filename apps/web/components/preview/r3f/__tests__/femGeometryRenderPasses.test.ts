@@ -172,4 +172,59 @@ describe("resolveFemGeometryRenderPasses", () => {
       showPoints: false,
     });
   });
+
+  it("activates mesh edges in mesh render mode with geometry", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "mesh",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: true,
+      showMeshEdges: true,
+      showWireOnlyEdges: false,
+      showWireOnlyMesh: false,
+      showSurfaceEdges: false,
+      showPoints: false,
+    });
+  });
+
+  it("disables mesh edges when no geometry is available", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "mesh",
+        hasGeometry: false,
+        hasEdgesGeometry: false,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showMeshEdges: false,
+    });
+  });
+
+  it("mesh mode respects showSurfacePass gate", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "mesh",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        showSurfacePass: false,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showMeshEdges: true,
+    });
+  });
 });

@@ -184,7 +184,7 @@ export interface PerObjectMeshReport {
 
 export interface MeshEntityViewState {
   visible: boolean;
-  renderMode: "surface" | "surface+edges" | "wireframe" | "points";
+  renderMode: "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
   opacity: number;
   colorField:
     | "orientation"
@@ -984,7 +984,7 @@ export interface SceneOutputsState {
 
 export interface SceneEditorMeshEntityViewState {
   visible: boolean;
-  render_mode: "surface" | "surface+edges" | "wireframe" | "points";
+  render_mode: "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
   opacity: number;
   color_field:
     | "orientation"
@@ -1021,7 +1021,7 @@ export interface VisualizationCameraState {
 }
 
 export interface VisualizationPresetFemState {
-  render_mode: "surface" | "surface+edges" | "wireframe" | "points";
+  render_mode: "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
   opacity: number;
   clip_enabled: boolean;
   clip_axis: "x" | "y" | "z";

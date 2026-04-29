@@ -590,7 +590,8 @@ export const FemGeometry = memo(function FemGeometry({
   const edgesGeometry = useMemo(() => {
     const needsEdges =
       renderMode === "wireframe" ||
-      renderMode === "surface+edges";
+      renderMode === "surface+edges" ||
+      renderMode === "mesh";
     if (!needsEdges || !geometry) return null;
     try {
       const wireGeometry = new THREE.WireframeGeometry(geometry);
@@ -602,10 +603,64 @@ export const FemGeometry = memo(function FemGeometry({
     }
   }, [geometry, renderMode]);
 
-  // Volume-edge wireframes are intentionally disabled in this surface mesh
-  // renderer. Building tetrahedral edge buffers during UI mode switches can
-  // transiently allocate very large GPU buffers and lose the WebGL context.
-  const tetraEdgesGeometry = null;
+  // Volume-edge wireframes: built ONLY in "mesh" mode to avoid transient
+  // allocations during regular mode switches. Tetrahedral elements have 6
+  // edges each, so this produces a large buffer; we lazily compute it.
+  const tetraEdgesGeometry = useMemo(() => {
+    if (renderMode !== "mesh") return null;
+    if (nElements === 0 || nNodes === 0) return null;
+    try {
+      // Each tetrahedron has 6 edges: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
+      const EDGE_PAIRS = [
+        [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
+      ] as const;
+      // Use a Set to deduplicate edges across shared faces
+      const edgeSet = new Set<string>();
+      const edgePairs: number[] = [];
+      for (let ei = 0; ei < nElements; ei++) {
+        const base = ei * 4;
+        const n0 = elements[base];
+        const n1 = elements[base + 1];
+        const n2 = elements[base + 2];
+        const n3 = elements[base + 3];
+        const tn = [n0, n1, n2, n3];
+        for (const [a, b] of EDGE_PAIRS) {
+          const na = tn[a];
+          const nb = tn[b];
+          const lo = Math.min(na, nb);
+          const hi = Math.max(na, nb);
+          const key = `${lo}_${hi}`;
+          if (!edgeSet.has(key)) {
+            edgeSet.add(key);
+            edgePairs.push(lo, hi);
+          }
+        }
+      }
+      // Build position buffer from edge pairs
+      const nEdges = edgePairs.length / 2;
+      const cx = centerX ?? 0;
+      const cy = centerY ?? 0;
+      const cz = centerZ ?? 0;
+      const positions = new Float32Array(nEdges * 6); // 2 vertices * 3 components per edge
+      for (let i = 0; i < nEdges; i++) {
+        const idxA = edgePairs[i * 2];
+        const idxB = edgePairs[i * 2 + 1];
+        positions[i * 6 + 0] = Number(nodes[idxA * 3 + 0]) - cx;
+        positions[i * 6 + 1] = Number(nodes[idxA * 3 + 1]) - cy;
+        positions[i * 6 + 2] = Number(nodes[idxA * 3 + 2]) - cz;
+        positions[i * 6 + 3] = Number(nodes[idxB * 3 + 0]) - cx;
+        positions[i * 6 + 4] = Number(nodes[idxB * 3 + 1]) - cy;
+        positions[i * 6 + 5] = Number(nodes[idxB * 3 + 2]) - cz;
+      }
+      const tetraGeo = new THREE.BufferGeometry();
+      tetraGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      tetraGeo.computeBoundingSphere();
+      return tetraGeo;
+    } catch (error) {
+      console.warn("[fem-geometry] Tetrahedral edge geometry construction failed", error);
+      return null;
+    }
+  }, [renderMode, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
 
   // ── Points geometry memo ──────────────────────────────────────────
   const { pointsGeometry, pointsVertexMap } = useMemo(() => {
@@ -869,6 +924,7 @@ export const FemGeometry = memo(function FemGeometry({
     showSurfaceEdges,
     showSurfaceEdgeFallback,
     showPoints,
+    showMeshEdges,
   } = resolveFemGeometryRenderPasses({
     renderMode,
     hasGeometry: geometry != null,
@@ -984,8 +1040,8 @@ export const FemGeometry = memo(function FemGeometry({
     !showVolumeVisibleEdgesPass;
   const showSelectionWireOverlay = highlight && showSurface && edgesGeometry != null;
 
-  const isTransparent = opacity < 100;
-  const opacityVal = opacity / 100;
+  const isTransparent = opacity < 100 || showMeshEdges;
+  const opacityVal = showMeshEdges ? Math.min(opacity / 100, 0.35) : opacity / 100;
   const surfacePolicy =
     isTransparent
       ? RENDER_POLICIES_V2.contextSurface
@@ -1104,6 +1160,32 @@ export const FemGeometry = memo(function FemGeometry({
             transparent
             depthWrite={false}
             depthTest={false}
+            clippingPlanes={clippingPlanes}
+          />
+        </lineSegments>
+      ) : null}
+
+      {showMeshEdges && tetraEdgesGeometry ? (
+        <lineSegments geometry={tetraEdgesGeometry} renderOrder={edgePolicy.renderOrder + 5} frustumCulled={false}>
+          <lineBasicMaterial
+            color={resolvedEdgeColor}
+            opacity={highlight ? 0.65 : 0.42}
+            transparent
+            depthWrite={false}
+            depthTest={true}
+            clippingPlanes={clippingPlanes}
+          />
+        </lineSegments>
+      ) : null}
+
+      {showMeshEdges && !tetraEdgesGeometry && edgesGeometry ? (
+        <lineSegments geometry={edgesGeometry} renderOrder={edgePolicy.renderOrder + 5} frustumCulled={false}>
+          <lineBasicMaterial
+            color={resolvedEdgeColor}
+            opacity={highlight ? 0.65 : 0.42}
+            transparent
+            depthWrite={false}
+            depthTest={true}
             clippingPlanes={clippingPlanes}
           />
         </lineSegments>

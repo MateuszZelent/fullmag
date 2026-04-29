@@ -24,7 +24,7 @@ import type {
 function toViewport3DRenderMode(
   mode: UnifiedRenderState["meshRenderMode"],
 ): Viewport3DRenderMode {
-  if (mode === "wireframe" || mode === "points") {
+  if (mode === "wireframe" || mode === "points" || mode === "mesh") {
     return mode;
   }
   if (mode === "solid+wireframe") {
@@ -36,7 +36,7 @@ function toViewport3DRenderMode(
 function fromViewport3DRenderMode(
   mode: Viewport3DRenderMode,
 ): NonNullable<UnifiedRenderState["meshRenderMode"]> {
-  if (mode === "wireframe" || mode === "points") {
+  if (mode === "wireframe" || mode === "points" || mode === "mesh") {
     return mode;
   }
   if (mode === "shaded+wireframe") {

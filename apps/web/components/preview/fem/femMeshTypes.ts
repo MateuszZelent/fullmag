@@ -44,7 +44,7 @@ export interface MeshSelectionSnapshot {
 export type FemColorField = "orientation" | "x" | "y" | "z" | "magnitude" | "quality" | "sicn" | "none";
 export type FemArrowColorMode = "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
 export type ArrowSamplingMode = "auto" | "surface" | "volume";
-export type RenderMode = "surface" | "surface+edges" | "wireframe" | "points";
+export type RenderMode = "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
 export type ClipAxis = "x" | "y" | "z";
 export type FemVectorDomainFilter = "auto" | "magnetic_only" | "full_domain" | "airbox_only";
 export type FemFerromagnetVisibilityMode = "hide" | "ghost";

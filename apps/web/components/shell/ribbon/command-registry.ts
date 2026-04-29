@@ -17,7 +17,7 @@ export type ResultAnalysisKind =
   | "quantity"
   | "table";
 
-export type ViewportMeshRenderMode = "surface" | "wireframe" | "surface+edges" | "points";
+export type ViewportMeshRenderMode = "surface" | "wireframe" | "mesh" | "surface+edges" | "points";
 
 export type AirboxDisplayPatch = Partial<{
   visible: boolean;

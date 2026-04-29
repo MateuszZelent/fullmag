@@ -286,6 +286,11 @@ describe("View ribbon contribution", () => {
       type: "radio-group",
       value: "surface+edges",
     });
+    const renderMode = findNode(airbox?.menu ?? [], "airbox:render-mode");
+    expect(renderMode?.type === "radio-group" ? renderMode.items : null).toContainEqual({
+      value: "mesh",
+      label: "Full mesh",
+    });
     expect(findNode(airbox?.menu ?? [], "airbox:vectors-submenu")).toMatchObject({
       type: "submenu",
     });

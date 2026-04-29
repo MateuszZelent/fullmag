@@ -85,7 +85,7 @@ function toUnifiedMeshRenderMode(
   if (mode === "surface+edges") {
     return "solid+wireframe";
   }
-  if (mode === "wireframe" || mode === "points") {
+  if (mode === "wireframe" || mode === "points" || mode === "mesh") {
     return mode;
   }
   return "solid";
@@ -94,7 +94,7 @@ function toUnifiedMeshRenderMode(
 function fromUnifiedMeshRenderMode(
   mode: UnifiedRenderState["meshRenderMode"],
 ): RenderMode {
-  if (mode === "wireframe" || mode === "points") {
+  if (mode === "wireframe" || mode === "points" || mode === "mesh") {
     return mode;
   }
   if (mode === "solid+wireframe") {

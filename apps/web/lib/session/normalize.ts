@@ -489,6 +489,7 @@ function normalizeSceneEditorMeshRenderMode(
     case "surface":
     case "surface+edges":
     case "wireframe":
+    case "mesh":
     case "points":
       return raw;
     default:

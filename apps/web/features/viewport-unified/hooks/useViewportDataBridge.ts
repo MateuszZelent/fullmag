@@ -819,6 +819,7 @@ export function useViewportDataBridge() {
       ctx.meshRenderMode === "wireframe" || ctx.meshRenderMode === "surface+edges"
         || ctx.meshRenderMode === "surface"
         || ctx.meshRenderMode === "points"
+        || ctx.meshRenderMode === "mesh"
         ? ctx.meshRenderMode
         : "surface";
     for (const part of ctx.meshParts) {

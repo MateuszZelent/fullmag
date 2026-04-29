@@ -60,7 +60,7 @@ export interface UnifiedViewport2DPresenterProps {
   femComponent: VectorComponent;
   meshParts: FemMeshPart[];
   meshEntityViewState: MeshEntityViewStateMap;
-  meshRenderMode: "wireframe" | "surface" | "surface+edges" | "points" | null;
+  meshRenderMode: "wireframe" | "surface" | "surface+edges" | "mesh" | "points" | null;
   showPrimitives: boolean;
   showMesh: boolean;
   showQuantity: boolean;

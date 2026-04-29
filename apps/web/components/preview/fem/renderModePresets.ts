@@ -55,6 +55,16 @@ export const RENDER_MODE_DISPLAY_PRESETS: Record<RenderMode, RenderModeDisplayPr
     shrinkFactor: 1,
     qualityProfile: "interactive",
   },
+  mesh: {
+    opacity: 35,
+    clipEnabled: false,
+    clipAxis: "x",
+    clipPos: 50,
+    vectorDomainFilter: "auto",
+    ferromagnetVisibilityMode: "hide",
+    shrinkFactor: 1,
+    qualityProfile: "interactive",
+  },
   points: {
     opacity: 100,
     clipEnabled: false,

@@ -82,6 +82,7 @@ function buildComponentMenuNode(
 const AIRBOX_RENDER_ITEMS = [
   { value: "surface", label: "Shaded" },
   { value: "wireframe", label: "Wireframe" },
+  { value: "mesh", label: "Full mesh" },
   { value: "surface+edges", label: "Shaded + wireframe" },
   { value: "points", label: "Points (nodes)" },
 ];
@@ -491,7 +492,7 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       onValueChange: (nextRenderMode) =>
         ctx.run({
           id: "viewport.set-airbox-display",
-          patch: { renderMode: nextRenderMode as "surface" | "wireframe" | "surface+edges" | "points" },
+          patch: { renderMode: nextRenderMode as ViewportMeshRenderMode },
         }),
       items: AIRBOX_RENDER_ITEMS,
     },

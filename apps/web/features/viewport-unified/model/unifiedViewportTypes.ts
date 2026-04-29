@@ -46,7 +46,7 @@ export interface UnifiedRenderState {
   everyN: number;
 
   // Capability-gated (FEM-specific become optional)
-  meshRenderMode?: "solid" | "solid+wireframe" | "wireframe" | "points";
+  meshRenderMode?: "solid" | "solid+wireframe" | "wireframe" | "mesh" | "points";
   meshOpacity?: number;
   clipEnabled?: boolean;
   clipAxis?: "x" | "y" | "z";

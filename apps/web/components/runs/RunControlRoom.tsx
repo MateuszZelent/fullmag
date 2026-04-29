@@ -1818,15 +1818,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (!updatesRender || airboxParts.length === 0) {
       return;
     }
-    const renderToggle =
-      typeof patch.shaded === "boolean" ||
-      typeof patch.wireframe === "boolean" ||
-      typeof patch.points === "boolean" ||
-      typeof patch.renderMode === "string";
     if (typeof patch.visible === "boolean") {
       ctx.setAirMeshVisible(patch.visible);
-    } else if (renderToggle) {
-      ctx.setAirMeshVisible(true);
     }
     ctx.setMeshEntityViewState((previous) => {
       let changed = false;
@@ -1836,9 +1829,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         const nextMode = resolveAirboxRenderMode(current.renderMode, patch);
         const nextVisible = typeof patch.visible === "boolean"
           ? patch.visible
-          : renderToggle
-            ? true
-            : current.visible;
+          : current.visible;
         const nextOpacity = typeof patch.opacity === "number" ? patch.opacity : current.opacity;
         if (
           current.visible === nextVisible &&

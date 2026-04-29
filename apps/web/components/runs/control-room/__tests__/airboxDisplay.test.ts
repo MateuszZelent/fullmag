@@ -23,5 +23,6 @@ describe("resolveAirboxRenderMode", () => {
 
   it("applies explicit radio render mode directly", () => {
     expect(resolveAirboxRenderMode("wireframe", { renderMode: "surface+edges" })).toBe("surface+edges");
+    expect(resolveAirboxRenderMode("wireframe", { renderMode: "mesh" })).toBe("mesh");
   });
 });
