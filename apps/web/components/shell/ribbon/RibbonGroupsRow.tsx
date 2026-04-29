@@ -27,7 +27,7 @@ export function ribbonActionTriggerClassName(
         ? "border-transparent bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
         : "border-transparent text-foreground hover:border-border/50 hover:bg-muted/80",
     previewPending && action.active && "animate-pulse shadow-[0_0_0_1px_hsl(var(--primary)/0.35)]",
-    action.disabled && "pointer-events-none cursor-not-allowed opacity-40",
+    action.disabled && "cursor-not-allowed opacity-40",
     className,
   );
 }

@@ -186,7 +186,7 @@ def evaluate_preset_texture(
             values.append(_normalize(params["direction"]))
         elif preset_kind == "random_seeded":
             # Use a deterministic per-point seed derived from the global seed + point coords
-            x, y, z = float(point[0]), float(point[1]), float(point[2])
+            x, y, z = float(point[0]) * 1e9, float(point[1]) * 1e9, float(point[2]) * 1e9
             seed = int(params.get("seed", 1))
             angle1 = math.sin(seed * 12.9898 + x * 78.233 + y * 37.719 + z * 11.137) * 43758.5453
             angle1 = angle1 - math.floor(angle1)

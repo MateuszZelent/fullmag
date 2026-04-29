@@ -117,16 +117,17 @@ function samplePreset(asset: MagnetizationAsset, point: Vec3): Vec3 | null {
   }
   if (kind === "random_seeded") {
     const seedBase = numericParam(params, "seed", 1);
-    const hashed = Math.sin(
-      point[0] * 12_989.0 + point[1] * 78_233.0 + point[2] * 37_719.0 + seedBase * 0.123_457,
-    );
-    const secondary = Math.sin(
-      point[0] * 39_721.0 + point[1] * 91_213.0 + point[2] * 12_347.0 + seedBase * 0.918_273,
-    );
-    const tertiary = Math.sin(
-      point[0] * 71_123.0 + point[1] * 19_817.0 + point[2] * 53_011.0 + seedBase * 0.271_828,
-    );
-    return normalize([hashed, secondary, tertiary]);
+    const x = point[0] * 1e9;
+    const y = point[1] * 1e9;
+    const z = point[2] * 1e9;
+    const u1Raw = Math.sin(seedBase * 12.9898 + x * 78.233 + y * 37.719 + z * 11.137) * 43_758.5453;
+    const u2Raw = Math.sin(seedBase * 4.1414 + x * 93.989 + y * 67.345 + z * 45.678) * 43_758.5453;
+    const u1 = u1Raw - Math.floor(u1Raw);
+    const u2 = u2Raw - Math.floor(u2Raw);
+    const phi = u1 * 2 * Math.PI;
+    const cosTheta = 2 * u2 - 1;
+    const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+    return [sinTheta * Math.cos(phi), sinTheta * Math.sin(phi), cosTheta];
   }
   if (kind !== "vortex" && kind !== "antivortex") return null;
   const plane = stringParam(params, "plane", "xy");

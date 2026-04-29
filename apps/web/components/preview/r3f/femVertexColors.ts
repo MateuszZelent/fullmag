@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { FemMeshData, FemColorField } from "../FemMeshView3D";
+import type { FemMeshData, FemColorField } from "../fem/femMeshTypes";
 import {
   computeFaceAspectRatios,
   qualityColor,

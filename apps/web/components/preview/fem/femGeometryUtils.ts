@@ -6,7 +6,7 @@
  * This module re-exports them for backward compatibility and provides
  * non-topology constants / helpers.
  */
-import type { FemArrowColorMode } from "../FemMeshView3D";
+import type { FemArrowColorMode } from "./femMeshTypes";
 export { countActiveNodes, isNodeActive, normalizeNodeMask, maskKind } from "./femNodeMask";
 
 // Re-export canonical topology helpers for backward compatibility.

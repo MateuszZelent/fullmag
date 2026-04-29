@@ -65,7 +65,7 @@ Thumbs.db
 
 # === Data & artifacts ===
 artifacts/
-data/
+# data/
 tmp/
 coverage/
 .fullmag/

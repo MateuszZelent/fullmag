@@ -2254,7 +2254,10 @@ async fn mesh_shared_domain_report_preserves_backend_truth_payloads() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["revision"], 17);
-    assert_eq!(json["report"]["mesh_statistics"]["global"]["element_count"], 24);
+    assert_eq!(
+        json["report"]["mesh_statistics"]["global"]["element_count"],
+        24
+    );
     assert_eq!(
         json["report"]["last_build_summary"]["operation_statuses"][0]["status"],
         "fallback"
@@ -5188,6 +5191,71 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
             .and_then(|value| value.to_str().ok()),
         Some("m")
     );
+}
+
+#[tokio::test]
+async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 24;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_456,
+            latest_step: StepUpdateView {
+                step: 8,
+                time: 2.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let values: Vec<f64> = bytes[48..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
 }
 
 #[tokio::test]

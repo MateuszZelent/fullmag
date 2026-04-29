@@ -4,7 +4,10 @@
  * and revision-based caching.
  */
 
-import { createOpenApiV2Transport } from "../generated/openapi-v2-client";
+import {
+  createOpenApiV2Transport,
+  type OpenApiV2Transport,
+} from "../generated/openapi-v2-client";
 import { LiveApiError } from "./errors/LiveApiError";
 import { ResourceCache } from "./cache/ResourceCache";
 import { applyRequestId } from "./interceptors/requestId";
@@ -57,6 +60,22 @@ const DEFAULT_TIMEOUT = 15_000;
 const DEFAULT_MAX_RETRIES = 3;
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
+interface ResolvedLiveSessionClientConfig {
+  baseUrl: string;
+  timeout: number;
+  maxRetries: number;
+}
+
+function resolveLiveSessionClientConfig(
+  config: LiveSessionClientConfig,
+): ResolvedLiveSessionClientConfig {
+  return {
+    baseUrl: config.baseUrl.replace(/\/+$/, ""),
+    timeout: config.timeout ?? DEFAULT_TIMEOUT,
+    maxRetries: config.maxRetries ?? DEFAULT_MAX_RETRIES,
+  };
+}
+
 export class LiveSessionClient {
   readonly status: StatusModule;
   readonly domain: DomainModule;
@@ -80,10 +99,11 @@ export class LiveSessionClient {
   readonly solver: SolverModule;
 
   private cache: ResourceCache;
-  private config: LiveSessionClientConfig;
+  private readonly config: ResolvedLiveSessionClientConfig;
+  private readonly openApiTransportCache = new Map<string, OpenApiV2Transport>();
 
   constructor(config: LiveSessionClientConfig) {
-    this.config = config;
+    this.config = resolveLiveSessionClientConfig(config);
     this.cache = new ResourceCache();
 
     this.status = new StatusModule(this);
@@ -191,15 +211,23 @@ export class LiveSessionClient {
     return this.config.baseUrl;
   }
 
+  matchesConfig(config: LiveSessionClientConfig): boolean {
+    const next = resolveLiveSessionClientConfig(config);
+    return (
+      this.config.baseUrl === next.baseUrl &&
+      this.config.timeout === next.timeout &&
+      this.config.maxRetries === next.maxRetries
+    );
+  }
+
   // ── Internal pipeline ───────────────────────────────────────────────
 
   private resolveUrl(path: string): string {
     if (path.startsWith("http://") || path.startsWith("https://")) {
       return path;
     }
-    const base = this.config.baseUrl.replace(/\/+$/, "");
     const p = path.startsWith("/") ? path : `/${path}`;
-    return `${base}${p}`;
+    return `${this.config.baseUrl}${p}`;
   }
 
   private async executeRequest(
@@ -209,8 +237,8 @@ export class LiveSessionClient {
     opts?: RequestOptions,
     execution?: { retryable?: boolean; acceptStatuses?: number[] },
   ): Promise<Response> {
-    const timeout = opts?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
-    const maxRetries = this.config.maxRetries ?? DEFAULT_MAX_RETRIES;
+    const timeout = opts?.timeout ?? this.config.timeout;
+    const maxRetries = this.config.maxRetries;
     const retryable = execution?.retryable ?? true;
     const acceptStatuses = execution?.acceptStatuses ?? [];
 
@@ -323,11 +351,9 @@ export class LiveSessionClient {
     opts?: RequestOptions,
     execution?: { retryable?: boolean; acceptStatuses?: number[] },
   ): Promise<T> {
-    const client = createOpenApiV2Transport({
-      baseUrl: this.config.baseUrl.replace(/\/+$/, ""),
-      fetch: (input: Request) =>
-        this.executeOpenApiFetch(input, undefined, opts, execution),
-    });
+    const timeout = opts?.timeout ?? this.config.timeout;
+    const retryable = execution?.retryable ?? true;
+    const client = this.getOpenApiTransport(timeout, retryable);
     const request: Record<string, unknown> = {
       headers: opts?.headers,
       signal: opts?.signal,
@@ -367,19 +393,38 @@ export class LiveSessionClient {
     return result.data as T;
   }
 
+  private getOpenApiTransport(
+    timeout: number,
+    retryable: boolean,
+  ): OpenApiV2Transport {
+    const key = `${timeout}:${retryable ? "retry" : "noretry"}`;
+    const cached = this.openApiTransportCache.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const transport = createOpenApiV2Transport({
+      baseUrl: this.config.baseUrl,
+      fetch: (input: Request) =>
+        this.executeOpenApiFetch(input, undefined, timeout, retryable),
+    });
+    this.openApiTransportCache.set(key, transport);
+    return transport;
+  }
+
   private async executeOpenApiFetch(
     input: RequestInfo | URL,
     init: RequestInit | undefined,
-    opts?: RequestOptions,
-    execution?: { retryable?: boolean; acceptStatuses?: number[] },
+    timeout: number,
+    retryable: boolean,
   ): Promise<Response> {
     const request = await normalizeFetchInput(input, init);
     return this.executeFetchRequest(
       request.method,
       request.url,
       request.init,
-      opts,
-      execution,
+      timeout,
+      retryable,
     );
   }
 
@@ -387,20 +432,16 @@ export class LiveSessionClient {
     method: string,
     url: string,
     init: RequestInit,
-    opts?: RequestOptions,
-    execution?: { retryable?: boolean; acceptStatuses?: number[] },
+    timeout: number,
+    retryable: boolean,
   ): Promise<Response> {
-    const timeout = opts?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
-    const maxRetries = this.config.maxRetries ?? DEFAULT_MAX_RETRIES;
-    const retryable = execution?.retryable ?? true;
-    const acceptStatuses = execution?.acceptStatuses ?? [];
+    const maxRetries = this.config.maxRetries;
 
     const headers = new Headers(init.headers);
     const requestId = applyRequestId(headers);
 
     const controller = new AbortController();
     const abort = () => controller.abort();
-    opts?.signal?.addEventListener("abort", abort);
     init.signal?.addEventListener("abort", abort);
     const timer = setTimeout(() => controller.abort(), timeout);
     const diag = createDiagnosticEntry(requestId, method, url);
@@ -412,22 +453,21 @@ export class LiveSessionClient {
           method,
           headers,
           signal: controller.signal,
-          cache: opts?.cache ?? init.cache ?? "no-store",
+          cache: init.cache ?? "no-store",
         });
 
       const response = await withRetry(
         doFetch,
         { maxRetries: retryable ? maxRetries : 0 },
-        opts?.signal,
+        init.signal ?? undefined,
       );
       checkContractVersion(response);
 
-      const acceptedStatus = acceptStatuses.includes(response.status);
       const contentLength = response.headers.get("content-length");
       diag.finish(
         response.status,
         contentLength ? parseInt(contentLength, 10) : null,
-        response.ok || acceptedStatus,
+        response.ok,
       );
       return response;
     } catch (err) {
@@ -435,7 +475,7 @@ export class LiveSessionClient {
         throw err;
       }
       if (err instanceof DOMException && err.name === "AbortError") {
-        if (opts?.signal?.aborted || init.signal?.aborted) {
+        if (init.signal?.aborted) {
           throw LiveApiError.networkError(url, err);
         }
         diag.finish(0, null, false, "timeout");
@@ -445,7 +485,6 @@ export class LiveSessionClient {
       throw LiveApiError.networkError(url, err);
     } finally {
       clearTimeout(timer);
-      opts?.signal?.removeEventListener("abort", abort);
       init.signal?.removeEventListener("abort", abort);
     }
   }
@@ -531,6 +570,13 @@ export function getLiveSessionClient(): LiveSessionClient {
 }
 
 export function initLiveSessionClient(config: LiveSessionClientConfig): LiveSessionClient {
+  if (_instance && _instance.matchesConfig(config)) {
+    return _instance;
+  }
   _instance = new LiveSessionClient(config);
   return _instance;
+}
+
+export function resetLiveSessionClientForTests(): void {
+  _instance = null;
 }

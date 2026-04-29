@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PlotHoverEvent, PlotMouseEvent } from "plotly.js";
-import type { FemMeshData, FemVectorDomainFilter, RenderMode } from "./FemMeshView3D";
+import type { FemMeshData, FemVectorDomainFilter, RenderMode } from "./fem/femMeshTypes";
 import type { AntennaOverlay } from "../runs/control-room/shared";
 import Plot from "../plots/DynamicPlot";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";

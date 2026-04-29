@@ -31,7 +31,7 @@ export const VIEWPORT_DISPLAY_DEFAULTS: ViewportDisplayDefaults = {
   meshClipEnabled: false,
   meshClipAxis: "x",
   meshClipPos: 50,
-  meshShowArrows: true,
+  meshShowArrows: false,
   airMeshVisible: !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault,
   airMeshOpacity: 28,
 };

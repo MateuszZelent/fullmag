@@ -64,6 +64,10 @@ interface RibbonBarProps {
   canPause?: boolean;
   canStop?: boolean;
   canSkip?: boolean;
+  runDisabledReason?: string | null;
+  pauseDisabledReason?: string | null;
+  stopDisabledReason?: string | null;
+  skipDisabledReason?: string | null;
   runAction?: string;
   runLabel?: string;
   onViewChange?: (mode: string) => void;
@@ -354,6 +358,10 @@ function buildContext(
     canPause: Boolean(props.canPause),
     canStop: Boolean(props.canStop),
     canSkip: Boolean(props.canSkip),
+    runDisabledReason: props.runDisabledReason ?? null,
+    pauseDisabledReason: props.pauseDisabledReason ?? null,
+    stopDisabledReason: props.stopDisabledReason ?? null,
+    skipDisabledReason: props.skipDisabledReason ?? null,
     runAction: props.runAction ?? "run",
     runLabel: props.runLabel ?? "Run",
 
@@ -711,6 +719,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.canPause,
     props.canStop,
     props.canSkip,
+    props.runDisabledReason,
+    props.pauseDisabledReason,
+    props.stopDisabledReason,
+    props.skipDisabledReason,
     props.quickPreviewTargets,
     props.selectedQuantity,
     props.requestedPreviewComponent,

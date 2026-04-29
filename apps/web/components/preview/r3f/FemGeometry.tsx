@@ -1,7 +1,7 @@
 import React, { memo, useMemo, useEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { FemMeshData, FemColorField, RenderMode } from "../FemMeshView3D";
+import type { FemMeshData, FemColorField, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
 import { computeVertexColors, getSharedVertexColors } from "./femVertexColors";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";

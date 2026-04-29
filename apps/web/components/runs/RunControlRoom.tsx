@@ -119,6 +119,7 @@ import type {
 } from "@/lib/study-builder/types";
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { resolveAirboxRenderMode } from "./control-room/airboxDisplay";
 
 const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
 
@@ -244,6 +245,49 @@ function isPositiveFinite(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+function formatWorkspaceStatus(status: string): string {
+  return status.replace(/_/g, " ");
+}
+
+function commandBlockedReason(
+  ctx: {
+    interactiveEnabled: boolean;
+    runtimeCanAcceptCommands: boolean;
+    commandBusy: boolean;
+    commandMessage: string | null;
+    workspaceStatus: string;
+    awaitingCommand: boolean;
+    isWaitingForCompute: boolean;
+  },
+  action: "run" | "pause" | "stop" | "skip",
+  builderRunBlocked: boolean,
+): string | null {
+  if (!ctx.interactiveEnabled) {
+    return "Solver commands are disabled because this workspace is not running in interactive mode.";
+  }
+  if (!ctx.runtimeCanAcceptCommands) {
+    return "Solver runtime is busy and cannot accept commands yet.";
+  }
+  if (ctx.commandBusy) {
+    return ctx.commandMessage ?? "A solver command is already being sent.";
+  }
+  if (action === "run" && builderRunBlocked) {
+    return "Compute is blocked because the Geometry builder has changes that must be built or validated first.";
+  }
+
+  const status = formatWorkspaceStatus(ctx.workspaceStatus);
+  if (action === "run") {
+    return "Compute is only available when the workspace is waiting for compute, awaiting a command, or paused. Current status: " + status + ".";
+  }
+  if (action === "pause") {
+    return "Pause is only available while the solver is running. Current status: " + status + ".";
+  }
+  if (action === "stop") {
+    return "Stop is only available while the solver is running, paused, or waiting for compute. Current status: " + status + ".";
+  }
+  return "Skip is only available while the solver is running or paused. Current status: " + status + ".";
+}
+
 function resolveFiniteMin(values: number[]): number | null {
   if (values.length === 0) return null;
   return Math.min(...values);
@@ -366,7 +410,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const builderModeEnabled = useGeometryBuilderStore((state) => state.builderMode.enabled);
   const builderViewportTool = useGeometryBuilderStore((state) => state.viewportTool);
   const builderRunBlocked = useGeometryBuilderStore((state) =>
-    state.builderMode.enabled ? state.isRunBlocked() : false,
+    currentStage === "build" && activeCoreTab === "Geometry" && state.builderMode.enabled
+      ? state.isRunBlocked()
+      : false,
   );
   const builderSelection = useGeometryBuilderStore((state) => state.builderSelection);
   const validateBuilderAll = useGeometryBuilderStore((state) => state.validateAll);
@@ -386,6 +432,45 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const toggleBuilderSnap = useGeometryBuilderStore((state) => state.toggleSnap);
   const disableBuilderMode = useGeometryBuilderStore((state) => state.disableBuilder);
   const [viewportSize, setViewportSize] = useState({ width: 1920, height: 1080 });
+
+  const solverControlDisabledReasons = useMemo(() => {
+    const reasonContext = {
+      interactiveEnabled: ctx.interactiveEnabled,
+      runtimeCanAcceptCommands: ctx.runtimeCanAcceptCommands,
+      commandBusy: ctx.commandBusy,
+      commandMessage: ctx.commandMessage,
+      workspaceStatus: ctx.workspaceStatus,
+      awaitingCommand: ctx.awaitingCommand,
+      isWaitingForCompute: ctx.isWaitingForCompute,
+    };
+    return {
+      run: ctx.canRunCommand && !builderRunBlocked
+        ? null
+        : commandBlockedReason(reasonContext, "run", builderRunBlocked),
+      pause: ctx.canPauseCommand
+        ? null
+        : commandBlockedReason(reasonContext, "pause", builderRunBlocked),
+      stop: ctx.canStopCommand
+        ? null
+        : commandBlockedReason(reasonContext, "stop", builderRunBlocked),
+      skip: ctx.canSkipCommand
+        ? null
+        : commandBlockedReason(reasonContext, "skip", builderRunBlocked),
+    };
+  }, [
+    builderRunBlocked,
+    ctx.awaitingCommand,
+    ctx.canPauseCommand,
+    ctx.canRunCommand,
+    ctx.canSkipCommand,
+    ctx.canStopCommand,
+    ctx.commandBusy,
+    ctx.commandMessage,
+    ctx.interactiveEnabled,
+    ctx.isWaitingForCompute,
+    ctx.runtimeCanAcceptCommands,
+    ctx.workspaceStatus,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -431,7 +516,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
 
   useEffect(() => {
-    const geometryTabSelected = activeCoreTab === "Geometry";
+    const geometryTabSelected = currentStage === "build" && activeCoreTab === "Geometry";
     if (!geometryTabSelected && builderModeEnabled) {
       disableBuilderMode();
     }
@@ -444,6 +529,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [
     activeCoreTab,
     builderModeEnabled,
+    currentStage,
     disableBuilderMode,
     effectiveViewMode,
     handleViewModeChange,
@@ -1694,39 +1780,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ferromagnetVisibilityMode: "hide" | "ghost";
   } | null>(null);
 
-  const resolveAirboxRenderMode = (
-    currentMode: ViewportMeshRenderMode,
-    patch: AirboxDisplayPatch,
-  ): ViewportMeshRenderMode => {
-    if (patch.renderMode) {
-      return patch.renderMode;
-    }
-    let shaded = currentMode === "surface" || currentMode === "surface+edges";
-    let wireframe = currentMode === "wireframe" || currentMode === "surface+edges";
-    let points = currentMode === "points";
-
-    if (typeof patch.points === "boolean") {
-      points = patch.points;
-      if (points) {
-        shaded = false;
-        wireframe = false;
-      }
-    }
-    if (typeof patch.shaded === "boolean") {
-      shaded = patch.shaded;
-      if (shaded) points = false;
-    }
-    if (typeof patch.wireframe === "boolean") {
-      wireframe = patch.wireframe;
-      if (wireframe) points = false;
-    }
-
-    if (points) return "points";
-    if (shaded && wireframe) return "surface+edges";
-    if (shaded) return "surface";
-    return "wireframe";
-  };
-
   const handleRibbonAirboxDisplay = (patch: AirboxDisplayPatch) => {
     if (typeof patch.vectors === "boolean") {
       ctx.setMeshShowArrows(patch.vectors);
@@ -2017,6 +2070,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         canPause={ctx.canPauseCommand}
         canStop={ctx.canStopCommand}
         canSkip={ctx.canSkipCommand}
+        runDisabledReason={solverControlDisabledReasons.run}
+        pauseDisabledReason={solverControlDisabledReasons.pause}
+        stopDisabledReason={solverControlDisabledReasons.stop}
+        skipDisabledReason={solverControlDisabledReasons.skip}
         onRun={() => ctx.handleSimulationAction(ctx.primaryRunAction)}
         onPause={() => ctx.handleSimulationAction("pause")}
         onStop={() => ctx.handleSimulationAction("stop")}
@@ -2035,6 +2092,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         canPause={ctx.canPauseCommand}
         canStop={ctx.canStopCommand}
         canSkip={ctx.canSkipCommand}
+        runDisabledReason={solverControlDisabledReasons.run}
+        pauseDisabledReason={solverControlDisabledReasons.pause}
+        stopDisabledReason={solverControlDisabledReasons.stop}
+        skipDisabledReason={solverControlDisabledReasons.skip}
         runAction={ctx.primaryRunAction}
         runLabel={ctx.primaryRunLabel}
         onViewChange={ctx.handleViewModeChange}

@@ -98,7 +98,7 @@ export function createDefaultVisualizationPreset(
       clip_enabled: false,
       clip_axis: "x",
       clip_pos: 50,
-      show_arrows: true,
+      show_arrows: false,
       max_points: 16384,
       arrow_color_mode: "orientation",
       arrow_mono_color: "#00c2ff",

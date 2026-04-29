@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { FemMeshData, FemVectorDomainFilter } from "./FemMeshView3D";
+import type { FemMeshData, FemVectorDomainFilter } from "./fem/femMeshTypes";
 import { DIVERGING_PALETTE, POSITIVE_PALETTE, SEQUENTIAL_BLUE_PALETTE } from "../../lib/colorPalettes";
 import type { AntennaOverlay } from "../runs/control-room/shared";
 import { ViewportOverlayLayout } from "./ViewportOverlayLayout";

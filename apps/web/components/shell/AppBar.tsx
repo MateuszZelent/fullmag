@@ -41,6 +41,10 @@ export interface AppBarProps {
   canPause?: boolean;
   canStop?: boolean;
   canSkip?: boolean;
+  runDisabledReason?: string | null;
+  pauseDisabledReason?: string | null;
+  stopDisabledReason?: string | null;
+  skipDisabledReason?: string | null;
   onRun?: () => void;
   onPause?: () => void;
   onStop?: () => void;
@@ -272,7 +276,7 @@ export default function AppBar(props: AppBarProps) {
             type="button"
             disabled={!props.canRun}
             onClick={props.onRun}
-            title="Run (R)"
+            title={props.canRun ? "Run (R)" : (props.runDisabledReason ?? "Run is unavailable")}
             className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-emerald-400 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Play size={12} fill="currentColor" />
@@ -283,7 +287,7 @@ export default function AppBar(props: AppBarProps) {
             type="button"
             disabled={!props.canPause}
             onClick={props.onPause}
-            title="Pause"
+            title={props.canPause ? "Pause" : (props.pauseDisabledReason ?? "Pause is unavailable")}
             className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-amber-400 transition-colors hover:border-amber-500/30 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Pause size={12} fill="currentColor" />
@@ -294,7 +298,7 @@ export default function AppBar(props: AppBarProps) {
             type="button"
             disabled={!props.canStop}
             onClick={props.onStop}
-            title="Stop"
+            title={props.canStop ? "Stop" : (props.stopDisabledReason ?? "Stop is unavailable")}
             className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-rose-400 transition-colors hover:border-rose-500/30 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <Square size={12} fill="currentColor" />
@@ -305,7 +309,7 @@ export default function AppBar(props: AppBarProps) {
             type="button"
             disabled={!props.canSkip}
             onClick={props.onSkip}
-            title="Skip stage"
+            title={props.canSkip ? "Skip stage" : (props.skipDisabledReason ?? "Skip is unavailable")}
             className="inline-flex h-6 w-6 items-center justify-center rounded border border-transparent text-violet-400 transition-colors hover:border-violet-500/30 hover:bg-violet-500/10 disabled:cursor-not-allowed disabled:opacity-35"
           >
             <SkipForward size={12} />

@@ -23,7 +23,6 @@ const DEFAULT_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 
 export class ResourceCache {
   private store = new Map<string, CacheEntry>();
-  private accessOrder: string[] = [];
   private totalBytes = 0;
   private readonly maxBytes: number;
 
@@ -40,12 +39,14 @@ export class ResourceCache {
   ): void {
     const byteSize = this.estimateSize(data);
 
-    // Remove existing entry first
-    if (this.store.has(key)) {
-      const existing = this.store.get(key)!;
+    const existing = this.store.get(key);
+    if (existing) {
       this.totalBytes -= existing.byteSize;
       this.store.delete(key);
-      this.removeFromAccessOrder(key);
+    }
+
+    if (byteSize > this.maxBytes) {
+      return;
     }
 
     // Evict until we have room
@@ -62,7 +63,6 @@ export class ResourceCache {
       eTag: eTag ?? null,
     };
     this.store.set(key, entry as CacheEntry);
-    this.accessOrder.push(key);
     this.totalBytes += byteSize;
   }
 
@@ -70,9 +70,9 @@ export class ResourceCache {
     const entry = this.store.get(key);
     if (!entry) return null;
 
-    // Move to end (most recently used)
-    this.removeFromAccessOrder(key);
-    this.accessOrder.push(key);
+    // Reinsert to keep Map iteration order aligned with LRU.
+    this.store.delete(key);
+    this.store.set(key, entry);
 
     return entry as CacheEntry<T>;
   }
@@ -96,9 +96,10 @@ export class ResourceCache {
   }
 
   evictOldest(): void {
-    if (this.accessOrder.length === 0) return;
-    const oldestKey = this.accessOrder[0];
-    this.remove(oldestKey);
+    const oldest = this.store.keys().next().value as string | undefined;
+    if (oldest) {
+      this.remove(oldest);
+    }
   }
 
   remove(key: string): void {
@@ -106,13 +107,11 @@ export class ResourceCache {
     if (entry) {
       this.totalBytes -= entry.byteSize;
       this.store.delete(key);
-      this.removeFromAccessOrder(key);
     }
   }
 
   clear(): void {
     this.store.clear();
-    this.accessOrder.length = 0;
     this.totalBytes = 0;
   }
 
@@ -138,15 +137,6 @@ export class ResourceCache {
     component: string = "full",
   ): string {
     return `field:${genId}:${quantityId}:${revision}:${component}`;
-  }
-
-  // ── Internal ────────────────────────────────────────────────────────
-
-  private removeFromAccessOrder(key: string): void {
-    const idx = this.accessOrder.indexOf(key);
-    if (idx !== -1) {
-      this.accessOrder.splice(idx, 1);
-    }
   }
 
   private estimateSize(data: unknown): number {

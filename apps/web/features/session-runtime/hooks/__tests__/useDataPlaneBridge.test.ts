@@ -39,14 +39,14 @@ describe("decideFieldVectorFetch", () => {
     });
   });
 
-  it("skips legacy full vector fetch for FEM 3D scoped rendering", () => {
+  it("fetches full vector payloads for FEM 3D quantities", () => {
     const decision = decideFieldVectorFetch({
       viewMode: "3d",
       component: "3D",
       isFemBackend: true,
     });
     expect(decision).toEqual({
-      shouldFetch: false,
+      shouldFetch: true,
       component: "full",
     });
   });

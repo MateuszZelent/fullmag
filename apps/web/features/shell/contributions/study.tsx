@@ -15,6 +15,10 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
   const studyNode = ctx.studyNodeContext;
   const hasStageSelection = studyNode?.kind === "study-stage";
   const placement = hasStageSelection ? "after" : "append";
+  const canRun = ctx.can({ id: "solver.control", action: "run" });
+  const canPause = ctx.can({ id: "solver.control", action: "pause" });
+  const canStop = ctx.can({ id: "solver.control", action: "stop" });
+  const canSkip = ctx.can({ id: "solver.control", action: "skip" });
 
   return [
     {
@@ -225,13 +229,14 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "study-compute-run",
           icon: <Play size={20} fill="currentColor" />,
           label: "Compute",
-          tooltip:
-            ctx.runLabel === "Resume"
+          tooltip: canRun
+            ? ctx.runLabel === "Resume"
               ? "Resume the staged compute pipeline"
-              : "Materialize and execute the current study pipeline",
+              : "Materialize and execute the current study pipeline"
+            : ctx.runDisabledReason ?? "Compute is unavailable",
           shortcut: "F5",
           accent: true,
-          disabled: !ctx.can({ id: "solver.control", action: "run" }),
+          disabled: !canRun,
           action: () => ctx.run({ id: "solver.control", action: "run" }),
           iconColor: "text-cyan-400",
         },
@@ -239,8 +244,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "study-compute-pause",
           icon: <Pause size={20} fill="currentColor" />,
           label: "Pause",
-          tooltip: "Pause study execution",
-          disabled: !ctx.can({ id: "solver.control", action: "pause" }),
+          tooltip: canPause ? "Pause study execution" : ctx.pauseDisabledReason ?? "Pause is unavailable",
+          disabled: !canPause,
           action: () => ctx.run({ id: "solver.control", action: "pause" }),
           iconColor: "text-amber-500",
         },
@@ -248,8 +253,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "study-compute-stop",
           icon: <Square size={20} fill="currentColor" />,
           label: "Stop",
-          tooltip: "Stop study execution",
-          disabled: !ctx.can({ id: "solver.control", action: "stop" }),
+          tooltip: canStop ? "Stop study execution" : ctx.stopDisabledReason ?? "Stop is unavailable",
+          disabled: !canStop,
           action: () => ctx.run({ id: "solver.control", action: "stop" }),
           iconColor: "text-rose-500",
         },
@@ -257,8 +262,8 @@ function buildStudyGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           id: "study-compute-skip",
           icon: <SkipForward size={20} />,
           label: "Skip",
-          tooltip: "Skip the active stage when supported by runtime",
-          disabled: !ctx.can({ id: "solver.control", action: "skip" }),
+          tooltip: canSkip ? "Skip the active stage when supported by runtime" : ctx.skipDisabledReason ?? "Skip is unavailable",
+          disabled: !canSkip,
           action: () => ctx.run({ id: "solver.control", action: "skip" }),
           iconColor: "text-violet-400",
         },

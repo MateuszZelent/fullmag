@@ -6,7 +6,7 @@ import type {
   FemVectorDomainFilter,
   RenderMode,
   ClipAxis,
-} from "../FemMeshView3D";
+} from "./femMeshTypes";
 import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles";
 
 export type FemViewportProjection = "perspective" | "orthographic";

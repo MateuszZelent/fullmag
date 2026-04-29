@@ -615,7 +615,7 @@ function normalizeVisualizationPresets(
         clip_axis:
           fem?.clip_axis === "y" || fem?.clip_axis === "z" ? fem.clip_axis : "x",
         clip_pos: Number(fem?.clip_pos ?? 50),
-        show_arrows: Boolean(fem?.show_arrows ?? true),
+        show_arrows: Boolean(fem?.show_arrows ?? false),
         max_points: Number(fem?.max_points ?? 16384),
         arrow_color_mode: normalizeVisualizationArrowColorMode(fem?.arrow_color_mode),
         arrow_mono_color:

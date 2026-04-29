@@ -21,7 +21,13 @@ import { ViewportToolbar3D } from "../ViewportToolbar3D";
 import { ViewportToolGroup, ViewportToolSeparator } from "../ViewportToolGroup";
 import { ViewportIconAction } from "../ViewportIconAction";
 import { ViewportPopoverPanel, ViewportPopoverRow, ViewportPopoverTrigger } from "../ViewportPopoverPanel";
-import type { ArrowSamplingMode, FemArrowColorMode, FemColorField, RenderMode, ClipAxis } from "../FemMeshView3D";
+import type {
+  ArrowSamplingMode,
+  FemArrowColorMode,
+  FemColorField,
+  RenderMode,
+  ClipAxis,
+} from "./femMeshTypes";
 import type {
   FemViewportNavigation,
   FemViewportOverlayPopover,

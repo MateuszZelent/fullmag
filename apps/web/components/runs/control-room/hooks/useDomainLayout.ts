@@ -463,7 +463,9 @@ export function useDomainLayout(params: UseDomainLayoutParams): UseDomainLayoutR
   const interactiveEnabled = session?.interactive_session_requested === true;
   const awaitingCommand = workspaceStatus === "awaiting_command";
   const runtimeCanAcceptCommands =
-    runtimeStatus?.can_accept_commands ?? interactiveEnabled;
+    awaitingCommand || isWaitingForCompute || workspaceStatus === "paused"
+      ? true
+      : (runtimeStatus?.can_accept_commands ?? interactiveEnabled);
   const interactiveControlsEnabled =
     interactiveEnabled &&
     (awaitingCommand || isWaitingForCompute || workspaceStatus === "running" || workspaceStatus === "paused");

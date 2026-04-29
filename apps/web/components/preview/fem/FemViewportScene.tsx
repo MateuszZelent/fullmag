@@ -16,7 +16,7 @@ import type {
   FemColorField,
   FemMeshData,
   RenderMode,
-} from "../FemMeshView3D";
+} from "./femMeshTypes";
 import type { FemMeshPart, MeshEntityViewState } from "../../../lib/session/types";
 
 export interface FemViewportRenderLayer {

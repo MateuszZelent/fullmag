@@ -133,4 +133,11 @@ describe("ResourceCache", () => {
     cache.set("f32", arr, 1);
     expect(cache.getCacheStats().totalBytes).toBe(64); // 16 * 4
   });
+
+  it("rejects a single entry larger than the cache budget", () => {
+    const cache = new ResourceCache(32);
+    cache.set("too-large", new Uint8Array(64), 1);
+    expect(cache.get("too-large")).toBeNull();
+    expect(cache.getCacheStats().entryCount).toBe(0);
+  });
 });

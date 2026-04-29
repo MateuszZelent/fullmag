@@ -237,9 +237,12 @@ fn eval_uniform(params: &BTreeMap<String, Value>) -> Result<[f64; 3], String> {
 
 fn eval_random_seeded(params: &BTreeMap<String, Value>, point: [f64; 3]) -> [f64; 3] {
     let seed = parse_i64(params, "seed", Some(1)).unwrap_or(1) as f64;
-    let angle1 = (seed * 12.9898 + point[0] * 78.233 + point[1] * 37.719 + point[2] * 11.137).sin()
+    let x = point[0] * 1.0e9;
+    let y = point[1] * 1.0e9;
+    let z = point[2] * 1.0e9;
+    let angle1 = (seed * 12.9898 + x * 78.233 + y * 37.719 + z * 11.137).sin()
         * 43758.5453;
-    let angle2 = (seed * 4.1414 + point[0] * 93.989 + point[1] * 67.345 + point[2] * 45.678).sin()
+    let angle2 = (seed * 4.1414 + x * 93.989 + y * 67.345 + z * 45.678).sin()
         * 43758.5453;
     let u1 = angle1 - angle1.floor();
     let u2 = angle2 - angle2.floor();
@@ -455,5 +458,48 @@ mod tests {
         .expect("vortex sampling should succeed");
 
         assert!(values[0][2] > 0.5);
+    }
+
+    #[test]
+    fn random_seeded_varies_across_nanoscale_points() {
+        let mapping = TextureMappingIR::default();
+        let transform = TextureTransform3DIR {
+            translation: [0.0, 0.0, 0.0],
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            pivot: [0.0, 0.0, 0.0],
+        };
+        let mut params = BTreeMap::new();
+        params.insert("seed".to_string(), Value::from(7));
+
+        let values = sample_preset_texture(
+            "random_seeded",
+            &params,
+            &mapping,
+            &transform,
+            &[
+                TextureSamplePoint {
+                    position_world: [0.0, 0.0, 0.0],
+                    position_object: [0.0, 0.0, 0.0],
+                    active: true,
+                },
+                TextureSamplePoint {
+                    position_world: [50e-9, 0.0, 0.0],
+                    position_object: [50e-9, 0.0, 0.0],
+                    active: true,
+                },
+                TextureSamplePoint {
+                    position_world: [100e-9, 25e-9, 0.0],
+                    position_object: [100e-9, 25e-9, 0.0],
+                    active: true,
+                },
+            ],
+        )
+        .expect("random_seeded sampling should succeed");
+
+        let dot01 = dot(values[0], values[1]).abs();
+        let dot12 = dot(values[1], values[2]).abs();
+        assert!(dot01 < 0.999, "first two random vectors are nearly identical: {dot01}");
+        assert!(dot12 < 0.999, "last two random vectors are nearly identical: {dot12}");
     }
 }

@@ -107,7 +107,32 @@ run_gate() {
   fi
 }
 
+run_repo_hygiene_gate() {
+  local findings="$tmp_dir/repo-hygiene.current"
+
+  find "$REPO_ROOT/apps/web" \
+    \( -path '*/node_modules/*' -o -path '*/.next/*' -o -path '*/out/*' \) -prune \
+    -o -type f \
+    \( -name '*.rej' -o -name '*.orig' -o -name '*.bak' -o -name 'output.txt' \) \
+    -print \
+    | sed -e "s#^${REPO_ROOT}/##" \
+    | sort -u > "$findings"
+
+  echo
+  echo "=== Repo Hygiene Gate ==="
+  if [[ -s "$findings" ]]; then
+    cat "$findings"
+    if [[ "$MODE" == "strict" ]]; then
+      GATE_FAILED=1
+    fi
+  else
+    echo "(none)"
+  fi
+}
+
 GATE_FAILED=0
+
+run_repo_hygiene_gate
 
 run_gate \
   "frontend-legacy-transport" \

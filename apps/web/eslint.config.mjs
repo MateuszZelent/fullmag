@@ -44,5 +44,29 @@ export default tseslint.config(
       ],
       "prefer-const": "error",
     },
-  }
+  },
+  {
+    files: [
+      "components/preview/r3f/**/*.{ts,tsx}",
+      "components/preview/fem/FemViewportScene.tsx",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "../FemMeshView3D",
+                "./FemMeshView3D",
+                "@/components/preview/FemMeshView3D",
+              ],
+              message:
+                "Import shared FEM viewport types from components/preview/fem/femMeshTypes.ts instead of the host component.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 );

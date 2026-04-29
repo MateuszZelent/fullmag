@@ -39,6 +39,10 @@ export interface RibbonCommandContext {
   canPause?: boolean;
   canStop?: boolean;
   canSkip?: boolean;
+  runDisabledReason?: string | null;
+  pauseDisabledReason?: string | null;
+  stopDisabledReason?: string | null;
+  skipDisabledReason?: string | null;
   runAction?: string;
   canSyncScriptBuilder?: boolean;
   scriptSyncBusy?: boolean;

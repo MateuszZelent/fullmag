@@ -3,12 +3,17 @@ import {
   openApiV2PathLiterals,
   assertOpenApiV2Path,
 } from "../../generated/openapi-v2-paths";
-import { LiveSessionClient } from "../LiveSessionClient";
+import {
+  LiveSessionClient,
+  initLiveSessionClient,
+  resetLiveSessionClientForTests,
+} from "../LiveSessionClient";
 import { sessionApiPaths } from "../sessionPaths";
 
 describe("LiveSessionClient v2 transport contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetLiveSessionClientForTests();
   });
 
   it("generates only v2 browser paths", () => {
@@ -61,5 +66,14 @@ describe("LiveSessionClient v2 transport contract", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the global singleton when the resolved config is unchanged", () => {
+    const first = initLiveSessionClient({ baseUrl: "http://api.test/" });
+    const second = initLiveSessionClient({ baseUrl: "http://api.test" });
+    const third = initLiveSessionClient({ baseUrl: "http://other.test" });
+
+    expect(second).toBe(first);
+    expect(third).not.toBe(first);
   });
 });

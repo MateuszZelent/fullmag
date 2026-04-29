@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { fitCameraToBounds } from "../camera/cameraHelpers";
-import type { ClipAxis } from "../FemMeshView3D";
+import type { ClipAxis } from "./femMeshTypes";
 
 /** Manage WebGL clipping planes for mesh cross-section view. */
 export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; flip?: boolean; geomSize: [number, number, number] }) {

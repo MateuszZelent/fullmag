@@ -154,7 +154,7 @@ export function decideFieldVectorFetch(args: {
   }
   if (args.isFemBackend && args.viewMode === "3d") {
     return {
-      shouldFetch: false,
+      shouldFetch: true,
       component: "full",
     };
   }

@@ -207,7 +207,6 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     : ctx.totalCells && ctx.totalCells > 0
       ? `${ctx.totalCells.toLocaleString()} cells`
       : "—";
-  const isBuilderAuthoringMode = ctx.workspaceMode === "build";
   const stageMatch = (ctx.activity.label ?? "").match(/stage\s+(\d+)\/(\d+)/i);
   const activeStageIndex = stageMatch ? Math.max(0, Number(stageMatch[1]) - 1) : null;
   const completedStageCount = stageMatch
@@ -315,35 +314,24 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       <SidebarSection
         title="Stages"
         icon="🧩"
-        badge={isBuilderAuthoringMode ? "authoring" : "read-only"}
+        badge="authoring"
         defaultOpen={true}
       >
         <div className="mb-3 rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] text-muted-foreground">
           This is the COMSOL-like stage authoring surface. Add, reorder and configure user-facing stages here. Backend `flat stages` are materialized artifacts derived from this sequence, not the primary editing surface.
         </div>
-        {isBuilderAuthoringMode ? (
-          <StudyBuilderWorkspace
-            stages={ctx.studyStages}
-            pipeline={ctx.studyPipeline}
-            activeStageIndex={activeStageIndex}
-            completedStageCount={completedStageCount}
-            stageStatuses={stageStatuses}
-            onChangeStages={(next) => {
-              ctx.setStudyStages(next);
-              syncCompatibilityState(ctx, next);
-            }}
-            onChangePipeline={(next) => ctx.setStudyPipeline(next)}
-          />
-        ) : (
-          <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] text-muted-foreground">
-            Stage authoring is available in <span className="font-semibold text-foreground">Model Builder</span>.
-            <div className="mt-3">
-              <Button size="sm" variant="outline" type="button" onClick={() => ctx.setWorkspaceMode("build")}>
-                Switch To Model Builder
-              </Button>
-            </div>
-          </div>
-        )}
+        <StudyBuilderWorkspace
+          stages={ctx.studyStages}
+          pipeline={ctx.studyPipeline}
+          activeStageIndex={activeStageIndex}
+          completedStageCount={completedStageCount}
+          stageStatuses={stageStatuses}
+          onChangeStages={(next) => {
+            ctx.setStudyStages(next);
+            syncCompatibilityState(ctx, next);
+          }}
+          onChangePipeline={(next) => ctx.setStudyPipeline(next)}
+        />
       </SidebarSection>
     </>
   );

@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { FemMeshData } from "../FemMeshView3D";
+import type { FemMeshData } from "../fem/femMeshTypes";
 
 interface FemHighlightViewProps {
   meshData: FemMeshData;

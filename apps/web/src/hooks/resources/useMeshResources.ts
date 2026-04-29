@@ -169,9 +169,9 @@ function useMeshJsonResource<T>(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
-      setData(null);
-      setError(null);
-      setLoading(false);
+      setData((current) => (current === null ? current : null));
+      setError((current) => (current === null ? current : null));
+      setLoading((current) => (current ? false : current));
       return () => {
         mountedRef.current = false;
       };
@@ -279,9 +279,9 @@ function useMeshBinaryResource(
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
-      setData(null);
-      setError(null);
-      setLoading(false);
+      setData((current) => (current === null ? current : null));
+      setError((current) => (current === null ? current : null));
+      setLoading((current) => (current ? false : current));
       return () => {
         mountedRef.current = false;
       };

@@ -6,6 +6,22 @@ const RUNTIME_HTTP_BASE_ENV_KEYS: string[] = [
   "NEXT_PUBLIC_API_URL",
 ];
 
+type BrowserFullmagConfig = {
+  runtimeHttpBase?: unknown;
+  apiBase?: unknown;
+};
+
+function normalizeRuntimeBase(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
 function configuredRuntimeBaseFromEnv(): string | null {
   if (typeof window !== "undefined") {
     return null;
@@ -21,22 +37,40 @@ function configuredRuntimeBaseFromEnv(): string | null {
 
   const env = rawEnv as Record<string, unknown>;
   for (const key of RUNTIME_HTTP_BASE_ENV_KEYS) {
-    const value = env[key];
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (trimmed) {
-      return trimmed.replace(/\/+$/, "");
+    const normalized = normalizeRuntimeBase(env[key]);
+    if (normalized) {
+      return normalized;
     }
   }
   return null;
+}
+
+function configuredRuntimeBaseFromWindow(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const config = (window as Window & { __FULLMAG_CONFIG__?: BrowserFullmagConfig })
+    .__FULLMAG_CONFIG__;
+  if (!config || typeof config !== "object") {
+    return null;
+  }
+
+  return (
+    normalizeRuntimeBase(config.runtimeHttpBase) ??
+    normalizeRuntimeBase(config.apiBase)
+  );
 }
 
 function resolveRuntimeHttpBase(): string {
   const configured = configuredRuntimeBaseFromEnv();
   if (configured) {
     return configured;
+  }
+
+  const runtimeConfigured = configuredRuntimeBaseFromWindow();
+  if (runtimeConfigured) {
+    return runtimeConfigured;
   }
 
   if (typeof window !== "undefined") {

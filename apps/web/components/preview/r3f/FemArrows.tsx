@@ -1,7 +1,12 @@
 import React, { useMemo, useRef, useEffect, useLayoutEffect } from "react";
 import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
-import { FemMeshData, FemColorField, FemArrowColorMode, ArrowSamplingMode } from "../FemMeshView3D";
+import type {
+  FemMeshData,
+  FemColorField,
+  FemArrowColorMode,
+  ArrowSamplingMode,
+} from "../fem/femMeshTypes";
 import { divergingColor, magnitudeColor } from "./colorUtils";
 import { applyMagnetizationHsl } from "../magnetizationColor";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";

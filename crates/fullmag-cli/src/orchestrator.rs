@@ -1701,7 +1701,7 @@ fn execute_manual_interactive_remesh(
                 } else {
                     plan.mesh_source.clone()
                 };
-                let live_mesh_payload = {
+                let (live_mesh_payload, remeshed_magnetization) = {
                     let mut remeshed_problem = problem.clone();
                     apply_current_fem_overrides(
                         &mut remeshed_problem,
@@ -1726,14 +1726,16 @@ fn execute_manual_interactive_remesh(
                             })?
                             .region_markers = region_markers;
                     }
-                    fem_mesh_payload_from_backend_plan(
-                        &fullmag_plan::plan(&remeshed_problem)
-                            .map_err(|error| anyhow!(error.to_string()))?
-                            .backend_plan,
-                    )
-                    .ok_or_else(|| {
-                        anyhow!("updated backend plan did not produce a FEM mesh payload")
-                    })?
+                    let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
+                        .map_err(|error| anyhow!(error.to_string()))?;
+                    let magnetization =
+                        current_stage_magnetization_vectors(None, &remeshed_plan.backend_plan);
+                    let mesh_payload =
+                        fem_mesh_payload_from_backend_plan(&remeshed_plan.backend_plan)
+                            .ok_or_else(|| {
+                                anyhow!("updated backend plan did not produce a FEM mesh payload")
+                            })?;
+                    (mesh_payload, magnetization)
                 };
                 live_workspace.push_log(
                     "success",
@@ -1768,6 +1770,13 @@ fn execute_manual_interactive_remesh(
                         ),
                     );
                 }
+                live_workspace.push_log(
+                    "info",
+                    format!(
+                        "Magnetization texture re-sampled on the new mesh — {} vectors",
+                        remeshed_magnetization.len()
+                    ),
+                );
                 *current_mesh_quality = remesh_result.quality.clone();
                 *current_fem_mesh_override = Some(new_mesh.clone());
                 *current_fem_hmax_override = Some(hmax);
@@ -1791,6 +1800,8 @@ fn execute_manual_interactive_remesh(
 
                 live_workspace.update(|state| {
                     state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
+                    state.live_state.latest_step.magnetization =
+                        Some(flatten_magnetization(&remeshed_magnetization));
                     let mut workspace = current_fem_mesh_workspace(
                         problem,
                         &new_mesh,

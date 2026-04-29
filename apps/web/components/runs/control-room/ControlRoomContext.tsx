@@ -392,7 +392,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [meshClipAxis, setMeshClipAxis] = useState<ClipAxis>("x");
   const [meshClipPos, setMeshClipPos] = useState(50);
   const [meshClipFlip, setMeshClipFlip] = useState(false);
-  const [meshShowArrows, setMeshShowArrows] = useState(true);
+  const [meshShowArrows, setMeshShowArrows] = useState(false);
   const [femTextureDownsampleCells, setFemTextureDownsampleCells] = useState(65_536);
   const [femVectorGlyphBudget, setFemVectorGlyphBudget] = useState(1_200);
   const [femArrowColorMode, setFemArrowColorMode] = useState<
@@ -2114,7 +2114,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     ?? selectedFieldCatalogDomain
     ?? null;
 	  const authoredMagnetizationPreview = useMemo(
-	    () => activeQuantityId === "m"
+	    () => activeQuantityId === "m" && workspaceStatus !== "running"
 	      ? buildAuthoredMagnetizationPreview({
 	          scene: sceneDocumentDraft ?? remoteSceneDocument,
 	          mesh: femMesh,
@@ -2134,6 +2134,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 	      sceneDocumentDraft,
 	      selectedObjectId,
       selectedSidebarNodeId,
+      workspaceStatus,
     ],
   );
   const selectedFieldTransportKey = useMemo(() => {
