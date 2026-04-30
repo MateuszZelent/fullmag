@@ -35,7 +35,8 @@ describe("resolveAirboxRenderMode", () => {
   });
 
   it("keeps points independent from shaded and wireframe passes", () => {
-    expect(resolveAirboxRenderMode("surface+edges", { points: true })).toBe("surface+edges");
+    // surface+edges + points → "custom" because no named preset covers all three.
+    expect(resolveAirboxRenderMode("surface+edges", { points: true })).toBe("custom");
     expect(resolveAirboxRenderMode("points", { points: false })).toBe("points");
     expect(
       resolveAirboxDisplayState(airboxDisplayStateFromRenderMode("surface+edges"), {
@@ -128,7 +129,8 @@ describe("resolveAirboxRenderMode", () => {
         { points: true },
       ),
     ).toMatchObject({
-      renderMode: "wireframe",
+      // wireframe + points → "custom" (not a named preset)
+      renderMode: "custom",
       wireframe: true,
       points: true,
       pointsScope: "surface",
@@ -157,5 +159,39 @@ describe("resolveAirboxRenderMode", () => {
       geometryVisible: true,
       renderMode: "wireframe",
     });
+  });
+
+  it("Krok 3 acceptance: surface + points is possible without disabling surface", () => {
+    const result = resolveAirboxDisplayState(
+      airboxDisplayStateFromRenderMode("surface"),
+      { points: true },
+    );
+    expect(result.surface).toBe(true);
+    expect(result.points).toBe(true);
+    expect(result.geometryVisible).toBe(true);
+    // Not a named preset — must be "custom"
+    expect(result.renderMode).toBe("custom");
+  });
+
+  it("Krok 3 acceptance: wireframe + points is possible without disabling wireframe", () => {
+    const result = resolveAirboxDisplayState(
+      airboxDisplayStateFromRenderMode("wireframe"),
+      { points: true },
+    );
+    expect(result.wireframe).toBe(true);
+    expect(result.points).toBe(true);
+    expect(result.geometryVisible).toBe(true);
+    expect(result.renderMode).toBe("custom");
+  });
+
+  it("Krok 3 acceptance: selecting preset 'points' turns off surface and wireframe", () => {
+    const result = resolveAirboxDisplayState(
+      airboxDisplayStateFromRenderMode("surface+edges"),
+      { renderMode: "points" },
+    );
+    expect(result.surface).toBe(false);
+    expect(result.wireframe).toBe(false);
+    expect(result.points).toBe(true);
+    expect(result.renderMode).toBe("points");
   });
 });

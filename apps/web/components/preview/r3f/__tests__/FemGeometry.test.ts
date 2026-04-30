@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { resolveFemClipPlane, resolveFemGeometryResourceNeeds } from "../FemGeometry";
+import { resolveFemClipPlane } from "../FemGeometry";
+import { resolveFemGeometryResourceNeeds } from "../femGeometryResources";
 import { resolveFemGeometryRenderPasses } from "../femGeometryRenderPasses";
 
 describe("resolveFemClipPlane", () => {

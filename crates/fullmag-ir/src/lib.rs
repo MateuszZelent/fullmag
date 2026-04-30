@@ -1,6 +1,6 @@
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod eigen_contract;
 pub mod execution;
@@ -1025,4 +1025,3 @@ impl ProblemIR {
         })
     }
 }
-

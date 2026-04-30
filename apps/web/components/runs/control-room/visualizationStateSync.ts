@@ -9,6 +9,7 @@ import type {
   FemViewportLayerState,
   MeshRenderPassState,
 } from "@/features/viewport-unified/model/unifiedViewportTypes";
+import type { Slice2DToolbarState } from "@/src/features/slice2d";
 import type {
   FerromagnetVisibilityMode,
   VectorLayerDomain,
@@ -65,6 +66,7 @@ export interface ResolvedRenderPlan {
     thickness: number;
     ferromagnetVisibility: FemFerromagnetVisibilityMode;
   };
+  slice: Slice2DToolbarState;
   diagnostics: VisualizationStateResource["diagnostics"];
 }
 
@@ -166,6 +168,31 @@ export function airboxPassesFromVisualizationState(
   };
 }
 
+export function sliceToolbarFromVisualizationState(
+  state: VisualizationStateResource,
+): Slice2DToolbarState {
+  return {
+    quantityId: state.slice.quantity_id,
+    component: state.slice.component,
+    axis: state.slice.axis,
+    mode: state.slice.mode,
+    layerIndex: state.slice.layer_index,
+    positionPercent: state.slice.position_percent,
+    thicknessPercent: state.slice.thickness_percent,
+    colormap: state.slice.colormap,
+    autoContrast: state.slice.auto_contrast,
+    showPrimitives: state.slice.show_primitives,
+    showMesh: state.slice.show_mesh,
+    showMagneticTexture: state.slice.show_magnetic_texture,
+    showAirbox: state.slice.show_airbox,
+    airboxRenderMode: state.slice.airbox_render_mode,
+    showAirboxVectors: state.slice.show_airbox_vectors,
+    showQuantity: state.slice.show_quantity,
+    showVectors: state.slice.show_vectors,
+    renderMode: state.slice.render_mode,
+  };
+}
+
 export function resolveRenderPlanFromVisualizationState(
   state: VisualizationStateResource,
   previousFemLayers: FemViewportLayerState,
@@ -211,6 +238,7 @@ export function resolveRenderPlanFromVisualizationState(
         state.vector_style.ferromagnet_visibility,
       ),
     },
+    slice: sliceToolbarFromVisualizationState(state),
     diagnostics: state.diagnostics,
   };
 }

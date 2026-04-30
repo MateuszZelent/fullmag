@@ -7,6 +7,7 @@ import {
   buildFieldVectorRequestKey,
   buildFieldVectorResourceKey,
   buildFieldVectorScopeToken,
+  getFieldVectorInflightCount,
   loadFieldVectorRequest,
   type FieldVectorRequestClient,
   type FieldVectorRequestParams,
@@ -178,5 +179,33 @@ describe("useFieldVector request helpers", () => {
 
     await expect(request.promise).rejects.toThrow(/aborted/i);
     expect(client.getCache().get(resourceKey)).toBeNull();
+  });
+});
+
+describe("getFieldVectorInflightCount", () => {
+  beforeEach(() => {
+    decodeFieldVectorOffThreadMock.mockClear();
+    decodeFieldVectorOffThreadMock.mockResolvedValue(decodedField);
+  });
+
+  it("returns 0 when no requests are in flight", () => {
+    expect(getFieldVectorInflightCount()).toBe(0);
+  });
+
+  it("increases while a fetch is pending and returns to 0 after completion", async () => {
+    let resolveResponse!: (v: FieldBinaryResponse) => void;
+    const getVectorResponse = vi.fn(
+      () => new Promise<FieldBinaryResponse>((res) => { resolveResponse = res; }),
+    );
+    const client = createClient(getVectorResponse);
+    const params = baseParams();
+
+    const request = loadFieldVectorRequest(client, params);
+    expect(getFieldVectorInflightCount()).toBe(1);
+
+    resolveResponse(binaryResponse());
+    await request.promise;
+    expect(getFieldVectorInflightCount()).toBe(0);
+    request.release();
   });
 });

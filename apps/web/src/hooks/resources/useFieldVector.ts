@@ -86,6 +86,11 @@ export function buildFieldVectorRequestKey(params: FieldVectorRequestParams): st
   )}`;
 }
 
+/** Returns the number of in-progress field vector fetches across all hook instances. */
+export function getFieldVectorInflightCount(): number {
+  return inflightFieldVectorRequests.size;
+}
+
 export function loadFieldVectorRequest(
   client: FieldVectorRequestClient,
   params: FieldVectorRequestParams,

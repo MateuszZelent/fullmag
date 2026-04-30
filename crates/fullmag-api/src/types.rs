@@ -3,8 +3,8 @@
 use crate::schemas::commands::CommandResponse;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
-    SamplingVisualizationState, VectorStyleVisualizationState, VisualizationLayerState,
-    VisualizationOverrideState,
+    SamplingVisualizationState, SliceVisualizationState, VectorStyleVisualizationState,
+    VisualizationLayerState, VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -44,6 +44,8 @@ pub(crate) struct DisplayPresentationState {
     #[serde(default)]
     pub visualization_fem: Option<FemVisualizationState>,
     #[serde(default)]
+    pub visualization_slice: Option<SliceVisualizationState>,
+    #[serde(default)]
     pub visualization_clip: Option<ClipVisualizationState>,
     #[serde(default)]
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
@@ -62,6 +64,7 @@ impl Default for DisplayPresentationState {
             visualization_domains: None,
             visualization_sampling: None,
             visualization_fem: None,
+            visualization_slice: None,
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,

@@ -122,6 +122,8 @@ describe("femSliceCache", () => {
     const snapshotAfter = getSliceCacheSnapshot();
     expect(snapshotAfter.topologyEntries).toBeLessThanOrEqual(snapshotAfter.topologyCapacity);
     expect(snapshotAfter.fieldEntries).toBeLessThanOrEqual(snapshotAfter.fieldCapacity);
+    expect(snapshotAfter.topologyEstimatedBytes).toBeLessThanOrEqual(snapshotAfter.topologyMaxBytes);
+    expect(snapshotAfter.fieldEstimatedBytes).toBeLessThanOrEqual(snapshotAfter.fieldMaxBytes);
     expect(readSliceTopologyCache(`${seed}:topology:0`)).toBeNull();
     expect(readSliceFieldCache(`${seed}:field:0`)).toBeNull();
   });

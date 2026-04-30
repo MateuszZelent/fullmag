@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
-use crate::{ProblemIR, CurrentModuleIR, DynamicsIR, EnergyTermIR, OerstedFieldModelIR, SpinTorqueModuleIR, CurrentTransportModelIR, IntegratorChoice};
+use crate::{
+    CurrentModuleIR, CurrentTransportModelIR, DynamicsIR, EnergyTermIR, ProblemIR,
+    SpinTorqueModuleIR,
+};
 
 pub(crate) fn vector3_is_finite(vector: &[f64; 3]) -> bool {
     vector.iter().all(|value| value.is_finite())
@@ -481,4 +484,3 @@ pub(crate) fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<St
         }
     }
 }
-

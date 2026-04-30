@@ -27,46 +27,32 @@ function part(overrides: Partial<FemMeshPart>): FemMeshPart {
 }
 
 describe("reduceAirboxDisplayTransaction", () => {
-  it("enables airbox vectors as one transaction and records restore state", () => {
+  it("enables airbox vectors as independent layer — does not touch global vector layer", () => {
     const transaction = reduceAirboxDisplayTransaction({
       patch: { vectors: true },
       airboxParts: [part({})],
       meshEntityViewState: {},
-      vectorDomainFilter: "magnetic_only",
-      ferromagnetVisibilityMode: "hide",
-      vectorRestoreState: null,
     });
 
+    // Must set airbox visible + airbox.vectors; must NOT touch layers.vectors or vector_style.
     expect(transaction.displayPatch).toMatchObject({
       layers: {
         airbox: {
           visible: true,
           vectors: { visible: true, domain: "airbox_only" },
         },
-        vectors: { visible: true, domain: "airbox_only" },
       },
-      vector_style: { ferromagnet_visibility: "ghost" },
     });
-    expect(transaction.vectorRestoreState).toEqual({
-      active: true,
-      vectorDomainFilter: "magnetic_only",
-      ferromagnetVisibilityMode: "hide",
-    });
+    expect(transaction.displayPatch?.layers?.vectors).toBeUndefined();
+    expect(transaction.displayPatch?.vector_style).toBeUndefined();
     expect(transaction.meshEntityViewStateChanged).toBe(false);
   });
 
-  it("disables airbox vectors and restores previous vector domain and ferro visibility", () => {
+  it("disables airbox vectors — does not restore global vector domain via hidden state", () => {
     const transaction = reduceAirboxDisplayTransaction({
       patch: { vectors: false },
       airboxParts: [part({})],
       meshEntityViewState: {},
-      vectorDomainFilter: "airbox_only",
-      ferromagnetVisibilityMode: "ghost",
-      vectorRestoreState: {
-        active: true,
-        vectorDomainFilter: "full_domain",
-        ferromagnetVisibilityMode: "hide",
-      },
     });
 
     expect(transaction.displayPatch).toMatchObject({
@@ -74,11 +60,11 @@ describe("reduceAirboxDisplayTransaction", () => {
         airbox: {
           vectors: { visible: false, domain: "airbox_only" },
         },
-        vectors: { visible: false, domain: "full_domain" },
       },
-      vector_style: { ferromagnet_visibility: "hide" },
     });
-    expect(transaction.vectorRestoreState).toBeNull();
+    // Global layers.vectors must not be touched — no hidden restore mechanism.
+    expect(transaction.displayPatch?.layers?.vectors).toBeUndefined();
+    expect(transaction.displayPatch?.vector_style).toBeUndefined();
   });
 
   it("updates airbox render state for all air-related parts in one mesh-state result", () => {
@@ -105,9 +91,6 @@ describe("reduceAirboxDisplayTransaction", () => {
       },
       airboxParts: [part({}), part({ id: "part:outer", role: "outer_boundary" })],
       meshEntityViewState,
-      vectorDomainFilter: "auto",
-      ferromagnetVisibilityMode: "hide",
-      vectorRestoreState: null,
     });
 
     expect(transaction.meshEntityViewStateChanged).toBe(true);
@@ -153,9 +136,6 @@ describe("reduceAirboxDisplayTransaction", () => {
       patch: { points: true },
       airboxParts: [part({})],
       meshEntityViewState,
-      vectorDomainFilter: "auto",
-      ferromagnetVisibilityMode: "hide",
-      vectorRestoreState: null,
     });
 
     expect(transaction.displayPatch).toEqual({
@@ -190,9 +170,6 @@ describe("reduceAirboxDisplayTransaction", () => {
           colorField: "none",
         },
       },
-      vectorDomainFilter: "auto",
-      ferromagnetVisibilityMode: "hide",
-      vectorRestoreState: null,
     });
 
     expect(transaction.meshEntityViewState["part:air"]).toMatchObject({

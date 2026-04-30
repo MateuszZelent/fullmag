@@ -17,6 +17,8 @@ export type {
   CurrentRunResource,
   DisplayPatchRequest,
   DisplaySelection,
+  SliceVisualizationPatch,
+  SliceVisualizationState,
   VisualizationStatePatch,
   VisualizationStateResource,
   DomainMeta,

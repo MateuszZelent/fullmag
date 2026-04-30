@@ -4856,6 +4856,15 @@
         ],
         "type": "object"
       },
+      "SliceAirboxRenderMode": {
+        "enum": [
+          "surface",
+          "wireframe",
+          "surface+edges",
+          "points"
+        ],
+        "type": "string"
+      },
       "SlicePlane": {
         "enum": [
           "xy",
@@ -4863,6 +4872,246 @@
           "yz"
         ],
         "type": "string"
+      },
+      "SliceRenderMode": {
+        "enum": [
+          "heatmap",
+          "contour",
+          "heatmap+contour",
+          "vectors",
+          "mesh-overlay"
+        ],
+        "type": "string"
+      },
+      "SliceVisualizationMode": {
+        "enum": [
+          "single",
+          "slab",
+          "all_layers"
+        ],
+        "type": "string"
+      },
+      "SliceVisualizationPatch": {
+        "properties": {
+          "airbox_render_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceAirboxRenderMode"
+              }
+            ]
+          },
+          "auto_contrast": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "axis": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClipAxis"
+              }
+            ]
+          },
+          "colormap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "component": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldComponent"
+              }
+            ]
+          },
+          "layer_index": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceVisualizationMode"
+              }
+            ]
+          },
+          "position_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quantity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "render_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceRenderMode"
+              }
+            ]
+          },
+          "show_airbox": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_airbox_vectors": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_magnetic_texture": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_mesh": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_primitives": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_quantity": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "show_vectors": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "thickness_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SliceVisualizationState": {
+        "properties": {
+          "airbox_render_mode": {
+            "$ref": "#/components/schemas/SliceAirboxRenderMode"
+          },
+          "auto_contrast": {
+            "type": "boolean"
+          },
+          "axis": {
+            "$ref": "#/components/schemas/ClipAxis"
+          },
+          "colormap": {
+            "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/FieldComponent"
+          },
+          "layer_index": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SliceVisualizationMode"
+          },
+          "position_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "render_mode": {
+            "$ref": "#/components/schemas/SliceRenderMode"
+          },
+          "show_airbox": {
+            "type": "boolean"
+          },
+          "show_airbox_vectors": {
+            "type": "boolean"
+          },
+          "show_magnetic_texture": {
+            "type": "boolean"
+          },
+          "show_mesh": {
+            "type": "boolean"
+          },
+          "show_primitives": {
+            "type": "boolean"
+          },
+          "show_quantity": {
+            "type": "boolean"
+          },
+          "show_vectors": {
+            "type": "boolean"
+          },
+          "thickness_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "quantity_id",
+          "component",
+          "axis",
+          "mode",
+          "position_percent",
+          "colormap",
+          "auto_contrast",
+          "show_primitives",
+          "show_mesh",
+          "show_magnetic_texture",
+          "show_airbox",
+          "airbox_render_mode",
+          "show_airbox_vectors",
+          "show_quantity",
+          "show_vectors",
+          "render_mode"
+        ],
+        "type": "object"
       },
       "SolverEnergyCurrentResource": {
         "properties": {
@@ -6179,6 +6428,16 @@
               }
             ]
           },
+          "slice": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SliceVisualizationPatch"
+              }
+            ]
+          },
           "slice_layer": {
             "format": "int32",
             "type": [
@@ -6336,6 +6595,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "slice": {
+            "$ref": "#/components/schemas/SliceVisualizationState",
+            "description": "2-D slice toolbar and overlay controls."
+          },
           "slice_layer": {
             "format": "int32",
             "type": "integer"
@@ -6383,6 +6646,7 @@
           "sampling",
           "fdm",
           "fem",
+          "slice",
           "clip",
           "vector_style",
           "overrides",

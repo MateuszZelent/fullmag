@@ -1,4 +1,5 @@
 import type { MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
+import type { MeshPasses } from "../../runs/control-room/meshDisplayState";
 
 interface ResolveFemGeometryRenderPassesInput {
   renderMode: RenderMode;
@@ -19,6 +20,30 @@ export interface FemGeometryPassState {
   wireframe: boolean;
   volumeMesh: boolean;
   points: boolean;
+}
+
+// ── Bridge: FemGeometryPassState ↔ MeshPasses ────────────────────────────────
+// Converts between the renderer-facing pass state (`wireframe`, `volumeMesh`)
+// and the canonical `MeshPasses` (`surfaceEdges`, `volumeEdges`).
+
+/** Convert canonical `MeshPasses` → renderer `FemGeometryPassState`. */
+export function femPassStateFromMeshPasses(passes: MeshPasses): FemGeometryPassState {
+  return {
+    surface: passes.surface,
+    wireframe: passes.surfaceEdges,
+    volumeMesh: passes.volumeEdges,
+    points: passes.points,
+  };
+}
+
+/** Convert renderer `FemGeometryPassState` → canonical `MeshPasses`. */
+export function meshPassesFromFemPassState(passes: FemGeometryPassState): MeshPasses {
+  return {
+    surface: passes.surface,
+    surfaceEdges: passes.wireframe,
+    volumeEdges: passes.volumeMesh,
+    points: passes.points,
+  };
 }
 
 export interface FemGeometryRenderPasses {

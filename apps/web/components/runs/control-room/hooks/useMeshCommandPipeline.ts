@@ -129,9 +129,13 @@ export function useMeshCommandPipeline({
     const vectorGlyphs = patch.layers?.vectors?.visible ?? patch.vector_glyphs;
     const vectorDensity = patch.layers?.vectors?.density ?? patch.vector_density;
     const maxPoints = patch.sampling?.max_points ?? patch.max_points;
+    const sliceQuantityId = patch.slice?.quantity_id;
+    const sliceComponent = patch.slice?.component;
+    const sliceMode = patch.slice?.mode;
+    const sliceLayer = patch.slice?.layer_index;
 
-    if (typeof activeQuantityId === "string" && activeQuantityId.trim().length > 0) {
-      nextSelection.quantity = activeQuantityId;
+    if (typeof (sliceQuantityId ?? activeQuantityId) === "string" && (sliceQuantityId ?? activeQuantityId)?.trim().length) {
+      nextSelection.quantity = (sliceQuantityId ?? activeQuantityId) as string;
       nextSelection.kind = kindForQuantity(nextSelection.quantity) as DisplaySelection["kind"];
       if (nextSelection.kind !== "vector_field") {
         nextSelection.view_mode = "2d";
@@ -149,6 +153,14 @@ export function useMeshCommandPipeline({
     ) {
       nextSelection.field_component = fieldComponent;
     }
+    if (
+      sliceComponent === "x" ||
+      sliceComponent === "y" ||
+      sliceComponent === "z" ||
+      sliceComponent === "magnitude"
+    ) {
+      nextSelection.field_component = sliceComponent;
+    }
     if (typeof vectorGlyphs === "boolean") {
       nextSelection.vector_glyphs = vectorGlyphs;
     }
@@ -161,8 +173,14 @@ export function useMeshCommandPipeline({
     if (patch.slice_mode === "all" || patch.slice_mode === "single") {
       nextSelection.all_layers = patch.slice_mode === "all";
     }
+    if (sliceMode === "all_layers" || sliceMode === "single") {
+      nextSelection.all_layers = sliceMode === "all_layers";
+    }
     if (typeof patch.slice_layer === "number" && Number.isFinite(patch.slice_layer)) {
       nextSelection.layer = patch.slice_layer;
+    }
+    if (typeof sliceLayer === "number" && Number.isFinite(sliceLayer)) {
+      nextSelection.layer = sliceLayer;
     }
     if (typeof maxPoints === "number" && Number.isFinite(maxPoints)) {
       nextSelection.max_points = maxPoints;

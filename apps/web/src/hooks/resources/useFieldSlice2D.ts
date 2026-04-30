@@ -9,8 +9,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { FieldSliceMeta, FieldSliceQuery } from "../../api/types";
-import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
+import type { FieldBinaryResponse, FieldSliceMeta, FieldSliceQuery } from "../../api/types";
+import {
+  getLiveSessionClient,
+  type LiveSessionClient,
+} from "../../api/client/LiveSessionClient";
+import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
 /** Decoded scalar raster from a 2-D slice. Row-major, shape [y_pixels × x_pixels]. */
@@ -43,6 +47,240 @@ export interface UseFieldSlice2DResult {
   error: LiveApiError | null;
 }
 
+export interface LoadedFieldSlice2D {
+  meta: FieldSliceMeta;
+  scalar: SliceScalarData;
+  arrows: SliceArrowData | null;
+}
+
+export interface FieldSliceRequestParams {
+  quantityId: string;
+  fieldRevision: number;
+  domainGenerationId: number;
+  query: FieldSliceQuery;
+}
+
+export interface FieldSliceRequestHandle {
+  key: string;
+  promise: Promise<LoadedFieldSlice2D>;
+  release: () => void;
+}
+
+export type FieldSliceRequestClient = Pick<
+  LiveSessionClient,
+  "fields" | "getCache"
+>;
+
+interface InflightFieldSliceRequest {
+  consumers: number;
+  controller: AbortController;
+  promise: Promise<LoadedFieldSlice2D>;
+}
+
+const inflightFieldSliceRequests = new Map<string, InflightFieldSliceRequest>();
+
+export function buildFieldSliceQueryToken(query: FieldSliceQuery): string {
+  return [
+    query.plane,
+    query.component ?? "full",
+    query.cut_world ?? "none",
+    query.cut_norm ?? "none",
+    query.x_size ?? "none",
+    query.y_size ?? "none",
+    query.max_points ?? "none",
+    query.include_arrows ? "arrows" : "scalar",
+    query.arrow_every ?? "none",
+    query.max_arrows ?? "none",
+  ].join(":");
+}
+
+export function buildFieldSliceResourceKey(params: FieldSliceRequestParams): string {
+  return `${ResourceCache.fieldKey(
+    params.quantityId,
+    params.fieldRevision,
+    params.domainGenerationId,
+    params.query.component ?? "full",
+  )}:slice:${buildFieldSliceQueryToken(params.query)}`;
+}
+
+export function buildFieldSliceRequestKey(params: FieldSliceRequestParams): string {
+  return `field-slice:${params.quantityId}:${params.fieldRevision}:${params.domainGenerationId}:${buildFieldSliceQueryToken(params.query)}`;
+}
+
+export function getFieldSliceInflightCount(): number {
+  return inflightFieldSliceRequests.size;
+}
+
+export function loadFieldSliceRequest(
+  client: FieldSliceRequestClient,
+  params: FieldSliceRequestParams,
+): FieldSliceRequestHandle {
+  const key = buildFieldSliceRequestKey(params);
+  const resourceKey = buildFieldSliceResourceKey(params);
+  const cached = client.getCache().get<LoadedFieldSlice2D>(resourceKey);
+  if (cached && cached.revision === params.fieldRevision) {
+    return {
+      key,
+      promise: Promise.resolve(cached.data),
+      release: () => undefined,
+    };
+  }
+
+  const existing = inflightFieldSliceRequests.get(key);
+  if (existing) {
+    existing.consumers += 1;
+    return createFieldSliceRequestHandle(key, existing);
+  }
+
+  const controller = new AbortController();
+  const entry: InflightFieldSliceRequest = {
+    consumers: 1,
+    controller,
+    promise: fetchDecodeAndCacheFieldSlice(
+      client,
+      params,
+      resourceKey,
+      cached?.data ?? null,
+      controller.signal,
+    ),
+  };
+  inflightFieldSliceRequests.set(key, entry);
+  void entry.promise.then(
+    () => {
+      if (inflightFieldSliceRequests.get(key) === entry) {
+        inflightFieldSliceRequests.delete(key);
+      }
+    },
+    () => {
+      if (inflightFieldSliceRequests.get(key) === entry) {
+        inflightFieldSliceRequests.delete(key);
+      }
+    },
+  );
+
+  return createFieldSliceRequestHandle(key, entry);
+}
+
+function createFieldSliceRequestHandle(
+  key: string,
+  entry: InflightFieldSliceRequest,
+): FieldSliceRequestHandle {
+  let released = false;
+  return {
+    key,
+    promise: entry.promise,
+    release: () => {
+      if (released) return;
+      released = true;
+      releaseFieldSliceRequest(key, entry);
+    },
+  };
+}
+
+async function fetchDecodeAndCacheFieldSlice(
+  client: FieldSliceRequestClient,
+  params: FieldSliceRequestParams,
+  resourceKey: string,
+  cached: LoadedFieldSlice2D | null,
+  signal: AbortSignal,
+): Promise<LoadedFieldSlice2D> {
+  const meta = await client.fields.getSliceMeta(params.quantityId, params.query, {
+    cache: "default",
+    signal,
+  });
+  throwIfAborted(signal);
+
+  const scalar = await fetchDecodeSliceScalar(
+    client,
+    params,
+    meta,
+    cached?.scalar ?? null,
+    signal,
+  );
+  const arrows = params.query.include_arrows
+    ? await fetchDecodeSliceArrows(client, params, cached?.arrows ?? null, signal)
+    : null;
+  throwIfAborted(signal);
+
+  const result: LoadedFieldSlice2D = { meta, scalar, arrows };
+  client.getCache().set(
+    resourceKey,
+    result,
+    params.fieldRevision,
+    params.domainGenerationId,
+    scalar.etag ?? meta.etag,
+  );
+  return result;
+}
+
+async function fetchDecodeSliceScalar(
+  client: FieldSliceRequestClient,
+  params: FieldSliceRequestParams,
+  meta: FieldSliceMeta,
+  cached: SliceScalarData | null,
+  signal: AbortSignal,
+): Promise<SliceScalarData> {
+  const response: FieldBinaryResponse = await client.fields.getSliceScalarResponse(
+    params.quantityId,
+    params.query,
+    cached?.etag ?? undefined,
+    { cache: "default", signal },
+  );
+  throwIfAborted(signal);
+  if (response.status === 304 && cached) {
+    return cached;
+  }
+  if (!response.buffer) {
+    throw new Error("received slice scalar 304 without cached data");
+  }
+  const decoded = decodeSliceScalar(response.buffer, meta);
+  return { ...decoded, etag: response.etag };
+}
+
+async function fetchDecodeSliceArrows(
+  client: FieldSliceRequestClient,
+  params: FieldSliceRequestParams,
+  cached: SliceArrowData | null,
+  signal: AbortSignal,
+): Promise<SliceArrowData> {
+  const response: FieldBinaryResponse = await client.fields.getSliceArrowsResponse(
+    params.quantityId,
+    params.query,
+    cached?.etag ?? undefined,
+    { cache: "default", signal },
+  );
+  throwIfAborted(signal);
+  if (response.status === 304 && cached) {
+    return cached;
+  }
+  if (!response.buffer) {
+    throw new Error("received slice arrows 304 without cached data");
+  }
+  const decoded = decodeSliceArrows(response.buffer);
+  return { ...decoded, etag: response.etag };
+}
+
+function releaseFieldSliceRequest(
+  key: string,
+  entry: InflightFieldSliceRequest,
+): void {
+  if (inflightFieldSliceRequests.get(key) !== entry) {
+    return;
+  }
+  entry.consumers -= 1;
+  if (entry.consumers > 0) return;
+  inflightFieldSliceRequests.delete(key);
+  entry.controller.abort();
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (typeof DOMException !== "undefined") {
+    throw new DOMException("field slice request aborted", "AbortError");
+  }
+  throw new Error("field slice request aborted");
+}
+
 export function useFieldSlice2D(
   quantityId: string | null,
   fieldRevision: number | null,
@@ -55,93 +293,69 @@ export function useFieldSlice2D(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);
 
-  const prevKeyRef = useRef<string | null>(null);
-  const scalarEtagRef = useRef<string | null>(null);
-  const arrowEtagRef = useRef<string | null>(null);
+  const fetchedKeyRef = useRef<string | null>(null);
+  const activeRequestRef = useRef<string | null>(null);
 
   const fetchSlice = useCallback(
-    async (
+    (
       qId: string,
       rev: number,
       domainGenId: number,
       q: FieldSliceQuery,
     ) => {
-      // Stable key for dedup — include all query params that change the rendered output.
-      const queryKey = JSON.stringify({
-        qId, rev, domainGenId,
-        plane: q.plane,
-        component: q.component ?? "full",
-        cut_world: q.cut_world,
-        cut_norm: q.cut_norm,
-        x_size: q.x_size,
-        y_size: q.y_size,
-        max_points: q.max_points,
-        include_arrows: q.include_arrows,
-        arrow_every: q.arrow_every,
-        max_arrows: q.max_arrows,
-      });
-
-      if (prevKeyRef.current === queryKey) return;
+      const params: FieldSliceRequestParams = {
+        quantityId: qId,
+        fieldRevision: rev,
+        domainGenerationId: domainGenId,
+        query: q,
+      };
+      const queryKey = buildFieldSliceRequestKey(params);
+      if (fetchedKeyRef.current === queryKey) return () => undefined;
+      activeRequestRef.current = queryKey;
       setLoading(true);
       setError(null);
 
-      try {
-        const client = getLiveSessionClient();
-
-        // 1. Fetch lightweight metadata first.
-        const newMeta = await client.fields.getSliceMeta(qId, q);
-        setMeta(newMeta);
-
-        // 2. Fetch scalar buffer, conditional on ETag.
-        const scalarResp = await client.fields.getSliceScalarResponse(
-          qId,
-          q,
-          scalarEtagRef.current ?? undefined,
-        );
-
-        if (scalarResp.status === 200 && scalarResp.buffer) {
-          const decoded = decodeSliceScalar(scalarResp.buffer, newMeta);
-          scalarEtagRef.current = scalarResp.etag;
-          setScalar({ ...decoded, etag: scalarResp.etag });
-        }
-        // On 304 the previous scalar state remains valid.
-
-        // 3. Optionally fetch arrow buffer.
-        if (q.include_arrows) {
-          const arrowResp = await client.fields.getSliceArrowsResponse(
-            qId,
-            q,
-            arrowEtagRef.current ?? undefined,
-          );
-
-          if (arrowResp.status === 200 && arrowResp.buffer) {
-            const decoded = decodeSliceArrows(arrowResp.buffer);
-            arrowEtagRef.current = arrowResp.etag;
-            setArrows({ ...decoded, etag: arrowResp.etag });
-          }
-        } else {
-          setArrows(null);
-          arrowEtagRef.current = null;
-        }
-
-        prevKeyRef.current = queryKey;
-        setLoading(false);
-      } catch (err) {
-        const apiErr =
-          err instanceof LiveApiError
-            ? err
-            : LiveApiError.networkError("field-slice-2d", err);
-        setError(apiErr);
-        setLoading(false);
-      }
+      const client = getLiveSessionClient();
+      const request = loadFieldSliceRequest(client, params);
+      let active = true;
+      request.promise
+        .then((result) => {
+          if (!active || activeRequestRef.current !== request.key) return;
+          fetchedKeyRef.current = queryKey;
+          setMeta(result.meta);
+          setScalar(result.scalar);
+          setArrows(result.arrows);
+          setLoading(false);
+        })
+        .catch((err) => {
+          if (!active || activeRequestRef.current !== request.key) return;
+          const apiErr =
+            err instanceof LiveApiError
+              ? err
+              : LiveApiError.networkError("field-slice-2d", err);
+          setError(apiErr);
+          setLoading(false);
+        });
+      return () => {
+        active = false;
+        request.release();
+      };
     },
     [],
   );
 
   useEffect(() => {
-    if (quantityId && fieldRevision != null && query) {
-      fetchSlice(quantityId, fieldRevision, domainGenerationId, query);
+    if (!quantityId || fieldRevision == null || !query) {
+      activeRequestRef.current = null;
+      fetchedKeyRef.current = null;
+      setMeta(null);
+      setScalar(null);
+      setArrows(null);
+      setLoading(false);
+      setError(null);
+      return undefined;
     }
+    return fetchSlice(quantityId, fieldRevision, domainGenerationId, query);
   }, [quantityId, fieldRevision, domainGenerationId, query, fetchSlice]);
 
   return { meta, scalar, arrows, loading, error };

@@ -10,12 +10,13 @@ use crate::schemas::display::DisplayPatch;
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::schemas::visualization_state::{
     AirboxLayerPatch, AirboxLayerState, BasicLayerPatch, BasicLayerState, ClipAxis,
-    ClipVisualizationState, DomainVisualizationState, FdmVisualizationState,
-    FemTopologyMode, FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile,
-    SamplingVisualizationState, VectorColorMode, VectorLayerDomain, VectorLayerPatch,
-    VectorLayerState, VectorStyleVisualizationState, VisualizationDiagnostics,
-    VisualizationLayerPatch, VisualizationLayerState, VisualizationScopeKind,
-    VisualizationStatePatch, VisualizationStateResource,
+    ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
+    FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
+    SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
+    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
+    VectorStyleVisualizationState, VisualizationDiagnostics, VisualizationLayerPatch,
+    VisualizationLayerState, VisualizationScopeKind, VisualizationStatePatch,
+    VisualizationStateResource,
 };
 use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
@@ -105,6 +106,7 @@ pub async fn replace_visualization_state(
         presentation.visualization_domains = Some(replacement.domains);
         presentation.visualization_sampling = Some(replacement.sampling);
         presentation.visualization_fem = Some(replacement.fem);
+        presentation.visualization_slice = Some(replacement.slice);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
         presentation.visualization_overrides = Some(replacement.overrides);
@@ -151,11 +153,7 @@ pub async fn patch_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_visualization_state_patch(&update)?;
     let display_patch = visualization_patch_to_display_patch(&update);
-    apply_display_patch(
-        state.clone(),
-        display_patch,
-    )
-    .await?;
+    apply_display_patch(state.clone(), display_patch).await?;
     {
         let mut presentation = state.current_display_presentation.write().await;
         apply_visualization_presentation_patch(&mut presentation, &update);
@@ -285,7 +283,9 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
         ));
     }
     if matches!(update.max_points, Some(0)) {
-        return Err(ApiError::bad_request("max_points must be greater than zero"));
+        return Err(ApiError::bad_request(
+            "max_points must be greater than zero",
+        ));
     }
     if let Some(sampling) = &update.sampling {
         if matches!(sampling.max_points, Some(0)) {
@@ -301,6 +301,18 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
         if matches!(sampling.max_bytes, Some(0)) {
             return Err(ApiError::bad_request(
                 "sampling.max_bytes must be greater than zero",
+            ));
+        }
+    }
+    if let Some(slice) = &update.slice {
+        if matches!(slice.position_percent, Some(value) if !(0.0..=100.0).contains(&value)) {
+            return Err(ApiError::bad_request(
+                "slice.position_percent must be between 0 and 100",
+            ));
+        }
+        if matches!(slice.thickness_percent, Some(value) if !(0.0..=100.0).contains(&value)) {
+            return Err(ApiError::bad_request(
+                "slice.thickness_percent must be between 0 and 100",
             ));
         }
     }
@@ -388,6 +400,63 @@ fn default_fem_visualization() -> FemVisualizationState {
     FemVisualizationState {
         topology_mode: FemTopologyMode::Auto,
         volume_edges_budget: 100_000,
+    }
+}
+
+fn slice_mode_from_selection(selection: &CurrentDisplaySelection) -> SliceVisualizationMode {
+    if selection.selection.all_layers {
+        SliceVisualizationMode::AllLayers
+    } else {
+        SliceVisualizationMode::Single
+    }
+}
+
+fn default_slice_visualization(
+    selection: &CurrentDisplaySelection,
+    presentation: &DisplayPresentationState,
+    layers: &VisualizationLayerState,
+) -> SliceVisualizationState {
+    let mut slice = default_slice_visualization_for_presentation(presentation, layers);
+    slice.quantity_id = selection.selection.quantity.clone();
+    slice.component = match selection.selection.field_component {
+        DisplayFieldComponent::X => FieldComponent::X,
+        DisplayFieldComponent::Y => FieldComponent::Y,
+        DisplayFieldComponent::Z => FieldComponent::Z,
+        DisplayFieldComponent::Magnitude => FieldComponent::Magnitude,
+    };
+    slice.mode = slice_mode_from_selection(selection);
+    slice.layer_index = Some(selection.selection.layer as i32);
+    slice.auto_contrast = selection.selection.auto_scale_enabled;
+    slice
+}
+
+fn default_slice_visualization_for_presentation(
+    presentation: &DisplayPresentationState,
+    layers: &VisualizationLayerState,
+) -> SliceVisualizationState {
+    SliceVisualizationState {
+        quantity_id: "m".to_string(),
+        component: FieldComponent::Magnitude,
+        axis: ClipAxis::Z,
+        mode: SliceVisualizationMode::Single,
+        layer_index: Some(0),
+        position_percent: 50.0,
+        thickness_percent: None,
+        colormap: presentation.colormap.clone(),
+        auto_contrast: true,
+        show_primitives: layers.primitives.visible,
+        show_mesh: layers.wireframe.visible || layers.volume_mesh.visible || layers.points.visible,
+        show_magnetic_texture: true,
+        show_airbox: false,
+        airbox_render_mode: SliceAirboxRenderMode::Wireframe,
+        show_airbox_vectors: false,
+        show_quantity: layers.quantity_overlay.visible,
+        show_vectors: presentation.vector_glyphs,
+        render_mode: if presentation.vector_glyphs {
+            SliceRenderMode::Vectors
+        } else {
+            SliceRenderMode::Heatmap
+        },
     }
 }
 
@@ -546,6 +615,71 @@ fn apply_visualization_presentation_patch(
         }
         presentation.visualization_fem = Some(fem);
     }
+    if let Some(slice_patch) = &update.slice {
+        let layers = presentation
+            .visualization_layers
+            .clone()
+            .unwrap_or_else(|| default_visualization_layers(presentation, 1));
+        let mut slice = presentation
+            .visualization_slice
+            .take()
+            .unwrap_or_else(|| default_slice_visualization_for_presentation(presentation, &layers));
+        if let Some(quantity_id) = &slice_patch.quantity_id {
+            slice.quantity_id = quantity_id.clone();
+        }
+        if let Some(component) = slice_patch.component {
+            slice.component = component;
+        }
+        if let Some(axis) = slice_patch.axis {
+            slice.axis = axis;
+        }
+        if let Some(mode) = slice_patch.mode {
+            slice.mode = mode;
+        }
+        if let Some(layer_index) = slice_patch.layer_index {
+            slice.layer_index = Some(layer_index);
+        }
+        if let Some(position_percent) = slice_patch.position_percent {
+            slice.position_percent = position_percent;
+        }
+        if let Some(thickness_percent) = slice_patch.thickness_percent {
+            slice.thickness_percent = Some(thickness_percent);
+        }
+        if let Some(colormap) = &slice_patch.colormap {
+            slice.colormap = colormap.clone();
+        }
+        if let Some(auto_contrast) = slice_patch.auto_contrast {
+            slice.auto_contrast = auto_contrast;
+        }
+        if let Some(show_primitives) = slice_patch.show_primitives {
+            slice.show_primitives = show_primitives;
+        }
+        if let Some(show_mesh) = slice_patch.show_mesh {
+            slice.show_mesh = show_mesh;
+        }
+        if let Some(show_magnetic_texture) = slice_patch.show_magnetic_texture {
+            slice.show_magnetic_texture = show_magnetic_texture;
+        }
+        if let Some(show_airbox) = slice_patch.show_airbox {
+            slice.show_airbox = show_airbox;
+        }
+        if let Some(airbox_render_mode) = slice_patch.airbox_render_mode {
+            slice.airbox_render_mode = airbox_render_mode;
+        }
+        if let Some(show_airbox_vectors) = slice_patch.show_airbox_vectors {
+            slice.show_airbox_vectors = show_airbox_vectors;
+        }
+        if let Some(show_quantity) = slice_patch.show_quantity {
+            slice.show_quantity = show_quantity;
+        }
+        if let Some(show_vectors) = slice_patch.show_vectors {
+            slice.show_vectors = show_vectors;
+        }
+        if let Some(render_mode) = slice_patch.render_mode {
+            slice.render_mode = render_mode;
+        }
+        presentation.visualization_slice = Some(slice);
+    }
     if let Some(clip_patch) = &update.clip {
         let mut clip = presentation
             .visualization_clip
@@ -597,6 +731,7 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
     let layers = update.layers.as_ref();
     let sampling = update.sampling.as_ref();
     let fdm = update.fdm.as_ref();
+    let slice = update.slice.as_ref();
 
     let nested_vectors = layers.and_then(|layers| layers.vectors.as_ref());
     let nested_airbox_vectors = layers
@@ -604,21 +739,27 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
         .and_then(|airbox| airbox.vectors.as_ref());
 
     DisplayPatch {
-        active_quantity_id: update
-            .active_quantity_id
-            .clone()
-            .or_else(|| quantity.as_ref().and_then(|quantity| quantity.active_quantity_id.clone())),
+        active_quantity_id: update.active_quantity_id.clone().or_else(|| {
+            quantity
+                .as_ref()
+                .and_then(|quantity| quantity.active_quantity_id.clone())
+        }),
         view_mode: update.view_mode,
-        field_component: update
-            .field_component
-            .or_else(|| quantity.as_ref().and_then(|quantity| quantity.field_component)),
-        colormap: update
-            .colormap
-            .clone()
-            .or_else(|| quantity.as_ref().and_then(|quantity| quantity.colormap.clone())),
-        auto_contrast: update
-            .auto_contrast
-            .or_else(|| quantity.as_ref().and_then(|quantity| quantity.auto_contrast)),
+        field_component: update.field_component.or_else(|| {
+            quantity
+                .as_ref()
+                .and_then(|quantity| quantity.field_component)
+        }),
+        colormap: update.colormap.clone().or_else(|| {
+            quantity
+                .as_ref()
+                .and_then(|quantity| quantity.colormap.clone())
+        }),
+        auto_contrast: update.auto_contrast.or_else(|| {
+            quantity
+                .as_ref()
+                .and_then(|quantity| quantity.auto_contrast)
+        }),
         contrast_min: update
             .contrast_min
             .or_else(|| quantity.as_ref().and_then(|quantity| quantity.contrast_min)),
@@ -635,8 +776,16 @@ fn visualization_patch_to_display_patch(update: &VisualizationStatePatch) -> Dis
                 .and_then(|vectors| vectors.density)
                 .or_else(|| nested_airbox_vectors.and_then(|vectors| vectors.density))
         }),
-        slice_mode: update.slice_mode.clone(),
-        slice_layer: update.slice_layer,
+        slice_mode: update.slice_mode.clone().or_else(|| {
+            slice.and_then(|slice| slice.mode).map(|mode| match mode {
+                SliceVisualizationMode::AllLayers => "all".to_string(),
+                SliceVisualizationMode::Slab => "slab".to_string(),
+                SliceVisualizationMode::Single => "single".to_string(),
+            })
+        }),
+        slice_layer: update
+            .slice_layer
+            .or_else(|| slice.and_then(|slice| slice.layer_index)),
         max_points: update
             .max_points
             .or_else(|| sampling.and_then(|sampling| sampling.max_points)),
@@ -760,6 +909,10 @@ pub(crate) fn build_visualization_state_response(
         .visualization_fem
         .clone()
         .unwrap_or_else(default_fem_visualization);
+    let slice = presentation
+        .visualization_slice
+        .clone()
+        .unwrap_or_else(|| default_slice_visualization(selection, presentation, &layers));
     let clip = presentation
         .visualization_clip
         .clone()
@@ -792,6 +945,7 @@ pub(crate) fn build_visualization_state_response(
             y_chosen_size: selection.selection.y_chosen_size,
         },
         fem,
+        slice,
         clip,
         vector_style,
         overrides,

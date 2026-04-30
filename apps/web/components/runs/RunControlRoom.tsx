@@ -9,6 +9,8 @@ import {
   useSlice2DToolbarStore,
   type Slice2DToolbarState,
 } from "@/src/features/slice2d";
+import { useSlice2DAirboxStore } from "./control-room/slice2DToolbarStore";
+import type { VisualizationAction } from "./control-room/visualizationReducer";
 import {
   positionPercentFromSliceIndex,
   resolveEffectiveSlicePlane,
@@ -121,14 +123,14 @@ import type {
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
-  airboxDisplayStateFromRenderMode,
-} from "./control-room/airboxDisplay";
-import {
   reduceAirboxDisplayTransaction,
-  type AirboxVectorRestoreState,
 } from "./control-room/airboxDisplayReducer";
 import {
+  resolveAirboxDisplayStateFromRenderPlan,
+} from "./control-room/resolvedRenderPlanView";
+import {
   visualizationPatchForClip,
+  visualizationPatchForFemLayers,
   visualizationPatchForOpacity,
   visualizationPatchForRenderMode,
   visualizationPatchForVectorStyle,
@@ -339,6 +341,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   );
   const slice2DToolbarPatch = useSlice2DToolbarStore((state) => state.patch);
   const patchSlice2DToolbar = useSlice2DToolbarStore((state) => state.patchToolbar);
+  const airboxStore = useSlice2DAirboxStore();
   const hasNoActiveWorkspace = ctx.error?.includes("no active local live workspace") ?? false;
 
   /* Local elapsed / throughput – updated every second via setInterval so that
@@ -1744,34 +1747,38 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     clipAxis: ctx.meshClipAxis,
     preferClipAxis: Boolean(femDiscretization),
   });
+  const canonicalSliceToolbar = ctx.resolvedRenderPlan?.slice ?? null;
 
-  const slice2DToolbar = useMemo<Slice2DToolbarState>(() => ({
-    quantityId: String(ctx.requestedPreviewQuantity ?? ctx.selectedQuantity ?? "m"),
-    component: normalizeSliceComponent(ctx.requestedPreviewComponent ?? ctx.component),
-    axis: sliceAxisFromPlane(effectiveSlicePlane),
-    mode: ctx.requestedPreviewAllLayers ? "all_layers" : "single",
-    layerIndex: ctx.sliceIndex,
-    positionPercent: femDiscretization
-      ? (ctx.meshClipPos ?? 50)
-      : positionPercentFromSliceIndex({
-        grid: ctx.previewGrid,
-        plane: effectiveSlicePlane,
-        sliceIndex: ctx.sliceIndex,
-      }),
-    thicknessPercent: null,
-    colormap: "viridis",
-    autoContrast: Boolean(ctx.requestedPreviewAutoScale ?? true),
-    showPrimitives: ctx.femViewportLayers.showPrimitives,
-    showMesh: ctx.femViewportLayers.showMesh,
-    showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
-    showAirbox: false,
-    airboxRenderMode: "wireframe",
-    showAirboxVectors: false,
-    showQuantity: ctx.femViewportLayers.showQuantity,
-    showVectors: Boolean(ctx.meshShowArrows),
-    renderMode: ctx.meshShowArrows ? "vectors" : "heatmap",
-    ...slice2DToolbarPatch,
-  }), [
+  const slice2DToolbar = useMemo<Slice2DToolbarState>(() => {
+    const fallbackToolbar: Slice2DToolbarState = {
+      quantityId: String(ctx.requestedPreviewQuantity ?? ctx.selectedQuantity ?? "m"),
+      component: normalizeSliceComponent(ctx.requestedPreviewComponent ?? ctx.component),
+      axis: sliceAxisFromPlane(effectiveSlicePlane),
+      mode: ctx.requestedPreviewAllLayers ? "all_layers" : "single",
+      layerIndex: ctx.sliceIndex,
+      positionPercent: femDiscretization
+        ? (ctx.meshClipPos ?? 50)
+        : positionPercentFromSliceIndex({
+          grid: ctx.previewGrid,
+          plane: effectiveSlicePlane,
+          sliceIndex: ctx.sliceIndex,
+        }),
+      thicknessPercent: null,
+      colormap: "viridis",
+      autoContrast: Boolean(ctx.requestedPreviewAutoScale ?? true),
+      showPrimitives: ctx.femViewportLayers.showPrimitives,
+      showMesh: ctx.femViewportLayers.showMesh,
+      showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
+      showAirbox: false,
+      airboxRenderMode: "wireframe",
+      showAirboxVectors: false,
+      showQuantity: ctx.femViewportLayers.showQuantity,
+      showVectors: Boolean(ctx.meshShowArrows),
+      renderMode: ctx.meshShowArrows ? "vectors" : "heatmap",
+    };
+    return canonicalSliceToolbar ?? { ...fallbackToolbar, ...slice2DToolbarPatch };
+  }, [
+    canonicalSliceToolbar,
     ctx.component,
     ctx.femViewportLayers,
     ctx.meshClipPos,
@@ -1790,27 +1797,24 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const airboxParts = ctx.meshParts.filter((part) => part.role === "air" || part.role === "outer_boundary");
   const airboxRepresentativePart = airboxParts[0] ?? ctx.airPart;
-  const airMeshRenderMode: ViewportMeshRenderMode | null = airboxRepresentativePart
-    ? (ctx.meshEntityViewState[airboxRepresentativePart.id]?.renderMode
-      ?? defaultMeshEntityViewState(airboxRepresentativePart).renderMode)
-    : null;
-  const airboxDisplayState = airboxRepresentativePart
-    ? (() => {
-        const modeDefaults = airboxDisplayStateFromRenderMode(airMeshRenderMode ?? "wireframe");
-        const partDefaults = defaultMeshEntityViewState(airboxRepresentativePart);
-        const current = ctx.meshEntityViewState[airboxRepresentativePart.id];
-        return {
-          ...modeDefaults,
-          geometryVisible: current?.geometryVisible ?? true,
-          surface: current?.renderPasses?.surface ?? modeDefaults.surface,
-          wireframe: current?.renderPasses?.wireframe ?? modeDefaults.wireframe,
-          points: current?.renderPasses?.points ?? modeDefaults.points,
-          wireframeScope: current?.wireframeScope ?? modeDefaults.wireframeScope ?? partDefaults.wireframeScope ?? "surface",
-          pointsScope: current?.pointsScope ?? modeDefaults.pointsScope ?? partDefaults.pointsScope ?? "surface",
-          vectorsScope: current?.vectorsScope ?? modeDefaults.vectorsScope ?? partDefaults.vectorsScope ?? "surface",
-        };
-      })()
-    : airboxDisplayStateFromRenderMode("wireframe");
+  const airboxDisplayState = resolveAirboxDisplayStateFromRenderPlan({
+    plan: ctx.resolvedRenderPlan,
+    representativePart: airboxRepresentativePart,
+    meshEntityViewState: ctx.meshEntityViewState,
+  });
+  const airMeshRenderMode: ViewportMeshRenderMode | null =
+    airboxDisplayState.renderMode === "custom" ? null : airboxDisplayState.renderMode;
+  const ribbonFemLayers = ctx.resolvedRenderPlan?.layers.femLayers ?? ctx.femViewportLayers;
+  const ribbonMeshRenderMode = ctx.resolvedRenderPlan?.layers.renderMode ?? ctx.meshRenderMode;
+  const ribbonMeshOpacity = ctx.resolvedRenderPlan?.layers.meshOpacityPercent ?? ctx.meshOpacity;
+  const ribbonMeshShowArrows = ctx.resolvedRenderPlan?.layers.vectorsVisible ?? ctx.meshShowArrows;
+  const ribbonVectorDomainFilter =
+    ctx.resolvedRenderPlan?.layers.vectorDomainFilter ?? ctx.femVectorDomainFilter;
+  const ribbonVectorStyle = ctx.resolvedRenderPlan?.vectorStyle;
+  const ribbonAirboxVisible = ctx.resolvedRenderPlan?.layers.airbox.visible ?? ctx.airMeshVisible;
+  const ribbonAirMeshOpacity =
+    ctx.resolvedRenderPlan?.layers.airbox.opacityPercent ?? ctx.airMeshOpacity;
+  const ribbonClip = ctx.resolvedRenderPlan?.clip;
   const handleRibbonSlice2DToolbar = (patch: Partial<Slice2DToolbarState>) => {
     patchSlice2DToolbar(patch);
     if (patch.quantityId) {
@@ -1876,26 +1880,32 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       }
     }
     if (typeof patch.showPrimitives === "boolean") {
-      ctx.setFemViewportLayers((previous) => ({ ...previous, showPrimitives: patch.showPrimitives ?? previous.showPrimitives }));
+      void ctx.patchDisplay(visualizationPatchForFemLayers({
+        ...ribbonFemLayers,
+        showPrimitives: patch.showPrimitives,
+      }));
     }
     if (typeof patch.showMesh === "boolean") {
-      ctx.setFemViewportLayers((previous) => ({ ...previous, showMesh: patch.showMesh ?? previous.showMesh }));
+      void ctx.patchDisplay(visualizationPatchForFemLayers({
+        ...ribbonFemLayers,
+        showMesh: patch.showMesh,
+      }));
     }
     if (typeof patch.showMagneticTexture === "boolean") {
-      ctx.setFemViewportLayers((previous) => ({
-        ...previous,
-        showMagneticTexture: patch.showMagneticTexture ?? previous.showMagneticTexture,
-        showQuantity: patch.showMagneticTexture ? false : previous.showQuantity,
+      void ctx.patchDisplay(visualizationPatchForFemLayers({
+        ...ribbonFemLayers,
+        showMagneticTexture: patch.showMagneticTexture,
+        showQuantity: patch.showMagneticTexture ? false : ribbonFemLayers.showQuantity,
       }));
       if (patch.showMagneticTexture) {
         ctx.requestPreviewQuantity("m");
       }
     }
     if (typeof patch.showQuantity === "boolean") {
-      ctx.setFemViewportLayers((previous) => ({
-        ...previous,
-        showQuantity: patch.showQuantity ?? previous.showQuantity,
-        showMagneticTexture: patch.showQuantity ? false : previous.showMagneticTexture,
+      void ctx.patchDisplay(visualizationPatchForFemLayers({
+        ...ribbonFemLayers,
+        showQuantity: patch.showQuantity,
+        showMagneticTexture: patch.showQuantity ? false : ribbonFemLayers.showMagneticTexture,
       }));
     }
   };
@@ -1921,18 +1931,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     });
   };
 
-  const airboxVectorDomainRef = useRef<AirboxVectorRestoreState | null>(null);
-
   const handleRibbonAirboxDisplay = (patch: AirboxDisplayPatch) => {
     const transaction = reduceAirboxDisplayTransaction({
       patch,
       airboxParts,
       meshEntityViewState: ctx.meshEntityViewState,
-      vectorDomainFilter: ctx.femVectorDomainFilter,
-      ferromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
-      vectorRestoreState: airboxVectorDomainRef.current,
     });
-    airboxVectorDomainRef.current = transaction.vectorRestoreState;
     if (transaction.displayPatch) {
       void ctx.patchDisplay(transaction.displayPatch);
     }
@@ -1940,6 +1944,32 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.setMeshEntityViewState(transaction.meshEntityViewState);
     }
   };
+
+  /**
+   * Handle a VisualizationAction dispatched from ribbon contributions.
+   *
+   * 2D-only actions (airbox.setVisible2D) update the local Zustand store only
+   * and do NOT call ctx.patchDisplay — this prevents 3D geometry rebuilds when
+   * the 3D viewport is not active.  If sync2D3D is enabled the 3D display is
+   * also patched.
+   */
+  const handleDispatchVisualization = useCallback((action: VisualizationAction) => {
+    switch (action.type) {
+      case "airbox.setVisible2D": {
+        // Update local 2D-only state — no API call, no 3D geometry invalidation.
+        airboxStore.setShowAirbox2D(action.visible);
+        patchSlice2DToolbar({ showAirbox: action.visible });
+        // Optional: also patch 3D if user opted in.
+        if (airboxStore.sync2D3D) {
+          handleRibbonAirboxDisplay({ visible: action.visible });
+        }
+        return;
+      }
+      default:
+        // For all other actions fall back to the API patch path.
+        break;
+    }
+  }, [airboxStore, handleRibbonAirboxDisplay, patchSlice2DToolbar]);
 
   const selectedObjectPartIds = ctx.selectedObjectId
     ? ctx.meshParts
@@ -2048,21 +2078,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleRibbonMeshRenderMode = useCallback((nextMode: ViewportMeshRenderMode) => {
     void ctx.patchDisplay(visualizationPatchForRenderMode(nextMode));
-    const nonAirParts = ctx.meshParts.filter(
-      (part) => part.role !== "air" && part.role !== "outer_boundary",
-    );
-    if (nonAirParts.length === 0) return;
-    ctx.setMeshEntityViewState((previous) => {
-      let changed = false;
-      const next = { ...previous };
-      for (const part of nonAirParts) {
-        const current = next[part.id] ?? defaultMeshEntityViewState(part);
-        if (current.renderMode === nextMode) continue;
-        next[part.id] = { ...current, renderMode: nextMode };
-        changed = true;
-      }
-      return changed ? next : previous;
-    });
   }, [ctx]);
 
   /* ── Loading state ── */
@@ -2182,7 +2197,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onViewChange={ctx.handleViewModeChange}
         onSidebarToggle={() => ctx.setSidebarCollapsed((v) => !v)}
         onCreateVisualizationPreset={handleCreateVisualizationPreset}
-        airboxVisible={ctx.airMeshVisible}
+        airboxVisible={ribbonAirboxVisible}
         viewportAxesScope={ctx.viewportAxesScope}
         universeWireframeVisible={ctx.universeWireframeVisible}
         viewportLegendVisible={ctx.viewportLegendVisible}
@@ -2190,7 +2205,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           void ctx.patchDisplay({
             layers: {
               airbox: {
-                visible: !ctx.airMeshVisible,
+                visible: !ribbonAirboxVisible,
               },
             },
           })
@@ -2206,29 +2221,31 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         requestedPreviewMaxPoints={ctx.requestedPreviewMaxPoints}
         requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
         requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
-        primitiveVisible={ctx.femViewportLayers.showPrimitives}
-        magneticTextureVisible={ctx.femViewportLayers.showMagneticTexture}
+        primitiveVisible={ribbonFemLayers.showPrimitives}
+        magneticTextureVisible={ribbonFemLayers.showMagneticTexture}
         magneticTextureDensity={ctx.femTextureDownsampleCells}
-        quantityShaderVisible={ctx.femViewportLayers.showQuantity}
+        quantityShaderVisible={ribbonFemLayers.showQuantity}
         femVectorGlyphBudget={ctx.femVectorGlyphBudget}
-        meshRenderMode={ctx.meshRenderMode}
-        meshOpacity={ctx.meshOpacity}
+        meshRenderMode={ribbonMeshRenderMode}
+        meshOpacity={ribbonMeshOpacity}
         selectedObjectTextureVisible={selectedObjectTextureVisible}
         selectedObjectOpacity={selectedObjectOpacity}
         selectedObjectRenderMode={selectedObjectRenderMode}
-        meshClipEnabled={ctx.meshClipEnabled}
-        meshClipAxis={ctx.meshClipAxis}
-        meshClipPos={ctx.meshClipPos}
-        meshClipFlip={ctx.meshClipFlip}
-        meshShowArrows={ctx.meshShowArrows}
-        femArrowColorMode={ctx.femArrowColorMode}
-        femArrowMonoColor={ctx.femArrowMonoColor}
-        femArrowAlpha={ctx.femArrowAlpha}
-        femArrowLengthScale={ctx.femArrowLengthScale}
-        femArrowThickness={ctx.femArrowThickness}
-        femVectorDomainFilter={ctx.femVectorDomainFilter}
-        femFerromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
-        airMeshOpacity={ctx.airMeshOpacity}
+        meshClipEnabled={ribbonClip?.enabled ?? ctx.meshClipEnabled}
+        meshClipAxis={ribbonClip?.axis ?? ctx.meshClipAxis}
+        meshClipPos={ribbonClip?.positionPercent ?? ctx.meshClipPos}
+        meshClipFlip={ribbonClip?.flipped ?? ctx.meshClipFlip}
+        meshShowArrows={ribbonMeshShowArrows}
+        femArrowColorMode={ribbonVectorStyle?.colorMode ?? ctx.femArrowColorMode}
+        femArrowMonoColor={ribbonVectorStyle?.monoColor ?? ctx.femArrowMonoColor}
+        femArrowAlpha={ribbonVectorStyle?.alpha ?? ctx.femArrowAlpha}
+        femArrowLengthScale={ribbonVectorStyle?.lengthScale ?? ctx.femArrowLengthScale}
+        femArrowThickness={ribbonVectorStyle?.thickness ?? ctx.femArrowThickness}
+        femVectorDomainFilter={ribbonVectorDomainFilter}
+        femFerromagnetVisibilityMode={
+          ribbonVectorStyle?.ferromagnetVisibility ?? ctx.femFerromagnetVisibilityMode
+        }
+        airMeshOpacity={ribbonAirMeshOpacity}
         airMeshRenderMode={airMeshRenderMode}
         airMeshGeometryVisible={airboxDisplayState.geometryVisible}
         airMeshSurfaceVisible={airboxDisplayState.surface}
@@ -2256,16 +2273,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
         onPatchVisualizationState={(patch) => { void ctx.patchDisplay(patch); }}
         onSetPrimitiveVisible={(visible) =>
-          ctx.setFemViewportLayers((previous) => ({
-            ...previous,
+          void ctx.patchDisplay(visualizationPatchForFemLayers({
+            ...ribbonFemLayers,
             showPrimitives: visible,
           }))
         }
         onSetMagneticTextureVisible={(visible) => {
-          ctx.setFemViewportLayers((previous) => ({
-            ...previous,
+          void ctx.patchDisplay(visualizationPatchForFemLayers({
+            ...ribbonFemLayers,
             showMagneticTexture: visible,
-            showQuantity: visible ? false : previous.showQuantity,
+            showQuantity: visible ? false : ribbonFemLayers.showQuantity,
           }));
           if (visible) {
             ctx.requestPreviewQuantity("m");
@@ -2273,10 +2290,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         }}
         onSetMagneticTextureDensity={ctx.setFemTextureDownsampleCells}
         onSetQuantityShaderVisible={(visible) =>
-          ctx.setFemViewportLayers((previous) => ({
-            ...previous,
+          void ctx.patchDisplay(visualizationPatchForFemLayers({
+            ...ribbonFemLayers,
             showQuantity: visible,
-            showMagneticTexture: visible ? false : previous.showMagneticTexture,
+            showMagneticTexture: visible ? false : ribbonFemLayers.showMagneticTexture,
           }))
         }
         onCapture={ctx.handleCapture}
@@ -2353,6 +2370,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetFemArrowStyle={handleRibbonFemArrowStyle}
         onSetAirboxDisplay={handleRibbonAirboxDisplay}
         onSetSlice2DToolbar={handleRibbonSlice2DToolbar}
+        onDispatchVisualization={handleDispatchVisualization}
         onSetTextureTransformMode={handleSetTextureTransformMode}
         onBuilderAddPrimitive={handleBuilderAddPrimitive}
         onBuilderBuildGeometry={handleBuilderBuildGeometry}

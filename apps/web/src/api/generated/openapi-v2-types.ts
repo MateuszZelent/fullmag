@@ -2716,7 +2716,59 @@ export interface components {
             workspace_root: string;
         };
         /** @enum {string} */
+        SliceAirboxRenderMode: "surface" | "wireframe" | "surface+edges" | "points";
+        /** @enum {string} */
         SlicePlane: "xy" | "xz" | "yz";
+        /** @enum {string} */
+        SliceRenderMode: "heatmap" | "contour" | "heatmap+contour" | "vectors" | "mesh-overlay";
+        /** @enum {string} */
+        SliceVisualizationMode: "single" | "slab" | "all_layers";
+        SliceVisualizationPatch: {
+            airbox_render_mode?: null | components["schemas"]["SliceAirboxRenderMode"];
+            auto_contrast?: boolean | null;
+            axis?: null | components["schemas"]["ClipAxis"];
+            colormap?: string | null;
+            component?: null | components["schemas"]["FieldComponent"];
+            /** Format: int32 */
+            layer_index?: number | null;
+            mode?: null | components["schemas"]["SliceVisualizationMode"];
+            /** Format: double */
+            position_percent?: number | null;
+            quantity_id?: string | null;
+            render_mode?: null | components["schemas"]["SliceRenderMode"];
+            show_airbox?: boolean | null;
+            show_airbox_vectors?: boolean | null;
+            show_magnetic_texture?: boolean | null;
+            show_mesh?: boolean | null;
+            show_primitives?: boolean | null;
+            show_quantity?: boolean | null;
+            show_vectors?: boolean | null;
+            /** Format: double */
+            thickness_percent?: number | null;
+        };
+        SliceVisualizationState: {
+            airbox_render_mode: components["schemas"]["SliceAirboxRenderMode"];
+            auto_contrast: boolean;
+            axis: components["schemas"]["ClipAxis"];
+            colormap: string;
+            component: components["schemas"]["FieldComponent"];
+            /** Format: int32 */
+            layer_index?: number | null;
+            mode: components["schemas"]["SliceVisualizationMode"];
+            /** Format: double */
+            position_percent: number;
+            quantity_id: string;
+            render_mode: components["schemas"]["SliceRenderMode"];
+            show_airbox: boolean;
+            show_airbox_vectors: boolean;
+            show_magnetic_texture: boolean;
+            show_mesh: boolean;
+            show_primitives: boolean;
+            show_quantity: boolean;
+            show_vectors: boolean;
+            /** Format: double */
+            thickness_percent?: number | null;
+        };
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;
@@ -3010,6 +3062,7 @@ export interface components {
             max_points?: number | null;
             quantity?: null | components["schemas"]["QuantityVisualizationPatch"];
             sampling?: null | components["schemas"]["SamplingVisualizationPatch"];
+            slice?: null | components["schemas"]["SliceVisualizationPatch"];
             /** Format: int32 */
             slice_layer?: number | null;
             slice_mode?: string | null;
@@ -3075,6 +3128,8 @@ export interface components {
              * @description Schema semver for consumers to detect payload shape changes.
              */
             schema_version: number;
+            /** @description 2-D slice toolbar and overlay controls. */
+            slice: components["schemas"]["SliceVisualizationState"];
             /** Format: int32 */
             slice_layer: number;
             slice_mode: string;

@@ -60,6 +60,8 @@ export type SliceCacheState = "hit" | "miss";
 
 const MAX_TOPOLOGY_CACHE_ENTRIES = 18;
 const MAX_FIELD_CACHE_ENTRIES = 48;
+const MAX_TOPOLOGY_CACHE_BYTES = 64 * 1024 * 1024;
+const MAX_FIELD_CACHE_BYTES = 128 * 1024 * 1024;
 
 function getLruValue<T>(cache: Map<string, T>, key: string): T | null {
   const existing = cache.get(key);
@@ -71,12 +73,19 @@ function getLruValue<T>(cache: Map<string, T>, key: string): T | null {
   return existing;
 }
 
-function setLruValue<T>(cache: Map<string, T>, key: string, value: T, maxEntries: number): void {
+function setLruValue<T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  maxEntries: number,
+  totalBytes: () => number,
+  maxBytes: number,
+): void {
   if (cache.has(key)) {
     cache.delete(key);
   }
   cache.set(key, value);
-  while (cache.size > maxEntries) {
+  while (cache.size > maxEntries || totalBytes() > maxBytes) {
     const oldestKey = cache.keys().next().value as string | undefined;
     if (!oldestKey) {
       break;
@@ -135,14 +144,14 @@ function publishSliceCacheBuckets(): void {
     label: "Slice topology cache",
     entries: sliceTopologyCache.size,
     estimatedBytes: totalTopologyCacheBytes(),
-    capacity: MAX_TOPOLOGY_CACHE_ENTRIES,
+    capacity: MAX_TOPOLOGY_CACHE_BYTES,
   });
   updateFrontendResourceBucket({
     id: "slice-field-cache",
     label: "Slice field cache",
     entries: sliceFieldCache.size,
     estimatedBytes: totalFieldCacheBytes(),
-    capacity: MAX_FIELD_CACHE_ENTRIES,
+    capacity: MAX_FIELD_CACHE_BYTES,
   });
 }
 
@@ -151,7 +160,14 @@ export function readSliceTopologyCache(key: string): SliceTopologyCollection | n
 }
 
 export function writeSliceTopologyCache(key: string, value: SliceTopologyCollection): void {
-  setLruValue(sliceTopologyCache, key, value, MAX_TOPOLOGY_CACHE_ENTRIES);
+  setLruValue(
+    sliceTopologyCache,
+    key,
+    value,
+    MAX_TOPOLOGY_CACHE_ENTRIES,
+    totalTopologyCacheBytes,
+    MAX_TOPOLOGY_CACHE_BYTES,
+  );
   publishSliceCacheBuckets();
 }
 
@@ -160,7 +176,14 @@ export function readSliceFieldCache(key: string): SliceCollection | null {
 }
 
 export function writeSliceFieldCache(key: string, value: SliceCollection): void {
-  setLruValue(sliceFieldCache, key, value, MAX_FIELD_CACHE_ENTRIES);
+  setLruValue(
+    sliceFieldCache,
+    key,
+    value,
+    MAX_FIELD_CACHE_ENTRIES,
+    totalFieldCacheBytes,
+    MAX_FIELD_CACHE_BYTES,
+  );
   publishSliceCacheBuckets();
 }
 
@@ -195,6 +218,8 @@ export function getSliceCacheSnapshot(): {
   fieldEntries: number;
   topologyCapacity: number;
   fieldCapacity: number;
+  topologyMaxBytes: number;
+  fieldMaxBytes: number;
   topologyEstimatedBytes: number;
   fieldEstimatedBytes: number;
 } {
@@ -203,6 +228,8 @@ export function getSliceCacheSnapshot(): {
     fieldEntries: sliceFieldCache.size,
     topologyCapacity: MAX_TOPOLOGY_CACHE_ENTRIES,
     fieldCapacity: MAX_FIELD_CACHE_ENTRIES,
+    topologyMaxBytes: MAX_TOPOLOGY_CACHE_BYTES,
+    fieldMaxBytes: MAX_FIELD_CACHE_BYTES,
     topologyEstimatedBytes: totalTopologyCacheBytes(),
     fieldEstimatedBytes: totalFieldCacheBytes(),
   };

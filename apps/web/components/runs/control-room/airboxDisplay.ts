@@ -3,13 +3,26 @@ import type {
   AirboxDisplayScope,
   ViewportMeshRenderMode,
 } from "@/components/shell/ribbon/command-registry";
+import {
+  bestPresetFromPasses,
+  passesFromPreset,
+} from "./meshDisplayState";
 
 export interface AirboxDisplayState {
   geometryVisible: boolean;
   surface: boolean;
   wireframe: boolean;
   points: boolean;
-  renderMode: ViewportMeshRenderMode;
+  /**
+   * Derived from the canonical pass state via `bestPresetFromPasses()`.
+   * May be `"custom"` when the active passes do not map to any named preset
+   * (e.g. surface + points, wireframe + points).
+   *
+   * The Ribbon uses this to decide whether to show a preset radio or individual
+   * pass checkboxes.  The renderer ignores this field when `renderPasses` is
+   * also set on the part.
+   */
+  renderMode: ViewportMeshRenderMode | "custom";
   wireframeScope: AirboxDisplayScope;
   pointsScope: AirboxDisplayScope;
   vectorsScope: AirboxDisplayScope;
@@ -30,11 +43,12 @@ export function airboxDisplayStateFromRenderMode(
       vectorsScope: "surface",
     };
   }
+  const passes = passesFromPreset(renderMode);
   return {
     geometryVisible: true,
-    surface: renderMode === "surface" || renderMode === "surface+edges",
-    wireframe: renderMode === "wireframe" || renderMode === "surface+edges",
-    points: renderMode === "points",
+    surface: passes.surface,
+    wireframe: passes.surfaceEdges,
+    points: passes.points,
     renderMode,
     wireframeScope: "surface",
     pointsScope: "surface",
@@ -46,7 +60,12 @@ export function resolveAirboxDisplayState(
   current: AirboxDisplayState,
   patch: AirboxDisplayPatch,
 ): AirboxDisplayState {
-  const modeDefaults = airboxDisplayStateFromRenderMode(current.renderMode);
+  // When the current renderMode is "custom" (e.g. surface+points), fall back to
+  // "surface+edges" for the purpose of computing mode defaults — the canonical
+  // pass state (surface/wireframe/points) is read directly from `current` below.
+  const canonicalMode: ViewportMeshRenderMode =
+    current.renderMode === "custom" ? "surface+edges" : current.renderMode;
+  const modeDefaults = airboxDisplayStateFromRenderMode(canonicalMode);
   const normalizedCurrent = {
     ...modeDefaults,
     geometryVisible: current.geometryVisible,
@@ -100,21 +119,14 @@ export function resolveAirboxDisplayState(
     geometryVisible = true;
   }
 
-  const renderMode: ViewportMeshRenderMode = points
-    ? shaded || wireframe
-      ? shaded && wireframe
-        ? "surface+edges"
-        : shaded
-          ? "surface"
-          : "wireframe"
-      : "points"
-    : shaded && wireframe
-      ? "surface+edges"
-      : shaded
-        ? "surface"
-        : wireframe
-          ? "wireframe"
-          : base.renderMode;
+  const renderMode = geometryVisible
+    ? bestPresetFromPasses({
+        surface: shaded,
+        surfaceEdges: wireframe,
+        volumeEdges: false,
+        points,
+      })
+    : base.renderMode; // preserve last-known preset when geometry is hidden
 
   return {
     geometryVisible,
@@ -128,10 +140,14 @@ export function resolveAirboxDisplayState(
   };
 }
 
+/**
+ * Convenience helper for ribbon handlers that need only the derived preset label.
+ * Returns `"custom"` when the resulting passes don't match any named preset.
+ */
 export function resolveAirboxRenderMode(
   currentMode: ViewportMeshRenderMode,
   patch: AirboxDisplayPatch,
-): ViewportMeshRenderMode {
+): ViewportMeshRenderMode | "custom" {
   return resolveAirboxDisplayState(
     { ...airboxDisplayStateFromRenderMode(currentMode), geometryVisible: true },
     patch,

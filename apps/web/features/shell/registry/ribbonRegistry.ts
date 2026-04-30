@@ -25,6 +25,7 @@ import type {
 } from "@/components/shell/ribbon/command-registry";
 import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
 import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
+import type { VisualizationAction } from "@/components/runs/control-room/visualizationReducer";
 import type { RibbonMenuNode, RibbonNodeState } from "./ribbonMenuTypes";
 
 // ---------------------------------------------------------------------------
@@ -235,6 +236,12 @@ export interface RibbonBuildContext {
   run: (command: RibbonCommand) => void;
   /** Check whether a command can currently execute. */
   can: (command: RibbonCommand) => boolean;
+  /**
+   * Dispatch a visualization action that must NOT cause 3D geometry rebuilds
+   * when the 3D viewport is not active (e.g. toggling 2D airbox visibility).
+   * Handlers that need both 2D and 3D effects should check `sync2D3D`.
+   */
+  dispatchVisualization?: (action: VisualizationAction) => void;
 
   // ── Geometry Builder state ──
   builderEnabled: boolean;

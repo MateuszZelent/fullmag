@@ -9,6 +9,7 @@ import {
   renderModeFromVisualizationState,
   renderPassesFromVisualizationState,
   resolveRenderPlanFromVisualizationState,
+  sliceToolbarFromVisualizationState,
   visualizationPatchForClip,
   visualizationPatchForFemLayers,
   visualizationPatchForOpacity,
@@ -67,6 +68,26 @@ function state(
       topology_mode: "auto",
       volume_edges_budget: 100_000,
     },
+    slice: {
+      quantity_id: "m",
+      component: "magnitude",
+      axis: "z",
+      mode: "single",
+      layer_index: 0,
+      position_percent: 50,
+      thickness_percent: null,
+      colormap: "viridis",
+      auto_contrast: true,
+      show_primitives: true,
+      show_mesh: false,
+      show_magnetic_texture: true,
+      show_airbox: false,
+      airbox_render_mode: "wireframe",
+      show_airbox_vectors: false,
+      show_quantity: true,
+      show_vectors: false,
+      render_mode: "heatmap",
+    },
     clip: {
       enabled: false,
       axis: "x",
@@ -113,6 +134,43 @@ describe("visualization state local sync", () => {
     expect(renderModeFromVisualizationState(state({
       layers: { ...state().layers, points: { visible: true, opacity: 1 } },
     }))).toBe("points");
+  });
+
+  it("derives the 2D slice toolbar from canonical visualization slice state", () => {
+    const next = sliceToolbarFromVisualizationState(state({
+      slice: {
+        quantity_id: "H_eff",
+        component: "x",
+        axis: "y",
+        mode: "slab",
+        layer_index: 4,
+        position_percent: 25,
+        thickness_percent: 12,
+        colormap: "magma",
+        auto_contrast: false,
+        show_primitives: false,
+        show_mesh: true,
+        show_magnetic_texture: false,
+        show_airbox: true,
+        airbox_render_mode: "points",
+        show_airbox_vectors: true,
+        show_quantity: true,
+        show_vectors: true,
+        render_mode: "vectors",
+      },
+    }));
+
+    expect(next).toMatchObject({
+      quantityId: "H_eff",
+      component: "x",
+      axis: "y",
+      mode: "slab",
+      layerIndex: 4,
+      positionPercent: 25,
+      airboxRenderMode: "points",
+      showAirboxVectors: true,
+      renderMode: "vectors",
+    });
   });
 
   it("keeps magnetic texture independent while syncing canonical layers", () => {

@@ -67,6 +67,9 @@ import {
   visualizationPatchForOpacity,
   visualizationPatchForRenderMode,
 } from "@/components/runs/control-room/visualizationStateSync";
+import {
+  resolveEffectiveFemMeshEntityViewStateFromRenderPlan,
+} from "@/components/runs/control-room/resolvedRenderPlanView";
 import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 import type { ViewportCameraState } from "@/features/workspace-graph";
@@ -749,8 +752,10 @@ export function useViewportDataBridge() {
     visibleObjectIds,
   ]);
 
+  const renderPlan = ctx.resolvedRenderPlan;
+
   /* ── FEM layer state ── */
-  const femLayerState = ctx.femViewportLayers;
+  const femLayerState = renderPlan?.layers.femLayers ?? ctx.femViewportLayers;
   const geometryAuthoringShowPrimitives = geometryViewportPresetActive
     ? true
     : showGeometryAuthoringViewport
@@ -803,11 +808,11 @@ export function useViewportDataBridge() {
       deriveFemLayerRenderState({
         layers: femLayerState,
         objectOverlays: displayObjectOverlays,
-        meshOpacity: ctx.meshOpacity,
+        meshOpacity: renderPlan?.layers.meshOpacityPercent ?? ctx.meshOpacity,
         colorField: ctx.femColorField,
         magneticTextureColorField:
           ctx.selectedQuantity === "m" ? "orientation" : "none",
-        showArrows: ctx.meshShowArrows,
+        showArrows: renderPlan?.layers.vectorsVisible ?? ctx.meshShowArrows,
       }),
     [
       ctx.femColorField,
@@ -816,6 +821,8 @@ export function useViewportDataBridge() {
       ctx.selectedQuantity,
       displayObjectOverlays,
       femLayerState,
+      renderPlan?.layers.meshOpacityPercent,
+      renderPlan?.layers.vectorsVisible,
     ],
   );
   const femObjectOverlaysForRender = femLayerRenderState.objectOverlays;
@@ -827,6 +834,16 @@ export function useViewportDataBridge() {
 
   const effectiveFemMeshEntityViewState = useMemo(() => {
     if (!femDiscretization || ctx.meshParts.length === 0) return ctx.meshEntityViewState;
+    if (renderPlan) {
+      return resolveEffectiveFemMeshEntityViewStateFromRenderPlan({
+        plan: renderPlan,
+        meshParts: ctx.meshParts,
+        meshEntityViewState: ctx.meshEntityViewState,
+        fallbackMeshRenderMode: ctx.meshRenderMode,
+        fallbackMeshOpacity: ctx.meshOpacity,
+        fallbackSelectedQuantity: ctx.selectedQuantity,
+      });
+    }
     const next: MeshEntityViewStateMap = { ...ctx.meshEntityViewState };
     const resolvedGlobalMeshRenderMode: MeshEntityViewState["renderMode"] =
       ctx.meshRenderMode === "wireframe" || ctx.meshRenderMode === "surface+edges"
@@ -890,6 +907,7 @@ export function useViewportDataBridge() {
     femLayerState.showMagneticTexture,
     femLayerState.showPrimitives,
     femLayerState.showQuantity,
+    renderPlan,
   ]);
 
   const patchMeshPartViewState = useCallback(
@@ -1048,30 +1066,28 @@ export function useViewportDataBridge() {
         }));
       }
       if (typeof patch.showMagneticTexture === "boolean") {
-        ctx.setFemViewportLayers((previous) => ({
-          ...previous,
-          showMagneticTexture: patch.showMagneticTexture ?? previous.showMagneticTexture,
-          showQuantity: patch.showMagneticTexture ? false : previous.showQuantity,
+        void patchDisplay(visualizationPatchForFemLayers({
+          ...femLayerState,
+          showMagneticTexture: patch.showMagneticTexture,
+          showQuantity: patch.showMagneticTexture ? false : femLayerState.showQuantity,
         }));
         if (patch.showMagneticTexture) {
           ctx.requestPreviewQuantity("m");
         }
       }
       if (typeof patch.showQuantity === "boolean") {
-        ctx.setFemViewportLayers((previous) =>
-          patch.showQuantity
-            ? { ...previous, showMagneticTexture: false }
-            : previous,
-        );
         void patchDisplay(visualizationPatchForFemLayers({
           ...femLayerState,
           showQuantity: patch.showQuantity,
+          showMagneticTexture: patch.showQuantity ? false : femLayerState.showMagneticTexture,
         }));
       }
     },
     [
       ctx,
+      femLayerState.showMesh,
       femLayerState.showMagneticTexture,
+      femLayerState.showPrimitives,
       femLayerState.showQuantity,
       handleFemSliceComponentChange,
       patchDisplay,
@@ -1205,17 +1221,17 @@ export function useViewportDataBridge() {
 
   const unifiedSliceDisplaySelection = useMemo<DisplaySelection>(
     () => ({
-      active_quantity_id: String(sliceQuantityId ?? ctx.selectedQuantity),
+      active_quantity_id: String(renderPlan?.slice.quantityId ?? sliceQuantityId ?? ctx.selectedQuantity),
       view_mode: "2d",
-      field_component: toDisplayFieldComponent(sliceComponent),
-      colormap: "viridis",
-      auto_contrast: ctx.requestedPreviewAutoScale,
+      field_component: renderPlan?.slice.component ?? toDisplayFieldComponent(sliceComponent),
+      colormap: renderPlan?.slice.colormap ?? "viridis",
+      auto_contrast: renderPlan?.slice.autoContrast ?? ctx.requestedPreviewAutoScale,
       contrast_min: null,
       contrast_max: null,
-      vector_glyphs: ctx.meshShowArrows,
+      vector_glyphs: renderPlan?.slice.showVectors ?? ctx.meshShowArrows,
       vector_density: ctx.requestedPreviewEveryN,
-      slice_mode: ctx.requestedPreviewAllLayers ? "all_layers" : "single",
-      slice_layer: ctx.sliceIndex,
+      slice_mode: renderPlan?.slice.mode ?? (ctx.requestedPreviewAllLayers ? "all_layers" : "single"),
+      slice_layer: renderPlan?.slice.layerIndex ?? ctx.sliceIndex,
       max_points: ctx.requestedPreviewMaxPoints,
       x_chosen_size: ctx.requestedPreviewXChosenSize,
       y_chosen_size: ctx.requestedPreviewYChosenSize,
@@ -1230,6 +1246,7 @@ export function useViewportDataBridge() {
       ctx.requestedPreviewYChosenSize,
       ctx.selectedQuantity,
       ctx.sliceIndex,
+      renderPlan?.slice,
       sliceComponent,
       sliceQuantityId,
     ],
@@ -1237,12 +1254,12 @@ export function useViewportDataBridge() {
 
   const slice2DPlaneOptions = useMemo(
     () => ({
-      axis: sliceAxisFromPlane(effectiveSlicePlane),
-      positionPercent: femDiscretization
+      axis: renderPlan?.slice.axis ?? sliceAxisFromPlane(effectiveSlicePlane),
+      positionPercent: renderPlan?.slice.positionPercent ?? (femDiscretization
         ? (ctx.meshClipPos ?? 50)
-        : sliceSampling.cutNorm * 100,
+        : sliceSampling.cutNorm * 100),
     }),
-    [ctx.meshClipPos, effectiveSlicePlane, femDiscretization, sliceSampling.cutNorm],
+    [ctx.meshClipPos, effectiveSlicePlane, femDiscretization, renderPlan?.slice, sliceSampling.cutNorm],
   );
 
   const slice2DBaseModel = useSlice2DModel({
@@ -1266,7 +1283,7 @@ export function useViewportDataBridge() {
           showQuantity: ctx.femViewportLayers.showQuantity,
         }
       : slice2DBaseModel.toolbar;
-    const toolbar = { ...layerControlledToolbar, ...slice2DToolbarPatch };
+    const toolbar = renderPlan?.slice ?? { ...layerControlledToolbar, ...slice2DToolbarPatch };
     return {
       ...slice2DBaseModel,
       toolbar,
@@ -1280,7 +1297,7 @@ export function useViewportDataBridge() {
         showVectors: toolbar.showVectors,
       },
     };
-  }, [ctx.femViewportLayers, femDiscretization, slice2DBaseModel, slice2DToolbarPatch]);
+  }, [ctx.femViewportLayers, femDiscretization, renderPlan?.slice, slice2DBaseModel, slice2DToolbarPatch]);
 
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,
@@ -1535,7 +1552,6 @@ export function useViewportDataBridge() {
   const viewport3DInteractionMode: Viewport3DInteractionMode = geometryViewportPresetActive
     ? toViewportInteractionMode(builderViewportTool)
     : "camera";
-  const renderPlan = ctx.resolvedRenderPlan;
   const viewport3DRenderState = useMemo<UnifiedRenderState>(
     () => ({
       selectedLayer: ctx.requestedPreviewLayer ?? ctx.sliceIndex,

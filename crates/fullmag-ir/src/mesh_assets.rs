@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 #[allow(unused_imports)]
 use crate::{
     FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR, MeshQualityIR,
@@ -656,4 +656,3 @@ impl DomainFrameIR {
         }
     }
 }
-

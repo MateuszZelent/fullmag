@@ -9,7 +9,7 @@ pub enum DisplayViewMode {
     ThreeD,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldComponent {
     X,

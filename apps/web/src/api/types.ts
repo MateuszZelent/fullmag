@@ -71,6 +71,7 @@ export interface VisualizationStateResource extends DisplaySelection {
   sampling: SamplingVisualizationState;
   fdm: FdmVisualizationState;
   fem: FemVisualizationState;
+  slice: SliceVisualizationState;
   clip: ClipVisualizationState;
   vector_style: VectorStyleVisualizationState;
   overrides: VisualizationOverrideState[];
@@ -229,6 +230,63 @@ export interface FemVisualizationState {
 export interface FemVisualizationPatch {
   topology_mode?: FemTopologyMode | null;
   volume_edges_budget?: number | null;
+}
+
+export type SliceVisualizationMode = "single" | "slab" | "all_layers";
+
+export type SliceRenderMode =
+  | "heatmap"
+  | "contour"
+  | "heatmap+contour"
+  | "vectors"
+  | "mesh-overlay";
+
+export type SliceAirboxRenderMode =
+  | "surface"
+  | "wireframe"
+  | "surface+edges"
+  | "points";
+
+export interface SliceVisualizationState {
+  quantity_id: string;
+  component: DisplaySelection["field_component"];
+  axis: ClipAxis;
+  mode: SliceVisualizationMode;
+  layer_index: number | null;
+  position_percent: number;
+  thickness_percent: number | null;
+  colormap: string;
+  auto_contrast: boolean;
+  show_primitives: boolean;
+  show_mesh: boolean;
+  show_magnetic_texture: boolean;
+  show_airbox: boolean;
+  airbox_render_mode: SliceAirboxRenderMode;
+  show_airbox_vectors: boolean;
+  show_quantity: boolean;
+  show_vectors: boolean;
+  render_mode: SliceRenderMode;
+}
+
+export interface SliceVisualizationPatch {
+  quantity_id?: string | null;
+  component?: DisplaySelection["field_component"] | null;
+  axis?: ClipAxis | null;
+  mode?: SliceVisualizationMode | null;
+  layer_index?: number | null;
+  position_percent?: number | null;
+  thickness_percent?: number | null;
+  colormap?: string | null;
+  auto_contrast?: boolean | null;
+  show_primitives?: boolean | null;
+  show_mesh?: boolean | null;
+  show_magnetic_texture?: boolean | null;
+  show_airbox?: boolean | null;
+  airbox_render_mode?: SliceAirboxRenderMode | null;
+  show_airbox_vectors?: boolean | null;
+  show_quantity?: boolean | null;
+  show_vectors?: boolean | null;
+  render_mode?: SliceRenderMode | null;
 }
 
 export type ClipAxis = "x" | "y" | "z";
@@ -740,6 +798,7 @@ export interface VisualizationStatePatch extends DisplayPatchRequest {
   sampling?: SamplingVisualizationPatch | null;
   fdm?: FdmVisualizationPatch | null;
   fem?: FemVisualizationPatch | null;
+  slice?: SliceVisualizationPatch | null;
   clip?: ClipVisualizationPatch | null;
   vector_style?: VectorStyleVisualizationPatch | null;
 }

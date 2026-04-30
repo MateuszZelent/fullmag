@@ -6,105 +6,33 @@ import {
   airboxDisplayStateFromRenderMode,
   resolveAirboxDisplayState,
 } from "./airboxDisplay";
-
-type FemVectorDomainFilter = "auto" | "magnetic_only" | "full_domain" | "airbox_only";
-type FemFerromagnetVisibilityMode = "hide" | "ghost";
-
-export interface AirboxVectorRestoreState {
-  active: boolean;
-  vectorDomainFilter: FemVectorDomainFilter;
-  ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
-}
+import { legacyRenderModeFromPasses } from "./meshDisplayState";
 
 export interface AirboxDisplayTransaction {
   displayPatch: VisualizationStatePatch | null;
   meshEntityViewState: MeshEntityViewStateMap;
   meshEntityViewStateChanged: boolean;
-  vectorRestoreState: AirboxVectorRestoreState | null;
 }
 
 export function reduceAirboxDisplayTransaction(args: {
   patch: AirboxDisplayPatch;
   airboxParts: FemMeshPart[];
   meshEntityViewState: MeshEntityViewStateMap;
-  vectorDomainFilter: FemVectorDomainFilter;
-  ferromagnetVisibilityMode: FemFerromagnetVisibilityMode;
-  vectorRestoreState: AirboxVectorRestoreState | null;
 }): AirboxDisplayTransaction {
-  const {
-    patch,
-    airboxParts,
-    meshEntityViewState,
-    vectorDomainFilter,
-    ferromagnetVisibilityMode,
-  } = args;
+  const { patch, airboxParts, meshEntityViewState } = args;
   let displayPatch: VisualizationStatePatch | null = null;
-  let vectorRestoreState = args.vectorRestoreState;
 
   if (typeof patch.vectors === "boolean") {
-    if (patch.vectors) {
-      vectorRestoreState = vectorRestoreState?.active
-        ? vectorRestoreState
-        : {
-            active: true,
-            vectorDomainFilter,
-            ferromagnetVisibilityMode,
-          };
-      displayPatch = mergeVisualizationPatch(displayPatch, {
-        layers: {
-          airbox: {
-            visible: true,
-            vectors: {
-              visible: true,
-              domain: "airbox_only",
-            },
-          },
-          vectors: {
-            visible: true,
-            domain: "airbox_only",
-          },
+    // Airbox vectors are an independent render layer — toggling them does NOT
+    // change global magnetic vector visibility or domain.
+    displayPatch = mergeVisualizationPatch(displayPatch, {
+      layers: {
+        airbox: {
+          ...(patch.vectors ? { visible: true } : {}),
+          vectors: { visible: patch.vectors, domain: "airbox_only" },
         },
-        vector_style: {
-          ferromagnet_visibility:
-            ferromagnetVisibilityMode === "hide" ? "ghost" : ferromagnetVisibilityMode,
-        },
-      });
-    } else if (vectorRestoreState?.active) {
-      const saved = vectorRestoreState;
-      displayPatch = mergeVisualizationPatch(displayPatch, {
-        layers: {
-          airbox: {
-            vectors: {
-              visible: false,
-              domain: "airbox_only",
-            },
-          },
-          vectors: {
-            visible: false,
-            domain: saved.vectorDomainFilter,
-          },
-        },
-        vector_style: {
-          ferromagnet_visibility: saved.ferromagnetVisibilityMode,
-        },
-      });
-      vectorRestoreState = null;
-    } else {
-      displayPatch = mergeVisualizationPatch(displayPatch, {
-        layers: {
-          airbox: {
-            vectors: {
-              visible: false,
-              domain: "airbox_only",
-            },
-          },
-          vectors: {
-            visible: false,
-            domain: "auto",
-          },
-        },
-      });
-    }
+      },
+    });
   }
 
   if (typeof patch.opacity === "number") {
@@ -143,7 +71,6 @@ export function reduceAirboxDisplayTransaction(args: {
     displayPatch,
     meshEntityViewState: meshResult.meshEntityViewState,
     meshEntityViewStateChanged: meshResult.changed,
-    vectorRestoreState,
   };
 }
 
@@ -224,7 +151,6 @@ function reduceAirboxMeshEntityViewState(args: {
         resolvedDisplay.wireframe &&
       (current.renderPasses?.points ?? airboxDisplayStateFromRenderMode(current.renderMode).points) ===
         resolvedDisplay.points &&
-      current.renderMode === resolvedDisplay.renderMode &&
       current.opacity === nextOpacity &&
       (current.wireframeScope ?? "surface") === resolvedDisplay.wireframeScope &&
       (current.pointsScope ?? "surface") === resolvedDisplay.pointsScope &&
@@ -236,6 +162,15 @@ function reduceAirboxMeshEntityViewState(args: {
       }
       continue;
     }
+    // When resolvedDisplay.renderMode may be "custom" (surface+points etc.),
+    // use legacyRenderModeFromPasses for the wire-format renderMode field.
+    // The renderer ignores renderMode when renderPasses is present.
+    const legacyMode = legacyRenderModeFromPasses({
+      surface: resolvedDisplay.surface,
+      surfaceEdges: resolvedDisplay.wireframe,
+      volumeEdges: false,
+      points: resolvedDisplay.points,
+    });
     next[part.id] = {
       ...current,
       visible: nextVisible,
@@ -245,7 +180,7 @@ function reduceAirboxMeshEntityViewState(args: {
         wireframe: resolvedDisplay.wireframe,
         points: resolvedDisplay.points,
       },
-      renderMode: resolvedDisplay.renderMode,
+      renderMode: legacyMode,
       wireframeScope: resolvedDisplay.wireframeScope,
       pointsScope: resolvedDisplay.pointsScope,
       vectorsScope: resolvedDisplay.vectorsScope,

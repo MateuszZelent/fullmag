@@ -1499,13 +1499,13 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
         json["active_quantity_id"]
     );
     assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
-    assert_eq!(
-        json["layers"]["vectors"]["density"],
-        json["vector_density"]
-    );
+    assert_eq!(json["layers"]["vectors"]["density"], json["vector_density"]);
     assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
+    assert_eq!(json["slice"]["quantity_id"], json["active_quantity_id"]);
+    assert_eq!(json["slice"]["mode"], "single");
+    assert_eq!(json["slice"]["airbox_render_mode"], "wireframe");
     assert!(json["overrides"].as_array().is_some());
     assert!(json["diagnostics"]["warnings"].as_array().is_some());
 }
@@ -1540,6 +1540,16 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                         "fdm": {
                             "x_chosen_size": 96,
                             "y_chosen_size": 64
+                        },
+                        "slice": {
+                            "axis": "y",
+                            "mode": "slab",
+                            "position_percent": 32.5,
+                            "show_airbox": true,
+                            "airbox_render_mode": "points",
+                            "show_airbox_vectors": true,
+                            "show_vectors": true,
+                            "render_mode": "vectors"
                         }
                     })
                     .to_string(),
@@ -1559,6 +1569,13 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["layers"]["vectors"]["density"], 6);
     assert_eq!(json["sampling"]["max_points"], 2048);
     assert_eq!(json["fdm"]["x_chosen_size"], 96);
+    assert_eq!(json["slice"]["axis"], "y");
+    assert_eq!(json["slice"]["mode"], "slab");
+    assert_eq!(json["slice"]["position_percent"], 32.5);
+    assert_eq!(json["slice"]["show_airbox"], true);
+    assert_eq!(json["slice"]["airbox_render_mode"], "points");
+    assert_eq!(json["slice"]["show_airbox_vectors"], true);
+    assert_eq!(json["slice"]["render_mode"], "vectors");
 }
 
 #[tokio::test]
@@ -1941,7 +1958,10 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert_eq!(fetched_json["clip"]["position_percent"], 37.5);
     assert_eq!(fetched_json["clip"]["flipped"], true);
     assert_eq!(fetched_json["vector_style"]["mono_color"], "#ff3366");
-    assert_eq!(fetched_json["vector_style"]["ferromagnet_visibility"], "ghost");
+    assert_eq!(
+        fetched_json["vector_style"]["ferromagnet_visibility"],
+        "ghost"
+    );
 
     let presentation = state.current_display_presentation.read().await;
     assert!(presentation.visualization_layers.is_some());
@@ -6531,6 +6551,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "sampling",
         "fdm",
         "fem",
+        "slice",
         "clip",
         "vector_style",
         "overrides",

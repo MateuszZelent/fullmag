@@ -168,6 +168,43 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshShowArrows).not.toHaveBeenCalled();
   });
 
+  it("maps 2D slice toolbar commands to canonical visualization slice patches", () => {
+    expect(visualizationPatchFromRibbonCommand({
+      id: "viewport.set-slice-axis",
+      axis: "y",
+    })).toEqual({ slice: { axis: "y" } });
+    expect(visualizationPatchFromRibbonCommand({
+      id: "viewport.set-slice-mode",
+      mode: "all_layers",
+    })).toEqual({ slice: { mode: "all_layers" }, slice_mode: "all" });
+    expect(visualizationPatchFromRibbonCommand({
+      id: "viewport.set-slice-airbox-vectors",
+      visible: true,
+    })).toEqual({
+      slice: {
+        show_airbox_vectors: true,
+        show_vectors: true,
+        render_mode: "vectors",
+      },
+    });
+  });
+
+  it("dispatches slice toolbar through visualization state when canonical patching is available", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({ onPatchVisualizationState, onSetSlice2DToolbar });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-slice-airbox-render-mode",
+      renderMode: "points",
+    });
+
+    expect(onPatchVisualizationState).toHaveBeenCalledWith({
+      slice: { airbox_render_mode: "points" },
+    });
+    expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
+  });
+
   it("keeps vector color changes independent from vector visibility", () => {
     const onSetFemArrowStyle = vi.fn();
     const onSetMeshShowArrows = vi.fn();

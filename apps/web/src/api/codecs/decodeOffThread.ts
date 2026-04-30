@@ -36,6 +36,19 @@ let worker: Worker | null = null;
 let nextRequestId = 1;
 const pending = new Map<number, PendingDecode>();
 let workerDisabled = false;
+let totalTransferredBytes = 0;
+
+export interface DecodeWorkerStats {
+  pendingCount: number;
+  totalTransferredBytes: number;
+}
+
+export function getDecodeWorkerStats(): DecodeWorkerStats {
+  return {
+    pendingCount: pending.size,
+    totalTransferredBytes,
+  };
+}
 
 function decodeOnMainThread(
   kind: DecodeKind,
@@ -119,9 +132,13 @@ async function decodeWithWorker<T extends DecodedFieldVector | DecodedTopology>(
       reject: (reason) => reject(reason),
     });
     try {
+      const transferList = options?.transferInput ? arrayBufferTransferList(buffer) : [];
+      if (transferList.length > 0) {
+        totalTransferredBytes += buffer.byteLength;
+      }
       activeWorker.postMessage(
         { id, kind, buffer } satisfies BinaryDecodeWorkerRequest,
-        options?.transferInput ? arrayBufferTransferList(buffer) : [],
+        transferList,
       );
     } catch (error) {
       pending.delete(id);

@@ -1033,7 +1033,10 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             checked: showAirbox,
             disabled: slice.disabled,
             disabledReason: slice.reason,
-            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-airbox", visible }),
+            onCheckedChange: (visible) =>
+              ctx.dispatchVisualization
+                ? ctx.dispatchVisualization({ type: "airbox.setVisible2D", visible })
+                : ctx.run({ id: "viewport.set-slice-airbox", visible }),
           },
           {
             type: "radio-group",

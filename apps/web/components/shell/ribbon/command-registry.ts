@@ -304,6 +304,42 @@ export function visualizationPatchFromRibbonCommand(
           flipped: command.patch.flipped,
         },
       };
+    case "viewport.set-slice-axis":
+      return { slice: { axis: command.axis } };
+    case "viewport.set-slice-mode":
+      return {
+        slice: { mode: command.mode },
+        slice_mode: command.mode === "all_layers" ? "all" : command.mode,
+      };
+    case "viewport.set-slice-position":
+      return { slice: { position_percent: command.positionPercent } };
+    case "viewport.set-slice-render-mode":
+      return {
+        slice: {
+          render_mode: command.renderMode,
+          show_mesh: command.renderMode === "mesh-overlay" ? true : undefined,
+          show_quantity: command.renderMode === "mesh-overlay" ? undefined : true,
+          show_vectors: command.renderMode === "vectors",
+        },
+      };
+    case "viewport.set-slice-quantity-overlay":
+      return { slice: { show_quantity: command.visible } };
+    case "viewport.set-slice-primitives":
+      return { slice: { show_primitives: command.visible } };
+    case "viewport.set-slice-mesh":
+      return { slice: { show_mesh: command.visible } };
+    case "viewport.set-slice-airbox":
+      return { slice: { show_airbox: command.visible } };
+    case "viewport.set-slice-airbox-render-mode":
+      return { slice: { airbox_render_mode: command.renderMode } };
+    case "viewport.set-slice-airbox-vectors":
+      return {
+        slice: {
+          show_airbox_vectors: command.visible,
+          show_vectors: command.visible,
+          render_mode: command.visible ? "vectors" : "heatmap",
+        },
+      };
     default:
       return null;
   }
@@ -648,7 +684,7 @@ export function canExecuteRibbonCommand(
     case "viewport.set-slice-airbox":
     case "viewport.set-slice-airbox-render-mode":
     case "viewport.set-slice-airbox-vectors":
-      return typeof ctx.onSetSlice2DToolbar === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function";
     case "viewport.toggle-selected-texture":
       return Boolean(ctx.selectedObjectId)
         && typeof ctx.onSetSelectedObjectTextureVisible === "function";

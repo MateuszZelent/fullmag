@@ -32,6 +32,7 @@ import { useGeometryCapabilities } from "@/src/hooks/resources/useSceneDocument"
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
+import type { VisualizationAction } from "@/components/runs/control-room/visualizationReducer";
 
 // ── Registry imports ──
 import {
@@ -246,6 +247,7 @@ interface RibbonBarProps {
   }>) => void;
   onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
   onSetSlice2DToolbar?: (patch: Partial<Slice2DToolbarState>) => void;
+  onDispatchVisualization?: (action: VisualizationAction) => void;
   onSetTextureTransformMode?: (
     objectId: string,
     mode: "translate" | "rotate" | "scale",
@@ -464,6 +466,7 @@ function buildContext(
 
     run,
     can,
+    dispatchVisualization: props.onDispatchVisualization,
   };
 }
 

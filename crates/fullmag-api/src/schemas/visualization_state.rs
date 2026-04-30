@@ -21,6 +21,8 @@ pub struct VisualizationStateResource {
     pub fdm: FdmVisualizationState,
     /// FEM-specific view controls.
     pub fem: FemVisualizationState,
+    /// 2-D slice toolbar and overlay controls.
+    pub slice: SliceVisualizationState,
     /// Shared clip-plane controls for topology-aware viewports.
     pub clip: ClipVisualizationState,
     /// Vector glyph style independent from vector visibility and sampling.
@@ -99,6 +101,8 @@ pub struct VisualizationStatePatch {
     pub fdm: Option<FdmVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem: Option<FemVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slice: Option<SliceVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<ClipVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -319,6 +323,98 @@ pub struct FemVisualizationPatch {
     pub topology_mode: Option<FemTopologyMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_edges_budget: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct SliceVisualizationState {
+    pub quantity_id: String,
+    pub component: FieldComponent,
+    pub axis: ClipAxis,
+    pub mode: SliceVisualizationMode,
+    pub layer_index: Option<i32>,
+    pub position_percent: f64,
+    pub thickness_percent: Option<f64>,
+    pub colormap: String,
+    pub auto_contrast: bool,
+    pub show_primitives: bool,
+    pub show_mesh: bool,
+    pub show_magnetic_texture: bool,
+    pub show_airbox: bool,
+    pub airbox_render_mode: SliceAirboxRenderMode,
+    pub show_airbox_vectors: bool,
+    pub show_quantity: bool,
+    pub show_vectors: bool,
+    pub render_mode: SliceRenderMode,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct SliceVisualizationPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<FieldComponent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<ClipAxis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SliceVisualizationMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer_index: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickness_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub colormap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_contrast: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_primitives: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_mesh: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_magnetic_texture: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_airbox: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airbox_render_mode: Option<SliceAirboxRenderMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_airbox_vectors: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_quantity: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_vectors: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<SliceRenderMode>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceVisualizationMode {
+    Single,
+    Slab,
+    AllLayers,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceRenderMode {
+    Heatmap,
+    Contour,
+    #[serde(rename = "heatmap+contour")]
+    HeatmapContour,
+    Vectors,
+    #[serde(rename = "mesh-overlay")]
+    MeshOverlay,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SliceAirboxRenderMode {
+    Surface,
+    Wireframe,
+    #[serde(rename = "surface+edges")]
+    SurfaceEdges,
+    Points,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

@@ -1,25 +1,21 @@
-import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useId } from "react";
+import React, { memo, useMemo, useEffect, useRef, useCallback, useId } from "react";
 import * as THREE from "three";
 import type { FemMeshData, FemColorField, MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
-import {
-  computeVertexColors,
-  computeVertexColorsOffThread,
-  getSharedVertexColors,
-  shouldUseVertexColorWorker,
-} from "./femVertexColors";
-import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
 import type { FemGeometryPassState } from "./femGeometryRenderPasses";
-import { useBatchedInvalidate } from "./useBatchedInvalidate";
-import { applyLiveBufferTransition } from "./liveBufferAnimation";
 import {
-  estimateThreeBufferGeometryBytes,
-  releaseViewportResource,
-  trackViewportResource,
-} from "@/lib/debug/viewportResourceManager";
+  resolveFemGeometryResourceNeeds,
+  useFemEdgeGeometryResource,
+  useFemPointsGeometryResource,
+  useFemSurfaceGeometryResource,
+} from "./femGeometryResources";
+import { useBatchedInvalidate } from "./useBatchedInvalidate";
+import { useFemVertexColorResource } from "./useFemVertexColorResource";
+import { useFemGeometryMaterials } from "./useFemGeometryMaterials";
+import { useFemGeometryDisposalAudit } from "./useFemGeometryDisposalAudit";
 
 interface FemGeometryProps {
   meshData: FemMeshData;
@@ -72,44 +68,6 @@ function flattenBoundaryFaces(customBoundaryFaces: readonly [number, number, num
   return flat;
 }
 
-function collectFaceNodeIndices(boundaryFaces: ArrayLike<number>, faceIndices: readonly number[]): number[] {
-  const maxFaces = Math.floor(boundaryFaces.length / 3);
-  const unique = new Set<number>();
-  for (const faceIndex of faceIndices) {
-    if (!Number.isInteger(faceIndex) || faceIndex < 0 || faceIndex >= maxFaces) {
-      continue;
-    }
-    const base = faceIndex * 3;
-    unique.add(boundaryFaces[base]);
-    unique.add(boundaryFaces[base + 1]);
-    unique.add(boundaryFaces[base + 2]);
-  }
-  return Array.from(unique);
-}
-
-function collectElementNodeIndices(
-  elements: ArrayLike<number>,
-  nElements: number,
-  elementOffsets: readonly number[],
-): number[] {
-  const unique = new Set<number>();
-  for (const elementOffset of elementOffsets) {
-    if (
-      !Number.isInteger(elementOffset) ||
-      elementOffset < 0 ||
-      elementOffset + 3 >= elements.length ||
-      Math.trunc(elementOffset / 4) >= nElements
-    ) {
-      continue;
-    }
-    unique.add(elements[elementOffset]);
-    unique.add(elements[elementOffset + 1]);
-    unique.add(elements[elementOffset + 2]);
-    unique.add(elements[elementOffset + 3]);
-  }
-  return Array.from(unique);
-}
-
 function isValidNodeIndex(nodeIndex: number, nNodes: number): boolean {
   return Number.isInteger(nodeIndex) && nodeIndex >= 0 && nodeIndex < nNodes;
 }
@@ -154,39 +112,6 @@ export function resolveFemClipPlane({
   return new THREE.Plane(normal, planePosition);
 }
 
-export function resolveFemGeometryResourceNeeds({
-  renderMode,
-  renderPasses,
-  edgeScope = "surface",
-}: {
-  renderMode: RenderMode;
-  renderPasses?: FemGeometryPassState;
-  edgeScope?: MeshDisplayScope;
-}): {
-  edges: boolean;
-  tetraEdges: boolean;
-  points: boolean;
-} {
-  if (renderPasses) {
-    return {
-      edges: renderPasses.wireframe || renderPasses.volumeMesh,
-      tetraEdges:
-        renderPasses.volumeMesh || (renderPasses.wireframe && edgeScope === "full"),
-      points: renderPasses.points,
-    };
-  }
-  return {
-    edges:
-      renderMode === "wireframe" ||
-      renderMode === "surface+edges" ||
-      renderMode === "mesh",
-    tetraEdges:
-      renderMode === "mesh" ||
-      ((renderMode === "wireframe" || renderMode === "surface+edges") && edgeScope === "full"),
-    points: renderMode === "points",
-  };
-}
-
 /* ── Helper: compute vertex colors from field data ─────────────────── */
 export const FemGeometry = memo(function FemGeometry({
   meshData,
@@ -228,7 +153,6 @@ export const FemGeometry = memo(function FemGeometry({
 }: FemGeometryProps) {
   const scheduleInvalidate = useBatchedInvalidate();
   const resourceOwner = `FemGeometry:${useId()}`;
-  const colorTransitionCleanupRef = useRef<(() => void) | null>(null);
   const {
     nodes,
     elements,
@@ -242,15 +166,6 @@ export const FemGeometry = memo(function FemGeometry({
   const centerY = globalCenter?.y ?? null;
   const centerZ = globalCenter?.z ?? null;
   const hasFieldColormap = field !== "none";
-  const resolvedEdgeColor = useMemo(
-    () =>
-      highlight
-        ? edgeColor ?? "#67e8f9"
-        : hasFieldColormap
-          ? "#d1d5db"
-          : edgeColor ?? uniformColor ?? "#dbeafe",
-    [edgeColor, hasFieldColormap, highlight, uniformColor],
-  );
 
   // ── Topology memo: only rebuilds when mesh structure changes ─────
   // Aux geometries (edges, tetra, points) are split into separate memos
@@ -267,7 +182,7 @@ export const FemGeometry = memo(function FemGeometry({
     _doShrink,
     _preferredFaceIndices,
     _resolvedBoundaryFaces,
-  } = useMemo(() => {
+  } = useFemSurfaceGeometryResource(() => {
     const perfEnabled = FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryPerfLogging;
     const totalStart = perfEnabled ? performance.now() : 0;
     const marks: Record<string, number> = {};
@@ -417,7 +332,7 @@ export const FemGeometry = memo(function FemGeometry({
     mark("post-center");
 
     const isVolumetric = elements.length >= 4;
-    const doShrink = isVolumetric && shrinkFactor && shrinkFactor < 0.999;
+    const doShrink = Boolean(isVolumetric && shrinkFactor && shrinkFactor < 0.999);
     const baseElementOffsets = preferredElementIndices
       ? (() => {
           const offsets: number[] = [];
@@ -642,378 +557,54 @@ export const FemGeometry = memo(function FemGeometry({
     edgeScope,
   });
 
-  // ── Edges geometry memo: used for shaded surface edge overlays and
-  // wireframe-only mode. The direct material wireframe path is kept only as an
-  // emergency fallback because it has proven unreliable after ribbon mode
-  // changes in the hosted viewport.
-  const edgesGeometry = useMemo(() => {
-    if (!geometryResourceNeeds.edges || !geometry) return null;
-    try {
-      const wireGeometry = new THREE.WireframeGeometry(geometry);
-      wireGeometry.computeBoundingSphere();
-      return wireGeometry;
-    } catch (error) {
-      console.warn("[fem-geometry] WireframeGeometry construction failed; falling back to material wireframe", error);
-      return null;
-    }
-  }, [geometry, geometryResourceNeeds.edges]);
+  const { edgesGeometry, tetraEdgesGeometry } = useFemEdgeGeometryResource({
+    needs: geometryResourceNeeds,
+    surfaceGeometry: geometry,
+    nElements,
+    nNodes,
+    elements,
+    nodes,
+    centerX,
+    centerY,
+    centerZ,
+  });
 
-  // Volume-edge wireframes: built ONLY in "mesh" mode to avoid transient
-  // allocations during regular mode switches. Tetrahedral elements have 6
-  // edges each, so this produces a large buffer; we lazily compute it.
-  const tetraEdgesGeometry = useMemo(() => {
-    if (!geometryResourceNeeds.tetraEdges) return null;
-    if (nElements === 0 || nNodes === 0) return null;
-    try {
-      // Each tetrahedron has 6 edges: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
-      const EDGE_PAIRS = [
-        [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
-      ] as const;
-      // Use a Set<number> to deduplicate edges across shared faces.
-      // Integer key: lo * nNodes + hi — safe for nNodes < ~3M (max value < Number.MAX_SAFE_INTEGER).
-      const edgeSet = new Set<number>();
-      const edgePairs: number[] = [];
-      for (let ei = 0; ei < nElements; ei++) {
-        const base = ei * 4;
-        const n0 = elements[base];
-        const n1 = elements[base + 1];
-        const n2 = elements[base + 2];
-        const n3 = elements[base + 3];
-        const tn = [n0, n1, n2, n3];
-        for (const [a, b] of EDGE_PAIRS) {
-          const na = tn[a];
-          const nb = tn[b];
-          const lo = Math.min(na, nb);
-          const hi = Math.max(na, nb);
-          const key = lo * nNodes + hi;
-          if (!edgeSet.has(key)) {
-            edgeSet.add(key);
-            edgePairs.push(lo, hi);
-          }
-        }
-      }
-      // Build position buffer from edge pairs
-      const nEdges = edgePairs.length / 2;
-      const cx = centerX ?? 0;
-      const cy = centerY ?? 0;
-      const cz = centerZ ?? 0;
-      const positions = new Float32Array(nEdges * 6); // 2 vertices * 3 components per edge
-      for (let i = 0; i < nEdges; i++) {
-        const idxA = edgePairs[i * 2];
-        const idxB = edgePairs[i * 2 + 1];
-        positions[i * 6 + 0] = Number(nodes[idxA * 3 + 0]) - cx;
-        positions[i * 6 + 1] = Number(nodes[idxA * 3 + 1]) - cy;
-        positions[i * 6 + 2] = Number(nodes[idxA * 3 + 2]) - cz;
-        positions[i * 6 + 3] = Number(nodes[idxB * 3 + 0]) - cx;
-        positions[i * 6 + 4] = Number(nodes[idxB * 3 + 1]) - cy;
-        positions[i * 6 + 5] = Number(nodes[idxB * 3 + 2]) - cz;
-      }
-      const tetraGeo = new THREE.BufferGeometry();
-      tetraGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      tetraGeo.computeBoundingSphere();
-      return tetraGeo;
-    } catch (error) {
-      console.warn("[fem-geometry] Tetrahedral edge geometry construction failed", error);
-      return null;
-    }
-  }, [geometryResourceNeeds.tetraEdges, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
+  // Points material uses vertexColors={false} — no color attribute needed on pointsGeometry.
+  const { pointsGeometry, pointsVertexMap } = useFemPointsGeometryResource({
+    needs: geometryResourceNeeds,
+    pointsScope,
+    surfaceGeometry: geometry,
+    vertexMap,
+    nNodes,
+    enableGeometryVertexColors: false,
+    positions: _positions,
+    boundaryFaces: _resolvedBoundaryFaces,
+    customBoundaryFaces,
+    activeElementOffsets: _activeElementOffsets,
+    elements,
+    nElements,
+    preferredFaceIndices: _preferredFaceIndices,
+  });
 
-  // ── Points geometry memo ──────────────────────────────────────────
-  const { pointsGeometry, pointsVertexMap } = useMemo(() => {
-    if (!geometryResourceNeeds.points) {
-      return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
-    }
-    if (pointsScope === "full" && _positions) {
-      const pointNodeIndices =
-        _activeElementOffsets.length > 0
-          ? collectElementNodeIndices(elements, nElements, _activeElementOffsets)
-          : Array.from({ length: nNodes }, (_, index) => index);
-      const pointPositions = new Float32Array(pointNodeIndices.length * 3);
-      const pointVMap = new Int32Array(pointNodeIndices.length);
-      for (let i = 0; i < pointNodeIndices.length; i += 1) {
-        const nodeIndex = pointNodeIndices[i];
-        pointVMap[i] = nodeIndex;
-        const base = nodeIndex * 3;
-        pointPositions[i * 3] = _positions[base];
-        pointPositions[i * 3 + 1] = _positions[base + 1];
-        pointPositions[i * 3 + 2] = _positions[base + 2];
-      }
-      const ptsGeom = new THREE.BufferGeometry();
-      ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
-      ptsGeom.computeBoundingSphere();
-      if (enableGeometryVertexColors) {
-        ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
-      }
-      return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-    }
-    const displayedPositions = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;
-    if (displayedPositions && displayedPositions.count > 0) {
-      const sourceArray = displayedPositions.array as ArrayLike<number>;
-      const pointPositions = new Float32Array(displayedPositions.count * 3);
-      for (let index = 0; index < pointPositions.length; index += 1) {
-        pointPositions[index] = Number(sourceArray[index] ?? 0);
-      }
-      const ptsGeom = new THREE.BufferGeometry();
-      ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
-      ptsGeom.computeBoundingSphere();
-      if (enableGeometryVertexColors) {
-        ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
-      }
-      const pointVMap =
-        vertexMap && vertexMap.length === displayedPositions.count
-          ? new Int32Array(vertexMap)
-          : displayedPositions.count === nNodes
-            ? Int32Array.from({ length: nNodes }, (_, index) => index)
-            : null;
-      return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-    }
-    if (!_positions) {
-      return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
-    }
-    const boundaryFaces = _resolvedBoundaryFaces;
-    const pointNodeIndices =
-      customBoundaryFaces && customBoundaryFaces.length > 0
-        ? collectFaceNodeIndices(
-            boundaryFaces,
-            (() => {
-              const faceCount = Math.floor(boundaryFaces.length / 3);
-              const allFaceIndices = new Array<number>(faceCount);
-              for (let index = 0; index < faceCount; index += 1) {
-                allFaceIndices[index] = index;
-              }
-              return allFaceIndices;
-            })(),
-          )
-        : _activeElementOffsets.length > 0
-        ? collectElementNodeIndices(elements, nElements, _activeElementOffsets)
-        : _preferredFaceIndices
-          ? collectFaceNodeIndices(boundaryFaces, _preferredFaceIndices)
-          : Array.from({ length: nNodes }, (_, index) => index);
-    const pointPositions = new Float32Array(pointNodeIndices.length * 3);
-    const pointVMap = new Int32Array(pointNodeIndices.length);
-    for (let i = 0; i < pointNodeIndices.length; i += 1) {
-      const nodeIndex = pointNodeIndices[i];
-      pointVMap[i] = nodeIndex;
-      const base = nodeIndex * 3;
-      pointPositions[i * 3] = _positions[base];
-      pointPositions[i * 3 + 1] = _positions[base + 1];
-      pointPositions[i * 3 + 2] = _positions[base + 2];
-    }
-    const ptsGeom = new THREE.BufferGeometry();
-    ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
-    ptsGeom.computeBoundingSphere();
-    if (enableGeometryVertexColors) {
-      ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
-    }
-    return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-  }, [geometryResourceNeeds.points, pointsScope, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
-
-  // ── Color update (and geometry-only invalidation when vertex colors are off) ──
-  useEffect(() => {
-    if (!geometry) return;
-    // When vertex colors are disabled, just invalidate and bail out.
-    if (!enableGeometryVertexColors) {
-      scheduleInvalidate();
-      return;
-    }
-    let cancelled = false;
-    const quantityUploadStart = performance.now();
-    recordFrontendPerfSample({
-      scope: "QuantitySwitch",
-      phase: "geometry-color-upload-start",
-      durationMs: 0,
-      timestampMs: quantityUploadStart,
-      meta: {
-        field,
-        fieldRevision:
-          fieldRevision == null
-            ? null
-            : typeof fieldRevision === "string"
-              ? fieldRevision
-              : String(fieldRevision),
-      },
-    });
-    const perfEnabled = FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryPerfLogging;
-    const totalStart = perfEnabled ? performance.now() : 0;
-    const mark = (phase: string, start: number, extra?: Record<string, number | string | boolean | null>) => {
-      if (!perfEnabled) return;
-      recordFrontendPerfSample({
-        scope: "FemGeometry",
-        phase,
-        durationMs: performance.now() - start,
-        timestampMs: performance.now(),
-        meta: {
-          field,
-          nNodes,
-          nElements,
-          ...extra,
-        },
-      });
-    };
-    const runColorUpload = async () => {
-      const baseColorStart = perfEnabled ? performance.now() : 0;
-      const boundaryFacesForColor = customBoundaryFaces
-        ? flattenBoundaryFaces(customBoundaryFaces)
-        : meshData.boundaryFaces;
-      const workerEligible =
-        !sharedBaseVertexColors &&
-        shouldUseVertexColorWorker({
-          enabled: FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.femVertexColorWorker,
-          nNodes,
-          field,
-          hasUniformColor: Boolean(uniformColor),
-        });
-      const workerColors = workerEligible
-        ? await computeVertexColorsOffThread({
-            nNodes,
-            field,
-            fieldData,
-            fieldNComp: meshData.fieldNComp ?? 3,
-            nodes,
-            boundaryFaces: boundaryFacesForColor,
-            qualityPerFace,
-          })
-        : null;
-      if (cancelled) return;
-      const baseColors: Float32Array =
-        sharedBaseVertexColors && sharedBaseVertexColors.length === nNodes * 3
-          ? sharedBaseVertexColors
-          : workerColors && workerColors.length === nNodes * 3
-            ? workerColors
-            : customBoundaryFaces
-              ? computeVertexColors(
-                  nNodes,
-                  field,
-                  fieldData,
-                  meshData.fieldNComp ?? 3,
-                  nodes,
-                  boundaryFacesForColor,
-                  qualityPerFace,
-                )
-              : getSharedVertexColors({
-                  meshData,
-                  field,
-                  uniformColor,
-                  qualityPerFace,
-                });
-      mark("colorBaseCompute", baseColorStart, { worker: Boolean(workerColors) });
-
-      // Sub-select or map colors
-      const meshApplyStart = perfEnabled ? performance.now() : 0;
-      const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
-      const meshColorTarget = new Float32Array(colorAttr.array.length);
-      if (vertexMap) {
-        for (let i = 0; i < vertexMap.length; i++) {
-          const orig = vertexMap[i];
-          meshColorTarget[i * 3] = baseColors[orig * 3];
-          meshColorTarget[i * 3 + 1] = baseColors[orig * 3 + 1];
-          meshColorTarget[i * 3 + 2] = baseColors[orig * 3 + 2];
-        }
-      } else {
-        const posCount = geometry.getAttribute("position").count;
-        for (let i = 0; i < posCount * 3; i++) {
-          meshColorTarget[i] = baseColors[i];
-        }
-      }
-      colorTransitionCleanupRef.current?.();
-      const transitionCleanups: Array<() => void> = [
-        applyLiveBufferTransition({
-          destination: colorAttr.array as Float32Array,
-          target: meshColorTarget,
-          maxAnimatedValues: 900_000,
-          markNeedsUpdate: () => {
-            colorAttr.needsUpdate = true;
-          },
-          scheduleInvalidate,
-        }),
-      ];
-      mark("colorMeshApply", meshApplyStart, { mapped: Boolean(vertexMap) });
-      if (pointsGeometry) {
-        const pointsApplyStart = perfEnabled ? performance.now() : 0;
-        const pointsColorAttr = pointsGeometry.getAttribute("color") as THREE.BufferAttribute | undefined;
-        if (!pointsColorAttr) {
-          scheduleInvalidate();
-          return;
-        }
-        const pointsColorTarget = new Float32Array(pointsColorAttr.array.length);
-        if (pointsVertexMap) {
-          for (let i = 0; i < pointsVertexMap.length; i += 1) {
-            const orig = pointsVertexMap[i];
-            pointsColorTarget[i * 3] = baseColors[orig * 3];
-            pointsColorTarget[i * 3 + 1] = baseColors[orig * 3 + 1];
-            pointsColorTarget[i * 3 + 2] = baseColors[orig * 3 + 2];
-          }
-        } else {
-          const colorCount = Math.min(pointsColorAttr.count, Math.floor(baseColors.length / 3));
-          for (let i = 0; i < colorCount; i += 1) {
-            pointsColorTarget[i * 3] = baseColors[i * 3];
-            pointsColorTarget[i * 3 + 1] = baseColors[i * 3 + 1];
-            pointsColorTarget[i * 3 + 2] = baseColors[i * 3 + 2];
-          }
-        }
-        transitionCleanups.push(
-          applyLiveBufferTransition({
-            destination: pointsColorAttr.array as Float32Array,
-            target: pointsColorTarget,
-            maxAnimatedValues: 900_000,
-            markNeedsUpdate: () => {
-              pointsColorAttr.needsUpdate = true;
-            },
-            scheduleInvalidate,
-          }),
-        );
-        mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
-      }
-      colorTransitionCleanupRef.current = () => {
-        for (const cleanup of transitionCleanups) {
-          cleanup();
-        }
-      };
-      mark("colorTotal", totalStart);
-      recordFrontendPerfSample({
-        scope: "QuantitySwitch",
-        phase: "geometry-color-upload-done",
-        durationMs: performance.now() - quantityUploadStart,
-        timestampMs: performance.now(),
-        meta: {
-          field,
-          mapped: Boolean(vertexMap),
-          pointsMapped: Boolean(pointsVertexMap),
-          worker: Boolean(workerColors),
-          fieldRevision:
-            fieldRevision == null
-              ? null
-              : typeof fieldRevision === "string"
-                ? fieldRevision
-                : String(fieldRevision),
-        },
-      });
-    };
-    void runColorUpload();
-    return () => {
-      cancelled = true;
-      colorTransitionCleanupRef.current?.();
-      colorTransitionCleanupRef.current = null;
-    };
-  }, [
+  useFemVertexColorResource({
     customBoundaryFaces,
     field,
     fieldData,
+    fieldRevision,
     geometry,
-    scheduleInvalidate,
-    meshBoundaryFaces,
+    meshData,
     nElements,
     nNodes,
     nodes,
     pointsGeometry,
     pointsVertexMap,
     qualityPerFace,
-    fieldRevision,
+    scheduleInvalidate,
     sharedBaseVertexColors,
     uniformColor,
     vertexMap,
     enableGeometryVertexColors,
-  ]);
+  });
 
   // ── Notify parent about geometry center (proper useEffect, not useMemo side-effect) ─
   const onGeometryCenterRef = useRef(onGeometryCenter);
@@ -1024,58 +615,14 @@ export const FemGeometry = memo(function FemGeometry({
     }
   }, [center, maxDim, geoSize]);
 
-  const geometryResourceKeys = useMemo(
-    () => ({
-      surface: `${resourceOwner}:surface`,
-      edges: `${resourceOwner}:edges`,
-      tetraEdges: `${resourceOwner}:tetraEdges`,
-      points: `${resourceOwner}:points`,
-    }),
-    [resourceOwner],
-  );
-
-  // ── Register and dispose old THREE geometries through the viewport resource manager ──
-  useLayoutEffect(() => {
-    const registerGeometry = (
-      key: string,
-      label: string,
-      resource: THREE.BufferGeometry | null,
-    ) => {
-      if (!resource) {
-        releaseViewportResource(key);
-        return;
-      }
-      trackViewportResource({
-        key,
-        owner: resourceOwner,
-        label,
-        resource,
-        estimatedBytes: estimateThreeBufferGeometryBytes(resource),
-        dispose: () => resource.dispose(),
-      });
-    };
-
-    registerGeometry(geometryResourceKeys.surface, "FEM surface geometry", geometry);
-    registerGeometry(geometryResourceKeys.edges, "FEM wireframe geometry", edgesGeometry);
-    registerGeometry(geometryResourceKeys.tetraEdges, "FEM volume-edge geometry", tetraEdgesGeometry);
-    registerGeometry(geometryResourceKeys.points, "FEM points geometry", pointsGeometry);
-  }, [
-    edgesGeometry,
-    geometry,
-    geometryResourceKeys,
-    pointsGeometry,
+  // ── Resource tracking / disposal (extracted to focused hook) ─────────────────
+  useFemGeometryDisposalAudit({
     resourceOwner,
+    geometry,
+    edgesGeometry,
     tetraEdgesGeometry,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      releaseViewportResource(geometryResourceKeys.surface);
-      releaseViewportResource(geometryResourceKeys.edges);
-      releaseViewportResource(geometryResourceKeys.tetraEdges);
-      releaseViewportResource(geometryResourceKeys.points);
-    };
-  }, [geometryResourceKeys]);
+    pointsGeometry,
+  });
 
   const {
     showSurface,
@@ -1086,6 +633,7 @@ export const FemGeometry = memo(function FemGeometry({
     showPoints,
     showMeshEdges,
   } = resolveFemGeometryRenderPasses({
+    // NOTE: showMeshEdges is needed for material params below
     renderMode,
     renderPasses,
     edgeScope,
@@ -1199,16 +747,25 @@ export const FemGeometry = memo(function FemGeometry({
     !showVolumeVisibleEdgesPass;
   const showSelectionWireOverlay = highlight && showSurface && edgesGeometry != null;
 
-  const isTransparent = opacity < 100 || showMeshEdges;
-  const opacityVal = showMeshEdges ? Math.min(opacity / 100, 0.35) : opacity / 100;
-  const surfacePolicy =
-    isTransparent
-      ? RENDER_POLICIES_V2.contextSurface
-      : RENDER_POLICIES_V2.solidSurface;
-  const edgePolicy = RENDER_POLICIES_V2.featureEdges;
-  const hiddenEdgePolicy = RENDER_POLICIES_V2.hiddenEdges;
-  const pointPolicy = RENDER_POLICIES_V2.points;
-  const selectionEdgePolicy = RENDER_POLICIES_V2.selectionShell;
+  // ── Material params (extracted to focused hook) ─────────────────────────────
+  const {
+    opacityVal,
+    isTransparent,
+    resolvedEdgeColor,
+    surfacePolicy,
+    edgePolicy,
+    hiddenEdgePolicy,
+    pointPolicy,
+    selectionEdgePolicy,
+  } = useFemGeometryMaterials({
+    opacity,
+    highlight,
+    uniformColor,
+    edgeColor,
+    showMeshEdges,
+    hasFieldColormap,
+  });
+
   const remapFaceIndex = useCallback((faceIndex: number | null | undefined) => {
     if (faceIndex == null) {
       return faceIndex ?? null;

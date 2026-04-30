@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useSyncExternalStore } from "react";
+import { memo, useMemo, useSyncExternalStore, useState, useEffect } from "react";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import {
   getFrontendPerfSamples,
@@ -11,6 +11,7 @@ import { useFrontendResourceBuckets } from "@/lib/debug/frontendResourceManager"
 import { useViewportTelemetrySnapshot } from "@/lib/debug/viewportTelemetry";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { cn } from "@/lib/utils";
+import { getTransportTelemetry, type TransportTelemetry } from "@/src/api/telemetry/transportTelemetry";
 
 function useFrontendPerfSamples(): PerfSample[] {
   return useSyncExternalStore(
@@ -96,12 +97,36 @@ function fmtBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Poll transport telemetry every 500 ms (low frequency, debug-only). */
+function useTransportTelemetry(): TransportTelemetry | null {
+  const [snapshot, setSnapshot] = useState<TransportTelemetry | null>(null);
+  useEffect(() => {
+    let active = true;
+    const tick = () => {
+      if (!active) return;
+      try {
+        setSnapshot(getTransportTelemetry());
+      } catch {
+        // module may not be initialised during SSR
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 500);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return snapshot;
+}
+
 export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
   const perfSamples = useFrontendPerfSamples();
   const viewportEntries = useViewportTelemetrySnapshot();
   const resourceBuckets = useFrontendResourceBuckets();
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const stageTabs = useWorkspaceStore((state) => state.workspaceTabsByStage[state.currentStage]);
+  const transport = useTransportTelemetry();
 
   const hidden = process.env.NODE_ENV === "production" || !FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showTelemetryHud;
   const metrics = useMemo(() => {
@@ -295,6 +320,49 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
                 <span>{fmtInt(entry.drawCalls)} dc</span>
               </div>
             ))}
+          </div>
+        ) : null}
+        {transport != null ? (
+          <div className="mt-2 border-t border-border/30 pt-2">
+            <div className="mb-1 text-[0.6rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              Transport
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[0.6rem]">
+              <span className="text-muted-foreground">field cache</span>
+              <span
+                className={
+                  transport.fieldVectorCache.utilization > 0.85
+                    ? "text-amber-300"
+                    : "text-foreground"
+                }
+              >
+                {fmtBytes(transport.fieldVectorCache.bytes)}
+                {" / "}
+                {fmtBytes(transport.fieldVectorCache.maxBytes)}
+              </span>
+              <span className="text-muted-foreground">field inflight</span>
+              <span
+                className={
+                  transport.fieldVectorInflight.count > 0
+                    ? "text-sky-300"
+                    : "text-foreground"
+                }
+              >
+                {fmtInt(transport.fieldVectorInflight.count)}
+              </span>
+              <span className="text-muted-foreground">decode pending</span>
+              <span
+                className={
+                  transport.decodeWorker.pending > 0
+                    ? "text-sky-300"
+                    : "text-foreground"
+                }
+              >
+                {fmtInt(transport.decodeWorker.pending)}
+              </span>
+              <span className="text-muted-foreground">decode xfer</span>
+              <span>{fmtBytes(transport.decodeWorker.totalTransferredBytes)}</span>
+            </div>
           </div>
         ) : null}
       </div>
