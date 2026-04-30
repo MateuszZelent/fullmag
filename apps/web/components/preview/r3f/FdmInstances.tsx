@@ -257,6 +257,10 @@ function FdmInstances({
     topoComponent,
     topoMultiplier,
   } = settings;
+  // P-08: ref keeps the latest voxelColorMode available to the main effect without making it
+  // a reactive dep — so that only the color-patch effect re-runs when color mode changes.
+  const voxelColorModeRef = useRef(voxelColorMode);
+  voxelColorModeRef.current = voxelColorMode;
   const expectedVectorCount = nx * ny * nz * 3;
   const hasRenderableVectors = Boolean(vectors && vectors.length >= expectedVectorCount);
   const gridBounds = useMemo(
@@ -562,7 +566,7 @@ function FdmInstances({
               vH,
               voxelScale,
             );
-            applyVoxelColor(mx, my, mz, voxelColorMode, _color);
+            applyVoxelColor(mx, my, mz, voxelColorModeRef.current, _color);
           } else {
             _tempPos.set(ix, iz, iy);
             const glyphScale = GLYPH_SCALE_MIN + GLYPH_SCALE_RANGE * Math.sqrt(Math.min(1, mag / normMag));
@@ -625,10 +629,36 @@ function FdmInstances({
     topoMultiplier,
     vectors,
     vectorsVisible,
-    voxelColorMode,
     voxelGap,
     voxelThreshold,
   ]);
+
+  /* ── P-08: Color-only patch when voxelColorMode changes ───────────
+   * Runs only when color mode changes while geometry is stable.
+   * Uses displayToCellRef to avoid re-iterating geometry, and skips
+   * when in geometry preview mode (constant gray, no vector data needed).
+   * ─────────────────────────────────────────────────────────────────── */
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh || !mesh.instanceColor) return;
+    const visibleCount = mesh.count;
+    if (visibleCount === 0 || !displayToCellRef.current) return;
+    if (!hasRenderableVectors || !vectors) return; // geometry mode uses constant gray — skip
+
+    const colors = mesh.instanceColor.array as Float32Array;
+    const displayToCell = displayToCellRef.current;
+    for (let di = 0; di < visibleCount; di++) {
+      const cellIndex = displayToCell[di];
+      const base = cellIndex * 3;
+      applyVoxelColor(vectors[base], vectors[base + 1], vectors[base + 2], voxelColorMode, _color);
+      const outBase = di * 3;
+      colors[outBase] = _color.r;
+      colors[outBase + 1] = _color.g;
+      colors[outBase + 2] = _color.b;
+    }
+    mesh.instanceColor.needsUpdate = true;
+    scheduleInvalidate();
+  }, [voxelColorMode, vectors, hasRenderableVectors, scheduleInvalidate]);
 
   if (count === 0) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {

@@ -26,6 +26,9 @@ export function selectViewportVectorField(args: {
   liveFieldSourceStep?: number | null;
   previewSourceStep?: number | null;
   isGlobalScalarQuantity: (quantity: string | null | undefined) => boolean;
+  /** When true, live field wins over preview whenever live has values. Use in FEM 3D
+   * mode to prevent a stale preview frame flickering back after live data arrives. */
+  skipPreviewFallback?: boolean;
 }): {
   vectors: Float64Array | null;
   source: "authored" | "preview" | "live" | "none";
@@ -40,6 +43,7 @@ export function selectViewportVectorField(args: {
     liveFieldSourceStep = null,
     previewSourceStep = null,
     isGlobalScalarQuantity,
+    skipPreviewFallback = false,
   } = args;
 
   if (isGlobalScalarQuantity(activeQuantityId)) {
@@ -48,6 +52,12 @@ export function selectViewportVectorField(args: {
 
   if (authoredField && authoredField.length > 0) {
     return { vectors: authoredField, source: "authored" };
+  }
+
+  // When skipPreviewFallback is set (e.g. FEM 3D with live data active), return live
+  // immediately if it has values — don't let a stale preview frame win.
+  if (skipPreviewFallback && liveField && liveField.length > 0) {
+    return { vectors: liveField, source: "live" };
   }
 
   const previewVectors = renderPreview?.vector_field_values ?? null;

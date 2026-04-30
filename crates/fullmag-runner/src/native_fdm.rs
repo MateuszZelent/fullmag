@@ -817,7 +817,7 @@ impl NativeFdmBackend {
             "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
             "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
             "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
-            "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+            "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
             "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
             _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
         };
@@ -1304,7 +1304,7 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
         "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
         "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
-        "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+        "H_oe" | "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         _ => return None,
     })

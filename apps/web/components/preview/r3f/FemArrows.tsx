@@ -12,6 +12,7 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { isNodeActive, maskKind } from "../fem/femNodeMask";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
+import { applyLiveBufferTransition } from "./liveBufferAnimation";
 
 export type ArrowLengthMode = "constant" | "magnitude" | "sqrt" | "log";
 
@@ -215,6 +216,8 @@ export function FemArrows({
   onSampledCount,
 }: FemArrowsProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
+  const previousInstanceCountRef = useRef(0);
+  const transitionCleanupRef = useRef<(() => void) | null>(null);
   const scheduleInvalidate = useBatchedInvalidate();
   const glyphPolicy = RENDER_POLICIES_V2.glyphs;
   const clampedAlpha = Math.max(0.05, Math.min(1, alpha));
@@ -513,7 +516,7 @@ export function FemArrows({
     if (!meshInstanceColor) return;
     const matrixArray = mesh.instanceMatrix.array as Float32Array;
     const colorArray = meshInstanceColor.array as Float32Array;
-    colorArray.set(colors.subarray(0, count * 3), 0);
+    const nextMatrices = new Float32Array(count * 16);
     const dummy = new THREE.Object3D();
     let matrixOffset = 0;
 
@@ -531,14 +534,50 @@ export function FemArrows({
       );
       dummy.scale.set(scales[i * 3], scales[i * 3 + 1], scales[i * 3 + 2]);
       dummy.updateMatrix();
-      dummy.matrix.toArray(matrixArray, matrixOffset);
+      dummy.matrix.toArray(nextMatrices, matrixOffset);
       matrixOffset += 16;
     }
 
     mesh.count = count;
-    mesh.instanceMatrix.needsUpdate = true;
-    meshInstanceColor.needsUpdate = true;
-    scheduleInvalidate();
+    transitionCleanupRef.current?.();
+    const animate = previousInstanceCountRef.current === count;
+    previousInstanceCountRef.current = count;
+    const colorTarget = colors.subarray(0, count * 3);
+    if (!animate) {
+      matrixArray.set(nextMatrices, 0);
+      colorArray.set(colorTarget, 0);
+      mesh.instanceMatrix.needsUpdate = true;
+      meshInstanceColor.needsUpdate = true;
+      scheduleInvalidate();
+      transitionCleanupRef.current = null;
+      return;
+    }
+    const cleanupMatrix = applyLiveBufferTransition({
+      destination: matrixArray.subarray(0, count * 16),
+      target: nextMatrices,
+      maxAnimatedValues: 320_000,
+      markNeedsUpdate: () => {
+        mesh.instanceMatrix.needsUpdate = true;
+      },
+      scheduleInvalidate,
+    });
+    const cleanupColors = applyLiveBufferTransition({
+      destination: colorArray.subarray(0, count * 3),
+      target: colorTarget,
+      maxAnimatedValues: 180_000,
+      markNeedsUpdate: () => {
+        meshInstanceColor.needsUpdate = true;
+      },
+      scheduleInvalidate,
+    });
+    transitionCleanupRef.current = () => {
+      cleanupMatrix();
+      cleanupColors();
+    };
+    return () => {
+      transitionCleanupRef.current?.();
+      transitionCleanupRef.current = null;
+    };
   }, [
     colors,
     count,

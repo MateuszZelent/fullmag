@@ -2,7 +2,7 @@
 
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import {
   OrthographicCamera,
   PerspectiveCamera,
@@ -93,6 +93,7 @@ interface ScientificViewportShellProps {
   bridgeRef?: MutableRefObject<any> | null;
   controlsRef?: MutableRefObject<any> | null;
   onCanvasCreated?: (payload: { gl: THREE.WebGLRenderer; camera: THREE.Camera }) => void;
+  onVisualActivityChange?: (active: boolean) => void;
   onPointerMissed?: () => void;
   onCanvasContextMenu?: React.MouseEventHandler<Element>;
   renderDefaultGizmos?: boolean;
@@ -109,6 +110,86 @@ interface ScientificViewportShellProps {
     forceFrameloopMode?: ViewportFrameloopMode;
   };
   telemetryLabel?: string;
+}
+
+const VISUAL_ACTIVITY_SAMPLE_POINTS = [
+  [0.18, 0.22], [0.38, 0.22], [0.58, 0.22], [0.78, 0.22],
+  [0.22, 0.42], [0.42, 0.42], [0.62, 0.42], [0.82, 0.42],
+  [0.18, 0.62], [0.38, 0.62], [0.58, 0.62], [0.78, 0.62],
+  [0.28, 0.78], [0.5, 0.78], [0.72, 0.78],
+] as const;
+
+function backgroundRgb(color: number): [number, number, number] {
+  return [
+    (color >> 16) & 255,
+    (color >> 8) & 255,
+    color & 255,
+  ];
+}
+
+function CanvasVisualActivityProbe({
+  backgroundColor,
+  onVisualActivityChange,
+}: {
+  backgroundColor: number;
+  onVisualActivityChange?: (active: boolean) => void;
+}) {
+  const { gl } = useThree();
+  const lastActiveRef = useRef<boolean | null>(null);
+  const sampleScheduledRef = useRef(false);
+  const background = useMemo(() => backgroundRgb(backgroundColor), [backgroundColor]);
+
+  useFrame(() => {
+    if (!onVisualActivityChange) {
+      return;
+    }
+    if (sampleScheduledRef.current) {
+      return;
+    }
+    sampleScheduledRef.current = true;
+    window.setTimeout(() => {
+      sampleScheduledRef.current = false;
+      const context = gl.getContext();
+      const width = context.drawingBufferWidth;
+      const height = context.drawingBufferHeight;
+      if (width <= 0 || height <= 0) {
+        if (lastActiveRef.current !== false) {
+          lastActiveRef.current = false;
+          onVisualActivityChange(false);
+        }
+        return;
+      }
+      const pixel = new Uint8Array(4);
+      let activeSamples = 0;
+      try {
+        for (const [xFactor, yFactor] of VISUAL_ACTIVITY_SAMPLE_POINTS) {
+          const x = Math.max(0, Math.min(width - 1, Math.round(width * xFactor)));
+          const y = Math.max(0, Math.min(height - 1, Math.round(height * yFactor)));
+          context.readPixels(x, y, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
+          const delta =
+            Math.abs(pixel[0] - background[0]) +
+            Math.abs(pixel[1] - background[1]) +
+            Math.abs(pixel[2] - background[2]);
+          if (delta > 36 && pixel[3] > 0) {
+            activeSamples += 1;
+          }
+        }
+      } catch {
+        if (lastActiveRef.current !== false) {
+          lastActiveRef.current = false;
+          onVisualActivityChange(false);
+        }
+        return;
+      }
+      const active = activeSamples > 0 || gl.info.render.calls > 0;
+      if (lastActiveRef.current !== active) {
+        lastActiveRef.current = active;
+        onVisualActivityChange(active);
+      }
+    }, 0);
+  });
+
+  return null;
 }
 
 function ShellCamera({ projection }: { projection: ShellProjection }) {
@@ -222,6 +303,24 @@ function ShellControls({
   );
 }
 
+/** P-25: Fires invalidate() when a warm-hidden canvas transitions back to visible.
+ * Without this, switching to a warm-hidden tab changes frameloop from "never" to "demand"
+ * but no draw call is dispatched until the next user interaction or data update, leaving
+ * the viewport blank/black for an observable instant.
+ */
+function WarmHideRevealInvalidator({ hidden }: { hidden: boolean }) {
+  const { invalidate } = useThree();
+  const prevHiddenRef = useRef(hidden);
+  useEffect(() => {
+    const wasHidden = prevHiddenRef.current;
+    prevHiddenRef.current = hidden;
+    if (wasHidden && !hidden) {
+      invalidate();
+    }
+  }, [hidden, invalidate]);
+  return null;
+}
+
 function ShellBridgeSync({
   bridgeRef,
   controlsRef,
@@ -284,6 +383,7 @@ export default function ScientificViewportShell({
   bridgeRef = null,
   controlsRef: externalControlsRef = null,
   onCanvasCreated,
+  onVisualActivityChange,
   onPointerMissed,
   onCanvasContextMenu,
   renderDefaultGizmos = true,
@@ -495,11 +595,16 @@ export default function ScientificViewportShell({
           awaitControls
         />
       ) : null}
+      <WarmHideRevealInvalidator hidden={resolvedHidden} />
       <ViewportTelemetryProbe
         label={telemetryLabel}
         dpr={effectiveDpr}
         hidden={resolvedHidden}
         onStats={telemetry.update}
+      />
+      <CanvasVisualActivityProbe
+        backgroundColor={backgroundColor}
+        onVisualActivityChange={onVisualActivityChange}
       />
     </Canvas>
   );

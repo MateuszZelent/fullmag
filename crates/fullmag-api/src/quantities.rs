@@ -33,6 +33,9 @@ pub(crate) fn build_quantities(
                 })
         })
         .unwrap_or_default();
+    let execution_plan = metadata
+        .and_then(|value| value.get("execution_plan"))
+        .and_then(|value| serde_json::from_value::<ExecutionPlanIR>(value.clone()).ok());
     let dynamic_available =
         |quantity_id: &str| dynamic_supported.iter().any(|id| id == quantity_id);
     let scalar_available = |run_value: Option<f64>| {
@@ -54,10 +57,10 @@ pub(crate) fn build_quantities(
                             .and_then(|state| state.latest_step.preview_field.as_ref())
                             .is_some_and(|field| field.quantity == spec.id.as_str())
                 }
-                QuantityShape::GlobalScalar => scalar_available(
-                    spec.scalar_metric_key
-                        .and_then(|metric_key| run_manifest_scalar_value(run, metric_key)),
-                ),
+                QuantityShape::GlobalScalar => spec.scalar_metric_key.is_some_and(|metric_key| {
+                    scalar_metric_is_active(execution_plan.as_ref(), metric_key)
+                        && scalar_available(run_manifest_scalar_value(run, metric_key))
+                }),
             };
 
             QuantityDescriptor {
@@ -80,6 +83,60 @@ pub(crate) fn build_quantities(
             }
         })
         .collect()
+}
+
+fn scalar_metric_is_active(plan: Option<&ExecutionPlanIR>, metric_key: &str) -> bool {
+    let Some(plan) = plan else {
+        return true;
+    };
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(plan) => match metric_key {
+            "e_ex" => plan.enable_exchange,
+            "e_demag" => plan.enable_demag,
+            "e_ext" => plan.external_field.is_some(),
+            "e_ani" => {
+                plan.material.uniaxial_anisotropy_ku1.is_some()
+                    || plan.material.uniaxial_anisotropy_ku2.is_some()
+                    || plan.material.cubic_anisotropy_kc1.is_some()
+                    || plan.material.cubic_anisotropy_kc2.is_some()
+                    || plan.material.cubic_anisotropy_kc3.is_some()
+            }
+            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_total" => true,
+            _ => false,
+        },
+        BackendPlanIR::Fem(plan) => match metric_key {
+            "e_ex" => plan.enable_exchange,
+            "e_demag" => plan.enable_demag,
+            "e_ext" => plan.external_field.is_some(),
+            "e_ani" => {
+                plan.material.uniaxial_anisotropy.is_some()
+                    || plan.material.uniaxial_anisotropy_k2.is_some()
+                    || plan.material.cubic_anisotropy_kc1.is_some()
+                    || plan.material.cubic_anisotropy_kc2.is_some()
+                    || plan.material.cubic_anisotropy_kc3.is_some()
+            }
+            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_total" => true,
+            _ => false,
+        },
+        BackendPlanIR::FemEigen(plan) => match metric_key {
+            "e_ex" => plan.enable_exchange,
+            "e_demag" => plan.enable_demag,
+            "e_ext" => plan.external_field.is_some(),
+            "e_ani" => {
+                plan.material.uniaxial_anisotropy.is_some()
+                    || plan.material.uniaxial_anisotropy_k2.is_some()
+                    || plan.material.cubic_anisotropy_kc1.is_some()
+                    || plan.material.cubic_anisotropy_kc2.is_some()
+                    || plan.material.cubic_anisotropy_kc3.is_some()
+            }
+            "e_dmi" => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+            "e_total" => true,
+            _ => false,
+        },
+        BackendPlanIR::FdmMultilayer(_) => true,
+    }
 }
 
 pub(crate) fn run_manifest_scalar_value(
@@ -109,8 +166,12 @@ pub(crate) fn extract_fem_mesh_from_metadata(metadata: &Value) -> Option<FemMesh
 
 #[cfg(test)]
 mod tests {
-    use super::build_quantities;
+    use super::{build_quantities, scalar_metric_is_active};
     use crate::types::{CachedPreviewFields, LatestFields, LiveState, StepUpdateView};
+    use fullmag_ir::{
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
+        OutputPlanIR, ProvenancePlanIR,
+    };
 
     #[test]
     fn magnetization_is_not_marked_available_from_legacy_inline_field() {
@@ -168,5 +229,39 @@ mod tests {
                 spec.id.as_str()
             );
         }
+    }
+
+    #[test]
+    fn scalar_energy_availability_follows_active_fdm_terms() {
+        let mut fdm = FdmPlanIR {
+            enable_exchange: true,
+            enable_demag: false,
+            ..FdmPlanIR::default()
+        };
+        let mut plan = ExecutionPlanIR {
+            common: CommonPlanMeta {
+                ir_version: "test".to_string(),
+                requested_backend: BackendTarget::Fdm,
+                resolved_backend: BackendTarget::Fdm,
+                execution_mode: ExecutionMode::Strict,
+            },
+            backend_plan: BackendPlanIR::Fdm(fdm.clone()),
+            output_plan: OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: ProvenancePlanIR { notes: Vec::new() },
+        };
+
+        assert!(scalar_metric_is_active(Some(&plan), "e_ex"));
+        assert!(!scalar_metric_is_active(Some(&plan), "e_demag"));
+        assert!(!scalar_metric_is_active(Some(&plan), "e_ani"));
+        assert!(scalar_metric_is_active(Some(&plan), "e_total"));
+
+        fdm.enable_demag = true;
+        fdm.material.uniaxial_anisotropy_ku1 = Some(1.0e5);
+        plan.backend_plan = BackendPlanIR::Fdm(fdm);
+
+        assert!(scalar_metric_is_active(Some(&plan), "e_demag"));
+        assert!(scalar_metric_is_active(Some(&plan), "e_ani"));
     }
 }

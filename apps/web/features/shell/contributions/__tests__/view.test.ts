@@ -356,6 +356,16 @@ describe("View ribbon contribution", () => {
     const global = buildViewRibbonGroups(baseContext({ airboxVisible: true }))[0];
     const airbox = global.actions.find((action) => action.id === "view-airbox");
 
+    expect(findNode(airbox?.menu ?? [], "airbox:points-section")).toMatchObject({
+      type: "label",
+      label: "Points",
+      badge: "off",
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:vectors-section")).toMatchObject({
+      type: "label",
+      label: "Vectors",
+      badge: "off",
+    });
     expect(findNode(airbox?.menu ?? [], "airbox:shaded")).toMatchObject({
       type: "checkbox",
       checked: true,
@@ -379,19 +389,56 @@ describe("View ribbon contribution", () => {
     expect(findNode(airbox?.menu ?? [], "airbox:points-scope")).toMatchObject({
       type: "radio-group",
       value: "surface",
+      disabled: true,
+      disabledReason: "Enable Airbox points first",
     });
     expect(findNode(airbox?.menu ?? [], "airbox:vectors-scope")).toMatchObject({
       type: "radio-group",
       value: "surface",
+      disabled: true,
+      disabledReason: "Enable Airbox vectors first",
     });
     expect(findNode(airbox?.menu ?? [], "airbox:vectors-submenu")).toMatchObject({
       type: "submenu",
     });
   });
 
-  it("dispatches airbox full extent patches for wireframe points and vectors", () => {
+  it("dispatches independent airbox points and vectors toggles", () => {
     const run = vi.fn();
     const global = buildViewRibbonGroups(baseContext({ airboxVisible: true, run }))[0];
+    const airbox = global.actions.find((action) => action.id === "view-airbox");
+
+    const points = findNode(airbox?.menu ?? [], "airbox:points");
+    const vectors = findNode(airbox?.menu ?? [], "airbox:vectors");
+
+    if (points?.type !== "checkbox" || vectors?.type !== "checkbox") {
+      throw new Error("Airbox point/vector toggles missing");
+    }
+
+    points.onCheckedChange(true);
+    vectors.onCheckedChange(true);
+
+    expect(run).toHaveBeenNthCalledWith(1, {
+      id: "viewport.set-airbox-display",
+      patch: { points: true },
+    });
+    expect(run).toHaveBeenNthCalledWith(2, {
+      id: "viewport.set-airbox-display",
+      patch: { vectors: true },
+    });
+  });
+
+  it("dispatches airbox full extent patches for wireframe points and vectors", () => {
+    const run = vi.fn();
+    const global = buildViewRibbonGroups(
+      baseContext({
+        airboxVisible: true,
+        airMeshRenderMode: "points",
+        femVectorDomainFilter: "airbox_only",
+        meshShowArrows: true,
+        run,
+      }),
+    )[0];
     const airbox = global.actions.find((action) => action.id === "view-airbox");
 
     const wireframeScope = findNode(airbox?.menu ?? [], "airbox:wireframe-scope");
@@ -417,6 +464,25 @@ describe("View ribbon contribution", () => {
     expect(run).toHaveBeenNthCalledWith(3, {
       id: "viewport.set-airbox-display",
       patch: { vectorsScope: "full" },
+    });
+  });
+
+  it("shows independent points and vectors extents in the airbox badge", () => {
+    const global = buildViewRibbonGroups(
+      baseContext({
+        airboxVisible: true,
+        airMeshRenderMode: "points",
+        airMeshPointsScope: "full",
+        airMeshVectorsScope: "surface",
+        femVectorDomainFilter: "airbox_only",
+        meshShowArrows: true,
+      }),
+    )[0];
+    const airbox = global.actions.find((action) => action.id === "view-airbox");
+
+    expect(findNode(airbox?.menu ?? [], "airbox:header")).toMatchObject({
+      type: "label",
+      badge: "points/full + vectors/surface",
     });
   });
 

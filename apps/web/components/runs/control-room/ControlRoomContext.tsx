@@ -2431,6 +2431,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       liveFieldSourceStep,
       previewSourceStep,
       isGlobalScalarQuantity,
+      skipPreviewFallback: effectiveIsFemBackend && effectiveViewMode === "3D" && Boolean(selectedLiveField),
     });
   }, [
     activeQuantityId,

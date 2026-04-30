@@ -34,9 +34,9 @@ describe("resolveAirboxRenderMode", () => {
     expect(resolveAirboxRenderMode("surface+edges", { shaded: false })).toBe("wireframe");
   });
 
-  it("uses points as an exclusive render mode and falls back when disabled", () => {
+  it("uses points as an exclusive render mode and keeps point configuration when disabled", () => {
     expect(resolveAirboxRenderMode("surface+edges", { points: true })).toBe("points");
-    expect(resolveAirboxRenderMode("points", { points: false })).toBe("wireframe");
+    expect(resolveAirboxRenderMode("points", { points: false })).toBe("points");
     expect(
       resolveAirboxDisplayState(airboxDisplayStateFromRenderMode("points"), {
         points: false,
@@ -70,6 +70,57 @@ describe("resolveAirboxRenderMode", () => {
     ).toMatchObject({
       renderMode: "points",
       pointsScope: "full",
+    });
+  });
+
+  it("updates vectors extent without changing point render state", () => {
+    expect(
+      resolveAirboxDisplayState(
+        {
+          ...airboxDisplayStateFromRenderMode("points"),
+          pointsScope: "full",
+          vectorsScope: "surface",
+        },
+        { vectorsScope: "full" },
+      ),
+    ).toMatchObject({
+      geometryVisible: true,
+      renderMode: "points",
+      pointsScope: "full",
+      vectorsScope: "full",
+    });
+  });
+
+  it("updates points extent without changing vectors extent", () => {
+    expect(
+      resolveAirboxDisplayState(
+        {
+          ...airboxDisplayStateFromRenderMode("wireframe"),
+          pointsScope: "surface",
+          vectorsScope: "full",
+        },
+        { pointsScope: "full" },
+      ),
+    ).toMatchObject({
+      renderMode: "wireframe",
+      pointsScope: "full",
+      vectorsScope: "full",
+    });
+  });
+
+  it("enables points without resetting vector extent", () => {
+    expect(
+      resolveAirboxDisplayState(
+        {
+          ...airboxDisplayStateFromRenderMode("wireframe"),
+          vectorsScope: "full",
+        },
+        { points: true },
+      ),
+    ).toMatchObject({
+      renderMode: "points",
+      pointsScope: "surface",
+      vectorsScope: "full",
     });
   });
 

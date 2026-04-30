@@ -23,6 +23,7 @@ import type {
 import { DataPlaneStatusBadges } from "./control-room/DataPlaneStatusBadges";
 import RunSidebar from "./control-room/RunSidebar";
 import { ViewportBar, ViewportCanvasArea } from "./control-room/ViewportPanels";
+import type { Viewport3DHealthReport } from "@/components/preview/FemMeshView3D";
 import { ViewportTabBar } from "./control-room/ViewportTabBar";
 import { WorkspaceBodyLayout } from "./control-room/WorkspaceBodyLayout";
 import FullmagLogo from "../brand/FullmagLogo";
@@ -565,6 +566,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   ]);
 
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
+  const [viewportRuntimeHealth, setViewportRuntimeHealth] =
+    useState<Viewport3DHealthReport | null>(null);
   const viewport3DStatus = useMemo<{
     status: "active" | "inactive" | "warning";
     reason: string;
@@ -620,10 +623,15 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
           detail: "Switch Display > Context or select an object to restore a visible 3D scope.",
         };
       }
+      if (viewportRuntimeHealth && viewportRuntimeHealth.status !== "active") {
+        return viewportRuntimeHealth;
+      }
       return {
         status: "active",
-        reason: "3D visualization is active.",
-        detail: `FEM mesh: ${ctx.femMeshData.nNodes.toLocaleString()} nodes, ${ctx.femMeshData.nElements.toLocaleString()} elements.`,
+        reason: viewportRuntimeHealth?.reason ?? "3D visualization is active.",
+        detail:
+          viewportRuntimeHealth?.detail ??
+          `FEM mesh: ${ctx.femMeshData.nNodes.toLocaleString()} nodes, ${ctx.femMeshData.nElements.toLocaleString()} elements.`,
       };
     }
     if (!ctx.previewGrid && !spatialPreview) {
@@ -655,7 +663,36 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.selectedObjectId,
     femDiscretization,
     spatialPreview,
+    viewportRuntimeHealth,
   ]);
+  const handleViewportHealthChange = useCallback((report: Viewport3DHealthReport) => {
+    setViewportRuntimeHealth((previous) => {
+      if (
+        previous?.status === report.status &&
+        previous.reason === report.reason &&
+        previous.detail === report.detail
+      ) {
+        return previous;
+      }
+      return report;
+    });
+  }, []);
+  useEffect(() => {
+    const handleHealthEvent = (event: Event) => {
+      const detail = (event as CustomEvent<Viewport3DHealthReport>).detail;
+      if (
+        !detail ||
+        (detail.status !== "active" &&
+          detail.status !== "inactive" &&
+          detail.status !== "warning")
+      ) {
+        return;
+      }
+      handleViewportHealthChange(detail);
+    };
+    window.addEventListener("fullmag:viewport3d-health", handleHealthEvent);
+    return () => window.removeEventListener("fullmag:viewport3d-health", handleHealthEvent);
+  }, [handleViewportHealthChange]);
   const [meshBuildDialogOpen, setMeshBuildDialogOpen] = useState(false);
   const [meshBuildIntent, setMeshBuildIntent] = useState<ReturnType<typeof meshBuildIntentForNode> | null>(null);
   const [meshBuildError, setMeshBuildError] = useState<string | null>(null);
@@ -1936,17 +1973,29 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ctx.setMeshEntityViewState((previous) => {
       let changed = false;
       const next = { ...previous };
+      const representativePart =
+        airboxParts.find((part) => part.role === "air") ?? airboxParts[0];
+      const representativeCurrent =
+        next[representativePart.id] ?? defaultMeshEntityViewState(representativePart);
+      const representativeModeDefaults = airboxDisplayStateFromRenderMode(
+        representativeCurrent.renderMode,
+      );
+      const sharedCurrentDisplay = {
+        ...representativeModeDefaults,
+        geometryVisible: representativeCurrent.geometryVisible ?? true,
+        wireframeScope:
+          representativeCurrent.wireframeScope ??
+          representativeModeDefaults.wireframeScope,
+        pointsScope:
+          representativeCurrent.pointsScope ??
+          representativeModeDefaults.pointsScope,
+        vectorsScope:
+          representativeCurrent.vectorsScope ??
+          representativeModeDefaults.vectorsScope,
+      };
       for (const part of airboxParts) {
         const current = next[part.id] ?? defaultMeshEntityViewState(part);
-        const modeDefaults = airboxDisplayStateFromRenderMode(current.renderMode);
-        const currentDisplay = {
-          ...modeDefaults,
-          geometryVisible: current.geometryVisible ?? true,
-          wireframeScope: current.wireframeScope ?? modeDefaults.wireframeScope,
-          pointsScope: current.pointsScope ?? modeDefaults.pointsScope,
-          vectorsScope: current.vectorsScope ?? modeDefaults.vectorsScope,
-        };
-        const nextDisplay = resolveAirboxDisplayState(currentDisplay, patch);
+        const nextDisplay = resolveAirboxDisplayState(sharedCurrentDisplay, patch);
         const nextVisible = typeof patch.visible === "boolean"
           ? patch.visible
           : current.visible;
@@ -2399,7 +2448,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
               {FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar ? <ViewportBar /> : null}
               {FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices ? previewNotices : null}
               <ViewportTabBar />
-              <ViewportCanvasArea />
+              <ViewportCanvasArea onViewportHealthChange={handleViewportHealthChange} />
             </>
           }
           rightOpen={rightInspectorOpen}

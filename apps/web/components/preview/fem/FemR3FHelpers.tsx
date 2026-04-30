@@ -33,23 +33,33 @@ export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geom
   return null;
 }
 
-/** Auto-fit the R3F camera to the geometry bounding sphere whenever maxDim changes. */
+/** Auto-fit the R3F camera to the geometry bounding sphere whenever maxDim changes.
+ *
+ * @param lastAppliedRef - Optional external ref for tracking the last applied generation/camera.
+ *   Pass a ref that lives outside this component (e.g. in FemMeshView3D) so that the fit state
+ *   survives scene remounts (missingExactScopeSegment toggle, context loss recovery).
+ *   Without this, remounting CameraAutoFit resets lastApplied to {gen:0, camera:null} and
+ *   immediately re-fires fitCameraToBounds for the current generation (P-19).
+ */
 export function CameraAutoFit({
   maxDim,
   generation,
   targetCenter,
   controlsRef,
+  lastAppliedRef: externalLastAppliedRef,
 }: {
   maxDim: number;
   generation: number;
   targetCenter?: THREE.Vector3;
   controlsRef?: React.MutableRefObject<any>;
+  lastAppliedRef?: React.MutableRefObject<{ generation: number; camera: THREE.Camera | null }>;
 }) {
   const { camera, invalidate } = useThree();
-  const lastAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>({
+  const internalLastAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>({
     generation: 0,
     camera: null,
   });
+  const lastAppliedRef = externalLastAppliedRef ?? internalLastAppliedRef;
 
   useEffect(() => {
     if (maxDim <= 0 || generation === 0) {

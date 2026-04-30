@@ -36,6 +36,7 @@ import TextureTransformGizmo, {
 } from "./TextureTransformGizmo";
 import type { TextureTransform3D } from "@/lib/textureTransform";
 import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
+import { resolveAirboxArrowSamplingMode } from "./fem/airboxVectorSampling";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
@@ -78,6 +79,29 @@ const DIMMED_MIN_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinMagnetic;
 const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
 const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
 const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
+
+export interface Viewport3DHealthReport {
+  status: "active" | "inactive" | "warning";
+  reason: string;
+  detail: string;
+}
+
+/* ── P-21: structural equality helper ─────────────────────────────── */
+function viewportCameraStatesClose(
+  a: ViewportCameraState | null | undefined,
+  b: ViewportCameraState | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const eps = 1e-9;
+  const arrClose = (x: readonly number[], y: readonly number[]) =>
+    x.length === y.length && x.every((v, i) => Math.abs(v - y[i]) < eps);
+  return (
+    arrClose(a.position, b.position) &&
+    arrClose(a.target, b.target) &&
+    arrClose(a.up, b.up)
+  );
+}
 
 interface Props {
   meshData: FemMeshData;
@@ -180,6 +204,7 @@ interface Props {
   viewportDocumentId?: string | null;
   persistedCameraState?: ViewportCameraState | null;
   onPersistCameraState?: (state: ViewportCameraState) => void;
+  onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
   authoringOverlay?: ReactNode;
 }
 
@@ -275,6 +300,7 @@ function FemMeshView3DInner({
   viewportDocumentId = null,
   persistedCameraState = null,
   onPersistCameraState,
+  onViewportHealthChange,
   authoringOverlay = null,
 }: Props) {
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
@@ -308,6 +334,24 @@ function FemMeshView3DInner({
   const cameraRestoreReadyRef = useRef(false);
   const restoredCameraScopeRef = useRef<string | null>(null);
   const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
+  // P-18: Track canvas remount generation so the camera restore effect re-runs after context loss
+  // recovery (canvasContextGeneration bump inside ScientificViewportShell remounts the Canvas but
+  // doesn't change cameraPersistenceScope or persistedCameraState, so without this counter the
+  // restore effect guard would silently return and the camera would snap to [3,2.4,3]).
+  const [cameraContextKey, setCameraContextKey] = useState(0);
+  const [canvasVisualActive, setCanvasVisualActive] = useState<boolean | null>(null);
+  const [viewportShellRecoveryGeneration, setViewportShellRecoveryGeneration] = useState(0);
+  const lastRestoredContextKeyRef = useRef(-1);
+  // P-19: External ref for CameraAutoFit so its "last applied" state survives scene remounts
+  // (missingExactScopeSegment toggle or context loss). Without this the ref resets to gen=0 on
+  // every remount and immediately re-fires fitCameraToBounds for the current generation.
+  const cameraAutoFitAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>(
+    { generation: 0, camera: null },
+  );
+  const blankViewportRecoveryRef = useRef<{ key: string | null; attempts: number }>({
+    key: null,
+    attempts: 0,
+  });
 
   const {
     renderMode,
@@ -485,18 +529,35 @@ function FemMeshView3DInner({
     shouldRenderMagneticGeometryResolved,
     shouldRenderAirGeometry,
   } = vectorDomain;
-  const effectiveArrowSamplingMode = useMemo<ArrowSamplingMode>(() => {
-    if (resolvedVectorDomain !== "airbox_only") {
-      return arrowSamplingMode;
+  const effectiveArrowSamplingMode = useMemo<ArrowSamplingMode>(
+    () =>
+      resolveAirboxArrowSamplingMode({
+        resolvedVectorDomain,
+        arrowSamplingMode,
+        visibleLayers,
+      }),
+    [arrowSamplingMode, resolvedVectorDomain, visibleLayers],
+  );
+  const renderableGeometryLayerCount = useMemo(() => {
+    if (!hasMeshParts) {
+      return Number(shouldRenderAirGeometry) + Number(shouldRenderMagneticGeometryResolved);
     }
-    const airLayer = visibleLayers.find(
-      (layer) => layer.part.role === "air" || layer.part.role === "outer_boundary",
-    );
-    return (airLayer?.viewState.vectorsScope ?? "surface") === "full"
-      ? "volume"
-      : "surface";
-  }, [arrowSamplingMode, resolvedVectorDomain, visibleLayers]);
-
+    return visibleLayers.filter((layer) => {
+      if (layer.viewState.geometryVisible === false) {
+        return false;
+      }
+      const hasFaces =
+        !Array.isArray(layer.boundaryFaceIndices) || layer.boundaryFaceIndices.length > 0;
+      const hasElements =
+        !Array.isArray(layer.elementIndices) || layer.elementIndices.length > 0;
+      return hasFaces || hasElements;
+    }).length;
+  }, [
+    hasMeshParts,
+    shouldRenderAirGeometry,
+    shouldRenderMagneticGeometryResolved,
+    visibleLayers,
+  ]);
   const topologySignature = topologyKey.trim();
   if (!topologySignature) {
     throw new Error("[FemMeshView3D] Missing required topologyKey.");
@@ -537,6 +598,55 @@ function FemMeshView3DInner({
     selectionScope,
   } = toolbarModel;
   const effectiveOpacity = opacity;
+  const expectedViewportContent =
+    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneGeometry &&
+    !missingExactScopeSegment &&
+    (renderableGeometryLayerCount > 0 || effectiveShowArrows);
+  const publishViewportHealth = useCallback((report: Viewport3DHealthReport) => {
+    onViewportHealthChange?.(report);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("fullmag:viewport3d-health", { detail: report }));
+    }
+  }, [onViewportHealthChange]);
+
+  useEffect(() => {
+    if (missingExactScopeSegment) {
+      publishViewportHealth({
+        status: "inactive",
+        reason: "Selected 3D scope has no matching FEM mesh segment.",
+        detail: "Clear isolate/selection or select an object that exists in the current FEM mesh.",
+      });
+      return;
+    }
+    if (!expectedViewportContent) {
+      publishViewportHealth({
+        status: "inactive",
+        reason: "No renderable 3D geometry or vectors are active.",
+        detail: "Enable Primitive, Mesh View, Quantity, Vectors, or Airbox in the View ribbon.",
+      });
+      return;
+    }
+    if (canvasVisualActive === false) {
+      publishViewportHealth({
+        status: "warning",
+        reason: "3D canvas appears blank although renderable FEM content is enabled.",
+        detail: "The WebGL viewport may need a reset, remount, or camera refit.",
+      });
+      return;
+    }
+    publishViewportHealth({
+      status: "active",
+      reason: "3D visualization is rendering visible content.",
+      detail: `${renderableGeometryLayerCount.toLocaleString()} renderable FEM layer${renderableGeometryLayerCount === 1 ? "" : "s"}${effectiveShowArrows ? " plus vectors" : ""}.`,
+    });
+  }, [
+    canvasVisualActive,
+    effectiveShowArrows,
+    expectedViewportContent,
+    missingExactScopeSegment,
+    publishViewportHealth,
+    renderableGeometryLayerCount,
+  ]);
 
   const {
     applyToolbarRenderMode,
@@ -641,6 +751,48 @@ function FemMeshView3DInner({
     setCaptureActive,
     setQualityProfile,
   });
+  useEffect(() => {
+    if (!expectedViewportContent || missingExactScopeSegment || canvasVisualActive !== false) {
+      if (canvasVisualActive === true) {
+        blankViewportRecoveryRef.current = { key: null, attempts: 0 };
+      }
+      return;
+    }
+    if (!Number.isFinite(dynamicMaxDim) || dynamicMaxDim <= 0) {
+      return;
+    }
+
+    const recoveryKey = [
+      topologyKey,
+      viewportFitSeed ?? "no-fit-seed",
+      renderableGeometryLayerCount,
+      effectiveShowArrows ? "vectors" : "no-vectors",
+    ].join(":");
+    if (blankViewportRecoveryRef.current.key !== recoveryKey) {
+      blankViewportRecoveryRef.current = { key: recoveryKey, attempts: 0 };
+    }
+    if (blankViewportRecoveryRef.current.attempts >= 2) {
+      return;
+    }
+
+    const nextAttempt = blankViewportRecoveryRef.current.attempts + 1;
+    blankViewportRecoveryRef.current.attempts = nextAttempt;
+    cameraAutoFitAppliedRef.current = { generation: -1, camera: null };
+    if (nextAttempt > 1) {
+      setCanvasVisualActive(null);
+      setViewportShellRecoveryGeneration((generation) => generation + 1);
+    }
+    setCameraFitGeneration((generation) => generation + 1);
+  }, [
+    canvasVisualActive,
+    dynamicMaxDim,
+    effectiveShowArrows,
+    expectedViewportContent,
+    missingExactScopeSegment,
+    renderableGeometryLayerCount,
+    topologyKey,
+    viewportFitSeed,
+  ]);
   const updateRotationSnapshot = useCallback((
     key: "viewport" | "viewCube" | "hsl",
     snapshot: OrientationDebugSnapshot,
@@ -678,10 +830,33 @@ function FemMeshView3DInner({
     syncViewportRotationSnapshot();
     persistCameraState();
   }, [persistCameraState, syncViewportRotationSnapshot]);
+  // P-21: Track the last persisted camera state we actually applied. Used to detect reference
+  // identity changes that carry identical values (e.g., when graphActiveViewportDocument gets a
+  // new object because a non-camera field changed), so we don\u2019t hard-set the camera unnecessarily.
+  const lastAppliedCameraStateRef = useRef<ViewportCameraState | null>(null);
+
   useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
   useEffect(() => {
-    if (restoredCameraScopeRef.current === cameraPersistenceScope && cameraRestoreReadyRef.current) {
+    if (
+      restoredCameraScopeRef.current === cameraPersistenceScope &&
+      cameraRestoreReadyRef.current &&
+      // P-18: guard must also match the canvas generation so that after context loss recovery
+      // (canvasContextGeneration increment \u2192 Canvas remount \u2192 cameraContextKey increment) the
+      // restore effect runs again instead of returning early.
+      lastRestoredContextKeyRef.current === cameraContextKey
+    ) {
       syncViewportRotationSnapshot();
+      return;
+    }
+    // P-21: Skip restore when persistedCameraState changed reference but values are identical
+    // to what we already applied. This prevents a camera snapback when the parent re-creates the
+    // camera object because an unrelated viewport document field changed.
+    if (
+      cameraRestoreReadyRef.current &&
+      persistedCameraState &&
+      lastAppliedCameraStateRef.current &&
+      viewportCameraStatesClose(persistedCameraState, lastAppliedCameraStateRef.current)
+    ) {
       return;
     }
     cameraRestoreReadyRef.current = false;
@@ -701,6 +876,8 @@ function FemMeshView3DInner({
         lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
       }
       restoredCameraScopeRef.current = cameraPersistenceScope;
+      lastRestoredContextKeyRef.current = cameraContextKey; // P-18
+      lastAppliedCameraStateRef.current = persistedCameraState;  // P-21
       cameraRestoreReadyRef.current = true;
       syncViewportRotationSnapshot();
     };
@@ -713,7 +890,7 @@ function FemMeshView3DInner({
         window.cancelAnimationFrame(raf);
       }
     };
-  }, [cameraPersistenceScope, persistedCameraState, syncViewportRotationSnapshot]);
+  }, [cameraPersistenceScope, persistedCameraState, syncViewportRotationSnapshot, cameraContextKey]);
   const applyRotationEuler = useCallback((nextEulerDeg: [number, number, number]) => {
     const quaternion = new THREE.Quaternion().setFromEuler(
       new THREE.Euler(
@@ -725,13 +902,14 @@ function FemMeshView3DInner({
     );
     handleViewCubeRotate(quaternion);
   }, [handleViewCubeRotate]);
-  const shellTarget = useMemo(
-    () => [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z] as [
-      number,
-      number,
-      number,
-    ],
-    [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z],
+  // P-20: Capture initial geometry center as a stable value and never update it reactively.
+  // Drei's OrbitControls/TrackballControls synchronise the `target` prop to controls.target via
+  // useEffect, so passing a reactive dynamicGeomCenter here causes the orbit center to snap back
+  // to the geometry centroid every time the mesh loads or part visibility changes \u2014 overriding
+  // the user\u2019s panning. Subsequent camera adjustments go through CameraAutoFit and
+  // restoreViewportCameraState which update controls.target directly via the controls ref.
+  const [shellTarget] = useState<[number, number, number]>(
+    () => [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z],
   );
   const {
     overlayItems,
@@ -851,6 +1029,7 @@ function FemMeshView3DInner({
   return (
     <div className="relative flex flex-1 w-[100%] h-[100%] min-w-0 min-h-0 bg-background overflow-hidden rounded-md fem-canvas-container">
       <ScientificViewportShell
+        key={`fem-viewport-shell-${viewportShellRecoveryGeneration}`}
         toolbar={
           null
         }
@@ -879,7 +1058,12 @@ function FemMeshView3DInner({
         onCanvasContextMenu={(e) => e.preventDefault()}
         onCanvasCreated={({ gl }) => {
           canvasRef.current = gl.domElement;
+          // P-18: Increment cameraContextKey so the restore effect re-runs after context loss
+          // recovery. ScientificViewportShell increments canvasContextGeneration on context loss,
+          // which remounts the Canvas (new key), which triggers onCanvasCreated again.
+          setCameraContextKey((k) => k + 1);
         }}
+        onVisualActivityChange={setCanvasVisualActive}
         diagnosticOverrides={{
           enableControls:
             selectionOnlyInteractionMode || textureGizmoDragging ? false : true,
@@ -898,6 +1082,7 @@ function FemMeshView3DInner({
               generation={cameraFitGeneration}
               targetCenter={dynamicGeomCenter}
               controlsRef={controlsRef}
+              lastAppliedRef={cameraAutoFitAppliedRef}
             />
           ) : null}
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (

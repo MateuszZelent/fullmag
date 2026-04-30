@@ -391,8 +391,11 @@ export function useFemSceneGeometry({
       return;
     }
     const fitSeed = viewportFitSeed == null ? null : String(viewportFitSeed);
-    const sig = fitSeed
-      ?? `${dynamicMaxDim.toFixed(6)}_${dynamicGeomCenter.x.toFixed(6)}_${dynamicGeomCenter.y.toFixed(6)}_${dynamicGeomCenter.z.toFixed(6)}`;
+    // When no explicit seed is provided, use a stable placeholder so that
+    // incremental geometry-bounds updates (floating-point changes during mesh
+    // streaming) do NOT re-trigger auto-fit.  Only an explicit viewportFitSeed
+    // change (topology revision, manual fit request) should fire a new fit.
+    const sig = fitSeed ?? "initial";
     if (lastFittedGeomRef.current === null && suppressInitialCameraFit) {
       lastFittedGeomRef.current = sig;
       return;
@@ -402,8 +405,6 @@ export function useFemSceneGeometry({
       setCameraFitGeneration((g) => g + 1);
     }
   }, [
-    dynamicMaxDim,
-    dynamicGeomCenter,
     enableCameraFitEffect,
     suppressInitialCameraFit,
     setCameraFitGeneration,

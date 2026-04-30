@@ -18,7 +18,9 @@ use crate::preview::{
     build_grid_preview_field, build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask,
     select_observables,
 };
-use crate::quantities::normalized_quantity_name;
+use crate::quantities::{
+    active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
+};
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -621,6 +623,17 @@ impl CpuInteractiveFdmPreviewRuntime {
         &mut self,
         request: &LivePreviewRequest,
     ) -> Result<LivePreviewField, RunError> {
+        let requested = [request.quantity.as_str()];
+        if active_fdm_preview_quantities(FdmEngine::CpuReference, &self.plan_signature, &requested)
+            .is_empty()
+        {
+            return Err(RunError {
+                message: format!(
+                    "preview quantity '{}' is not active for the current FDM problem",
+                    request.quantity
+                ),
+            });
+        }
         let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
         Ok(build_grid_preview_field(
             request,
@@ -635,6 +648,11 @@ impl CpuInteractiveFdmPreviewRuntime {
         quantities: &[&str],
         request: &LivePreviewRequest,
     ) -> Result<Vec<LivePreviewField>, RunError> {
+        let quantities = active_fdm_preview_quantities(
+            FdmEngine::CpuReference,
+            &self.plan_signature,
+            quantities,
+        );
         let observables = cpu_reference::observe_state(&self.problem, &self.state)?;
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
@@ -1307,6 +1325,17 @@ impl CudaInteractiveFdmPreviewRuntime {
         &mut self,
         request: &LivePreviewRequest,
     ) -> Result<LivePreviewField, RunError> {
+        let requested = [request.quantity.as_str()];
+        if active_fdm_preview_quantities(FdmEngine::CudaFdm, &self.plan_signature, &requested)
+            .is_empty()
+        {
+            return Err(RunError {
+                message: format!(
+                    "preview quantity '{}' is not active for the current FDM problem",
+                    request.quantity
+                ),
+            });
+        }
         self.backend.copy_live_preview_field(
             request,
             self.original_grid,
@@ -1319,6 +1348,8 @@ impl CudaInteractiveFdmPreviewRuntime {
         quantities: &[&str],
         request: &LivePreviewRequest,
     ) -> Result<Vec<LivePreviewField>, RunError> {
+        let quantities =
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &self.plan_signature, quantities);
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
 
@@ -1349,7 +1380,11 @@ impl CudaInteractiveFdmPreviewRuntime {
         &self,
         display_state: &DisplaySelectionState,
     ) -> Result<Option<Vec<NativeFdmPreviewSnapshot>>, RunError> {
-        let quantities = cached_preview_quantities_for(display_state);
+        let quantities = active_fdm_preview_quantities(
+            FdmEngine::CudaFdm,
+            &self.plan_signature,
+            &cached_preview_quantities_for(display_state),
+        );
         if quantities.is_empty() {
             return Ok(None);
         }
@@ -1954,6 +1989,17 @@ impl CpuInteractiveFemPreviewRuntime {
         &mut self,
         request: &LivePreviewRequest,
     ) -> Result<LivePreviewField, RunError> {
+        let requested = [request.quantity.as_str()];
+        if active_fem_preview_quantities(FemEngine::CpuNative, &self.plan_signature, &requested)
+            .is_empty()
+        {
+            return Err(RunError {
+                message: format!(
+                    "preview quantity '{}' is not active for the current FEM problem",
+                    request.quantity
+                ),
+            });
+        }
         let observables =
             fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?;
         Ok(build_mesh_preview_field_with_active_mask(
@@ -1968,6 +2014,8 @@ impl CpuInteractiveFemPreviewRuntime {
         quantities: &[&str],
         request: &LivePreviewRequest,
     ) -> Result<Vec<LivePreviewField>, RunError> {
+        let quantities =
+            active_fem_preview_quantities(FemEngine::CpuNative, &self.plan_signature, quantities);
         let observables =
             fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?;
         let mut cached = Vec::new();
@@ -2606,6 +2654,17 @@ impl GpuInteractiveFemPreviewRuntime {
         &mut self,
         request: &LivePreviewRequest,
     ) -> Result<LivePreviewField, RunError> {
+        let requested = [request.quantity.as_str()];
+        if active_fem_preview_quantities(FemEngine::NativeGpu, &self.plan_signature, &requested)
+            .is_empty()
+        {
+            return Err(RunError {
+                message: format!(
+                    "preview quantity '{}' is not active for the current FEM problem",
+                    request.quantity
+                ),
+            });
+        }
         if normalized_quantity_name(&request.quantity).ok() == Some("H_ant") {
             return Ok(build_mesh_preview_field_with_active_mask(
                 request,
@@ -2622,6 +2681,8 @@ impl GpuInteractiveFemPreviewRuntime {
         quantities: &[&str],
         request: &LivePreviewRequest,
     ) -> Result<Vec<LivePreviewField>, RunError> {
+        let quantities =
+            active_fem_preview_quantities(FemEngine::NativeGpu, &self.plan_signature, quantities);
         let mut cached = Vec::new();
         let mut seen = HashSet::new();
 

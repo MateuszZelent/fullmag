@@ -415,7 +415,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         collapseTarget: "drawer",
         render: () => (
           <div className="pointer-events-none rounded-xl border border-warning/25 bg-background/85 px-4 py-3 text-sm text-warning/90 shadow-lg backdrop-blur-md">
-            Magnetic masking unavailable for shared-domain FEM. View shows built airbox.
+            Magnetic-domain mask unavailable for shared-domain FEM; magnetic-only field display may be unscoped.
           </div>
         ),
       });

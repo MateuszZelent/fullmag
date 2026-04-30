@@ -7,6 +7,7 @@ import { DEFAULT_WORKSPACE_SYNC_STATE } from "@/src/features/workspaceSync";
 import { ViewportHost } from "@/features";
 import { UnifiedViewport3DRenderer, Viewport3DHost } from "@/features/viewport-unified";
 import FemMeshView3D from "@/components/preview/FemMeshView3D";
+import type { Viewport3DHealthReport } from "@/components/preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "@/components/preview/ViewportErrorBoundary";
 import EmptyState from "@/components/ui/EmptyState";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
@@ -50,6 +51,7 @@ const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
 export interface ViewportTabContentProps {
   bridge: ViewportDataBridge;
   viewportVisible?: boolean;
+  onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
 }
 
 /* ── Component ── */
@@ -57,6 +59,7 @@ export interface ViewportTabContentProps {
 export function ViewportTabContent({
   bridge,
   viewportVisible = true,
+  onViewportHealthChange,
 }: ViewportTabContentProps) {
   const ctx = bridge.ctx;
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
@@ -216,6 +219,7 @@ export function ViewportTabContent({
             topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
             meshData={bridge.renderFemMeshData!}
             viewportVisible={viewportVisible}
+            onViewportHealthChange={onViewportHealthChange}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             quantityId={ctx.requestedPreviewQuantity}
@@ -335,6 +339,7 @@ export function ViewportTabContent({
               topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
               meshData={bridge.renderFemMeshData!}
               viewportVisible={viewportVisible}
+              onViewportHealthChange={onViewportHealthChange}
               selectedSidebarNodeId={ctx.selectedSidebarNodeId}
               viewportFitSeed={bridge.viewportFitSeed}
               fieldLabel={
@@ -479,6 +484,7 @@ export function ViewportTabContent({
             topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
             meshData={bridge.scaledFemMeshData ?? ctx.femMeshData}
             viewportVisible={viewportVisible}
+            onViewportHealthChange={onViewportHealthChange}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             colorField="none"

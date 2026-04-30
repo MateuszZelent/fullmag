@@ -1413,7 +1413,12 @@ export function useViewportDataBridge() {
         resolvedFemTopologyKey,
         scaledFemMeshData,
       }),
-    [resolvedFemTopologyKey, scaledFemMeshData],
+    [
+      resolvedFemTopologyKey,
+      scaledFemMeshData?.boundaryFaces?.length,
+      scaledFemMeshData?.nElements,
+      scaledFemMeshData?.nNodes,
+    ],
   );
 
   /* ── Viewport route determination ── */

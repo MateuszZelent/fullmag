@@ -84,10 +84,16 @@ function computeMeshCenterAndExtent(mesh: FemLiveMesh) {
 
 function FemSceneAutoFit({ maxDim }: { maxDim: number }) {
   const { camera, invalidate } = useThree();
+  // C6: guard against re-fitting on re-renders that produce the same maxDim.
+  const lastFittedRef = useRef<number>(-1);
   useEffect(() => {
     if (maxDim <= 0) {
       return;
     }
+    if (lastFittedRef.current === maxDim) {
+      return;
+    }
+    lastFittedRef.current = maxDim;
     fitCameraToBounds(camera, maxDim);
     invalidate();
   }, [camera, invalidate, maxDim]);

@@ -38,6 +38,7 @@ use crate::native_fem;
 use crate::native_fem::NativeFemBackend;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
+use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quantities};
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -985,6 +986,15 @@ pub(crate) fn snapshot_fdm_preview(
     plan: &FdmPlanIR,
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
+    let requested = [request.quantity.as_str()];
+    if active_fdm_preview_quantities(engine, plan, &requested).is_empty() {
+        return Err(RunError {
+            message: format!(
+                "preview quantity '{}' is not active for the current FDM problem",
+                request.quantity
+            ),
+        });
+    }
     match engine {
         FdmEngine::CpuReference => cpu_reference::snapshot_preview(plan, request),
         FdmEngine::CudaFdm => snapshot_native_fdm_preview(plan, request),
@@ -997,9 +1007,12 @@ pub(crate) fn snapshot_fdm_vector_fields(
     quantities: &[&str],
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let quantities = active_fdm_preview_quantities(engine, plan, quantities);
     match engine {
-        FdmEngine::CpuReference => cpu_reference::snapshot_vector_fields(plan, quantities, request),
-        FdmEngine::CudaFdm => snapshot_native_fdm_vector_fields(plan, quantities, request),
+        FdmEngine::CpuReference => {
+            cpu_reference::snapshot_vector_fields(plan, &quantities, request)
+        }
+        FdmEngine::CudaFdm => snapshot_native_fdm_vector_fields(plan, &quantities, request),
     }
 }
 
@@ -1008,6 +1021,15 @@ pub(crate) fn snapshot_fem_preview(
     plan: &FemPlanIR,
     request: &LivePreviewRequest,
 ) -> Result<crate::LivePreviewField, RunError> {
+    let requested = [request.quantity.as_str()];
+    if active_fem_preview_quantities(engine, plan, &requested).is_empty() {
+        return Err(RunError {
+            message: format!(
+                "preview quantity '{}' is not active for the current FEM problem",
+                request.quantity
+            ),
+        });
+    }
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
@@ -1023,12 +1045,13 @@ pub(crate) fn snapshot_fem_vector_fields(
     quantities: &[&str],
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
+    let quantities = active_fem_preview_quantities(engine, plan, quantities);
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
-            snapshot_native_fem_vector_fields(&cpu_plan, quantities, request)
+            snapshot_native_fem_vector_fields(&cpu_plan, &quantities, request)
         }
-        FemEngine::NativeGpu => snapshot_native_fem_vector_fields(plan, quantities, request),
+        FemEngine::NativeGpu => snapshot_native_fem_vector_fields(plan, &quantities, request),
     }
 }
 
@@ -2045,9 +2068,14 @@ fn execute_cuda_fdm(
 fn build_fem_cached_preview_fields(
     backend: &NativeFemBackend,
     display_selection: &crate::DisplaySelectionState,
+    plan: &FemPlanIR,
     node_count: usize,
 ) -> Option<Vec<crate::LivePreviewField>> {
-    let quantities = cached_preview_quantities_for(display_selection);
+    let quantities = active_fem_preview_quantities(
+        FemEngine::NativeGpu,
+        plan,
+        &cached_preview_quantities_for(display_selection),
+    );
     if quantities.is_empty() {
         return None;
     }
@@ -2225,7 +2253,12 @@ fn execute_native_fem(
                         None
                     };
                     let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(&backend, &display_selection, node_count)
+                        build_fem_cached_preview_fields(
+                            &backend,
+                            &display_selection,
+                            plan,
+                            node_count,
+                        )
                     } else {
                         None
                     };
@@ -2495,7 +2528,12 @@ fn execute_native_fem(
                         None
                     };
                     let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(&backend, &display_selection, node_count)
+                        build_fem_cached_preview_fields(
+                            &backend,
+                            &display_selection,
+                            plan,
+                            node_count,
+                        )
                     } else {
                         None
                     };
@@ -2565,9 +2603,9 @@ fn execute_native_fem(
                     None
                 };
                 let cached_preview_fields = if preview_due {
-                    display_selection
-                        .as_ref()
-                        .and_then(|sel| build_fem_cached_preview_fields(&backend, sel, node_count))
+                    display_selection.as_ref().and_then(|sel| {
+                        build_fem_cached_preview_fields(&backend, sel, plan, node_count)
+                    })
                 } else {
                     None
                 };

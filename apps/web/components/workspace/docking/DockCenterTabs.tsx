@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
@@ -145,6 +145,19 @@ export default function DockCenterTabs() {
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible =
     FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
+
+  // P-22: Track recently activated WebGL tabs in LRU order so that warm-hide keeps the most
+  // recently used tabs alive rather than the last N tabs by array index.
+  const recentWebGLTabIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (!activeTab || !isWebGLWorkspaceTab(activeTab)) return;
+    const id = activeTab.id;
+    recentWebGLTabIdsRef.current = [
+      id,
+      ...recentWebGLTabIdsRef.current.filter((tid) => tid !== id),
+    ].slice(0, 8); // Keep reasonable history for large tab sets
+  }, [activeTab]);
+
   const activeTabIsCharts = activeTab?.kind === "viewport-charts";
   const warmWebGLTabIds = useMemo(() => {
     if (
@@ -154,9 +167,24 @@ export default function DockCenterTabs() {
     ) {
       return null;
     }
-    const budget = Math.max(0, dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit ?? 2);
+    const budget = Math.max(0, dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit ?? 1);
+    // FF-1: Firefox loses WebGL contexts when multiple renderers are active. Force
+    // budget=0 on Firefox so hidden tabs are never warm-mounted there.
+    const isFirefox = typeof navigator !== "undefined" && navigator.userAgent.includes("Firefox");
+    const effectiveBudget = isFirefox ? 0 : budget;
     const ids = new Set<string>();
-    for (let index = tabs.length - 1; index >= 0 && ids.size < budget; index -= 1) {
+    // LRU policy: prefer most-recently-activated WebGL tabs (recentWebGLTabIdsRef is updated by
+    // the effect above; reads stale value here but tabs[]-based fallback fills any gap).
+    for (const recentId of recentWebGLTabIdsRef.current) {
+      if (ids.size >= effectiveBudget) break;
+      if (recentId === activeTab.id) continue;
+      const tab = tabs.find((t) => t.id === recentId);
+      if (tab && isWebGLWorkspaceTab(tab)) {
+        ids.add(recentId);
+      }
+    }
+    // Fallback: fill remaining budget from tabs array (last-to-first) for tabs not yet in LRU list
+    for (let index = tabs.length - 1; index >= 0 && ids.size < effectiveBudget; index -= 1) {
       const tab = tabs[index];
       if (!tab || tab.id === activeTab.id || !isWebGLWorkspaceTab(tab)) {
         continue;

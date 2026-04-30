@@ -449,15 +449,35 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const points = effectiveRenderMode === "points";
   const geometryVisible =
     ctx.airMeshGeometryVisible ?? (shaded || wireframe || points);
+  const pointsLayerOn = geometryVisible && points;
   const vectors = ctx.femVectorDomainFilter === "airbox_only" && Boolean(ctx.meshShowArrows);
+  const airboxBadge = (() => {
+    if (!ctx.airboxVisible) return "hidden";
+    const parts: string[] = [];
+    if (pointsLayerOn) parts.push(`points/${pointsScope}`);
+    if (vectors) parts.push(`vectors/${vectorsScope}`);
+    if (geometryVisible && wireframe) parts.push(`wire/${wireframeScope}`);
+    if (geometryVisible && shaded) parts.push("shaded");
+    return parts.length > 0 ? parts.join(" + ") : "visible";
+  })();
+  const pointsDisabled = global.disabled || !pointsLayerOn;
+  const pointsDisabledReason = global.disabled
+    ? global.reason
+    : pointsLayerOn
+      ? null
+      : "Enable Airbox points first";
+  const vectorsDisabled = global.disabled || !vectors;
+  const vectorsDisabledReason = global.disabled
+    ? global.reason
+    : vectors
+      ? null
+      : "Enable Airbox vectors first";
   return [
     {
       type: "label",
       id: "airbox:header",
       label: "Airbox display",
-      badge: ctx.airboxVisible
-        ? `${effectiveRenderMode}${wireframe ? ` / ${wireframeScope}` : ""}`
-        : "hidden",
+      badge: airboxBadge,
     },
     {
       type: "checkbox",
@@ -468,6 +488,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onCheckedChange: (visible) => ctx.run({ id: "viewport.set-airbox-display", patch: { visible } }),
     },
+    { type: "separator", id: "airbox:s-primitive" },
+    { type: "label", id: "airbox:primitive-section", label: "Primitive", badge: geometryVisible ? "on" : "off" },
     {
       type: "checkbox",
       id: "airbox:shaded",
@@ -500,6 +522,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
         }),
       items: AIRBOX_EXTENT_ITEMS,
     },
+    { type: "separator", id: "airbox:s-points" },
+    { type: "label", id: "airbox:points-section", label: "Points", badge: pointsLayerOn ? pointsScope : "off" },
     {
       type: "checkbox",
       id: "airbox:points",
@@ -514,8 +538,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       id: "airbox:points-scope",
       label: "Points extent",
       value: pointsScope,
-      disabled: global.disabled,
-      disabledReason: global.reason,
+      disabled: pointsDisabled,
+      disabledReason: pointsDisabledReason,
       onValueChange: (scope) =>
         ctx.run({
           id: "viewport.set-airbox-display",
@@ -523,6 +547,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
         }),
       items: AIRBOX_EXTENT_ITEMS,
     },
+    { type: "separator", id: "airbox:s-vectors" },
+    { type: "label", id: "airbox:vectors-section", label: "Vectors", badge: vectors ? vectorsScope : "off" },
     {
       type: "checkbox",
       id: "airbox:vectors",
@@ -537,28 +563,14 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       id: "airbox:vectors-scope",
       label: "Vectors extent",
       value: vectorsScope,
-      disabled: global.disabled,
-      disabledReason: global.reason,
+      disabled: vectorsDisabled,
+      disabledReason: vectorsDisabledReason,
       onValueChange: (scope) =>
         ctx.run({
           id: "viewport.set-airbox-display",
           patch: { vectorsScope: scope as AirboxDisplayScope },
         }),
       items: AIRBOX_EXTENT_ITEMS,
-    },
-    { type: "separator", id: "airbox:s-visible" },
-    {
-      type: "slider",
-      id: "airbox:opacity",
-      label: "Opacity",
-      value: ctx.airMeshOpacity ?? 35,
-      min: 0,
-      max: 100,
-      step: 1,
-      unit: "%",
-      disabled: global.disabled,
-      disabledReason: global.reason,
-      onValueChange: (opacity) => ctx.run({ id: "viewport.set-airbox-display", patch: { opacity } }),
     },
     {
       type: "submenu",
@@ -573,8 +585,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           min: 1,
           max: 64,
           step: 1,
-          disabled: global.disabled || !vectors,
-          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          disabled: vectorsDisabled,
+          disabledReason: vectorsDisabledReason,
           onValueChange: (everyN) => ctx.run({ id: "viewport.set-vector-density", everyN }),
         },
         {
@@ -585,8 +597,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           min: 0.2,
           max: 4,
           step: 0.1,
-          disabled: global.disabled || !vectors,
-          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          disabled: vectorsDisabled,
+          disabledReason: vectorsDisabledReason,
           onValueChange: (lengthScale) => ctx.run({ id: "viewport.set-vector-style", patch: { lengthScale } }),
         },
         {
@@ -597,8 +609,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           min: 0.2,
           max: 4,
           step: 0.1,
-          disabled: global.disabled || !vectors,
-          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          disabled: vectorsDisabled,
+          disabledReason: vectorsDisabledReason,
           onValueChange: (thickness) => ctx.run({ id: "viewport.set-vector-style", patch: { thickness } }),
         },
         {
@@ -609,8 +621,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           min: 0,
           max: 1,
           step: 0.05,
-          disabled: global.disabled || !vectors,
-          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          disabled: vectorsDisabled,
+          disabledReason: vectorsDisabledReason,
           onValueChange: (alpha) => ctx.run({ id: "viewport.set-vector-style", patch: { alpha } }),
         },
       ],
@@ -625,8 +637,8 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           id: "airbox:vector-coloring",
           label: "Vector colors",
           value: ctx.femArrowColorMode ?? "orientation",
-          disabled: global.disabled || !vectors,
-          disabledReason: vectors ? global.reason : "Enable Airbox vectors first",
+          disabled: vectorsDisabled,
+          disabledReason: vectorsDisabledReason,
           onValueChange: (colorMode) =>
             ctx.run({
               id: "viewport.set-vector-style",
@@ -639,15 +651,29 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
           id: "airbox:vector-mono-color",
           label: "Monochrome vector color",
           value: ctx.femArrowMonoColor ?? "#38d9ff",
-          disabled: global.disabled || !vectors || ctx.femArrowColorMode !== "monochrome",
-          disabledReason: !vectors
-            ? "Enable Airbox vectors first"
+          disabled: vectorsDisabled || ctx.femArrowColorMode !== "monochrome",
+          disabledReason: vectorsDisabled
+            ? vectorsDisabledReason
             : ctx.femArrowColorMode === "monochrome"
               ? global.reason
               : "Use Monochrome vector coloring first",
           onValueChange: (monoColor) => ctx.run({ id: "viewport.set-vector-style", patch: { monoColor } }),
         },
       ],
+    },
+    { type: "separator", id: "airbox:s-visible" },
+    {
+      type: "slider",
+      id: "airbox:opacity",
+      label: "Opacity",
+      value: ctx.airMeshOpacity ?? 35,
+      min: 0,
+      max: 100,
+      step: 1,
+      unit: "%",
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (opacity) => ctx.run({ id: "viewport.set-airbox-display", patch: { opacity } }),
     },
     { type: "separator", id: "airbox:s0" },
     { type: "item", id: "airbox:focus", label: "Focus airbox", disabled: true, disabledReason: "Airbox focus command is pending viewport preset support" },

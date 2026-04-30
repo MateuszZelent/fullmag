@@ -243,6 +243,30 @@ function formatDebugTimestamp(timestamp: number | null | undefined): string {
   });
 }
 
+function tupleClose(
+  a: readonly number[] | null | undefined,
+  b: readonly number[] | null | undefined,
+): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => Math.abs(value - (b[index] ?? Number.NaN)) < 1e-9);
+}
+
+function viewportCameraStatesEqual(
+  a: ViewportCameraState | null | undefined,
+  b: ViewportCameraState | null | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    tupleClose(a.position, b.position) &&
+    tupleClose(a.target, b.target) &&
+    tupleClose(a.up, b.up) &&
+    a.projection === b.projection &&
+    a.navigation === b.navigation &&
+    a.lastFocusedObjectId === b.lastFocusedObjectId
+  );
+}
+
 function settingsFromViewport3DModel(
   base: Settings,
   model: Viewport3DModel | null | undefined,
@@ -964,6 +988,10 @@ function UnifiedVectorFieldRendererInner({
     [deferredGrid, geometryMode, sceneFrame.extent, sceneMode, sceneTarget, viewportDocumentId],
   );
   const cameraRestoreReadyRef = useRef(false);
+  const lastRestoredCameraRef = useRef<{
+    key: string;
+    state: ViewportCameraState | null;
+  } | null>(null);
   const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
     setRotationSnapshots((previous) => {
@@ -1013,7 +1041,6 @@ function UnifiedVectorFieldRendererInner({
   }, [persistCameraState, syncViewportRotationSnapshot]);
   useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
   useEffect(() => {
-    cameraRestoreReadyRef.current = false;
     let raf = 0;
     let disposed = false;
 
@@ -1026,6 +1053,32 @@ function UnifiedVectorFieldRendererInner({
         raf = window.requestAnimationFrame(restore);
         return;
       }
+      const currentState = captureViewportCameraState(bridge, {
+        projection: "perspective",
+        navigation: "trackball",
+        lastFocusedObjectId: lastFocusedObjectIdRef.current,
+      });
+      const lastRestored = lastRestoredCameraRef.current;
+      if (
+        cameraRestoreReadyRef.current &&
+        lastRestored?.key === cameraPersistenceKey &&
+        viewportCameraStatesEqual(lastRestored.state, persistedCameraState) &&
+        (!persistedCameraState || viewportCameraStatesEqual(currentState, persistedCameraState))
+      ) {
+        syncViewportRotationSnapshot();
+        return;
+      }
+      if (persistedCameraState && viewportCameraStatesEqual(currentState, persistedCameraState)) {
+        lastRestoredCameraRef.current = {
+          key: cameraPersistenceKey,
+          state: persistedCameraState,
+        };
+        cameraRestoreReadyRef.current = true;
+        syncViewportRotationSnapshot();
+        return;
+      }
+
+      cameraRestoreReadyRef.current = false;
       const restored =
         restoreViewportCameraState(bridge, persistedCameraState) ||
         (() => {
@@ -1043,6 +1096,10 @@ function UnifiedVectorFieldRendererInner({
       if (restored) {
         lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
       }
+      lastRestoredCameraRef.current = {
+        key: cameraPersistenceKey,
+        state: persistedCameraState ?? null,
+      };
       cameraRestoreReadyRef.current = true;
       syncViewportRotationSnapshot();
     };

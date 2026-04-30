@@ -172,11 +172,19 @@ function CameraAutoFit({
   center: THREE.Vector3;
 }) {
   const { camera, invalidate } = useThree();
+  // C6: only fire once per unique scene extent — prevents camera reset on every
+  // re-render that recomputes maxDim/center without changing the actual geometry.
+  const lastFittedRef = useRef<string>("");
 
   useEffect(() => {
     if (maxDim <= 0) {
       return;
     }
+    const sig = `${maxDim.toFixed(6)}:${center.x.toFixed(6)}:${center.y.toFixed(6)}:${center.z.toFixed(6)}`;
+    if (lastFittedRef.current === sig) {
+      return;
+    }
+    lastFittedRef.current = sig;
     fitCameraToBounds(camera, maxDim, center);
     invalidate();
   }, [camera, center, invalidate, maxDim]);

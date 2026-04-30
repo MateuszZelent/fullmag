@@ -28,6 +28,36 @@ import type { ViewportQualityProfileId } from "../shared/viewportQualityProfiles
 
 const AIR_OBJECT_SEGMENT_ID = "__air__";
 
+export function shouldWarnMissingMagneticMask({
+  quantityDomain,
+  activeMaskLength,
+  nNodes,
+  hasMeshParts,
+  magneticSegmentCount,
+  field,
+  showArrowsRequested,
+}: {
+  quantityDomain: FemMeshData["quantityDomain"];
+  activeMaskLength: number | null;
+  nNodes: number;
+  hasMeshParts: boolean;
+  magneticSegmentCount: number;
+  field: FemColorField;
+  showArrowsRequested: boolean;
+}): boolean {
+  if (quantityDomain !== "magnetic_only") {
+    return false;
+  }
+  const magneticFieldLayerActive = field !== "none" || showArrowsRequested;
+  if (!magneticFieldLayerActive) {
+    return false;
+  }
+  if (hasMeshParts || magneticSegmentCount > 0) {
+    return false;
+  }
+  return activeMaskLength !== nNodes;
+}
+
 interface UseFemViewportDerivedModelArgs {
   meshData: FemMeshData;
   objectOverlays: BuilderObjectOverlay[];
@@ -197,9 +227,15 @@ export function useFemViewportDerivedModel({
     onVisibleSubmeshSnapshotChange,
   });
 
-  const missingMagneticMask =
-    meshData.quantityDomain === "magnetic_only" &&
-    (!meshData.activeMask || meshData.activeMask.length !== meshData.nNodes);
+  const missingMagneticMask = shouldWarnMissingMagneticMask({
+    quantityDomain: meshData.quantityDomain,
+    activeMaskLength: meshData.activeMask?.length ?? null,
+    nNodes: meshData.nNodes,
+    hasMeshParts,
+    magneticSegmentCount: magneticSegments.length,
+    field,
+    showArrowsRequested,
+  });
   const missingExactScopeSegment =
     Boolean(selectedObjectId) &&
     meshData.nElements > 0 &&

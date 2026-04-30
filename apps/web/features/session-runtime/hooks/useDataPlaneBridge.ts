@@ -250,11 +250,12 @@ export function useDataPlaneBridge(
       }
       const rev = envelope.fieldRevision;
       const requestedComponent = fetchDecision.component;
-      const meshGenerationIdRaw = Number.parseInt(envelope.meshGenerationId ?? "0", 10);
-      const meshGenerationId = Number.isFinite(meshGenerationIdRaw)
-        ? meshGenerationIdRaw
-        : 0;
-      const cacheKey = `${envelope.quantityId}:${requestedComponent}:${rev}:${meshGenerationId}`;
+      // Use the raw opaque string for the dedup cache key so that UUID-like
+      // generation IDs are not collapsed to 0 by parseInt.
+      const meshGenerationIdStr = envelope.meshGenerationId ?? "";
+      const meshGenerationIdNum = Number.parseInt(envelope.meshGenerationId ?? "0", 10);
+      const meshGenerationId = Number.isFinite(meshGenerationIdNum) ? meshGenerationIdNum : 0;
+      const cacheKey = `${envelope.quantityId}:${requestedComponent}:${rev}:${meshGenerationIdStr}`;
       if (fetchedFieldRevRef.current === cacheKey) return;
 
       try {

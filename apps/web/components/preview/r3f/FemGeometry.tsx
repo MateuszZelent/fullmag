@@ -13,6 +13,7 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
+import { applyLiveBufferTransition } from "./liveBufferAnimation";
 
 interface FemGeometryProps {
   meshData: FemMeshData;
@@ -185,6 +186,7 @@ export const FemGeometry = memo(function FemGeometry({
   enableGeometryHoverInteractions = true,
 }: FemGeometryProps) {
   const scheduleInvalidate = useBatchedInvalidate();
+  const colorTransitionCleanupRef = useRef<(() => void) | null>(null);
   const {
     nodes,
     elements,
@@ -626,8 +628,9 @@ export const FemGeometry = memo(function FemGeometry({
       const EDGE_PAIRS = [
         [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
       ] as const;
-      // Use a Set to deduplicate edges across shared faces
-      const edgeSet = new Set<string>();
+      // Use a Set<number> to deduplicate edges across shared faces.
+      // Integer key: lo * nNodes + hi — safe for nNodes < ~3M (max value < Number.MAX_SAFE_INTEGER).
+      const edgeSet = new Set<number>();
       const edgePairs: number[] = [];
       for (let ei = 0; ei < nElements; ei++) {
         const base = ei * 4;
@@ -641,7 +644,7 @@ export const FemGeometry = memo(function FemGeometry({
           const nb = tn[b];
           const lo = Math.min(na, nb);
           const hi = Math.max(na, nb);
-          const key = `${lo}_${hi}`;
+          const key = lo * nNodes + hi;
           if (!edgeSet.has(key)) {
             edgeSet.add(key);
             edgePairs.push(lo, hi);
@@ -857,20 +860,32 @@ export const FemGeometry = memo(function FemGeometry({
       // Sub-select or map colors
       const meshApplyStart = perfEnabled ? performance.now() : 0;
       const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
+      const meshColorTarget = new Float32Array(colorAttr.array.length);
       if (vertexMap) {
         for (let i = 0; i < vertexMap.length; i++) {
           const orig = vertexMap[i];
-          colorAttr.array[i * 3] = baseColors[orig * 3];
-          colorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
-          colorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
+          meshColorTarget[i * 3] = baseColors[orig * 3];
+          meshColorTarget[i * 3 + 1] = baseColors[orig * 3 + 1];
+          meshColorTarget[i * 3 + 2] = baseColors[orig * 3 + 2];
         }
       } else {
         const posCount = geometry.getAttribute("position").count;
         for (let i = 0; i < posCount * 3; i++) {
-          colorAttr.array[i] = baseColors[i];
+          meshColorTarget[i] = baseColors[i];
         }
       }
-      colorAttr.needsUpdate = true;
+      colorTransitionCleanupRef.current?.();
+      const transitionCleanups: Array<() => void> = [
+        applyLiveBufferTransition({
+          destination: colorAttr.array as Float32Array,
+          target: meshColorTarget,
+          maxAnimatedValues: 900_000,
+          markNeedsUpdate: () => {
+            colorAttr.needsUpdate = true;
+          },
+          scheduleInvalidate,
+        }),
+      ];
       mark("colorMeshApply", meshApplyStart, { mapped: Boolean(vertexMap) });
       if (pointsGeometry) {
         const pointsApplyStart = perfEnabled ? performance.now() : 0;
@@ -879,25 +894,40 @@ export const FemGeometry = memo(function FemGeometry({
           scheduleInvalidate();
           return;
         }
+        const pointsColorTarget = new Float32Array(pointsColorAttr.array.length);
         if (pointsVertexMap) {
           for (let i = 0; i < pointsVertexMap.length; i += 1) {
             const orig = pointsVertexMap[i];
-            pointsColorAttr.array[i * 3] = baseColors[orig * 3];
-            pointsColorAttr.array[i * 3 + 1] = baseColors[orig * 3 + 1];
-            pointsColorAttr.array[i * 3 + 2] = baseColors[orig * 3 + 2];
+            pointsColorTarget[i * 3] = baseColors[orig * 3];
+            pointsColorTarget[i * 3 + 1] = baseColors[orig * 3 + 1];
+            pointsColorTarget[i * 3 + 2] = baseColors[orig * 3 + 2];
           }
         } else {
           const colorCount = Math.min(pointsColorAttr.count, Math.floor(baseColors.length / 3));
           for (let i = 0; i < colorCount; i += 1) {
-            pointsColorAttr.array[i * 3] = baseColors[i * 3];
-            pointsColorAttr.array[i * 3 + 1] = baseColors[i * 3 + 1];
-            pointsColorAttr.array[i * 3 + 2] = baseColors[i * 3 + 2];
+            pointsColorTarget[i * 3] = baseColors[i * 3];
+            pointsColorTarget[i * 3 + 1] = baseColors[i * 3 + 1];
+            pointsColorTarget[i * 3 + 2] = baseColors[i * 3 + 2];
           }
         }
-        pointsColorAttr.needsUpdate = true;
+        transitionCleanups.push(
+          applyLiveBufferTransition({
+            destination: pointsColorAttr.array as Float32Array,
+            target: pointsColorTarget,
+            maxAnimatedValues: 900_000,
+            markNeedsUpdate: () => {
+              pointsColorAttr.needsUpdate = true;
+            },
+            scheduleInvalidate,
+          }),
+        );
         mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
       }
-      scheduleInvalidate();
+      colorTransitionCleanupRef.current = () => {
+        for (const cleanup of transitionCleanups) {
+          cleanup();
+        }
+      };
       mark("colorTotal", totalStart);
       recordFrontendPerfSample({
         scope: "QuantitySwitch",
@@ -921,6 +951,8 @@ export const FemGeometry = memo(function FemGeometry({
     void runColorUpload();
     return () => {
       cancelled = true;
+      colorTransitionCleanupRef.current?.();
+      colorTransitionCleanupRef.current = null;
     };
   }, [
     customBoundaryFaces,
@@ -997,7 +1029,7 @@ export const FemGeometry = memo(function FemGeometry({
     renderMode,
     edgeScope,
     pointsScope,
-    hasGeometry: geometry != null,
+    hasGeometry: (geometry?.getAttribute("position")?.count ?? 0) > 0,
     hasEdgesGeometry: edgesGeometry != null,
     hasTetraEdgesGeometry: tetraEdgesGeometry != null,
     showSurfacePass,

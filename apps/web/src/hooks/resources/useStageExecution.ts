@@ -39,6 +39,8 @@ export function shouldFetchStageExecutionResource(args: {
   revision: number | null;
   fetchIdentity: string | null;
   notFoundIdentity: string | null;
+  /** Session-level 404 guard: blocks all retries for this session after a 404. */
+  notFoundSession?: string | null;
 }): boolean {
   return Boolean(
     args.enabled &&
@@ -46,7 +48,8 @@ export function shouldFetchStageExecutionResource(args: {
       args.revision != null &&
       args.revision > 0 &&
       args.fetchIdentity &&
-      args.notFoundIdentity !== args.fetchIdentity,
+      args.notFoundIdentity !== args.fetchIdentity &&
+      (args.notFoundSession == null || args.notFoundSession !== args.sessionKey),
   );
 }
 
@@ -64,6 +67,15 @@ export function useStageExecution(options?: {
   const mountedRef = useRef(true);
   const lastFetchedIdentityRef = useRef<string | null>(null);
   const notFoundIdentityRef = useRef<string | null>(null);
+  /** Session-level 404 guard: if set to the current sessionKey, suppress all
+   * revision-driven retries until the session changes. Cleared automatically
+   * when sessionKey changes or when a successful response is received. */
+  const notFoundSessionRef = useRef<string | null>(null);
+
+  // Reset session-level 404 guard whenever the session changes.
+  useEffect(() => {
+    notFoundSessionRef.current = null;
+  }, [sessionKey]);
 
   const fetchIdentity = sessionKey
     ? `${sessionKey}:${revision == null ? "no-revision" : revision}`
@@ -77,6 +89,7 @@ export function useStageExecution(options?: {
         revision,
         fetchIdentity,
         notFoundIdentity: notFoundIdentityRef.current,
+        notFoundSession: notFoundSessionRef.current,
       })
     ) {
       if (mountedRef.current) {
@@ -98,6 +111,7 @@ export function useStageExecution(options?: {
       }
       lastFetchedIdentityRef.current = `${sessionKey}:${resource.revision}`;
       notFoundIdentityRef.current = null;
+      notFoundSessionRef.current = null;
       setStageExecution(mapStageExecutionResource(resource));
       setError(null);
       setLoading(false);
@@ -111,6 +125,8 @@ export function useStageExecution(options?: {
           : LiveApiError.networkError("stage-execution", err);
       if (apiError.status === 404) {
         notFoundIdentityRef.current = fetchIdentity;
+        // Also block at session level: revision-only changes won't bypass guard.
+        notFoundSessionRef.current = sessionKey;
         lastFetchedIdentityRef.current = fetchIdentity;
         setStageExecution(null);
         setError(null);
@@ -128,6 +144,7 @@ export function useStageExecution(options?: {
     if (!enabled || !sessionKey || revision == null || revision <= 0) {
       lastFetchedIdentityRef.current = null;
       notFoundIdentityRef.current = null;
+      notFoundSessionRef.current = null;
       setStageExecution(null);
       setError(null);
       setLoading(false);

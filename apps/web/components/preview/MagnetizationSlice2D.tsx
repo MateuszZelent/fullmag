@@ -133,6 +133,7 @@ export default function MagnetizationSlice2D({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
+  const chartTopologyKeyRef = useRef<string | null>(null);
 
   // ─── Extract scalar field data ────────────────────────────────────
   const { data, xLen, yLen, dMin, dMax } = useMemo(() => {
@@ -244,9 +245,15 @@ export default function MagnetizationSlice2D({
     const axisLabel = plane === "xy" ? "x" : plane === "xz" ? "x" : "y";
     const yAxisLabel = plane === "xy" ? "y" : "z";
 
+    const topologyKey = `${plane}:${xLen}:${yLen}`;
+    const topologyChanged = chartTopologyKeyRef.current !== topologyKey;
+    chartTopologyKeyRef.current = topologyKey;
+
     chart.setOption(
       {
-        animation: false,
+        animation: true,
+        animationDurationUpdate: 140,
+        animationEasingUpdate: "cubicOut",
         tooltip: {
           position: "top",
           confine: true,
@@ -351,7 +358,7 @@ export default function MagnetizationSlice2D({
             emphasis: { disabled: true },
             progressive: 0,
             progressiveThreshold: Number.MAX_SAFE_INTEGER,
-            animation: false,
+            animation: true,
             data,
           },
         ],
@@ -386,7 +393,7 @@ export default function MagnetizationSlice2D({
           },
         },
       },
-      { notMerge: true },
+      { notMerge: topologyChanged },
     );
 
     return () => {

@@ -58,6 +58,7 @@ export function resolveAirboxDisplayState(
   let shaded = base.renderMode === "surface" || base.renderMode === "surface+edges";
   let wireframe = base.renderMode === "wireframe" || base.renderMode === "surface+edges";
   let points = base.renderMode === "points";
+  const pointsWasActive = points;
 
   if (typeof patch.points === "boolean") {
     points = patch.points;
@@ -94,7 +95,11 @@ export function resolveAirboxDisplayState(
       ? "surface+edges"
       : shaded
         ? "surface"
-        : "wireframe";
+        : wireframe
+          ? "wireframe"
+          : pointsWasActive && patch.points === false
+            ? base.renderMode
+            : "wireframe";
 
   return {
     geometryVisible,
