@@ -395,13 +395,20 @@ describe("ribbon viewport commands", () => {
     executeRibbonCommand(ctx, { id: "viewport.set-slice-mode", mode: "slab" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-position", positionPercent: 42 });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox", visible: true });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "points" });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox-vectors", visible: true });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" });
 
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { axis: "x" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { mode: "slab" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { positionPercent: 42 });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { showAirbox: true });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, {
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, { airboxRenderMode: "points" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, {
+      showAirboxVectors: true,
+      renderMode: "vectors",
+    });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(7, {
       renderMode: "mesh-overlay",
       showMesh: true,
       showVectors: false,

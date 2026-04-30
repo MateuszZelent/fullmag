@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useLayoutEffect } from "react";
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useId } from "react";
 import * as THREE from "three";
 import type {
   FemMeshData,
@@ -13,6 +13,11 @@ import { isNodeActive, maskKind } from "../fem/femNodeMask";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
+import {
+  estimateThreeBufferGeometryBytes,
+  releaseViewportResource,
+  trackViewportResource,
+} from "@/lib/debug/viewportResourceManager";
 
 export type ArrowLengthMode = "constant" | "magnitude" | "sqrt" | "log";
 
@@ -215,6 +220,7 @@ export function FemArrows({
   samplingMode = "auto",
   onSampledCount,
 }: FemArrowsProps) {
+  const resourceOwner = `FemArrows:${useId()}`;
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const previousInstanceCountRef = useRef(0);
   const transitionCleanupRef = useRef<(() => void) | null>(null);
@@ -244,18 +250,42 @@ export function FemArrows({
 
   const templateGeometry = useArrowTemplate();
   const arrowTemplateScale = resolveFemArrowTemplateScale(maxDim);
+  const resourceKeys = useMemo(
+    () => ({
+      template: `${resourceOwner}:template`,
+      material: `${resourceOwner}:material`,
+      instanceBuffers: `${resourceOwner}:instanceBuffers`,
+    }),
+    [resourceOwner],
+  );
 
   useEffect(() => {
+    trackViewportResource({
+      key: resourceKeys.template,
+      owner: resourceOwner,
+      label: "FEM arrow template geometry",
+      resource: templateGeometry,
+      estimatedBytes: estimateThreeBufferGeometryBytes(templateGeometry),
+      dispose: () => templateGeometry.dispose(),
+    });
     return () => {
-      templateGeometry.dispose();
+      releaseViewportResource(resourceKeys.template);
     };
-  }, [templateGeometry]);
+  }, [resourceKeys.template, resourceOwner, templateGeometry]);
 
   useEffect(() => {
+    trackViewportResource({
+      key: resourceKeys.material,
+      owner: resourceOwner,
+      label: "FEM arrow material",
+      resource: material,
+      estimatedBytes: 4096,
+      dispose: () => material.dispose(),
+    });
     return () => {
-      material.dispose();
+      releaseViewportResource(resourceKeys.material);
     };
-  }, [material]);
+  }, [material, resourceKeys.material, resourceOwner]);
 
   const effectiveNodeMask = useMemo(() => {
     if (activeNodeMask && activeNodeMask.length === meshData.nNodes) {
@@ -503,6 +533,19 @@ export function FemArrows({
     attribute.setUsage(THREE.DynamicDrawUsage);
     return attribute;
   }, [capacity]);
+  useEffect(() => {
+    trackViewportResource({
+      key: resourceKeys.instanceBuffers,
+      owner: resourceOwner,
+      label: "FEM arrow instance buffers",
+      resource: instanceColorAttribute,
+      estimatedBytes: capacity * (16 + 3) * Float32Array.BYTES_PER_ELEMENT,
+      dispose: () => {},
+    });
+    return () => {
+      releaseViewportResource(resourceKeys.instanceBuffers);
+    };
+  }, [capacity, instanceColorAttribute, resourceKeys.instanceBuffers, resourceOwner]);
 
   // Apply instance matrices and per-instance colors using the same low-level
   // buffer path that already works reliably in FDM preview rendering.

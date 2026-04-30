@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { memo, useRef, useEffect, useLayoutEffect, useMemo, useId } from "react";
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { applyMagnetizationHsl } from "../magnetizationColor";
@@ -15,6 +15,11 @@ import type {
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
+import {
+  estimateThreeBufferGeometryBytes,
+  releaseViewportResource,
+  trackViewportResource,
+} from "@/lib/debug/viewportResourceManager";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -241,6 +246,7 @@ function FdmInstances({
   vectorsVisible = true,
   onVisibleCount,
 }: FdmInstancesProps) {
+  const resourceOwner = `FdmInstances:${useId()}`;
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const displayToCellRef = useRef<Uint32Array | null>(null);
   const renderSignatureRef = useRef<string | null>(null);
@@ -248,6 +254,14 @@ function FdmInstances({
   const scheduleInvalidate = useBatchedInvalidate();
   const [nx, ny, nz] = grid;
   const count = nx * ny * nz;
+  const resourceKeys = useMemo(
+    () => ({
+      geometry: `${resourceOwner}:geometry`,
+      material: `${resourceOwner}:material`,
+      instanceBuffers: `${resourceOwner}:instanceBuffers`,
+    }),
+    [resourceOwner],
+  );
   const {
     quality,
     renderMode: mode,
@@ -325,11 +339,32 @@ function FdmInstances({
   }, [mode, quality]);
 
   useEffect(() => {
+    trackViewportResource({
+      key: resourceKeys.geometry,
+      owner: resourceOwner,
+      label: mode === "voxel" ? "FDM voxel geometry" : "FDM arrow geometry",
+      resource: geometry,
+      estimatedBytes: estimateThreeBufferGeometryBytes(geometry),
+      dispose: () => geometry.dispose(),
+    });
     return () => {
-      geometry.dispose();
-      material.dispose();
+      releaseViewportResource(resourceKeys.geometry);
     };
-  }, [geometry, material]);
+  }, [geometry, mode, resourceKeys.geometry, resourceOwner]);
+
+  useEffect(() => {
+    trackViewportResource({
+      key: resourceKeys.material,
+      owner: resourceOwner,
+      label: "FDM instance material",
+      resource: material,
+      estimatedBytes: 4096,
+      dispose: () => material.dispose(),
+    });
+    return () => {
+      releaseViewportResource(resourceKeys.material);
+    };
+  }, [material, resourceKeys.material, resourceOwner]);
 
   useLayoutEffect(() => {
     const mesh = meshRef.current;
@@ -368,14 +403,23 @@ function FdmInstances({
   useEffect(() => {
     const mesh = meshRef.current;
     if (!mesh || count === 0) return;
-    mesh.instanceColor = new THREE.InstancedBufferAttribute(
-      new Float32Array(Math.max(count, 1) * 3),
-      3,
-    );
+    const instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(count, 1) * 3), 3);
+    mesh.instanceColor = instanceColor;
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = false;
     mesh.renderOrder = mode === "voxel" ? 2 : 1;
-  }, [count, mode]);
+    trackViewportResource({
+      key: resourceKeys.instanceBuffers,
+      owner: resourceOwner,
+      label: "FDM instance buffers",
+      resource: instanceColor,
+      estimatedBytes: Math.max(count, 1) * (16 + 3) * Float32Array.BYTES_PER_ELEMENT,
+      dispose: () => {},
+    });
+    return () => {
+      releaseViewportResource(resourceKeys.instanceBuffers);
+    };
+  }, [count, mode, resourceKeys.instanceBuffers, resourceOwner]);
 
   /* ── Update instances (core rendering loop) ───────────────────── */
   useEffect(() => {

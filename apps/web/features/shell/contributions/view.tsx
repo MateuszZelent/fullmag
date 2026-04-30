@@ -898,6 +898,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const showMesh = toolbar?.showMesh ?? false;
   const showAirbox = toolbar?.showAirbox ?? false;
   const showVectors = toolbar?.showVectors ?? Boolean(ctx.meshShowArrows);
+  const showAirboxVectors = toolbar?.showAirboxVectors ?? false;
+  const airboxRenderMode = toolbar?.airboxRenderMode ?? "wireframe";
   const position = toolbar?.positionPercent ?? ctx.meshClipPos ?? 50;
   const autoScale = toolbar?.autoContrast ?? Boolean(ctx.requestedPreviewAutoScale ?? true);
   return {
@@ -1031,22 +1033,19 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             checked: showAirbox,
             disabled: slice.disabled,
             disabledReason: slice.reason,
-            onCheckedChange: (visible) => {
-              ctx.run({ id: "viewport.set-slice-airbox", visible });
-              ctx.run({ id: "viewport.set-airbox-display", patch: { visible } });
-            },
+            onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-airbox", visible }),
           },
           {
             type: "radio-group",
             id: "slice:airbox:render-mode",
             label: "Airbox render",
-            value: ctx.airMeshRenderMode ?? "wireframe",
+            value: airboxRenderMode,
             disabled: slice.disabled || !showAirbox,
             disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
-            onValueChange: (meshRenderMode) =>
+            onValueChange: (renderMode) =>
               ctx.run({
-                id: "viewport.set-airbox-display",
-                patch: { renderMode: meshRenderMode as "surface" | "wireframe" | "surface+edges" | "points" },
+                id: "viewport.set-slice-airbox-render-mode",
+                renderMode: renderMode as "surface" | "wireframe" | "surface+edges" | "points",
               }),
             items: [
               { value: "surface", label: "Shaded" },
@@ -1059,13 +1058,11 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             type: "checkbox",
             id: "slice:airbox:vectors",
             label: "Vectors",
-            checked: showVectors && ctx.femVectorDomainFilter === "airbox_only",
+            checked: showAirboxVectors,
             disabled: slice.disabled || !showAirbox,
             disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
-            onCheckedChange: (visible) => {
-              ctx.run({ id: "viewport.set-airbox-display", patch: { vectors: visible } });
-              ctx.run({ id: "viewport.set-slice-render-mode", renderMode: visible ? "vectors" : "heatmap" });
-            },
+            onCheckedChange: (visible) =>
+              ctx.run({ id: "viewport.set-slice-airbox-vectors", visible }),
           },
         ],
       },

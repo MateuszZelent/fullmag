@@ -1,6 +1,11 @@
-import React, { useMemo, useEffect, useRef } from "react";
+import React, { useMemo, useEffect, useId } from "react";
 import * as THREE from "three";
 import type { FemMeshData } from "../fem/femMeshTypes";
+import {
+  estimateThreeBufferGeometryBytes,
+  releaseViewportResource,
+  trackViewportResource,
+} from "@/lib/debug/viewportResourceManager";
 
 interface FemHighlightViewProps {
   meshData: FemMeshData;
@@ -9,6 +14,8 @@ interface FemHighlightViewProps {
 }
 
 export function FemHighlightView({ meshData, selectedFaces, center }: FemHighlightViewProps) {
+  const resourceOwner = `FemHighlightView:${useId()}`;
+  const resourceKey = `${resourceOwner}:geometry`;
   const geometry = useMemo(() => {
     if (selectedFaces.length === 0) return null;
 
@@ -33,15 +40,23 @@ export function FemHighlightView({ meshData, selectedFaces, center }: FemHighlig
     return geom;
   }, [selectedFaces, meshData, center]);
 
-  // Dispose old geometry to prevent GPU memory leaks
-  const prevGeomRef = useRef<THREE.BufferGeometry | null>(null);
   useEffect(() => {
-    if (prevGeomRef.current && prevGeomRef.current !== geometry) {
-      prevGeomRef.current.dispose();
+    if (!geometry) {
+      releaseViewportResource(resourceKey);
+      return;
     }
-    prevGeomRef.current = geometry;
-    return () => { geometry?.dispose(); };
-  }, [geometry]);
+    trackViewportResource({
+      key: resourceKey,
+      owner: resourceOwner,
+      label: "FEM highlight geometry",
+      resource: geometry,
+      estimatedBytes: estimateThreeBufferGeometryBytes(geometry),
+      dispose: () => geometry.dispose(),
+    });
+    return () => {
+      releaseViewportResource(resourceKey);
+    };
+  }, [geometry, resourceKey, resourceOwner]);
 
   if (!geometry) return null;
 

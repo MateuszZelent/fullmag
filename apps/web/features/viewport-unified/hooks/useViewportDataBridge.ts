@@ -1057,15 +1057,6 @@ export function useViewportDataBridge() {
           ctx.requestPreviewQuantity("m");
         }
       }
-      if (typeof patch.showAirbox === "boolean") {
-        void patchDisplay({
-          layers: {
-            airbox: {
-              visible: patch.showAirbox,
-            },
-          },
-        });
-      }
       if (typeof patch.showQuantity === "boolean") {
         ctx.setFemViewportLayers((previous) =>
           patch.showQuantity
@@ -1269,7 +1260,9 @@ export function useViewportDataBridge() {
           showPrimitives: ctx.femViewportLayers.showPrimitives,
           showMesh: ctx.femViewportLayers.showMesh,
           showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
-          showAirbox: ctx.airMeshVisible,
+          showAirbox: false,
+          airboxRenderMode: "wireframe" as const,
+          showAirboxVectors: false,
           showQuantity: ctx.femViewportLayers.showQuantity,
         }
       : slice2DBaseModel.toolbar;
@@ -1287,7 +1280,7 @@ export function useViewportDataBridge() {
         showVectors: toolbar.showVectors,
       },
     };
-  }, [ctx.airMeshVisible, ctx.femViewportLayers, femDiscretization, slice2DBaseModel, slice2DToolbarPatch]);
+  }, [ctx.femViewportLayers, femDiscretization, slice2DBaseModel, slice2DToolbarPatch]);
 
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,

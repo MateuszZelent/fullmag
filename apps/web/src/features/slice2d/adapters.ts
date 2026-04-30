@@ -46,6 +46,8 @@ export function slice2DToolbarFromDisplay(
     showMesh: false,
     showMagneticTexture: true,
     showAirbox: false,
+    airboxRenderMode: "wireframe",
+    showAirboxVectors: false,
     showQuantity: true,
     showVectors: display.vector_glyphs,
     renderMode: display.vector_glyphs ? "vectors" : DEFAULT_RENDER_MODE,

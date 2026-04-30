@@ -1,4 +1,4 @@
-import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback, useId } from "react";
 import * as THREE from "three";
 import type { FemMeshData, FemColorField, MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
@@ -15,6 +15,11 @@ import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
 import type { FemGeometryPassState } from "./femGeometryRenderPasses";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
+import {
+  estimateThreeBufferGeometryBytes,
+  releaseViewportResource,
+  trackViewportResource,
+} from "@/lib/debug/viewportResourceManager";
 
 interface FemGeometryProps {
   meshData: FemMeshData;
@@ -222,6 +227,7 @@ export const FemGeometry = memo(function FemGeometry({
   enableGeometryHoverInteractions = true,
 }: FemGeometryProps) {
   const scheduleInvalidate = useBatchedInvalidate();
+  const resourceOwner = `FemGeometry:${useId()}`;
   const colorTransitionCleanupRef = useRef<(() => void) | null>(null);
   const {
     nodes,
@@ -1018,39 +1024,58 @@ export const FemGeometry = memo(function FemGeometry({
     }
   }, [center, maxDim, geoSize]);
 
-  // ── Dispose old THREE geometries to prevent GPU memory leaks ─────
-  const prevGeomsRef = useRef<{
-    g: THREE.BufferGeometry | null;
-    e: THREE.BufferGeometry | null;
-    t: THREE.BufferGeometry | null;
-    p: THREE.BufferGeometry | null;
-  }>({ g: null, e: null, t: null, p: null });
+  const geometryResourceKeys = useMemo(
+    () => ({
+      surface: `${resourceOwner}:surface`,
+      edges: `${resourceOwner}:edges`,
+      tetraEdges: `${resourceOwner}:tetraEdges`,
+      points: `${resourceOwner}:points`,
+    }),
+    [resourceOwner],
+  );
+
+  // ── Register and dispose old THREE geometries through the viewport resource manager ──
   useLayoutEffect(() => {
-    if (prevGeomsRef.current.g && prevGeomsRef.current.g !== geometry) {
-      prevGeomsRef.current.g.dispose();
-    }
-    if (prevGeomsRef.current.e && prevGeomsRef.current.e !== edgesGeometry) {
-      prevGeomsRef.current.e.dispose();
-    }
-    if (prevGeomsRef.current.t && prevGeomsRef.current.t !== tetraEdgesGeometry) {
-      prevGeomsRef.current.t.dispose();
-    }
-    if (prevGeomsRef.current.p && prevGeomsRef.current.p !== pointsGeometry) {
-      prevGeomsRef.current.p.dispose();
-    }
-    prevGeomsRef.current = { g: geometry, e: edgesGeometry, t: tetraEdgesGeometry, p: pointsGeometry };
-  }, [edgesGeometry, geometry, pointsGeometry, tetraEdgesGeometry]);
+    const registerGeometry = (
+      key: string,
+      label: string,
+      resource: THREE.BufferGeometry | null,
+    ) => {
+      if (!resource) {
+        releaseViewportResource(key);
+        return;
+      }
+      trackViewportResource({
+        key,
+        owner: resourceOwner,
+        label,
+        resource,
+        estimatedBytes: estimateThreeBufferGeometryBytes(resource),
+        dispose: () => resource.dispose(),
+      });
+    };
+
+    registerGeometry(geometryResourceKeys.surface, "FEM surface geometry", geometry);
+    registerGeometry(geometryResourceKeys.edges, "FEM wireframe geometry", edgesGeometry);
+    registerGeometry(geometryResourceKeys.tetraEdges, "FEM volume-edge geometry", tetraEdgesGeometry);
+    registerGeometry(geometryResourceKeys.points, "FEM points geometry", pointsGeometry);
+  }, [
+    edgesGeometry,
+    geometry,
+    geometryResourceKeys,
+    pointsGeometry,
+    resourceOwner,
+    tetraEdgesGeometry,
+  ]);
 
   useEffect(() => {
     return () => {
-      const current = prevGeomsRef.current;
-      current.g?.dispose();
-      current.e?.dispose();
-      current.t?.dispose();
-      current.p?.dispose();
-      prevGeomsRef.current = { g: null, e: null, t: null, p: null };
+      releaseViewportResource(geometryResourceKeys.surface);
+      releaseViewportResource(geometryResourceKeys.edges);
+      releaseViewportResource(geometryResourceKeys.tetraEdges);
+      releaseViewportResource(geometryResourceKeys.points);
     };
-  }, []);
+  }, [geometryResourceKeys]);
 
   const {
     showSurface,

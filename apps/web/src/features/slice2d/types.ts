@@ -13,6 +13,12 @@ export type SliceRenderMode =
   | "vectors"
   | "mesh-overlay";
 
+export type SliceAirboxRenderMode =
+  | "surface"
+  | "wireframe"
+  | "surface+edges"
+  | "points";
+
 export type Slice2DInteractionMode =
   | "pan_zoom"
   | "select"
@@ -34,6 +40,8 @@ export interface Slice2DToolbarState {
   showMesh: boolean;
   showMagneticTexture: boolean;
   showAirbox: boolean;
+  airboxRenderMode: SliceAirboxRenderMode;
+  showAirboxVectors: boolean;
   showQuantity: boolean;
   showVectors: boolean;
   renderMode: SliceRenderMode;

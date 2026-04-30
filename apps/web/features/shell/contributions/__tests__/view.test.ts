@@ -19,6 +19,8 @@ const slice2DToolbar: Slice2DToolbarState = {
   showMesh: true,
   showMagneticTexture: true,
   showAirbox: false,
+  airboxRenderMode: "wireframe",
+  showAirboxVectors: false,
   showQuantity: true,
   showVectors: true,
   renderMode: "heatmap",
@@ -164,16 +166,66 @@ describe("View ribbon contribution", () => {
 
     const render = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [], "slice:layers:render-mode");
     const airbox = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [], "slice:airbox:visible");
+    const airboxRender = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [], "slice:airbox:render-mode");
     const vectors = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-vectors")?.menu ?? [], "slice:vectors:visible");
 
     expect(axis).toMatchObject({ type: "radio-group", value: "y" });
     expect(mode).toMatchObject({ type: "radio-group", value: "slab" });
     expect(render).toMatchObject({ type: "radio-group", value: "heatmap" });
     expect(airbox).toMatchObject({ type: "checkbox", checked: true });
+    expect(airboxRender).toMatchObject({ type: "radio-group", value: "wireframe" });
     expect(vectors).toMatchObject({ type: "checkbox", checked: true });
 
     axis?.onValueChange?.("x");
     expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-axis", axis: "x" });
+  });
+
+  it("keeps 2D airbox controls off the 3D airbox command path", () => {
+    const run = vi.fn();
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        run,
+        viewMode: "2D",
+        slice2DEnabled: true,
+        slice2DToolbar: {
+          ...slice2DToolbar,
+          showAirbox: true,
+          airboxRenderMode: "wireframe",
+        },
+      }),
+    )[1];
+    const menu = sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [];
+    const visible = findNode(menu, "slice:airbox:visible");
+    const renderMode = findNode(menu, "slice:airbox:render-mode");
+    const vectors = findNode(menu, "slice:airbox:vectors");
+
+    if (
+      visible?.type !== "checkbox" ||
+      renderMode?.type !== "radio-group" ||
+      vectors?.type !== "checkbox"
+    ) {
+      throw new Error("2D airbox controls missing");
+    }
+
+    visible.onCheckedChange(false);
+    renderMode.onValueChange("points");
+    vectors.onCheckedChange(true);
+
+    expect(run).toHaveBeenNthCalledWith(1, {
+      id: "viewport.set-slice-airbox",
+      visible: false,
+    });
+    expect(run).toHaveBeenNthCalledWith(2, {
+      id: "viewport.set-slice-airbox-render-mode",
+      renderMode: "points",
+    });
+    expect(run).toHaveBeenNthCalledWith(3, {
+      id: "viewport.set-slice-airbox-vectors",
+      visible: true,
+    });
+    expect(run).not.toHaveBeenCalledWith(expect.objectContaining({
+      id: "viewport.set-airbox-display",
+    }));
   });
 
   it("keeps 2D slice controls visible but disabled outside 2D mode", () => {

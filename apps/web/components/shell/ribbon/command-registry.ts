@@ -482,6 +482,8 @@ export type RibbonCommand =
   | { id: "viewport.set-slice-primitives"; visible: boolean }
   | { id: "viewport.set-slice-mesh"; visible: boolean }
   | { id: "viewport.set-slice-airbox"; visible: boolean }
+  | { id: "viewport.set-slice-airbox-render-mode"; renderMode: Slice2DToolbarState["airboxRenderMode"] }
+  | { id: "viewport.set-slice-airbox-vectors"; visible: boolean }
   | { id: "viewport.toggle-selected-texture"; visible: boolean }
   | { id: "viewport.set-selected-opacity"; opacity: number }
   | { id: "viewport.set-selected-render-mode"; renderMode: ViewportMeshRenderMode | "inherit" }
@@ -644,6 +646,8 @@ export function canExecuteRibbonCommand(
     case "viewport.set-slice-primitives":
     case "viewport.set-slice-mesh":
     case "viewport.set-slice-airbox":
+    case "viewport.set-slice-airbox-render-mode":
+    case "viewport.set-slice-airbox-vectors":
       return typeof ctx.onSetSlice2DToolbar === "function";
     case "viewport.toggle-selected-texture":
       return Boolean(ctx.selectedObjectId)
@@ -913,6 +917,15 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-slice-airbox":
       ctx.onSetSlice2DToolbar?.({ showAirbox: command.visible });
+      return;
+    case "viewport.set-slice-airbox-render-mode":
+      ctx.onSetSlice2DToolbar?.({ airboxRenderMode: command.renderMode });
+      return;
+    case "viewport.set-slice-airbox-vectors":
+      ctx.onSetSlice2DToolbar?.({
+        showAirboxVectors: command.visible,
+        renderMode: command.visible ? "vectors" : "heatmap",
+      });
       return;
     case "viewport.toggle-selected-texture":
       ctx.onSetSelectedObjectTextureVisible?.(command.visible);

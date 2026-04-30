@@ -1764,13 +1764,14 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     showPrimitives: ctx.femViewportLayers.showPrimitives,
     showMesh: ctx.femViewportLayers.showMesh,
     showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
-    showAirbox: ctx.airMeshVisible,
+    showAirbox: false,
+    airboxRenderMode: "wireframe",
+    showAirboxVectors: false,
     showQuantity: ctx.femViewportLayers.showQuantity,
     showVectors: Boolean(ctx.meshShowArrows),
     renderMode: ctx.meshShowArrows ? "vectors" : "heatmap",
     ...slice2DToolbarPatch,
   }), [
-    ctx.airMeshVisible,
     ctx.component,
     ctx.femViewportLayers,
     ctx.meshClipPos,
@@ -1879,33 +1880,6 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
     if (typeof patch.showMesh === "boolean") {
       ctx.setFemViewportLayers((previous) => ({ ...previous, showMesh: patch.showMesh ?? previous.showMesh }));
-    }
-    if (typeof patch.showAirbox === "boolean") {
-      const nextVisible = patch.showAirbox;
-      void ctx.patchDisplay({
-        layers: {
-          airbox: {
-            visible: nextVisible,
-          },
-        },
-      });
-      ctx.setMeshEntityViewState((previous) => {
-        let changed = false;
-        const next = { ...previous };
-        for (const part of airboxParts) {
-          const current = next[part.id] ?? defaultMeshEntityViewState(part);
-          if (current.visible === nextVisible) {
-            if (!next[part.id]) {
-              next[part.id] = current;
-              changed = true;
-            }
-            continue;
-          }
-          next[part.id] = { ...current, visible: nextVisible };
-          changed = true;
-        }
-        return changed ? next : previous;
-      });
     }
     if (typeof patch.showMagneticTexture === "boolean") {
       ctx.setFemViewportLayers((previous) => ({

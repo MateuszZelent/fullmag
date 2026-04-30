@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 
 import { Slice2DShell } from "@/src/features/slice2d";
@@ -9,8 +10,12 @@ import type { CrossSurfaceSelectionState } from "@/src/features/workspaceSync";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
 import EmptyState from "../../ui/EmptyState";
-import type { MeshEntityViewStateMap, FemMeshPart } from "../../../lib/session/types";
+import {
+  type MeshEntityViewStateMap,
+  type FemMeshPart,
+} from "../../../lib/session/types";
 import type { AntennaOverlay, ObjectViewMode } from "./shared";
+import { resolveSlice2DAirboxViewState } from "./slice2DAirboxViewState";
 
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
@@ -138,8 +143,24 @@ export default function UnifiedViewport2DPresenter({
     ? toolbar.showQuantity
     : toolbar?.showQuantity ?? showQuantity;
   const effectiveShowPrimitives = toolbar?.showPrimitives ?? showPrimitives;
-  const effectiveShowArrows = toolbar?.showVectors ?? showArrows;
+  const effectiveShowArrows =
+    toolbar?.showAirboxVectors || (toolbar?.showVectors ?? showArrows);
   const effectiveAirboxVisible = toolbar?.showAirbox ?? airSegmentVisible;
+  const effectiveVectorDomainFilter: FemVectorDomainFilter =
+    toolbar?.showAirboxVectors && effectiveAirboxVisible
+      ? "airbox_only"
+      : vectorDomainFilter;
+  const effectiveMeshEntityViewState = useMemo(() => {
+    if (!toolbar) {
+      return meshEntityViewState;
+    }
+    return resolveSlice2DAirboxViewState({
+      meshParts,
+      meshEntityViewState,
+      visible: effectiveAirboxVisible,
+      renderMode: toolbar.airboxRenderMode,
+    });
+  }, [effectiveAirboxVisible, meshEntityViewState, meshParts, toolbar]);
 
   const wrap = (content: ReactNode) =>
     slice2DModel ? (
@@ -159,7 +180,7 @@ export default function UnifiedViewport2DPresenter({
         component={femComponent}
         plane={plane}
         meshParts={meshParts}
-        meshEntityViewState={meshEntityViewState}
+        meshEntityViewState={effectiveMeshEntityViewState}
         meshRenderMode={toolbar?.renderMode === "mesh-overlay" ? "surface+edges" : meshRenderMode ?? "surface"}
         showPrimitives={effectiveShowPrimitives}
         showMesh={effectiveShowMesh}
@@ -167,7 +188,7 @@ export default function UnifiedViewport2DPresenter({
         airSegmentVisible={effectiveAirboxVisible}
         objectViewMode={objectViewMode}
         visibleObjectIds={visibleObjectIds}
-        vectorDomainFilter={vectorDomainFilter}
+        vectorDomainFilter={effectiveVectorDomainFilter}
         clipAxis={clipAxis}
         clipPos={clipPos}
         antennaOverlays={antennaOverlays}
