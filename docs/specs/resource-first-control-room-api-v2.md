@@ -47,7 +47,9 @@ The default frontend base path is `/v2/sessions/current`.
 - `completion_status` is command outcome, not queue state; public command states are `queued`, `accepted`, `dispatched`, `running`, `completed`, `rejected`, and `failed`.
 - `data/quantities` describes supported quantities and preview capability.
 - `data/fields` describes materialized field resources; an empty field catalog does not make a quantity unsupported.
-- `visualization/display` owns renderer state; `workspace/*` owns shell state only and must not mutate physics semantics.
+- `visualization/display` owns the legacy display-selection projection.
+- `visualization/state` owns canonical renderer state. Its schema version 2 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, clip-plane state, vector glyph style, object/part `overrides`, and diagnostics while retaining flat display fields as a compatibility projection.
+- `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
 ## 3.1 Single-owner read-model rules

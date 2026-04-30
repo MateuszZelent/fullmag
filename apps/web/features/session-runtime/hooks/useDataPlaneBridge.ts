@@ -283,7 +283,9 @@ export function useDataPlaneBridge(
             if (response.buffer == null) {
               throw new Error(`field vector response for ${envelope.quantityId} had no buffer`);
             }
-            result = await decodeFieldVectorOffThread(response.buffer);
+            result = await decodeFieldVectorOffThread(response.buffer, {
+              transferInput: true,
+            });
             client.getCache().set(
               resourceKey,
               result,

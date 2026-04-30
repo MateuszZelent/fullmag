@@ -1,6 +1,11 @@
 //! API request/response types and view models.
 
 use crate::schemas::commands::CommandResponse;
+use crate::schemas::visualization_state::{
+    ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
+    SamplingVisualizationState, VectorStyleVisualizationState, VisualizationLayerState,
+    VisualizationOverrideState,
+};
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
 };
@@ -30,6 +35,20 @@ pub(crate) struct DisplayPresentationState {
     pub contrast_min: Option<f64>,
     pub contrast_max: Option<f64>,
     pub vector_glyphs: bool,
+    #[serde(default)]
+    pub visualization_layers: Option<VisualizationLayerState>,
+    #[serde(default)]
+    pub visualization_domains: Option<DomainVisualizationState>,
+    #[serde(default)]
+    pub visualization_sampling: Option<SamplingVisualizationState>,
+    #[serde(default)]
+    pub visualization_fem: Option<FemVisualizationState>,
+    #[serde(default)]
+    pub visualization_clip: Option<ClipVisualizationState>,
+    #[serde(default)]
+    pub visualization_vector_style: Option<VectorStyleVisualizationState>,
+    #[serde(default)]
+    pub visualization_overrides: Option<Vec<VisualizationOverrideState>>,
 }
 
 impl Default for DisplayPresentationState {
@@ -39,6 +58,13 @@ impl Default for DisplayPresentationState {
             contrast_min: None,
             contrast_max: None,
             vector_glyphs: true,
+            visualization_layers: None,
+            visualization_domains: None,
+            visualization_sampling: None,
+            visualization_fem: None,
+            visualization_clip: None,
+            visualization_vector_style: None,
+            visualization_overrides: None,
         }
     }
 }

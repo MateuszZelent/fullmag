@@ -48,6 +48,13 @@ import { defaultMeshEntityViewState } from "@/lib/session/types";
 import type { FemColorField, RenderMode } from "@/components/preview/FemMeshView3D";
 import type { VectorComponent } from "./shared";
 import { useCommand, useModel, useTransport, useViewport } from "./context-hooks";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForFemLayers,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+  visualizationPatchForVectorStyle,
+} from "./visualizationStateSync";
 
 function toUnifiedVectorComponent(
   component: string,
@@ -307,7 +314,7 @@ export const ViewportBar = memo(function ViewportBar() {
 
     if (next.meshRenderMode !== renderState.meshRenderMode) {
       const nextRenderMode = fromUnifiedMeshRenderMode(next.meshRenderMode);
-      model.setMeshRenderMode(nextRenderMode);
+      void viewport.patchDisplay(visualizationPatchForRenderMode(nextRenderMode));
       if (model.meshParts.length > 0) {
         model.setMeshEntityViewState((previous) => {
           let changed = false;
@@ -326,19 +333,23 @@ export const ViewportBar = memo(function ViewportBar() {
     }
 
     if (next.meshOpacity !== renderState.meshOpacity && typeof next.meshOpacity === "number") {
-      model.setMeshOpacity(next.meshOpacity);
+      void viewport.patchDisplay(visualizationPatchForOpacity(next.meshOpacity));
     }
 
     if (next.clipEnabled !== renderState.clipEnabled) {
-      model.setMeshClipEnabled(Boolean(next.clipEnabled));
+      void viewport.patchDisplay(
+        visualizationPatchForClip({ enabled: Boolean(next.clipEnabled) }),
+      );
     }
 
     if (next.clipAxis !== renderState.clipAxis && next.clipAxis) {
-      model.setMeshClipAxis(next.clipAxis);
+      void viewport.patchDisplay(visualizationPatchForClip({ axis: next.clipAxis }));
     }
 
     if (next.clipPosition !== renderState.clipPosition && typeof next.clipPosition === "number") {
-      model.setMeshClipPos(next.clipPosition);
+      void viewport.patchDisplay(
+        visualizationPatchForClip({ positionPercent: next.clipPosition }),
+      );
     }
 
     const currentLayers = renderState.femLayers ?? DEFAULT_FEM_VIEWPORT_LAYER_STATE;
@@ -349,7 +360,16 @@ export const ViewportBar = memo(function ViewportBar() {
       nextLayers.showMagneticTexture !== currentLayers.showMagneticTexture ||
       nextLayers.showQuantity !== currentLayers.showQuantity
     ) {
-      model.setFemViewportLayers(nextLayers);
+      if (nextLayers.showMagneticTexture !== currentLayers.showMagneticTexture) {
+        model.setFemViewportLayers(nextLayers);
+      }
+      if (
+        nextLayers.showPrimitives !== currentLayers.showPrimitives ||
+        nextLayers.showMesh !== currentLayers.showMesh ||
+        nextLayers.showQuantity !== currentLayers.showQuantity
+      ) {
+        void viewport.patchDisplay(visualizationPatchForFemLayers(nextLayers));
+      }
     }
   }, [displayControls, model, renderState, viewport]);
 
@@ -458,7 +478,13 @@ export const ViewportBar = memo(function ViewportBar() {
     const next = !vectorsEnabled;
     dispatchToolbar({ type: "setVectorsVisible", value: next });
     if (supportsTopology) {
-      model.setMeshShowArrows(next);
+      void viewport.patchDisplay({
+        layers: {
+          vectors: {
+            visible: next,
+          },
+        },
+      });
       return;
     }
     void displayControls.setVectorGlyphs(next);
@@ -639,7 +665,9 @@ export const ViewportBar = memo(function ViewportBar() {
         quantityStatus={viewport.requestedPreviewQuantityDataStatus}
         onQuantityChange={viewport.requestDisplayQuantity}
         clipFlip={model.meshClipFlip}
-        onClipFlipChange={model.setMeshClipFlip}
+        onClipFlipChange={(flipped) => {
+          void viewport.patchDisplay(visualizationPatchForClip({ flipped }));
+        }}
         controlStates={viewportToolbarState.controlStates}
         controlReasons={viewport3DControlReasons}
       />
@@ -931,9 +959,13 @@ export const ViewportBar = memo(function ViewportBar() {
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
                   value={model.femVectorDomainFilter}
                   onChange={(event) =>
-                    model.setFemVectorDomainFilter(
-                      event.target.value as "auto" | "magnetic_only" | "full_domain" | "airbox_only",
-                    )
+                    void viewport.patchDisplay({
+                      layers: {
+                        vectors: {
+                          domain: event.target.value as "auto" | "magnetic_only" | "full_domain" | "airbox_only",
+                        },
+                      },
+                    })
                   }
                 >
                   <option value="auto">auto</option>
@@ -948,7 +980,11 @@ export const ViewportBar = memo(function ViewportBar() {
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
                   value={model.femFerromagnetVisibilityMode}
                   onChange={(event) =>
-                    model.setFemFerromagnetVisibilityMode(event.target.value as "hide" | "ghost")
+                    void viewport.patchDisplay(
+                      visualizationPatchForVectorStyle({
+                        ferromagnetVisibility: event.target.value as "hide" | "ghost",
+                      }),
+                    )
                   }
                 >
                   <option value="hide">hide</option>
@@ -964,7 +1000,11 @@ export const ViewportBar = memo(function ViewportBar() {
                   max={1}
                   step={0.01}
                   value={model.femArrowAlpha}
-                  onChange={(event) => model.setFemArrowAlpha(Number(event.target.value))}
+                  onChange={(event) =>
+                    void viewport.patchDisplay(
+                      visualizationPatchForVectorStyle({ alpha: Number(event.target.value) }),
+                    )
+                  }
                 />
               </label>
               <label className={ROW_B_HINT_CLASS}>
@@ -976,7 +1016,13 @@ export const ViewportBar = memo(function ViewportBar() {
                   max={4}
                   step={0.05}
                   value={model.femArrowLengthScale}
-                  onChange={(event) => model.setFemArrowLengthScale(Number(event.target.value))}
+                  onChange={(event) =>
+                    void viewport.patchDisplay(
+                      visualizationPatchForVectorStyle({
+                        lengthScale: Number(event.target.value),
+                      }),
+                    )
+                  }
                 />
               </label>
               <label className={ROW_B_HINT_CLASS}>
@@ -988,7 +1034,13 @@ export const ViewportBar = memo(function ViewportBar() {
                   max={4}
                   step={0.05}
                   value={model.femArrowThickness}
-                  onChange={(event) => model.setFemArrowThickness(Number(event.target.value))}
+                  onChange={(event) =>
+                    void viewport.patchDisplay(
+                      visualizationPatchForVectorStyle({
+                        thickness: Number(event.target.value),
+                      }),
+                    )
+                  }
                 />
               </label>
             </>
@@ -1055,8 +1107,10 @@ export const ViewportBar = memo(function ViewportBar() {
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
                   value={model.femArrowColorMode}
                   onChange={(event) =>
-                    model.setFemArrowColorMode(
-                      event.target.value as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome",
+                    void viewport.patchDisplay(
+                      visualizationPatchForVectorStyle({
+                        colorMode: event.target.value as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome",
+                      }),
                     )
                   }
                 >
@@ -1075,7 +1129,11 @@ export const ViewportBar = memo(function ViewportBar() {
                     type="color"
                     className="ml-1 h-7 w-10 rounded border border-border/35 bg-background/45 p-0.5 align-middle"
                     value={model.femArrowMonoColor}
-                    onChange={(event) => model.setFemArrowMonoColor(event.target.value)}
+                    onChange={(event) =>
+                      void viewport.patchDisplay(
+                        visualizationPatchForVectorStyle({ monoColor: event.target.value }),
+                      )
+                    }
                   />
                 </label>
               ) : null}

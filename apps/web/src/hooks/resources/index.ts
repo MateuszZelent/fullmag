@@ -8,6 +8,11 @@ export { useSliceResource, useSlice2DModel } from "./useSliceResource";
 export type { SliceScalarData, SliceArrowData, UseFieldSlice2DResult } from "./useFieldSlice2D";
 export { useScalarHistory } from "./useScalarHistory";
 export { useDisplayControl } from "./useDisplayControl";
+export {
+  buildVisualizationStateFetchIdentity,
+  shouldFetchVisualizationStateResource,
+  useVisualizationStateResource,
+} from "./useVisualizationStateResource";
 export { useCommands } from "./useCommands";
 export { useCommandCompletion } from "./useCommandCompletion";
 export { useArtifacts } from "./useArtifacts";

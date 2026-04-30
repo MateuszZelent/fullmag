@@ -65,6 +65,225 @@ export interface DisplaySelection {
 export interface VisualizationStateResource extends DisplaySelection {
   revision: number;
   schema_version: number;
+  quantity: QuantityVisualizationState;
+  layers: VisualizationLayerState;
+  domains: DomainVisualizationState;
+  sampling: SamplingVisualizationState;
+  fdm: FdmVisualizationState;
+  fem: FemVisualizationState;
+  clip: ClipVisualizationState;
+  vector_style: VectorStyleVisualizationState;
+  overrides: VisualizationOverrideState[];
+  diagnostics: VisualizationDiagnostics;
+}
+
+export interface QuantityVisualizationState {
+  active_quantity_id: string;
+  field_component: DisplaySelection["field_component"];
+  colormap: string;
+  auto_contrast: boolean;
+  contrast_min: number | null;
+  contrast_max: number | null;
+}
+
+export interface QuantityVisualizationPatch {
+  active_quantity_id?: string | null;
+  field_component?: DisplaySelection["field_component"] | null;
+  colormap?: string | null;
+  auto_contrast?: boolean | null;
+  contrast_min?: number | null;
+  contrast_max?: number | null;
+}
+
+export interface VisualizationLayerState {
+  surface: BasicLayerState;
+  quantity_overlay: BasicLayerState;
+  wireframe: BasicLayerState;
+  volume_mesh: BasicLayerState;
+  points: BasicLayerState;
+  vectors: VectorLayerState;
+  primitives: BasicLayerState;
+  airbox: AirboxLayerState;
+}
+
+export interface VisualizationLayerPatch {
+  surface?: BasicLayerPatch | null;
+  quantity_overlay?: BasicLayerPatch | null;
+  wireframe?: BasicLayerPatch | null;
+  volume_mesh?: BasicLayerPatch | null;
+  points?: BasicLayerPatch | null;
+  vectors?: VectorLayerPatch | null;
+  primitives?: BasicLayerPatch | null;
+  airbox?: AirboxLayerPatch | null;
+}
+
+export interface BasicLayerState {
+  visible: boolean;
+  opacity: number;
+}
+
+export interface BasicLayerPatch {
+  visible?: boolean | null;
+  opacity?: number | null;
+}
+
+export type VectorLayerDomain =
+  | "auto"
+  | "magnetic_only"
+  | "full_domain"
+  | "airbox_only"
+  | "selection"
+  | "object"
+  | "part";
+
+export interface VectorLayerState {
+  visible: boolean;
+  density: number;
+  domain: VectorLayerDomain;
+}
+
+export interface VectorLayerPatch {
+  visible?: boolean | null;
+  density?: number | null;
+  domain?: VectorLayerDomain | null;
+}
+
+export interface AirboxLayerState {
+  visible: boolean;
+  surface: BasicLayerState;
+  wireframe: BasicLayerState;
+  points: BasicLayerState;
+  vectors: VectorLayerState;
+  opacity: number;
+}
+
+export interface AirboxLayerPatch {
+  visible?: boolean | null;
+  surface?: BasicLayerPatch | null;
+  wireframe?: BasicLayerPatch | null;
+  points?: BasicLayerPatch | null;
+  vectors?: VectorLayerPatch | null;
+  opacity?: number | null;
+}
+
+export type VisualizationScopeKind =
+  | "full"
+  | "magnetic"
+  | "airbox"
+  | "object"
+  | "part"
+  | "selection";
+
+export interface DomainVisualizationState {
+  active_scope: VisualizationScopeKind;
+  object_id: string | null;
+  part_id: string | null;
+}
+
+export interface DomainVisualizationPatch {
+  active_scope?: VisualizationScopeKind | null;
+  object_id?: string | null;
+  part_id?: string | null;
+}
+
+export type SamplingProfile =
+  | "quality"
+  | "balanced"
+  | "interactive"
+  | "memory_saver"
+  | "custom";
+
+export interface SamplingVisualizationState {
+  profile: SamplingProfile;
+  max_points: number;
+  max_glyphs: number;
+  max_bytes: number | null;
+  progressive: boolean;
+}
+
+export interface SamplingVisualizationPatch {
+  profile?: SamplingProfile | null;
+  max_points?: number | null;
+  max_glyphs?: number | null;
+  max_bytes?: number | null;
+  progressive?: boolean | null;
+}
+
+export interface FdmVisualizationState {
+  x_chosen_size: number;
+  y_chosen_size: number;
+}
+
+export interface FdmVisualizationPatch {
+  x_chosen_size?: number | null;
+  y_chosen_size?: number | null;
+}
+
+export type FemTopologyMode = "surface" | "boundary" | "volume" | "auto";
+
+export interface FemVisualizationState {
+  topology_mode: FemTopologyMode;
+  volume_edges_budget: number;
+}
+
+export interface FemVisualizationPatch {
+  topology_mode?: FemTopologyMode | null;
+  volume_edges_budget?: number | null;
+}
+
+export type ClipAxis = "x" | "y" | "z";
+
+export interface ClipVisualizationState {
+  enabled: boolean;
+  axis: ClipAxis;
+  position_percent: number;
+  flipped: boolean;
+}
+
+export interface ClipVisualizationPatch {
+  enabled?: boolean | null;
+  axis?: ClipAxis | null;
+  position_percent?: number | null;
+  flipped?: boolean | null;
+}
+
+export type VectorColorMode =
+  | "orientation"
+  | "x"
+  | "y"
+  | "z"
+  | "magnitude"
+  | "monochrome";
+
+export type FerromagnetVisibilityMode = "hide" | "ghost";
+
+export interface VectorStyleVisualizationState {
+  color_mode: VectorColorMode;
+  mono_color: string;
+  alpha: number;
+  length_scale: number;
+  thickness: number;
+  ferromagnet_visibility: FerromagnetVisibilityMode;
+}
+
+export interface VectorStyleVisualizationPatch {
+  color_mode?: VectorColorMode | null;
+  mono_color?: string | null;
+  alpha?: number | null;
+  length_scale?: number | null;
+  thickness?: number | null;
+  ferromagnet_visibility?: FerromagnetVisibilityMode | null;
+}
+
+export interface VisualizationOverrideState {
+  scope: VisualizationScopeKind;
+  scope_id: string;
+  visible: boolean | null;
+}
+
+export interface VisualizationDiagnostics {
+  warnings: string[];
+  degraded_reasons: string[];
 }
 
 export interface DomainSummary {
@@ -514,7 +733,16 @@ export interface DisplayPatchRequest {
   y_chosen_size?: number;
 }
 
-export type VisualizationStatePatch = DisplayPatchRequest;
+export interface VisualizationStatePatch extends DisplayPatchRequest {
+  quantity?: QuantityVisualizationPatch | null;
+  layers?: VisualizationLayerPatch | null;
+  domains?: DomainVisualizationPatch | null;
+  sampling?: SamplingVisualizationPatch | null;
+  fdm?: FdmVisualizationPatch | null;
+  fem?: FemVisualizationPatch | null;
+  clip?: ClipVisualizationPatch | null;
+  vector_style?: VectorStyleVisualizationPatch | null;
+}
 
 // ── Commands ──────────────────────────────────────────────────────────
 

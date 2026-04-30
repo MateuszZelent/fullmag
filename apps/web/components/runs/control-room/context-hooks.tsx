@@ -17,8 +17,8 @@
 import { createContext, useContext } from "react";
 import type {
   CapabilityMap,
-  DisplayPatchRequest,
   GpuTelemetryDevice,
+  VisualizationStatePatch,
 } from "@/src/api/types";
 import type {
   ArtifactEntry,
@@ -222,7 +222,7 @@ export interface ViewportContextValue {
   setSelectedQuantity: React.Dispatch<React.SetStateAction<string>>;
   setConsoleCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   setSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
-  patchDisplay: (patch: DisplayPatchRequest) => Promise<void>;
+  patchDisplay: (patch: VisualizationStatePatch) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   handleViewModeChange: (mode: string) => void;
   handleCapture: () => void;

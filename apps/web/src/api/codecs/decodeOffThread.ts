@@ -1,6 +1,7 @@
 import { decodeFieldVector } from "./fieldVectorCodec";
 import { decodeTopology } from "./topologyCodec";
 import type { DecodedFieldVector, DecodedTopology } from "./types";
+import { arrayBufferTransferList } from "./transferables";
 
 type DecodeKind = "field-vector" | "topology";
 
@@ -26,6 +27,10 @@ type PendingDecode = {
   resolve: (value: DecodedFieldVector | DecodedTopology) => void;
   reject: (reason?: unknown) => void;
 };
+
+interface DecodeOffThreadOptions {
+  transferInput?: boolean;
+}
 
 let worker: Worker | null = null;
 let nextRequestId = 1;
@@ -100,6 +105,7 @@ function ensureWorker(): Worker | null {
 async function decodeWithWorker<T extends DecodedFieldVector | DecodedTopology>(
   kind: DecodeKind,
   buffer: ArrayBuffer,
+  options?: DecodeOffThreadOptions,
 ): Promise<T> {
   const activeWorker = ensureWorker();
   if (!activeWorker) {
@@ -113,22 +119,31 @@ async function decodeWithWorker<T extends DecodedFieldVector | DecodedTopology>(
       reject: (reason) => reject(reason),
     });
     try {
-      activeWorker.postMessage({ id, kind, buffer } satisfies BinaryDecodeWorkerRequest);
+      activeWorker.postMessage(
+        { id, kind, buffer } satisfies BinaryDecodeWorkerRequest,
+        options?.transferInput ? arrayBufferTransferList(buffer) : [],
+      );
     } catch (error) {
       pending.delete(id);
-      reject(error);
+      try {
+        resolve(decodeOnMainThread(kind, buffer) as T);
+      } catch {
+        reject(error);
+      }
     }
   });
 }
 
 export function decodeFieldVectorOffThread(
   buffer: ArrayBuffer,
+  options?: DecodeOffThreadOptions,
 ): Promise<DecodedFieldVector> {
-  return decodeWithWorker<DecodedFieldVector>("field-vector", buffer);
+  return decodeWithWorker<DecodedFieldVector>("field-vector", buffer, options);
 }
 
 export function decodeTopologyOffThread(
   buffer: ArrayBuffer,
+  options?: DecodeOffThreadOptions,
 ): Promise<DecodedTopology> {
-  return decodeWithWorker<DecodedTopology>("topology", buffer);
+  return decodeWithWorker<DecodedTopology>("topology", buffer, options);
 }

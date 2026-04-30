@@ -234,7 +234,13 @@ export default function UniversePanel() {
     ctx.setSelectedObjectId(null);
     ctx.setViewportScope("universe");
     ctx.setObjectViewMode("context");
-    ctx.setAirMeshVisible(true);
+    void viewport.patchDisplay({
+      layers: {
+        airbox: {
+          visible: true,
+        },
+      },
+    });
     ctx.setMeshEntityViewState((prev) => {
       const next = { ...prev };
       for (const part of ctx.meshParts) {
@@ -247,15 +253,20 @@ export default function UniversePanel() {
       }
       return next;
     });
-  }, [ctx]);
+  }, [ctx, viewport]);
   const handleShowFullDomainView = useCallback(() => {
     ctx.handleViewModeChange("3D");
     ctx.setSelectedSidebarNodeId("universe-airbox");
     ctx.setSelectedObjectId(null);
     ctx.setViewportScope("universe");
     ctx.setObjectViewMode("context");
-    // Full-domain baseline should keep airbox hidden by default.
-    ctx.setAirMeshVisible(false);
+    void viewport.patchDisplay({
+      layers: {
+        airbox: {
+          visible: false,
+        },
+      },
+    });
     ctx.setMeshEntityViewState((prev) => {
       const next = { ...prev };
       for (const part of ctx.meshParts) {
@@ -268,7 +279,7 @@ export default function UniversePanel() {
       }
       return next;
     });
-  }, [ctx]);
+  }, [ctx, viewport]);
   const airboxIsolated = useMemo(
     () =>
       Boolean(
@@ -480,7 +491,13 @@ export default function UniversePanel() {
                   onBlur={(event) => {
                     const parsed = Number(event.target.value);
                     if (!Number.isFinite(parsed)) return;
-                    ctx.setAirMeshOpacity(Math.max(5, Math.min(100, Math.round(parsed))));
+                    void viewport.patchDisplay({
+                      layers: {
+                        airbox: {
+                          opacity: Math.max(5, Math.min(100, Math.round(parsed))) / 100,
+                        },
+                      },
+                    });
                   }}
                   tooltip="Viewport-only opacity for the Universe / airbox mesh in FEM domain view."
                 />
@@ -488,7 +505,15 @@ export default function UniversePanel() {
               <ToggleRow
                 label="Show Airbox Mesh"
                 checked={ctx.airMeshVisible}
-                onChange={ctx.setAirMeshVisible}
+                onChange={(visible) => {
+                  void viewport.patchDisplay({
+                    layers: {
+                      airbox: {
+                        visible,
+                      },
+                    },
+                  });
+                }}
               />
               {airViewState ? (
                 <SelectField

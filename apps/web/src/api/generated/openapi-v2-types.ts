@@ -1464,6 +1464,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AirboxLayerPatch: {
+            /** Format: double */
+            opacity?: number | null;
+            points?: null | components["schemas"]["BasicLayerPatch"];
+            surface?: null | components["schemas"]["BasicLayerPatch"];
+            vectors?: null | components["schemas"]["VectorLayerPatch"];
+            visible?: boolean | null;
+            wireframe?: null | components["schemas"]["BasicLayerPatch"];
+        };
+        AirboxLayerState: {
+            /** Format: double */
+            opacity: number;
+            points: components["schemas"]["BasicLayerState"];
+            surface: components["schemas"]["BasicLayerState"];
+            vectors: components["schemas"]["VectorLayerState"];
+            visible: boolean;
+            wireframe: components["schemas"]["BasicLayerState"];
+        };
         ApiErrorResponse: {
             error: string;
             message: string;
@@ -1539,6 +1557,16 @@ export interface components {
             scene_revision: number;
             transaction_kind: string;
         };
+        BasicLayerPatch: {
+            /** Format: double */
+            opacity?: number | null;
+            visible?: boolean | null;
+        };
+        BasicLayerState: {
+            /** Format: double */
+            opacity: number;
+            visible: boolean;
+        };
         Bounds3: {
             max: number[];
             min: number[];
@@ -1579,6 +1607,22 @@ export interface components {
             study_kind: string;
             /** Format: double */
             time_s: number;
+        };
+        /** @enum {string} */
+        ClipAxis: "x" | "y" | "z";
+        ClipVisualizationPatch: {
+            axis?: null | components["schemas"]["ClipAxis"];
+            enabled?: boolean | null;
+            flipped?: boolean | null;
+            /** Format: double */
+            position_percent?: number | null;
+        };
+        ClipVisualizationState: {
+            axis: components["schemas"]["ClipAxis"];
+            enabled: boolean;
+            flipped: boolean;
+            /** Format: double */
+            position_percent: number;
         };
         CommandDetailResource: {
             command_id: string;
@@ -1773,6 +1817,16 @@ export interface components {
             /** Format: int64 */
             generation_id: number;
         };
+        DomainVisualizationPatch: {
+            active_scope?: null | components["schemas"]["VisualizationScopeKind"];
+            object_id?: string | null;
+            part_id?: string | null;
+        };
+        DomainVisualizationState: {
+            active_scope: components["schemas"]["VisualizationScopeKind"];
+            object_id?: string | null;
+            part_id?: string | null;
+        };
         EnergySummary: {
             /** Format: double */
             anisotropy?: number | null;
@@ -1798,6 +1852,32 @@ export interface components {
             revision: number;
             total: number;
         };
+        FdmVisualizationPatch: {
+            /** Format: int32 */
+            x_chosen_size?: number | null;
+            /** Format: int32 */
+            y_chosen_size?: number | null;
+        };
+        FdmVisualizationState: {
+            /** Format: int32 */
+            x_chosen_size: number;
+            /** Format: int32 */
+            y_chosen_size: number;
+        };
+        /** @enum {string} */
+        FemTopologyMode: "surface" | "boundary" | "volume" | "auto";
+        FemVisualizationPatch: {
+            topology_mode?: null | components["schemas"]["FemTopologyMode"];
+            /** Format: int32 */
+            volume_edges_budget?: number | null;
+        };
+        FemVisualizationState: {
+            topology_mode: components["schemas"]["FemTopologyMode"];
+            /** Format: int32 */
+            volume_edges_budget: number;
+        };
+        /** @enum {string} */
+        FerromagnetVisibilityMode: "hide" | "ghost";
         FieldCatalog: {
             /** Format: int64 */
             domain_generation_id: number;
@@ -2395,6 +2475,26 @@ export interface components {
             quantities: components["schemas"]["QuantityCatalogEntry"][];
             schema_version: string;
         };
+        QuantityVisualizationPatch: {
+            active_quantity_id?: string | null;
+            auto_contrast?: boolean | null;
+            colormap?: string | null;
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            field_component?: null | components["schemas"]["FieldComponent"];
+        };
+        QuantityVisualizationState: {
+            active_quantity_id: string;
+            auto_contrast: boolean;
+            colormap: string;
+            /** Format: double */
+            contrast_max?: number | null;
+            /** Format: double */
+            contrast_min?: number | null;
+            field_component: components["schemas"]["FieldComponent"];
+        };
         RecoveryClearResponse: {
             cleared: number;
         };
@@ -2493,6 +2593,28 @@ export interface components {
         RuntimeCapabilityMatrix: {
             engines: components["schemas"]["HostEngineEntry"][];
             profile_version: string;
+        };
+        /** @enum {string} */
+        SamplingProfile: "quality" | "balanced" | "interactive" | "memory_saver" | "custom";
+        SamplingVisualizationPatch: {
+            /** Format: int64 */
+            max_bytes?: number | null;
+            /** Format: int32 */
+            max_glyphs?: number | null;
+            /** Format: int32 */
+            max_points?: number | null;
+            profile?: null | components["schemas"]["SamplingProfile"];
+            progressive?: boolean | null;
+        };
+        SamplingVisualizationState: {
+            /** Format: int64 */
+            max_bytes?: number | null;
+            /** Format: int32 */
+            max_glyphs: number;
+            /** Format: int32 */
+            max_points: number;
+            profile: components["schemas"]["SamplingProfile"];
+            progressive: boolean;
         };
         /**
          * @description Which elements to include when saving a session.
@@ -2801,23 +2923,100 @@ export interface components {
             study_universe_mesh: Record<string, never> | null;
             universe: Record<string, never> | null;
         };
+        /** @enum {string} */
+        VectorColorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+        /** @enum {string} */
+        VectorLayerDomain: "auto" | "magnetic_only" | "full_domain" | "airbox_only" | "selection" | "object" | "part";
+        VectorLayerPatch: {
+            /** Format: int32 */
+            density?: number | null;
+            domain?: null | components["schemas"]["VectorLayerDomain"];
+            visible?: boolean | null;
+        };
+        VectorLayerState: {
+            /** Format: int32 */
+            density: number;
+            domain: components["schemas"]["VectorLayerDomain"];
+            visible: boolean;
+        };
+        VectorStyleVisualizationPatch: {
+            /** Format: double */
+            alpha?: number | null;
+            color_mode?: null | components["schemas"]["VectorColorMode"];
+            ferromagnet_visibility?: null | components["schemas"]["FerromagnetVisibilityMode"];
+            /** Format: double */
+            length_scale?: number | null;
+            mono_color?: string | null;
+            /** Format: double */
+            thickness?: number | null;
+        };
+        VectorStyleVisualizationState: {
+            /** Format: double */
+            alpha: number;
+            color_mode: components["schemas"]["VectorColorMode"];
+            ferromagnet_visibility: components["schemas"]["FerromagnetVisibilityMode"];
+            /** Format: double */
+            length_scale: number;
+            mono_color: string;
+            /** Format: double */
+            thickness: number;
+        };
+        VisualizationDiagnostics: {
+            degraded_reasons: string[];
+            warnings: string[];
+        };
+        VisualizationLayerPatch: {
+            airbox?: null | components["schemas"]["AirboxLayerPatch"];
+            points?: null | components["schemas"]["BasicLayerPatch"];
+            primitives?: null | components["schemas"]["BasicLayerPatch"];
+            quantity_overlay?: null | components["schemas"]["BasicLayerPatch"];
+            surface?: null | components["schemas"]["BasicLayerPatch"];
+            vectors?: null | components["schemas"]["VectorLayerPatch"];
+            volume_mesh?: null | components["schemas"]["BasicLayerPatch"];
+            wireframe?: null | components["schemas"]["BasicLayerPatch"];
+        };
+        VisualizationLayerState: {
+            airbox: components["schemas"]["AirboxLayerState"];
+            points: components["schemas"]["BasicLayerState"];
+            primitives: components["schemas"]["BasicLayerState"];
+            quantity_overlay: components["schemas"]["BasicLayerState"];
+            surface: components["schemas"]["BasicLayerState"];
+            vectors: components["schemas"]["VectorLayerState"];
+            volume_mesh: components["schemas"]["BasicLayerState"];
+            wireframe: components["schemas"]["BasicLayerState"];
+        };
+        VisualizationOverrideState: {
+            scope: components["schemas"]["VisualizationScopeKind"];
+            scope_id: string;
+            visible?: boolean | null;
+        };
+        /** @enum {string} */
+        VisualizationScopeKind: "full" | "magnetic" | "airbox" | "object" | "part" | "selection";
         VisualizationStatePatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
+            clip?: null | components["schemas"]["ClipVisualizationPatch"];
             colormap?: string | null;
             /** Format: double */
             contrast_max?: number | null;
             /** Format: double */
             contrast_min?: number | null;
+            domains?: null | components["schemas"]["DomainVisualizationPatch"];
+            fdm?: null | components["schemas"]["FdmVisualizationPatch"];
+            fem?: null | components["schemas"]["FemVisualizationPatch"];
             field_component?: null | components["schemas"]["FieldComponent"];
+            layers?: null | components["schemas"]["VisualizationLayerPatch"];
             /** Format: int32 */
             max_points?: number | null;
+            quantity?: null | components["schemas"]["QuantityVisualizationPatch"];
+            sampling?: null | components["schemas"]["SamplingVisualizationPatch"];
             /** Format: int32 */
             slice_layer?: number | null;
             slice_mode?: string | null;
             /** Format: int32 */
             vector_density?: number | null;
             vector_glyphs?: boolean | null;
+            vector_style?: null | components["schemas"]["VectorStyleVisualizationPatch"];
             view_mode?: null | components["schemas"]["DisplayViewMode"];
             /** Format: int32 */
             x_chosen_size?: number | null;
@@ -2825,21 +3024,52 @@ export interface components {
             y_chosen_size?: number | null;
         };
         VisualizationStateResource: {
+            /** @description Compatibility projection for current display clients. Prefer `quantity.active_quantity_id`. */
             active_quantity_id: string;
+            /** @description Compatibility projection for current display clients. Prefer `quantity.auto_contrast`. */
             auto_contrast: boolean;
+            /** @description Shared clip-plane controls for topology-aware viewports. */
+            clip: components["schemas"]["ClipVisualizationState"];
+            /** @description Compatibility projection for current display clients. Prefer `quantity.colormap`. */
             colormap: string;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Compatibility projection for current display clients. Prefer `quantity.contrast_max`.
+             */
             contrast_max?: number | null;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Compatibility projection for current display clients. Prefer `quantity.contrast_min`.
+             */
             contrast_min?: number | null;
+            /** @description Backend normalization warnings and degraded-state reasons for display controls. */
+            diagnostics: components["schemas"]["VisualizationDiagnostics"];
+            /** @description Domain/scope selection for renderer resources. */
+            domains: components["schemas"]["DomainVisualizationState"];
+            /** @description FDM-specific view controls. */
+            fdm: components["schemas"]["FdmVisualizationState"];
+            /** @description FEM-specific view controls. */
+            fem: components["schemas"]["FemVisualizationState"];
+            /** @description Compatibility projection for current display clients. Prefer `quantity.field_component`. */
             field_component: components["schemas"]["FieldComponent"];
-            /** Format: int32 */
+            /** @description Independent renderer layers. This is the canonical View ribbon state model. */
+            layers: components["schemas"]["VisualizationLayerState"];
+            /**
+             * Format: int32
+             * @description Compatibility projection for current display clients. Prefer `sampling.max_points`.
+             */
             max_points: number;
+            /** @description Object/part overrides. Endpoint projections must patch this state, not create a second store. */
+            overrides: components["schemas"]["VisualizationOverrideState"][];
+            /** @description Canonical quantity/color state. New clients should read this instead of the flat compatibility fields. */
+            quantity: components["schemas"]["QuantityVisualizationState"];
             /**
              * Format: int64
              * @description Monotonic revision of all visualization state.
              */
             revision: number;
+            /** @description Sampling and memory budget policy for heavy renderer data. */
+            sampling: components["schemas"]["SamplingVisualizationState"];
             /**
              * Format: int32
              * @description Schema semver for consumers to detect payload shape changes.
@@ -2848,13 +3078,26 @@ export interface components {
             /** Format: int32 */
             slice_layer: number;
             slice_mode: string;
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Compatibility projection for current display clients. Prefer `layers.vectors.density`.
+             */
             vector_density: number;
+            /** @description Compatibility projection for current display clients. Prefer `layers.vectors.visible`. */
             vector_glyphs: boolean;
+            /** @description Vector glyph style independent from vector visibility and sampling. */
+            vector_style: components["schemas"]["VectorStyleVisualizationState"];
+            /** @description Compatibility projection for current display clients. */
             view_mode: components["schemas"]["DisplayViewMode"];
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Compatibility projection for current display clients. Prefer `fdm.x_chosen_size`.
+             */
             x_chosen_size: number;
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Compatibility projection for current display clients. Prefer `fdm.y_chosen_size`.
+             */
             y_chosen_size: number;
         };
         WorkspaceActiveNodeReplaceRequest: {

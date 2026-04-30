@@ -61,6 +61,12 @@ import {
 } from "@/components/runs/control-room/viewportUtils";
 import type { Vec3, Quat } from "@/components/runs/control-room/viewportUtils";
 import { deriveFemLayerRenderState } from "@/components/runs/control-room/viewportLayers";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForFemLayers,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+} from "@/components/runs/control-room/visualizationStateSync";
 import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 import type { ViewportCameraState } from "@/features/workspace-graph";
@@ -341,12 +347,6 @@ export function useViewportDataBridge() {
 
   /* ── ctx aliases (used in callbacks below) ── */
   const requestDisplayQuantity = ctx.requestDisplayQuantity;
-  const setMeshClipAxis = ctx.setMeshClipAxis;
-  const setMeshClipEnabled = ctx.setMeshClipEnabled;
-  const setMeshClipPos = ctx.setMeshClipPos;
-  const setMeshOpacity = ctx.setMeshOpacity;
-  const setMeshRenderMode = ctx.setMeshRenderMode;
-  const setMeshShowArrows = ctx.setMeshShowArrows;
   const setPlane = ctx.setPlane;
   const setSliceIndex = ctx.setSliceIndex;
 
@@ -367,13 +367,26 @@ export function useViewportDataBridge() {
   const handleMeshWorkspaceToolbarChange = useCallback(
     (patch: Partial<MeshWorkspaceModel["toolbar"]>) => {
       setMeshWorkspaceToolbarPatch((previous) => ({ ...previous, ...patch }));
-      if (patch.renderMode) setMeshRenderMode(meshWorkspaceRenderModeToFem(patch.renderMode));
-      if (typeof patch.opacity === "number") setMeshOpacity(patch.opacity);
-      if (typeof patch.clipEnabled === "boolean") setMeshClipEnabled(patch.clipEnabled);
-      if (patch.clipAxis) setMeshClipAxis(patch.clipAxis);
-      if (typeof patch.clipPosition === "number") setMeshClipPos(patch.clipPosition);
+      const renderPatch = patch.renderMode
+        ? visualizationPatchForRenderMode(meshWorkspaceRenderModeToFem(patch.renderMode))
+        : null;
+      const opacityPatch =
+        typeof patch.opacity === "number" ? visualizationPatchForOpacity(patch.opacity) : null;
+      const clipPatch = visualizationPatchForClip({
+        enabled: patch.clipEnabled,
+        axis: patch.clipAxis,
+        positionPercent: patch.clipPosition,
+      });
+      void ctx.patchDisplay({
+        ...renderPatch,
+        ...clipPatch,
+        layers: {
+          ...renderPatch?.layers,
+          ...opacityPatch?.layers,
+        },
+      });
     },
-    [setMeshClipAxis, setMeshClipEnabled, setMeshClipPos, setMeshOpacity, setMeshRenderMode],
+    [ctx],
   );
 
   /* ── Derived flags ── */
@@ -974,7 +987,9 @@ export function useViewportDataBridge() {
           syncClipAxis: Boolean(femDiscretization),
         });
         setPlane(nextSliceAxis.plane);
-        if (nextSliceAxis.clipAxis) setMeshClipAxis(nextSliceAxis.clipAxis);
+        if (nextSliceAxis.clipAxis) {
+          void patchDisplay(visualizationPatchForClip({ axis: nextSliceAxis.clipAxis }));
+        }
       }
       if (patch.mode) {
         void patchDisplay({ slice_mode: patch.mode === "all_layers" ? "all" : patch.mode });
@@ -983,11 +998,13 @@ export function useViewportDataBridge() {
         setSliceIndex(patch.layerIndex);
         void patchDisplay({ slice_layer: patch.layerIndex });
         if (femDiscretization) {
-          setMeshClipPos(
-            positionPercentFromSliceIndex({
-              grid: ctx.previewGrid,
-              plane: effectiveSlicePlane,
-              sliceIndex: patch.layerIndex,
+          void patchDisplay(
+            visualizationPatchForClip({
+              positionPercent: positionPercentFromSliceIndex({
+                grid: ctx.previewGrid,
+                plane: effectiveSlicePlane,
+                sliceIndex: patch.layerIndex,
+              }),
             }),
           );
         }
@@ -998,7 +1015,7 @@ export function useViewportDataBridge() {
           plane: effectiveSlicePlane,
           positionPercent: patch.positionPercent,
         });
-        setMeshClipPos(patch.positionPercent);
+        void patchDisplay(visualizationPatchForClip({ positionPercent: patch.positionPercent }));
         setSliceIndex(nextSliceIndex);
         void patchDisplay({ slice_layer: nextSliceIndex });
       }
@@ -1007,22 +1024,27 @@ export function useViewportDataBridge() {
         void patchDisplay({ auto_contrast: patch.autoContrast });
       }
       if (typeof patch.showVectors === "boolean") {
-        setMeshShowArrows(patch.showVectors);
-        void patchDisplay({ vector_glyphs: patch.showVectors });
+        void patchDisplay({
+          layers: {
+            vectors: {
+              visible: patch.showVectors,
+            },
+          },
+        });
         if (!patch.showVectors && femLayerState.showMagneticTexture && !femLayerState.showQuantity) {
           ctx.requestPreviewQuantity("m");
         }
       }
       if (typeof patch.showPrimitives === "boolean") {
-        ctx.setFemViewportLayers((previous) => ({
-          ...previous,
-          showPrimitives: patch.showPrimitives ?? previous.showPrimitives,
+        void patchDisplay(visualizationPatchForFemLayers({
+          ...femLayerState,
+          showPrimitives: patch.showPrimitives,
         }));
       }
       if (typeof patch.showMesh === "boolean") {
-        ctx.setFemViewportLayers((previous) => ({
-          ...previous,
-          showMesh: patch.showMesh ?? previous.showMesh,
+        void patchDisplay(visualizationPatchForFemLayers({
+          ...femLayerState,
+          showMesh: patch.showMesh,
         }));
       }
       if (typeof patch.showMagneticTexture === "boolean") {
@@ -1036,13 +1058,23 @@ export function useViewportDataBridge() {
         }
       }
       if (typeof patch.showAirbox === "boolean") {
-        ctx.setAirMeshVisible(patch.showAirbox);
+        void patchDisplay({
+          layers: {
+            airbox: {
+              visible: patch.showAirbox,
+            },
+          },
+        });
       }
       if (typeof patch.showQuantity === "boolean") {
-        ctx.setFemViewportLayers((previous) => ({
-          ...previous,
-          showQuantity: patch.showQuantity ?? previous.showQuantity,
-          showMagneticTexture: patch.showQuantity ? false : previous.showMagneticTexture,
+        ctx.setFemViewportLayers((previous) =>
+          patch.showQuantity
+            ? { ...previous, showMagneticTexture: false }
+            : previous,
+        );
+        void patchDisplay(visualizationPatchForFemLayers({
+          ...femLayerState,
+          showQuantity: patch.showQuantity,
         }));
       }
     },
@@ -1054,9 +1086,6 @@ export function useViewportDataBridge() {
       patchDisplay,
       patchSlice2DToolbar,
       requestDisplayQuantity,
-      setMeshClipPos,
-      setMeshClipAxis,
-      setMeshShowArrows,
       setPlane,
       setSliceIndex,
       femDiscretization,

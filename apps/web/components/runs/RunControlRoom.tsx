@@ -124,6 +124,12 @@ import {
   airboxDisplayStateFromRenderMode,
   resolveAirboxDisplayState,
 } from "./control-room/airboxDisplay";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+  visualizationPatchForVectorStyle,
+} from "./control-room/visualizationStateSync";
 
 const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
 
@@ -1813,7 +1819,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       });
       ctx.setPlane(nextSliceAxis.plane);
       if (nextSliceAxis.clipAxis) {
-        ctx.setMeshClipAxis(nextSliceAxis.clipAxis);
+        void ctx.patchDisplay(visualizationPatchForClip({ axis: nextSliceAxis.clipAxis }));
       }
     }
     if (patch.mode) {
@@ -1823,11 +1829,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       ctx.setSliceIndex(patch.layerIndex);
       void ctx.patchDisplay({ slice_layer: patch.layerIndex });
       if (femDiscretization) {
-        ctx.setMeshClipPos(
-          positionPercentFromSliceIndex({
-            grid: ctx.previewGrid,
-            plane: effectiveSlicePlane,
-            sliceIndex: patch.layerIndex,
+        void ctx.patchDisplay(
+          visualizationPatchForClip({
+            positionPercent: positionPercentFromSliceIndex({
+              grid: ctx.previewGrid,
+              plane: effectiveSlicePlane,
+              sliceIndex: patch.layerIndex,
+            }),
           }),
         );
       }
@@ -1838,7 +1846,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         plane: effectiveSlicePlane,
         positionPercent: patch.positionPercent,
       });
-      ctx.setMeshClipPos(patch.positionPercent);
+      void ctx.patchDisplay(visualizationPatchForClip({ positionPercent: patch.positionPercent }));
       ctx.setSliceIndex(nextSliceIndex);
       void ctx.patchDisplay({ slice_layer: nextSliceIndex });
     }
@@ -1849,8 +1857,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       handleRibbonPreviewAutoScale(patch.autoContrast);
     }
     if (typeof patch.showVectors === "boolean") {
-      ctx.setMeshShowArrows(patch.showVectors);
-      void ctx.patchDisplay({ vector_glyphs: patch.showVectors });
+      void ctx.patchDisplay({
+        layers: {
+          vectors: {
+            visible: patch.showVectors,
+          },
+        },
+      });
       if (!patch.showVectors && ctx.femViewportLayers.showMagneticTexture && !ctx.femViewportLayers.showQuantity) {
         ctx.requestPreviewQuantity("m");
       }
@@ -1863,7 +1876,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
     if (typeof patch.showAirbox === "boolean") {
       const nextVisible = patch.showAirbox;
-      ctx.setAirMeshVisible(nextVisible);
+      void ctx.patchDisplay({
+        layers: {
+          airbox: {
+            visible: nextVisible,
+          },
+        },
+      });
       ctx.setMeshEntityViewState((previous) => {
         let changed = false;
         const next = { ...previous };
@@ -1910,13 +1929,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
     ferromagnetVisibility: "hide" | "ghost";
   }>) => {
-    if (patch.colorMode) ctx.setFemArrowColorMode(patch.colorMode);
-    if (patch.monoColor) ctx.setFemArrowMonoColor(patch.monoColor);
-    if (typeof patch.alpha === "number") ctx.setFemArrowAlpha(patch.alpha);
-    if (typeof patch.lengthScale === "number") ctx.setFemArrowLengthScale(patch.lengthScale);
-    if (typeof patch.thickness === "number") ctx.setFemArrowThickness(patch.thickness);
-    if (patch.domain) ctx.setFemVectorDomainFilter(patch.domain);
-    if (patch.ferromagnetVisibility) ctx.setFemFerromagnetVisibilityMode(patch.ferromagnetVisibility);
+    void ctx.patchDisplay({
+      ...visualizationPatchForVectorStyle(patch),
+      layers: patch.domain
+        ? {
+            vectors: {
+              domain: patch.domain,
+            },
+          }
+        : undefined,
+    });
   };
 
   const airboxVectorDomainRef = useRef<{
@@ -1927,9 +1949,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
 
   const handleRibbonAirboxDisplay = (patch: AirboxDisplayPatch) => {
     if (typeof patch.vectors === "boolean") {
-      ctx.setMeshShowArrows(patch.vectors);
       if (patch.vectors) {
-        ctx.setAirMeshVisible(true);
         if (!airboxVectorDomainRef.current?.active) {
           airboxVectorDomainRef.current = {
             active: true,
@@ -1937,21 +1957,56 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             ferromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
           };
         }
-        ctx.setFemVectorDomainFilter("airbox_only");
-        if (ctx.femFerromagnetVisibilityMode === "hide") {
-          ctx.setFemFerromagnetVisibilityMode("ghost");
-        }
+        void ctx.patchDisplay({
+          layers: {
+            airbox: {
+              visible: true,
+            },
+            vectors: {
+              visible: true,
+              domain: "airbox_only",
+            },
+          },
+          vector_style: {
+            ferromagnet_visibility:
+              ctx.femFerromagnetVisibilityMode === "hide"
+                ? "ghost"
+                : ctx.femFerromagnetVisibilityMode,
+          },
+        });
       } else if (airboxVectorDomainRef.current?.active) {
         const saved = airboxVectorDomainRef.current;
-        ctx.setFemVectorDomainFilter(saved.vectorDomainFilter);
-        ctx.setFemFerromagnetVisibilityMode(saved.ferromagnetVisibilityMode);
+        void ctx.patchDisplay({
+          layers: {
+            vectors: {
+              visible: false,
+              domain: saved.vectorDomainFilter,
+            },
+          },
+          vector_style: {
+            ferromagnet_visibility: saved.ferromagnetVisibilityMode,
+          },
+        });
         airboxVectorDomainRef.current = null;
       } else {
-        ctx.setFemVectorDomainFilter("auto");
+        void ctx.patchDisplay({
+          layers: {
+            vectors: {
+              visible: false,
+              domain: "auto",
+            },
+          },
+        });
       }
     }
     if (typeof patch.opacity === "number") {
-      ctx.setAirMeshOpacity(patch.opacity);
+      void ctx.patchDisplay({
+        layers: {
+          airbox: {
+            opacity: Math.max(0, Math.min(100, patch.opacity)) / 100,
+          },
+        },
+      });
     }
     const updatesRender =
       typeof patch.visible === "boolean" ||
@@ -1968,7 +2023,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       return;
     }
     if (typeof patch.visible === "boolean") {
-      ctx.setAirMeshVisible(patch.visible);
+      void ctx.patchDisplay({
+        layers: {
+          airbox: {
+            visible: patch.visible,
+          },
+        },
+      });
     }
     ctx.setMeshEntityViewState((previous) => {
       let changed = false;
@@ -2137,7 +2198,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }, [ctx.setMeshEntityViewState, selectedObjectPartIds]);
 
   const handleRibbonMeshRenderMode = useCallback((nextMode: ViewportMeshRenderMode) => {
-    ctx.setMeshRenderMode(nextMode);
+    void ctx.patchDisplay(visualizationPatchForRenderMode(nextMode));
     const nonAirParts = ctx.meshParts.filter(
       (part) => part.role !== "air" && part.role !== "outer_boundary",
     );
@@ -2153,7 +2214,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       }
       return changed ? next : previous;
     });
-  }, [ctx.meshParts, ctx.setMeshEntityViewState, ctx.setMeshRenderMode]);
+  }, [ctx]);
 
   /* ── Loading state ── */
   if (!ctx.session) {
@@ -2276,7 +2337,15 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         viewportAxesScope={ctx.viewportAxesScope}
         universeWireframeVisible={ctx.universeWireframeVisible}
         viewportLegendVisible={ctx.viewportLegendVisible}
-        onToggleAirbox={() => ctx.setAirMeshVisible((visible) => !visible)}
+        onToggleAirbox={() =>
+          void ctx.patchDisplay({
+            layers: {
+              airbox: {
+                visible: !ctx.airMeshVisible,
+              },
+            },
+          })
+        }
         onSetViewportAxesScope={ctx.setViewportAxesScope}
         onToggleUniverseWireframe={() => ctx.setUniverseWireframeVisible((visible) => !visible)}
         onToggleViewportLegend={() => ctx.setViewportLegendVisible((visible) => !visible)}
@@ -2324,9 +2393,16 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetPreviewComponent={handleRibbonPreviewComponent}
         onSetPreviewEveryN={handleRibbonPreviewEveryN}
         onSetPreviewMaxPoints={handleRibbonPreviewMaxPoints}
-        onSetFemVectorGlyphBudget={ctx.setFemVectorGlyphBudget}
+        onSetFemVectorGlyphBudget={(glyphBudget) =>
+          void ctx.patchDisplay({
+            sampling: {
+              max_glyphs: glyphBudget,
+            },
+          })
+        }
         onSetPreviewColormap={handleRibbonPreviewColormap}
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
+        onPatchVisualizationState={(patch) => { void ctx.patchDisplay(patch); }}
         onSetPrimitiveVisible={(visible) =>
           ctx.setFemViewportLayers((previous) => ({
             ...previous,
@@ -2394,16 +2470,34 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         activeTransformScope={ctx.activeTransformScope}
         onSetTransformScope={handleSetTransformScope}
         onSetMeshRenderMode={handleRibbonMeshRenderMode}
-        onSetMeshOpacity={ctx.setMeshOpacity}
+        onSetMeshOpacity={(opacity) =>
+          void ctx.patchDisplay(visualizationPatchForOpacity(opacity))
+        }
         onSetSelectedObjectTextureVisible={handleRibbonSelectedObjectTextureVisible}
         onSetSelectedObjectOpacity={handleRibbonSelectedObjectOpacity}
         onSetSelectedObjectRenderMode={handleRibbonSelectedObjectRenderMode}
         onClearSelectedDisplayOverrides={handleRibbonClearSelectedDisplayOverrides}
-        onSetMeshClipEnabled={ctx.setMeshClipEnabled}
-        onSetMeshClipAxis={ctx.setMeshClipAxis}
-        onSetMeshClipPos={ctx.setMeshClipPos}
-        onSetMeshClipFlip={ctx.setMeshClipFlip}
-        onSetMeshShowArrows={ctx.setMeshShowArrows}
+        onSetMeshClipEnabled={(enabled) =>
+          void ctx.patchDisplay(visualizationPatchForClip({ enabled }))
+        }
+        onSetMeshClipAxis={(axis) =>
+          void ctx.patchDisplay(visualizationPatchForClip({ axis }))
+        }
+        onSetMeshClipPos={(positionPercent) =>
+          void ctx.patchDisplay(visualizationPatchForClip({ positionPercent }))
+        }
+        onSetMeshClipFlip={(flipped) =>
+          void ctx.patchDisplay(visualizationPatchForClip({ flipped }))
+        }
+        onSetMeshShowArrows={(visible) =>
+          void ctx.patchDisplay({
+            layers: {
+              vectors: {
+                visible,
+              },
+            },
+          })
+        }
         onSetFemArrowStyle={handleRibbonFemArrowStyle}
         onSetAirboxDisplay={handleRibbonAirboxDisplay}
         onSetSlice2DToolbar={handleRibbonSlice2DToolbar}

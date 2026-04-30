@@ -5,6 +5,7 @@ import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model
 import type { CapabilityMap } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { Slice2DToolbarState } from "@/src/features/slice2d";
+import type { VisualizationStatePatch } from "@/src/api/types";
 
 export type ResultAnalysisKind =
   | "spectrum"
@@ -78,6 +79,7 @@ export interface RibbonCommandContext {
   onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onPatchVisualizationState?: (patch: VisualizationStatePatch) => void;
   onSetPrimitiveVisible?: (visible: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetMagneticTextureDensity?: (density: number) => void;
@@ -180,6 +182,190 @@ export interface RibbonCommandContext {
   builderSelectedPrimitiveId?: string | null;
 }
 
+export function visualizationPatchFromRibbonCommand(
+  command: RibbonCommand,
+): VisualizationStatePatch | null {
+  switch (command.id) {
+    case "viewport.set-quantity":
+    case "preview.select-quantity":
+      return {
+        quantity: {
+          active_quantity_id: command.quantityId,
+        },
+      };
+    case "viewport.set-component":
+      if (command.component === "3D") {
+        return { view_mode: "3d" };
+      }
+      return {
+        view_mode: "2d",
+        quantity: {
+          field_component: command.component,
+        },
+      };
+    case "viewport.set-colormap":
+      return {
+        quantity: {
+          colormap: command.colormap,
+        },
+      };
+    case "viewport.set-auto-scale":
+      return {
+        quantity: {
+          auto_contrast: command.enabled,
+        },
+      };
+    case "viewport.set-vector-density":
+      return {
+        layers: {
+          vectors: {
+            density: command.everyN,
+          },
+        },
+      };
+    case "viewport.set-vector-max-points":
+      return {
+        sampling: {
+          max_points: command.maxPoints,
+        },
+      };
+    case "viewport.set-vector-glyph-budget":
+      return {
+        sampling: {
+          max_glyphs: command.glyphBudget,
+        },
+      };
+    case "viewport.toggle-vectors":
+      return {
+        layers: {
+          vectors: {
+            visible: command.visible,
+          },
+        },
+      };
+    case "viewport.toggle-primitives":
+      return {
+        layers: {
+          primitives: {
+            visible: command.visible,
+          },
+        },
+      };
+    case "viewport.toggle-quantity-shader":
+      return {
+        layers: {
+          quantity_overlay: {
+            visible: command.visible,
+          },
+        },
+      };
+    case "viewport.set-global-render-mode":
+      return patchForGlobalRenderMode(command.renderMode);
+    case "viewport.set-global-opacity":
+      return {
+        layers: {
+          surface: {
+            opacity: command.opacity,
+          },
+          quantity_overlay: {
+            opacity: command.opacity,
+          },
+        },
+      };
+    case "viewport.set-airbox-display":
+      return patchForAirboxDisplay(command.patch);
+    case "viewport.set-vector-style":
+      return {
+        layers: {
+          vectors: command.patch.domain
+            ? {
+                domain: command.patch.domain,
+              }
+            : undefined,
+        },
+        vector_style: {
+          color_mode: command.patch.colorMode,
+          mono_color: command.patch.monoColor,
+          alpha: command.patch.alpha,
+          length_scale: command.patch.lengthScale,
+          thickness: command.patch.thickness,
+          ferromagnet_visibility: command.patch.ferromagnetVisibility,
+        },
+      };
+    case "viewport.set-global-clip":
+      return {
+        clip: {
+          enabled: command.patch.enabled,
+          axis: command.patch.axis,
+          position_percent: command.patch.position,
+          flipped: command.patch.flipped,
+        },
+      };
+    default:
+      return null;
+  }
+}
+
+function patchForGlobalRenderMode(
+  renderMode: ViewportMeshRenderMode,
+): VisualizationStatePatch {
+  return {
+    layers: {
+      surface: {
+        visible: renderMode === "surface" || renderMode === "surface+edges",
+      },
+      wireframe: {
+        visible: renderMode === "wireframe" || renderMode === "surface+edges",
+      },
+      volume_mesh: {
+        visible: renderMode === "mesh",
+      },
+      points: {
+        visible: renderMode === "points",
+      },
+    },
+    fem: {
+      topology_mode:
+        renderMode === "mesh"
+          ? "volume"
+          : renderMode === "wireframe" || renderMode === "surface+edges"
+            ? "boundary"
+            : "surface",
+    },
+  };
+}
+
+function patchForAirboxDisplay(
+  patch: AirboxDisplayPatch,
+): VisualizationStatePatch {
+  const airbox: NonNullable<
+    NonNullable<VisualizationStatePatch["layers"]>["airbox"]
+  > = {};
+  if (typeof patch.visible === "boolean") {
+    airbox.visible = patch.visible;
+  }
+  if (typeof patch.opacity === "number") {
+    airbox.opacity = patch.opacity;
+  }
+  if (patch.geometry != null || patch.shaded != null) {
+    airbox.surface = { visible: patch.geometry ?? patch.shaded };
+  }
+  if (patch.wireframe != null || patch.renderMode === "wireframe") {
+    airbox.wireframe = { visible: patch.wireframe ?? true };
+  }
+  if (patch.points != null || patch.renderMode === "points") {
+    airbox.points = { visible: patch.points ?? true };
+  }
+  if (patch.vectors != null) {
+    airbox.vectors = { visible: patch.vectors, domain: "airbox_only" };
+  }
+  return {
+    layers: {
+      airbox,
+    },
+  };
+}
+
 type CanonicalViewportMode = "3D" | "2D" | "Mesh" | "Analyze" | "charts";
 
 function supportsFemMeshActions(ctx: RibbonCommandContext): boolean {
@@ -187,6 +373,16 @@ function supportsFemMeshActions(ctx: RibbonCommandContext): boolean {
     return isFemDiscretization(ctx.domainCapabilities);
   }
   return Boolean(ctx.isFemBackend);
+}
+
+function canPatchVisualizationCommand(
+  ctx: RibbonCommandContext,
+  command: RibbonCommand,
+): boolean {
+  return (
+    typeof ctx.onPatchVisualizationState === "function" &&
+    visualizationPatchFromRibbonCommand(command) !== null
+  );
 }
 
 function normalizeViewportMode(mode: string | undefined | null): CanonicalViewportMode | null {
@@ -376,41 +572,41 @@ export function canExecuteRibbonCommand(
       if (command.action === "skip") return Boolean(ctx.canSkip);
       return Boolean(ctx.canStop);
     case "preview.select-quantity":
-      return typeof ctx.onQuickPreviewSelect === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onQuickPreviewSelect === "function";
     case "viewport.set-quantity":
-      return typeof ctx.onQuickPreviewSelect === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onQuickPreviewSelect === "function";
     case "viewport.set-component":
-      return typeof ctx.onSetPreviewComponent === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewComponent === "function";
     case "viewport.set-colormap":
-      return typeof ctx.onSetPreviewColormap === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewColormap === "function";
     case "viewport.set-auto-scale":
-      return typeof ctx.onSetPreviewAutoScale === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewAutoScale === "function";
     case "viewport.toggle-primitives":
-      return typeof ctx.onSetPrimitiveVisible === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPrimitiveVisible === "function";
     case "viewport.toggle-magnetic-texture":
       return typeof ctx.onSetMagneticTextureVisible === "function";
     case "viewport.toggle-quantity-shader":
-      return typeof ctx.onSetQuantityShaderVisible === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetQuantityShaderVisible === "function";
     case "viewport.set-vector-density":
-      return typeof ctx.onSetPreviewEveryN === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewEveryN === "function";
     case "viewport.set-vector-max-points":
-      return typeof ctx.onSetPreviewMaxPoints === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewMaxPoints === "function";
     case "viewport.set-vector-glyph-budget":
-      return typeof ctx.onSetFemVectorGlyphBudget === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetFemVectorGlyphBudget === "function";
     case "viewport.set-magnetic-texture-density":
       return typeof ctx.onSetMagneticTextureDensity === "function";
     case "viewport.toggle-vectors":
-      return typeof ctx.onSetMeshShowArrows === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshShowArrows === "function";
     case "viewport.set-vector-style":
-      return typeof ctx.onSetFemArrowStyle === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetFemArrowStyle === "function";
     case "viewport.set-airbox-display":
-      return typeof ctx.onSetAirboxDisplay === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetAirboxDisplay === "function";
     case "viewport.set-global-render-mode":
-      return typeof ctx.onSetMeshRenderMode === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshRenderMode === "function";
     case "viewport.set-global-opacity":
-      return typeof ctx.onSetMeshOpacity === "function";
+      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshOpacity === "function";
     case "viewport.set-global-clip":
-      return (
+      return canPatchVisualizationCommand(ctx, command) || (
         typeof ctx.onSetMeshClipEnabled === "function" ||
         typeof ctx.onSetMeshClipAxis === "function" ||
         typeof ctx.onSetMeshClipPos === "function" ||
@@ -545,6 +741,11 @@ export function executeRibbonCommand(
   command: RibbonCommand,
 ): void {
   if (!canExecuteRibbonCommand(ctx, command)) {
+    return;
+  }
+  const visualizationPatch = visualizationPatchFromRibbonCommand(command);
+  if (visualizationPatch && typeof ctx.onPatchVisualizationState === "function") {
+    ctx.onPatchVisualizationState(visualizationPatch);
     return;
   }
   switch (command.id) {

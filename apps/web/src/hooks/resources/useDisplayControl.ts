@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Hook: provides partial display mutations for `PATCH /display`.
+ * Hook: provides legacy display-selection mutations through canonical visualization state.
  */
 
 import { useState, useCallback } from "react";
 import type { DisplaySelection } from "../../api/contracts";
-import type { DisplayPatchRequest } from "../../api/types";
+import type { VisualizationStatePatch } from "../../api/types";
 import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -15,7 +15,7 @@ interface UseDisplayControlResult {
   loading: boolean;
   error: LiveApiError | null;
   patchDisplay: (
-    update: DisplayPatchRequest,
+    update: VisualizationStatePatch,
   ) => Promise<DisplaySelection | null>;
 }
 
@@ -25,12 +25,12 @@ export function useDisplayControl(): UseDisplayControlResult {
   const [error, setError] = useState<LiveApiError | null>(null);
 
   const patchDisplay = useCallback(
-    async (update: DisplayPatchRequest): Promise<DisplaySelection | null> => {
+    async (update: VisualizationStatePatch): Promise<DisplaySelection | null> => {
       setLoading(true);
       setError(null);
       try {
         const client = getLiveSessionClient();
-        const result = await client.display.patch(update);
+        const result = await client.visualizationState.patch(update);
         setSelection(result);
         setLoading(false);
         return result;

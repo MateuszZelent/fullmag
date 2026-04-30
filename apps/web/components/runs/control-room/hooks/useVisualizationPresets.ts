@@ -21,7 +21,7 @@ import type {
   VectorComponent,
   ViewportMode,
 } from "../shared";
-import type { CapabilityMap, DisplayPatchRequest } from "@/src/api/types";
+import type { CapabilityMap, VisualizationStatePatch } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import {
   cloneVisualizationPreset,
@@ -34,6 +34,11 @@ import {
   sameVisualizationPresets,
   serializeMeshEntityViewStateForScene,
 } from "../controlRoomUtils";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+} from "../visualizationStateSync";
 
 export interface UseVisualizationPresetsParams {
   /* Current UI state for building presets */
@@ -90,27 +95,12 @@ export interface UseVisualizationPresetsParams {
   setComponent: Dispatch<SetStateAction<VectorComponent>>;
   setPlane: Dispatch<SetStateAction<SlicePlane>>;
   setSliceIndex: Dispatch<SetStateAction<number>>;
-  setMeshRenderMode: Dispatch<SetStateAction<RenderMode>>;
-  setMeshOpacity: Dispatch<SetStateAction<number>>;
-  setMeshClipEnabled: Dispatch<SetStateAction<boolean>>;
-  setMeshClipAxis: Dispatch<SetStateAction<ClipAxis>>;
-  setMeshClipPos: Dispatch<SetStateAction<number>>;
-  setMeshShowArrows: Dispatch<SetStateAction<boolean>>;
-  setFemArrowColorMode: Dispatch<SetStateAction<FemArrowColorMode>>;
-  setFemArrowMonoColor: Dispatch<SetStateAction<string>>;
-  setFemArrowAlpha: Dispatch<SetStateAction<number>>;
-  setFemArrowLengthScale: Dispatch<SetStateAction<number>>;
-  setFemArrowThickness: Dispatch<SetStateAction<number>>;
   setObjectViewMode: Dispatch<SetStateAction<ObjectViewMode>>;
-  setFemVectorDomainFilter: Dispatch<SetStateAction<FemVectorDomainFilter>>;
-  setFemFerromagnetVisibilityMode: Dispatch<SetStateAction<FemFerromagnetVisibilityMode>>;
-  setAirMeshVisible: Dispatch<SetStateAction<boolean>>;
-  setAirMeshOpacity: Dispatch<SetStateAction<number>>;
   setMeshEntityViewState: Dispatch<SetStateAction<MeshEntityViewStateMap>>;
   setFdmVisualizationSettings: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
 
   /* Callback */
-  patchDisplay: (patch: DisplayPatchRequest) => Promise<void>;
+  patchDisplay: (patch: VisualizationStatePatch) => Promise<void>;
 }
 
 export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
@@ -156,22 +146,7 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     setComponent,
     setPlane,
     setSliceIndex,
-    setMeshRenderMode,
-    setMeshOpacity,
-    setMeshClipEnabled,
-    setMeshClipAxis,
-    setMeshClipPos,
-    setMeshShowArrows,
-    setFemArrowColorMode,
-    setFemArrowMonoColor,
-    setFemArrowAlpha,
-    setFemArrowLengthScale,
-    setFemArrowThickness,
     setObjectViewMode,
-    setFemVectorDomainFilter,
-    setFemFerromagnetVisibilityMode,
-    setAirMeshVisible,
-    setAirMeshOpacity,
     setMeshEntityViewState,
     setFdmVisualizationSettings,
     patchDisplay,
@@ -476,18 +451,33 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
       }
 
       if (femDiscretization && preset.domain === "fem") {
-        // Arrow config is always global (no per-part arrow settings)
-        setMeshShowArrows(preset.fem.show_arrows);
-        setFemArrowColorMode(preset.fem.arrow_color_mode);
-        setFemArrowMonoColor(preset.fem.arrow_mono_color);
-        setFemArrowAlpha(preset.fem.arrow_alpha);
-        setFemArrowLengthScale(preset.fem.arrow_length_scale);
-        setFemArrowThickness(preset.fem.arrow_thickness);
         setObjectViewMode(preset.fem.object_view_mode);
-        setFemVectorDomainFilter(preset.fem.vector_domain_filter);
-        setFemFerromagnetVisibilityMode(preset.fem.ferromagnet_visibility_mode);
 
         if (isScoped) {
+          void patchDisplay({
+            layers: {
+              vectors: {
+                visible: preset.fem.show_arrows,
+                domain: preset.fem.vector_domain_filter,
+              },
+            },
+            vector_style: {
+              color_mode: preset.fem.arrow_color_mode,
+              mono_color: preset.fem.arrow_mono_color,
+              alpha: preset.fem.arrow_alpha,
+              length_scale: preset.fem.arrow_length_scale,
+              thickness: preset.fem.arrow_thickness,
+              ferromagnet_visibility: preset.fem.ferromagnet_visibility_mode,
+            },
+            ...(requestedPreviewMaxPoints !== preset.fem.max_points
+              ? {
+                  max_points: preset.fem.max_points,
+                  sampling: {
+                    max_points: preset.fem.max_points,
+                  },
+                }
+              : {}),
+          });
           // ── Scoped apply: only merge targeted parts' view state ──
           // Global defaults (meshRenderMode, meshOpacity, clip, air) are untouched.
           const presetViewState = normalizePersistedMeshEntityViewState(
@@ -505,20 +495,48 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
           });
         } else {
           // ── Global apply (default): set everything ──
-          setMeshRenderMode(preset.fem.render_mode);
-          setMeshOpacity(preset.fem.opacity);
-          setMeshClipEnabled(preset.fem.clip_enabled);
-          setMeshClipAxis(preset.fem.clip_axis);
-          setMeshClipPos(preset.fem.clip_pos);
-          setAirMeshVisible(preset.fem.air_mesh_visible);
-          setAirMeshOpacity(preset.fem.air_mesh_opacity);
+          const renderPatch = visualizationPatchForRenderMode(preset.fem.render_mode);
+          const opacityPatch = visualizationPatchForOpacity(preset.fem.opacity);
+          const clipPatch = visualizationPatchForClip({
+            enabled: preset.fem.clip_enabled,
+            axis: preset.fem.clip_axis,
+            positionPercent: preset.fem.clip_pos,
+          });
+          void patchDisplay({
+            ...renderPatch,
+            ...clipPatch,
+            layers: {
+              ...renderPatch.layers,
+              ...opacityPatch.layers,
+              vectors: {
+                visible: preset.fem.show_arrows,
+                domain: preset.fem.vector_domain_filter,
+              },
+              airbox: {
+                visible: preset.fem.air_mesh_visible,
+                opacity: Math.max(0, Math.min(100, preset.fem.air_mesh_opacity)) / 100,
+              },
+            },
+            vector_style: {
+              color_mode: preset.fem.arrow_color_mode,
+              mono_color: preset.fem.arrow_mono_color,
+              alpha: preset.fem.arrow_alpha,
+              length_scale: preset.fem.arrow_length_scale,
+              thickness: preset.fem.arrow_thickness,
+              ferromagnet_visibility: preset.fem.ferromagnet_visibility_mode,
+            },
+            ...(requestedPreviewMaxPoints !== preset.fem.max_points
+              ? {
+                  max_points: preset.fem.max_points,
+                  sampling: {
+                    max_points: preset.fem.max_points,
+                  },
+                }
+              : {}),
+          });
           setMeshEntityViewState(
             normalizePersistedMeshEntityViewState(preset.fem.mesh_entity_view_state),
           );
-        }
-
-        if (requestedPreviewMaxPoints !== preset.fem.max_points) {
-          void patchDisplay({ max_points: preset.fem.max_points });
         }
       } else if (!femDiscretization && preset.domain === "fdm") {
         setFdmVisualizationSettings({ ...preset.fdm });

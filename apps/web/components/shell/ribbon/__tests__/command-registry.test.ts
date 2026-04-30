@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canExecuteRibbonCommand,
   executeRibbonCommand,
+  visualizationPatchFromRibbonCommand,
   type RibbonCommandContext,
 } from "../command-registry";
 
@@ -49,6 +50,121 @@ describe("ribbon viewport commands", () => {
     executeRibbonCommand(ctx, { id: "viewport.set-component", component: "3D" });
 
     expect(onSetPreviewComponent).toHaveBeenCalledWith("3D");
+    expect(onSetMeshShowArrows).not.toHaveBeenCalled();
+  });
+
+  it("maps view ribbon quantity controls to visualization state patches", () => {
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-quantity",
+        quantityId: "h_eff",
+      }),
+    ).toEqual({
+      quantity: {
+        active_quantity_id: "h_eff",
+      },
+    });
+
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-component",
+        component: "x",
+      }),
+    ).toEqual({
+      view_mode: "2d",
+      quantity: {
+        field_component: "x",
+      },
+    });
+
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-component",
+        component: "3D",
+      }),
+    ).toEqual({
+      view_mode: "3d",
+    });
+  });
+
+  it("maps vector and sampling controls to visualization state patches", () => {
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.toggle-vectors",
+        visible: true,
+      }),
+    ).toEqual({
+      layers: {
+        vectors: {
+          visible: true,
+        },
+      },
+    });
+
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-vector-max-points",
+        maxPoints: 4096,
+      }),
+    ).toEqual({
+      sampling: {
+        max_points: 4096,
+      },
+    });
+
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-vector-style",
+        patch: {
+          colorMode: "magnitude",
+          monoColor: "#ff3366",
+          alpha: 0.5,
+          lengthScale: 1.25,
+          thickness: 2,
+          domain: "airbox_only",
+          ferromagnetVisibility: "ghost",
+        },
+      }),
+    ).toEqual({
+      layers: {
+        vectors: {
+          domain: "airbox_only",
+        },
+      },
+      vector_style: {
+        color_mode: "magnitude",
+        mono_color: "#ff3366",
+        alpha: 0.5,
+        length_scale: 1.25,
+        thickness: 2,
+        ferromagnet_visibility: "ghost",
+      },
+    });
+  });
+
+  it("prefers canonical visualization patch callback when available", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetMeshShowArrows = vi.fn();
+    const ctx = context({ onPatchVisualizationState, onSetMeshShowArrows });
+
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "viewport.toggle-vectors",
+        visible: true,
+      }),
+    ).toBe(true);
+    executeRibbonCommand(ctx, {
+      id: "viewport.toggle-vectors",
+      visible: true,
+    });
+
+    expect(onPatchVisualizationState).toHaveBeenCalledWith({
+      layers: {
+        vectors: {
+          visible: true,
+        },
+      },
+    });
     expect(onSetMeshShowArrows).not.toHaveBeenCalled();
   });
 

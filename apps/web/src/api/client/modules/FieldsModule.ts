@@ -33,7 +33,7 @@ export class FieldsModule {
     if (!response.buffer) {
       throw new Error("getVector: unexpectedly received 304 Not Modified without a prior buffer");
     }
-    return decodeFieldVectorOffThread(response.buffer);
+    return decodeFieldVectorOffThread(response.buffer, { transferInput: true });
   }
 
   /** @deprecated Use `getVectorResponse(id, options, opts)` instead. */

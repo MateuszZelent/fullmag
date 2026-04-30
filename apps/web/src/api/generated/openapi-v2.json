@@ -1,6 +1,96 @@
 {
   "components": {
     "schemas": {
+      "AirboxLayerPatch": {
+        "properties": {
+          "opacity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "points": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "surface": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "vectors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorLayerPatch"
+              }
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wireframe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AirboxLayerState": {
+        "properties": {
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "points": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "surface": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "vectors": {
+            "$ref": "#/components/schemas/VectorLayerState"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "wireframe": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          }
+        },
+        "required": [
+          "visible",
+          "surface",
+          "wireframe",
+          "points",
+          "vectors",
+          "opacity"
+        ],
+        "type": "object"
+      },
       "ApiErrorResponse": {
         "properties": {
           "error": {
@@ -331,6 +421,40 @@
         ],
         "type": "object"
       },
+      "BasicLayerPatch": {
+        "properties": {
+          "opacity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "BasicLayerState": {
+        "properties": {
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "visible",
+          "opacity"
+        ],
+        "type": "object"
+      },
       "Bounds3": {
         "properties": {
           "max": {
@@ -502,6 +626,72 @@
           "step",
           "time_s",
           "study_kind"
+        ],
+        "type": "object"
+      },
+      "ClipAxis": {
+        "enum": [
+          "x",
+          "y",
+          "z"
+        ],
+        "type": "string"
+      },
+      "ClipVisualizationPatch": {
+        "properties": {
+          "axis": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClipAxis"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "flipped": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "position_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ClipVisualizationState": {
+        "properties": {
+          "axis": {
+            "$ref": "#/components/schemas/ClipAxis"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "flipped": {
+            "type": "boolean"
+          },
+          "position_percent": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "axis",
+          "position_percent",
+          "flipped"
         ],
         "type": "object"
       },
@@ -1283,6 +1473,56 @@
         ],
         "type": "object"
       },
+      "DomainVisualizationPatch": {
+        "properties": {
+          "active_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationScopeKind"
+              }
+            ]
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "part_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "DomainVisualizationState": {
+        "properties": {
+          "active_scope": {
+            "$ref": "#/components/schemas/VisualizationScopeKind"
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "part_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "active_scope"
+        ],
+        "type": "object"
+      },
       "EnergySummary": {
         "properties": {
           "anisotropy": {
@@ -1374,6 +1614,102 @@
           "entries"
         ],
         "type": "object"
+      },
+      "FdmVisualizationPatch": {
+        "properties": {
+          "x_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "y_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FdmVisualizationState": {
+        "properties": {
+          "x_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y_chosen_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x_chosen_size",
+          "y_chosen_size"
+        ],
+        "type": "object"
+      },
+      "FemTopologyMode": {
+        "enum": [
+          "surface",
+          "boundary",
+          "volume",
+          "auto"
+        ],
+        "type": "string"
+      },
+      "FemVisualizationPatch": {
+        "properties": {
+          "topology_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FemTopologyMode"
+              }
+            ]
+          },
+          "volume_edges_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FemVisualizationState": {
+        "properties": {
+          "topology_mode": {
+            "$ref": "#/components/schemas/FemTopologyMode"
+          },
+          "volume_edges_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "topology_mode",
+          "volume_edges_budget"
+        ],
+        "type": "object"
+      },
+      "FerromagnetVisibilityMode": {
+        "enum": [
+          "hide",
+          "ghost"
+        ],
+        "type": "string"
       },
       "FieldCatalog": {
         "properties": {
@@ -3622,6 +3958,90 @@
         ],
         "type": "object"
       },
+      "QuantityVisualizationPatch": {
+        "properties": {
+          "active_quantity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto_contrast": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "colormap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contrast_max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "contrast_min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_component": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldComponent"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "QuantityVisualizationState": {
+        "properties": {
+          "active_quantity_id": {
+            "type": "string"
+          },
+          "auto_contrast": {
+            "type": "boolean"
+          },
+          "colormap": {
+            "type": "string"
+          },
+          "contrast_max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "contrast_min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "field_component": {
+            "$ref": "#/components/schemas/FieldComponent"
+          }
+        },
+        "required": [
+          "active_quantity_id",
+          "field_component",
+          "colormap",
+          "auto_contrast"
+        ],
+        "type": "object"
+      },
       "RecoveryClearResponse": {
         "properties": {
           "cleared": {
@@ -3981,6 +4401,96 @@
         "required": [
           "profile_version",
           "engines"
+        ],
+        "type": "object"
+      },
+      "SamplingProfile": {
+        "enum": [
+          "quality",
+          "balanced",
+          "interactive",
+          "memory_saver",
+          "custom"
+        ],
+        "type": "string"
+      },
+      "SamplingVisualizationPatch": {
+        "properties": {
+          "max_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_glyphs": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingProfile"
+              }
+            ]
+          },
+          "progressive": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SamplingVisualizationState": {
+        "properties": {
+          "max_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_glyphs": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_points": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/SamplingProfile"
+          },
+          "progressive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "profile",
+          "max_points",
+          "max_glyphs",
+          "progressive"
         ],
         "type": "object"
       },
@@ -4932,6 +5442,20 @@
             "properties": {
               "kind": {
                 "enum": [
+                  "compute_fields"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
                   "close"
                 ],
                 "type": "string"
@@ -5197,6 +5721,342 @@
         ],
         "type": "object"
       },
+      "VectorColorMode": {
+        "enum": [
+          "orientation",
+          "x",
+          "y",
+          "z",
+          "magnitude",
+          "monochrome"
+        ],
+        "type": "string"
+      },
+      "VectorLayerDomain": {
+        "enum": [
+          "auto",
+          "magnetic_only",
+          "full_domain",
+          "airbox_only",
+          "selection",
+          "object",
+          "part"
+        ],
+        "type": "string"
+      },
+      "VectorLayerPatch": {
+        "properties": {
+          "density": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "domain": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorLayerDomain"
+              }
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VectorLayerState": {
+        "properties": {
+          "density": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "domain": {
+            "$ref": "#/components/schemas/VectorLayerDomain"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "visible",
+          "density",
+          "domain"
+        ],
+        "type": "object"
+      },
+      "VectorStyleVisualizationPatch": {
+        "properties": {
+          "alpha": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "color_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorColorMode"
+              }
+            ]
+          },
+          "ferromagnet_visibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FerromagnetVisibilityMode"
+              }
+            ]
+          },
+          "length_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mono_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VectorStyleVisualizationState": {
+        "properties": {
+          "alpha": {
+            "format": "double",
+            "type": "number"
+          },
+          "color_mode": {
+            "$ref": "#/components/schemas/VectorColorMode"
+          },
+          "ferromagnet_visibility": {
+            "$ref": "#/components/schemas/FerromagnetVisibilityMode"
+          },
+          "length_scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "mono_color": {
+            "type": "string"
+          },
+          "thickness": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color_mode",
+          "mono_color",
+          "alpha",
+          "length_scale",
+          "thickness",
+          "ferromagnet_visibility"
+        ],
+        "type": "object"
+      },
+      "VisualizationDiagnostics": {
+        "properties": {
+          "degraded_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "warnings",
+          "degraded_reasons"
+        ],
+        "type": "object"
+      },
+      "VisualizationLayerPatch": {
+        "properties": {
+          "airbox": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AirboxLayerPatch"
+              }
+            ]
+          },
+          "points": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "primitives": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "quantity_overlay": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "surface": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "vectors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorLayerPatch"
+              }
+            ]
+          },
+          "volume_mesh": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "wireframe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationLayerState": {
+        "properties": {
+          "airbox": {
+            "$ref": "#/components/schemas/AirboxLayerState"
+          },
+          "points": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "primitives": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "quantity_overlay": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "surface": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "vectors": {
+            "$ref": "#/components/schemas/VectorLayerState"
+          },
+          "volume_mesh": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
+          "wireframe": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          }
+        },
+        "required": [
+          "surface",
+          "quantity_overlay",
+          "wireframe",
+          "volume_mesh",
+          "points",
+          "vectors",
+          "primitives",
+          "airbox"
+        ],
+        "type": "object"
+      },
+      "VisualizationOverrideState": {
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/VisualizationScopeKind"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "scope_id"
+        ],
+        "type": "object"
+      },
+      "VisualizationScopeKind": {
+        "enum": [
+          "full",
+          "magnetic",
+          "airbox",
+          "object",
+          "part",
+          "selection"
+        ],
+        "type": "string"
+      },
       "VisualizationStatePatch": {
         "properties": {
           "active_quantity_id": {
@@ -5209,6 +6069,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "clip": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClipVisualizationPatch"
+              }
             ]
           },
           "colormap": {
@@ -5231,6 +6101,36 @@
               "null"
             ]
           },
+          "domains": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DomainVisualizationPatch"
+              }
+            ]
+          },
+          "fdm": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FdmVisualizationPatch"
+              }
+            ]
+          },
+          "fem": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FemVisualizationPatch"
+              }
+            ]
+          },
           "field_component": {
             "oneOf": [
               {
@@ -5241,12 +6141,42 @@
               }
             ]
           },
+          "layers": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationLayerPatch"
+              }
+            ]
+          },
           "max_points": {
             "format": "int32",
             "minimum": 0,
             "type": [
               "integer",
               "null"
+            ]
+          },
+          "quantity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/QuantityVisualizationPatch"
+              }
+            ]
+          },
+          "sampling": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SamplingVisualizationPatch"
+              }
             ]
           },
           "slice_layer": {
@@ -5274,6 +6204,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "vector_style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorStyleVisualizationPatch"
+              }
             ]
           },
           "view_mode": {
@@ -5308,15 +6248,23 @@
       "VisualizationStateResource": {
         "properties": {
           "active_quantity_id": {
+            "description": "Compatibility projection for current display clients. Prefer `quantity.active_quantity_id`.",
             "type": "string"
           },
           "auto_contrast": {
+            "description": "Compatibility projection for current display clients. Prefer `quantity.auto_contrast`.",
             "type": "boolean"
           },
+          "clip": {
+            "$ref": "#/components/schemas/ClipVisualizationState",
+            "description": "Shared clip-plane controls for topology-aware viewports."
+          },
           "colormap": {
+            "description": "Compatibility projection for current display clients. Prefer `quantity.colormap`.",
             "type": "string"
           },
           "contrast_max": {
+            "description": "Compatibility projection for current display clients. Prefer `quantity.contrast_max`.",
             "format": "double",
             "type": [
               "number",
@@ -5324,25 +6272,63 @@
             ]
           },
           "contrast_min": {
+            "description": "Compatibility projection for current display clients. Prefer `quantity.contrast_min`.",
             "format": "double",
             "type": [
               "number",
               "null"
             ]
           },
+          "diagnostics": {
+            "$ref": "#/components/schemas/VisualizationDiagnostics",
+            "description": "Backend normalization warnings and degraded-state reasons for display controls."
+          },
+          "domains": {
+            "$ref": "#/components/schemas/DomainVisualizationState",
+            "description": "Domain/scope selection for renderer resources."
+          },
+          "fdm": {
+            "$ref": "#/components/schemas/FdmVisualizationState",
+            "description": "FDM-specific view controls."
+          },
+          "fem": {
+            "$ref": "#/components/schemas/FemVisualizationState",
+            "description": "FEM-specific view controls."
+          },
           "field_component": {
-            "$ref": "#/components/schemas/FieldComponent"
+            "$ref": "#/components/schemas/FieldComponent",
+            "description": "Compatibility projection for current display clients. Prefer `quantity.field_component`."
+          },
+          "layers": {
+            "$ref": "#/components/schemas/VisualizationLayerState",
+            "description": "Independent renderer layers. This is the canonical View ribbon state model."
           },
           "max_points": {
+            "description": "Compatibility projection for current display clients. Prefer `sampling.max_points`.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
+          },
+          "overrides": {
+            "description": "Object/part overrides. Endpoint projections must patch this state, not create a second store.",
+            "items": {
+              "$ref": "#/components/schemas/VisualizationOverrideState"
+            },
+            "type": "array"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/QuantityVisualizationState",
+            "description": "Canonical quantity/color state. New clients should read this instead of the flat compatibility fields."
           },
           "revision": {
             "description": "Monotonic revision of all visualization state.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/SamplingVisualizationState",
+            "description": "Sampling and memory budget policy for heavy renderer data."
           },
           "schema_version": {
             "description": "Schema semver for consumers to detect payload shape changes.",
@@ -5358,22 +6344,31 @@
             "type": "string"
           },
           "vector_density": {
+            "description": "Compatibility projection for current display clients. Prefer `layers.vectors.density`.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
           },
           "vector_glyphs": {
+            "description": "Compatibility projection for current display clients. Prefer `layers.vectors.visible`.",
             "type": "boolean"
           },
+          "vector_style": {
+            "$ref": "#/components/schemas/VectorStyleVisualizationState",
+            "description": "Vector glyph style independent from vector visibility and sampling."
+          },
           "view_mode": {
-            "$ref": "#/components/schemas/DisplayViewMode"
+            "$ref": "#/components/schemas/DisplayViewMode",
+            "description": "Compatibility projection for current display clients."
           },
           "x_chosen_size": {
+            "description": "Compatibility projection for current display clients. Prefer `fdm.x_chosen_size`.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
           },
           "y_chosen_size": {
+            "description": "Compatibility projection for current display clients. Prefer `fdm.y_chosen_size`.",
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -5382,6 +6377,16 @@
         "required": [
           "revision",
           "schema_version",
+          "quantity",
+          "layers",
+          "domains",
+          "sampling",
+          "fdm",
+          "fem",
+          "clip",
+          "vector_style",
+          "overrides",
+          "diagnostics",
           "active_quantity_id",
           "view_mode",
           "field_component",

@@ -41,6 +41,11 @@ import {
   estimateDenseSolverRamGb,
   extractMeshLogHighlights,
 } from "../../runs/control-room/meshWorkspace";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+} from "../../runs/control-room/visualizationStateSync";
 import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
@@ -399,17 +404,11 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     effectiveViewMode,
     handleViewModeChange,
     meshRenderMode,
-    setMeshRenderMode,
     meshClipEnabled,
-    setMeshClipEnabled,
     meshClipAxis,
-    setMeshClipAxis,
     meshClipPos,
-    setMeshClipPos,
     meshOpacity,
-    setMeshOpacity,
     meshShowArrows,
-    setMeshShowArrows,
     meshQualitySummary,
     meshQualityData,
     meshBoundsMin,
@@ -940,7 +939,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       type="button"
                       className="appearance-none rounded-md border border-border/40 bg-background/50 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                       data-active={meshRenderMode === option.value}
-                      onClick={() => setMeshRenderMode(option.value as RenderMode)}
+                      onClick={() => {
+                        void viewport.patchDisplay(visualizationPatchForRenderMode(option.value as RenderMode));
+                      }}
                     >
                       {option.label}
                     </button>
@@ -958,7 +959,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         type="button"
                         className="rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                         data-active={meshClipEnabled}
-                        onClick={() => setMeshClipEnabled((current) => !current)}
+                        onClick={() => {
+                          void viewport.patchDisplay(visualizationPatchForClip({ enabled: !meshClipEnabled }));
+                        }}
                       >
                         {meshClipEnabled ? "On" : "Off"}
                       </button>
@@ -971,7 +974,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                           className="appearance-none rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                           data-active={meshClipAxis === axis}
                           disabled={!meshClipEnabled}
-                          onClick={() => setMeshClipAxis(axis)}
+                          onClick={() => {
+                            void viewport.patchDisplay(visualizationPatchForClip({ axis }));
+                          }}
                         >
                           {axis.toUpperCase()}
                         </button>
@@ -985,7 +990,11 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         min={0}
                         max={100}
                         value={meshClipPos}
-                        onChange={(event) => setMeshClipPos(Number(event.target.value))}
+                        onChange={(event) => {
+                          void viewport.patchDisplay(
+                            visualizationPatchForClip({ positionPercent: Number(event.target.value) }),
+                          );
+                        }}
                         disabled={!meshClipEnabled}
                       />
                     </label>
@@ -1001,7 +1010,15 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         type="button"
                         className="flex items-center gap-1.5 rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                         data-active={meshShowArrows}
-                        onClick={() => setMeshShowArrows((current) => !current)}
+                        onClick={() => {
+                          void viewport.patchDisplay({
+                            layers: {
+                              vectors: {
+                                visible: !meshShowArrows,
+                              },
+                            },
+                          });
+                        }}
                       >
                         {meshShowArrows ? <Eye size={12} /> : <EyeOff size={12} />}
                         Arrows
@@ -1015,7 +1032,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         min={10}
                         max={100}
                         value={meshOpacity}
-                        onChange={(event) => setMeshOpacity(Number(event.target.value))}
+                        onChange={(event) => {
+                          void viewport.patchDisplay(visualizationPatchForOpacity(Number(event.target.value)));
+                        }}
                       />
                     </label>
                   </div>

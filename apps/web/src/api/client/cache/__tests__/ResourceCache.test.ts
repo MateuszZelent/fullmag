@@ -134,6 +134,57 @@ describe("ResourceCache", () => {
     expect(cache.getCacheStats().totalBytes).toBe(64); // 16 * 4
   });
 
+  it("sizes nested decoded field payloads from typed array bytes", () => {
+    const cache = new ResourceCache(16 * 1024);
+    const values = new Float64Array(1024);
+    cache.set(
+      "field",
+      {
+        quantityId: "m",
+        nComp: 3,
+        grid: [8, 8, 16],
+        pointCount: 1024,
+        valueCount: 3072,
+        dtype: "float64",
+        values,
+      },
+      1,
+    );
+
+    const stats = cache.getCacheStats();
+    expect(stats.entryCount).toBe(1);
+    expect(stats.totalBytes).toBeGreaterThanOrEqual(values.byteLength);
+    expect(stats.totalBytes).toBeLessThan(10 * 1024);
+  });
+
+  it("does not call JSON serialization hooks while estimating objects", () => {
+    const cache = new ResourceCache(1024);
+    cache.set(
+      "payload",
+      {
+        values: new Float32Array(8),
+        toJSON: () => {
+          throw new Error("ResourceCache must not stringify cached resources");
+        },
+      },
+      1,
+    );
+    expect(cache.get("payload")).not.toBeNull();
+  });
+
+  it("handles cyclic objects without recursive growth", () => {
+    const cache = new ResourceCache(1024);
+    const payload: { values: Float32Array; self?: unknown } = {
+      values: new Float32Array(8),
+    };
+    payload.self = payload;
+
+    cache.set("cyclic", payload, 1);
+
+    expect(cache.get("cyclic")).not.toBeNull();
+    expect(cache.getCacheStats().totalBytes).toBeLessThan(1024);
+  });
+
   it("rejects a single entry larger than the cache budget", () => {
     const cache = new ResourceCache(32);
     cache.set("too-large", new Uint8Array(64), 1);

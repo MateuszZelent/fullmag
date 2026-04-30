@@ -1477,6 +1477,125 @@ async fn status_topology_revision_is_stable_across_quantity_switch() {
     assert_eq!(first_topology_revision, second_topology_revision);
 }
 
+#[tokio::test]
+async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], 2);
+    assert_eq!(
+        json["quantity"]["active_quantity_id"],
+        json["active_quantity_id"]
+    );
+    assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
+    assert_eq!(
+        json["layers"]["vectors"]["density"],
+        json["vector_density"]
+    );
+    assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
+    assert_eq!(json["sampling"]["max_points"], json["max_points"]);
+    assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
+    assert!(json["overrides"].as_array().is_some());
+    assert!(json["diagnostics"]["warnings"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn visualization_state_patch_accepts_nested_v2_controls() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "quantity": {
+                            "active_quantity_id": "h_eff",
+                            "field_component": "magnitude",
+                            "colormap": "viridis"
+                        },
+                        "layers": {
+                            "vectors": {
+                                "visible": true,
+                                "density": 6
+                            }
+                        },
+                        "sampling": {
+                            "max_points": 2048,
+                            "max_glyphs": 512
+                        },
+                        "fdm": {
+                            "x_chosen_size": 96,
+                            "y_chosen_size": 64
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["active_quantity_id"], "h_eff");
+    assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
+    assert_eq!(json["field_component"], "magnitude");
+    assert_eq!(json["layers"]["vectors"]["visible"], true);
+    assert_eq!(json["layers"]["vectors"]["density"], 6);
+    assert_eq!(json["sampling"]["max_points"], 2048);
+    assert_eq!(json["fdm"]["x_chosen_size"], 96);
+}
+
+#[tokio::test]
+async fn visualization_state_rejects_invalid_airbox_vector_domain() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "layers": {
+                            "airbox": {
+                                "vectors": {
+                                    "domain": "magnetic_only"
+                                }
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "layers.airbox.vectors.domain must be airbox_only"
+    );
+}
+
 // ─── quantities endpoints ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1724,6 +1843,112 @@ async fn display_patch_returns_persisted_presentation_state() {
     let second_json = body_json(second).await;
     assert_eq!(second_json["colormap"], "plasma");
     assert_eq!(second_json["vector_glyphs"], false);
+}
+
+#[tokio::test]
+async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state.clone());
+
+    let patched = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "layers": {
+                            "surface": { "visible": false, "opacity": 0.42 },
+                            "wireframe": { "visible": true },
+                            "points": { "visible": true },
+                            "vectors": { "visible": true, "density": 8, "domain": "magnetic_only" },
+                            "airbox": {
+                                "visible": true,
+                                "opacity": 0.25,
+                                "wireframe": { "visible": true },
+                                "vectors": { "visible": true, "domain": "airbox_only" }
+                            }
+                        },
+                        "sampling": {
+                            "max_points": 4096,
+                            "max_glyphs": 512,
+                            "max_bytes": 262144,
+                            "progressive": false
+                        },
+                        "fem": {
+                            "topology_mode": "volume",
+                            "volume_edges_budget": 2048
+                        },
+                        "clip": {
+                            "enabled": true,
+                            "axis": "z",
+                            "position_percent": 37.5,
+                            "flipped": true
+                        },
+                        "vector_style": {
+                            "color_mode": "magnitude",
+                            "mono_color": "#ff3366",
+                            "alpha": 0.5,
+                            "length_scale": 1.25,
+                            "thickness": 2.0,
+                            "ferromagnet_visibility": "ghost"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(patched.status(), StatusCode::OK);
+    let patched_json = body_json(patched).await;
+    assert_eq!(patched_json["layers"]["surface"]["visible"], false);
+    assert_eq!(patched_json["layers"]["wireframe"]["visible"], true);
+    assert_eq!(patched_json["layers"]["points"]["visible"], true);
+    assert_eq!(patched_json["layers"]["airbox"]["visible"], true);
+    assert_eq!(patched_json["sampling"]["max_points"], 4096);
+    assert_eq!(patched_json["sampling"]["max_glyphs"], 512);
+    assert_eq!(patched_json["fem"]["topology_mode"], "volume");
+    assert_eq!(patched_json["clip"]["enabled"], true);
+    assert_eq!(patched_json["clip"]["axis"], "z");
+    assert_eq!(patched_json["vector_style"]["color_mode"], "magnitude");
+
+    let fetched = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched_json = body_json(fetched).await;
+    assert_eq!(fetched_json["layers"]["surface"]["visible"], false);
+    assert_eq!(fetched_json["layers"]["surface"]["opacity"], 0.42);
+    assert_eq!(fetched_json["layers"]["airbox"]["opacity"], 0.25);
+    assert_eq!(fetched_json["layers"]["vectors"]["visible"], true);
+    assert_eq!(fetched_json["layers"]["vectors"]["density"], 8);
+    assert_eq!(fetched_json["sampling"]["max_glyphs"], 512);
+    assert_eq!(fetched_json["sampling"]["max_bytes"], 262144);
+    assert_eq!(fetched_json["sampling"]["progressive"], false);
+    assert_eq!(fetched_json["fem"]["volume_edges_budget"], 2048);
+    assert_eq!(fetched_json["clip"]["position_percent"], 37.5);
+    assert_eq!(fetched_json["clip"]["flipped"], true);
+    assert_eq!(fetched_json["vector_style"]["mono_color"], "#ff3366");
+    assert_eq!(fetched_json["vector_style"]["ferromagnet_visibility"], "ghost");
+
+    let presentation = state.current_display_presentation.read().await;
+    assert!(presentation.visualization_layers.is_some());
+    assert!(presentation.visualization_sampling.is_some());
+    assert!(presentation.visualization_fem.is_some());
+    assert!(presentation.visualization_clip.is_some());
+    assert!(presentation.visualization_vector_style.is_some());
 }
 
 #[tokio::test]
@@ -6285,6 +6510,50 @@ fn openapi_status_schema_remains_thin_and_owned() {
         status_props, expected,
         "LiveStatus may contain only summaries, capabilities, and revision pointers"
     );
+}
+
+#[test]
+fn openapi_visualization_state_schema_exposes_v2_layers() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+    let state_props = schema_property_names(schemas, "VisualizationStateResource");
+
+    for required in [
+        "revision",
+        "schema_version",
+        "quantity",
+        "layers",
+        "domains",
+        "sampling",
+        "fdm",
+        "fem",
+        "clip",
+        "vector_style",
+        "overrides",
+        "diagnostics",
+    ] {
+        assert!(
+            state_props.contains(required),
+            "VisualizationStateResource missing v2 field `{required}`"
+        );
+    }
+
+    for compatibility_field in [
+        "active_quantity_id",
+        "view_mode",
+        "field_component",
+        "vector_glyphs",
+        "max_points",
+    ] {
+        assert!(
+            state_props.contains(compatibility_field),
+            "VisualizationStateResource must retain compatibility projection `{compatibility_field}`"
+        );
+    }
 }
 
 #[test]

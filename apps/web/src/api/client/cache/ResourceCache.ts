@@ -20,6 +20,9 @@ export interface CacheStats {
 }
 
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+const OBJECT_OVERHEAD_BYTES = 32;
+const ARRAY_OVERHEAD_BYTES = 24;
+const PRIMITIVE_FALLBACK_BYTES = 8;
 
 export class ResourceCache {
   private store = new Map<string, CacheEntry>();
@@ -139,15 +142,34 @@ export class ResourceCache {
     return `field:${genId}:${quantityId}:${revision}:${component}`;
   }
 
-  private estimateSize(data: unknown): number {
+  private estimateSize(data: unknown, seen = new WeakSet<object>()): number {
+    if (data === null || data === undefined) return 0;
+
+    if (typeof data === "string") return data.length * 2;
+    if (typeof data === "number") return 8;
+    if (typeof data === "boolean") return 4;
+    if (typeof data === "bigint") return 8;
+    if (typeof data !== "object") return PRIMITIVE_FALLBACK_BYTES;
+
+    const object = data as object;
+    if (seen.has(object)) return 0;
+    seen.add(object);
+
     if (data instanceof ArrayBuffer) return data.byteLength;
     if (ArrayBuffer.isView(data)) return data.byteLength;
-    if (typeof data === "string") return data.length * 2;
-    // Rough JSON estimate
-    try {
-      return JSON.stringify(data).length * 2;
-    } catch {
-      return 1024;
+
+    if (Array.isArray(data)) {
+      return data.reduce(
+        (total, item) => total + this.estimateSize(item, seen),
+        ARRAY_OVERHEAD_BYTES,
+      );
     }
+
+    let total = OBJECT_OVERHEAD_BYTES;
+    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+      total += key.length * 2;
+      total += this.estimateSize(value, seen);
+    }
+    return total;
   }
 }

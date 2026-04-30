@@ -18,6 +18,8 @@ import {
 } from "@/src/api/displaySelection";
 import type {
   DisplayPatchRequest,
+  VisualizationStatePatch,
+  VisualizationStateResource,
 } from "@/src/api/contracts";
 import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
@@ -52,6 +54,7 @@ export interface UseMeshCommandPipelineParams {
   setMeshGenerating: Dispatch<SetStateAction<boolean>>;
   setScriptSyncBusy: Dispatch<SetStateAction<boolean>>;
   setScriptSyncMessage: Dispatch<SetStateAction<string | null>>;
+  applyVisualizationStateResource?: (state: VisualizationStateResource) => void;
 }
 
 export interface UseMeshCommandPipelineReturn {
@@ -60,7 +63,7 @@ export interface UseMeshCommandPipelineReturn {
   buildMeshOptionsPayload: (options: MeshOptionsState, refinementZonesOverride?: MeshOptionsState["refinementZones"]) => Record<string, unknown>;
   enqueueStudyDomainRemesh: (meshReason: string, meshOptionsPayload: Record<string, unknown>, meshTarget?: MeshCommandTarget) => Promise<void>;
   patchDisplay: (
-    patch: DisplayPatchRequest,
+    patch: VisualizationStatePatch,
     optimisticSelectionOverride?: DisplaySelection,
     message?: string,
   ) => Promise<void>;
@@ -99,6 +102,7 @@ export function useMeshCommandPipeline({
   setMeshGenerating,
   setScriptSyncBusy,
   setScriptSyncMessage,
+  applyVisualizationStateResource,
 }: UseMeshCommandPipelineParams): UseMeshCommandPipelineReturn {
   const selectionToDisplayPatch = useCallback(
     (selection: DisplaySelection): DisplayPatchRequest => ({
@@ -117,10 +121,17 @@ export function useMeshCommandPipeline({
     [],
   );
 
-  const applyDisplayPatchToSelection = useCallback((selection: DisplaySelection, patch: DisplayPatchRequest): DisplaySelection => {
+  const applyDisplayPatchToSelection = useCallback((selection: DisplaySelection, patch: VisualizationStatePatch): DisplaySelection => {
     const nextSelection: DisplaySelection = { ...selection };
-    if (typeof patch.active_quantity_id === "string" && patch.active_quantity_id.trim().length > 0) {
-      nextSelection.quantity = patch.active_quantity_id;
+    const activeQuantityId = patch.quantity?.active_quantity_id ?? patch.active_quantity_id;
+    const fieldComponent = patch.quantity?.field_component ?? patch.field_component;
+    const autoContrast = patch.quantity?.auto_contrast ?? patch.auto_contrast;
+    const vectorGlyphs = patch.layers?.vectors?.visible ?? patch.vector_glyphs;
+    const vectorDensity = patch.layers?.vectors?.density ?? patch.vector_density;
+    const maxPoints = patch.sampling?.max_points ?? patch.max_points;
+
+    if (typeof activeQuantityId === "string" && activeQuantityId.trim().length > 0) {
+      nextSelection.quantity = activeQuantityId;
       nextSelection.kind = kindForQuantity(nextSelection.quantity) as DisplaySelection["kind"];
       if (nextSelection.kind !== "vector_field") {
         nextSelection.view_mode = "2d";
@@ -131,21 +142,21 @@ export function useMeshCommandPipeline({
       nextSelection.view_mode = patch.view_mode;
     }
     if (
-      patch.field_component === "x" ||
-      patch.field_component === "y" ||
-      patch.field_component === "z" ||
-      patch.field_component === "magnitude"
+      fieldComponent === "x" ||
+      fieldComponent === "y" ||
+      fieldComponent === "z" ||
+      fieldComponent === "magnitude"
     ) {
-      nextSelection.field_component = patch.field_component;
+      nextSelection.field_component = fieldComponent;
     }
-    if (typeof patch.vector_glyphs === "boolean") {
-      nextSelection.vector_glyphs = patch.vector_glyphs;
+    if (typeof vectorGlyphs === "boolean") {
+      nextSelection.vector_glyphs = vectorGlyphs;
     }
-    if (typeof patch.auto_contrast === "boolean") {
-      nextSelection.auto_scale_enabled = patch.auto_contrast;
+    if (typeof autoContrast === "boolean") {
+      nextSelection.auto_scale_enabled = autoContrast;
     }
-    if (typeof patch.vector_density === "number" && Number.isFinite(patch.vector_density)) {
-      nextSelection.every_n = patch.vector_density;
+    if (typeof vectorDensity === "number" && Number.isFinite(vectorDensity)) {
+      nextSelection.every_n = vectorDensity;
     }
     if (patch.slice_mode === "all" || patch.slice_mode === "single") {
       nextSelection.all_layers = patch.slice_mode === "all";
@@ -153,8 +164,8 @@ export function useMeshCommandPipeline({
     if (typeof patch.slice_layer === "number" && Number.isFinite(patch.slice_layer)) {
       nextSelection.layer = patch.slice_layer;
     }
-    if (typeof patch.max_points === "number" && Number.isFinite(patch.max_points)) {
-      nextSelection.max_points = patch.max_points;
+    if (typeof maxPoints === "number" && Number.isFinite(maxPoints)) {
+      nextSelection.max_points = maxPoints;
     }
     if (typeof patch.x_chosen_size === "number" && Number.isFinite(patch.x_chosen_size)) {
       nextSelection.x_chosen_size = patch.x_chosen_size;
@@ -315,7 +326,7 @@ export function useMeshCommandPipeline({
   );
 
   const patchDisplay = useCallback(async (
-    patch: DisplayPatchRequest,
+    patch: VisualizationStatePatch,
     optimisticSelectionOverride?: DisplaySelection,
     message?: string,
   ) => {
@@ -325,9 +336,13 @@ export function useMeshCommandPipeline({
     );
     setOptimisticDisplaySelection(nextSelection);
     setPreviewPostInFlight(true);
-    setPreviewMessage(message ?? (patch.active_quantity_id ? `Switching to ${nextSelection.quantity}` : "Updating display"));
+    const patchedQuantity = patch.quantity?.active_quantity_id ?? patch.active_quantity_id;
+    setPreviewMessage(
+      message ?? (patchedQuantity ? `Switching to ${nextSelection.quantity}` : "Updating display"),
+    );
     try {
-      await liveApi.patchDisplay(patch);
+      const nextVisualizationState = await liveApi.patchDisplay(patch);
+      applyVisualizationStateResource?.(nextVisualizationState);
     }
     catch (e) {
       setOptimisticDisplaySelection(null);
@@ -336,6 +351,7 @@ export function useMeshCommandPipeline({
     finally { setPreviewPostInFlight(false); }
   }, [
     applyDisplayPatchToSelection,
+    applyVisualizationStateResource,
     liveApi,
     requestedDisplaySelection,
   ]);

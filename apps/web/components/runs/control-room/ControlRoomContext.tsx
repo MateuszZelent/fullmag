@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import type { GpuTelemetryResponse } from "@/src/api/types";
+import type { GpuTelemetryResponse, VisualizationStateResource } from "@/src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
 import { decodeFieldVector } from "@/src/api/codecs/fieldVectorCodec";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
@@ -17,6 +17,7 @@ import { useSceneDocument } from "@/src/hooks/resources/useSceneDocument";
 import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelection";
+import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import {
@@ -157,6 +158,15 @@ import {
 } from "./analyzeSelection";
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
+import {
+  clipAxisFromVisualizationState,
+  ferromagnetVisibilityFromVisualizationState,
+  femLayersFromVisualizationState,
+  femVectorDomainFromVisualizationState,
+  opacityUnitToPercent,
+  renderModeFromVisualizationState,
+  vectorColorModeFromVisualizationState,
+} from "./visualizationStateSync";
 import {
   resolveFailedWorkspaceSelectionPersistence,
   resolvePersistedWorkspaceSelection,
@@ -350,6 +360,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const refreshLiveState = useCallback(async () => {
     await liveApi.getStatus();
   }, [liveApi]);
+  const visualizationStateRevision = runtimeResourceRevisions?.display_revision ?? null;
+  const {
+    state: visualizationStateResource,
+  } = useVisualizationStateResource({
+    enabled: Boolean(runtimeSession?.session_id),
+    sessionKey: runtimeSession?.session_id ?? null,
+    revision: visualizationStateRevision,
+  });
 
   // Runtime bridge adapter: sync Control Room transport into session-runtime store.
   useSessionRuntimeBridgeRouter();
@@ -477,6 +495,100 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const stickyViewportObjectIdRef = useRef<string | null>(null);
   const lastFieldDataRevisionRef = useRef<string | null>(null);
   const fieldDataTimestampRef = useRef<number | null>(null);
+  const applyVisualizationStateResource = useCallback((state: VisualizationStateResource) => {
+    setSelectedQuantity((previous) =>
+      previous === state.quantity.active_quantity_id
+        ? previous
+        : state.quantity.active_quantity_id,
+    );
+    setComponent((previous) =>
+      previous === state.quantity.field_component
+        ? previous
+        : state.quantity.field_component,
+    );
+    setMeshRenderMode((previous) => {
+      const next = renderModeFromVisualizationState(state);
+      return previous === next ? previous : next;
+    });
+    setMeshOpacity((previous) => {
+      const next = opacityUnitToPercent(state.layers.surface.opacity, previous);
+      return previous === next ? previous : next;
+    });
+    setMeshShowArrows((previous) =>
+      previous === state.layers.vectors.visible ? previous : state.layers.vectors.visible,
+    );
+    setFemVectorGlyphBudget((previous) =>
+      previous === state.sampling.max_glyphs ? previous : state.sampling.max_glyphs,
+    );
+    setFemVectorDomainFilter((previous) => {
+      const next = femVectorDomainFromVisualizationState(state.layers.vectors.domain);
+      return next == null || previous === next ? previous : next;
+    });
+    setFemViewportLayers((previous) => {
+      const next = femLayersFromVisualizationState(state, previous);
+      return previous.showPrimitives === next.showPrimitives &&
+        previous.showMesh === next.showMesh &&
+        previous.showMagneticTexture === next.showMagneticTexture &&
+        previous.showQuantity === next.showQuantity
+        ? previous
+        : next;
+    });
+    setAirMeshVisible((previous) =>
+      previous === state.layers.airbox.visible ? previous : state.layers.airbox.visible,
+    );
+    setAirMeshOpacity((previous) => {
+      const next = opacityUnitToPercent(state.layers.airbox.opacity, previous);
+      return previous === next ? previous : next;
+    });
+    setMeshClipEnabled((previous) =>
+      previous === state.clip.enabled ? previous : state.clip.enabled,
+    );
+    setMeshClipAxis((previous) => {
+      const next = clipAxisFromVisualizationState(state.clip.axis);
+      return previous === next ? previous : next;
+    });
+    setMeshClipPos((previous) =>
+      previous === state.clip.position_percent
+        ? previous
+        : state.clip.position_percent,
+    );
+    setMeshClipFlip((previous) =>
+      previous === state.clip.flipped ? previous : state.clip.flipped,
+    );
+    setFemArrowColorMode((previous) => {
+      const next = vectorColorModeFromVisualizationState(state.vector_style.color_mode);
+      return previous === next ? previous : next;
+    });
+    setFemArrowMonoColor((previous) =>
+      previous === state.vector_style.mono_color
+        ? previous
+        : state.vector_style.mono_color,
+    );
+    setFemArrowAlpha((previous) =>
+      previous === state.vector_style.alpha ? previous : state.vector_style.alpha,
+    );
+    setFemArrowLengthScale((previous) =>
+      previous === state.vector_style.length_scale
+        ? previous
+        : state.vector_style.length_scale,
+    );
+    setFemArrowThickness((previous) =>
+      previous === state.vector_style.thickness ? previous : state.vector_style.thickness,
+    );
+    setFemFerromagnetVisibilityMode((previous) => {
+      const next = ferromagnetVisibilityFromVisualizationState(
+        state.vector_style.ferromagnet_visibility,
+      );
+      return previous === next ? previous : next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!visualizationStateResource) {
+      return;
+    }
+    applyVisualizationStateResource(visualizationStateResource);
+  }, [applyVisualizationStateResource, visualizationStateResource]);
 
   const activeWorkspaceTab = useMemo(
     () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
@@ -1811,6 +1923,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshGenerating,
     setScriptSyncBusy,
     setScriptSyncMessage,
+    applyVisualizationStateResource,
   });
 
   // Set of quantity IDs whose field buffers are already cached locally.
@@ -1889,6 +2002,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     domainCapabilities,
     workspaceStatus,
     effectiveViewMode,
+    meshRenderMode,
     previewControlsActive,
     selectedQuantity,
     runUntilInput,
@@ -1906,9 +2020,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     cachedFieldQuantities,
     setViewMode,
     setFemDockTab,
-    setMeshRenderMode,
-    setMeshClipEnabled,
-    setMeshOpacity,
     setComponent,
     setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi,
     setSelectedQuantity,
@@ -1983,22 +2094,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setComponent,
     setPlane,
     setSliceIndex,
-    setMeshRenderMode,
-    setMeshOpacity,
-    setMeshClipEnabled,
-    setMeshClipAxis,
-    setMeshClipPos,
-    setMeshShowArrows,
-    setFemArrowColorMode,
-    setFemArrowMonoColor,
-    setFemArrowAlpha,
-    setFemArrowLengthScale,
-    setFemArrowThickness,
     setObjectViewMode,
-    setFemVectorDomainFilter,
-    setFemFerromagnetVisibilityMode,
-    setAirMeshVisible,
-    setAirMeshOpacity,
     setMeshEntityViewState,
     setFdmVisualizationSettings,
     patchDisplay,

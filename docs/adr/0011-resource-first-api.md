@@ -113,6 +113,12 @@ product branches.
 The 10+ legacy preview POST endpoints are replaced by a single
 `PUT /display` endpoint that accepts the full `DisplaySelection` update.
 
+2026-04-30 update: `/v2/sessions/current/visualization/state` is the canonical
+renderer state resource for new clients. Schema version 2 separates quantity,
+layers, domains/scopes, sampling budgets, FDM/FEM policy, clip-plane state,
+vector glyph style, overrides, and diagnostics. `/visualization/display`
+remains the compatibility projection for legacy display-selection clients.
+
 ### 7. OpenAPI documentation
 
 The former v1 API was documented via utoipa-generated OpenAPI 3.1 spec at

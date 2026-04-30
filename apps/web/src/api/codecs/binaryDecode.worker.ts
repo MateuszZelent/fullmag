@@ -1,6 +1,7 @@
 import { decodeFieldVector } from "./fieldVectorCodec";
 import { decodeTopology } from "./topologyCodec";
 import type { DecodedFieldVector, DecodedTopology } from "./types";
+import { decodedPayloadTransferList } from "./transferables";
 
 type BinaryDecodeWorkerRequest =
   | {
@@ -27,7 +28,10 @@ type BinaryDecodeWorkerResponse =
     };
 
 interface BinaryDecodeWorkerScope {
-  postMessage: (message: BinaryDecodeWorkerResponse) => void;
+  postMessage: (
+    message: BinaryDecodeWorkerResponse,
+    transfer?: Transferable[],
+  ) => void;
   addEventListener: (
     type: "message",
     listener: (event: MessageEvent<BinaryDecodeWorkerRequest>) => void,
@@ -48,7 +52,7 @@ workerScope.addEventListener("message", (event: MessageEvent<BinaryDecodeWorkerR
       ok: true,
       payload,
     };
-    workerScope.postMessage(response);
+    workerScope.postMessage(response, decodedPayloadTransferList(payload));
   } catch (error) {
     const response: BinaryDecodeWorkerResponse = {
       id: request.id,

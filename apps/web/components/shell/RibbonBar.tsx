@@ -22,7 +22,11 @@ import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
 import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
-import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
+import type {
+  CapabilityMap,
+  GeometryCapabilitiesResource,
+  VisualizationStatePatch,
+} from "@/src/api/types";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useGeometryCapabilities } from "@/src/hooks/resources/useSceneDocument";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
@@ -136,6 +140,7 @@ interface RibbonBarProps {
   onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onPatchVisualizationState?: (patch: VisualizationStatePatch) => void;
   onSetPrimitiveVisible?: (visible: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetMagneticTextureDensity?: (density: number) => void;

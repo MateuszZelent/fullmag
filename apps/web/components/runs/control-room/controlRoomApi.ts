@@ -8,7 +8,6 @@ import type { DisplaySelection, LiveStatus } from "@/src/api/contracts";
 import type {
   AuthoringStudyRuntimePatchRequest,
   AuthoringStudyRuntimeResource,
-  DisplayPatchRequest,
   DisplayReplaceRequest,
   FieldSampleScopeKind,
   MeshBuildCommandRequest,
@@ -18,6 +17,8 @@ import type {
   SessionImportCommitResponse,
   SessionImportInspectRequest,
   SessionImportInspectResponse,
+  VisualizationStatePatch,
+  VisualizationStateResource,
 } from "@/src/api/types";
 import type { GpuTelemetryResponse } from "@/src/api/types";
 import type { MeshCommandTarget, SceneDocument } from "@/lib/session/types";
@@ -51,9 +52,9 @@ export interface ControlRoomApi {
     options?: RequestOptions,
   ) => Promise<DisplaySelection>;
   patchDisplay: (
-    payload: DisplayPatchRequest,
+    payload: VisualizationStatePatch,
     options?: RequestOptions,
-  ) => Promise<DisplaySelection>;
+  ) => Promise<VisualizationStateResource>;
   updateSceneDocument: (
     payload: SceneDocument,
     options?: RequestOptions,
@@ -134,7 +135,7 @@ export function createControlRoomApi(): ControlRoomApi {
       return client.display.replace(payload, options);
     },
     patchDisplay(payload, options) {
-      return client.display.patch(payload, options);
+      return client.visualizationState.patch(payload, options);
     },
     updateSceneDocument(payload, options) {
       return client.scene.update(payload, options);

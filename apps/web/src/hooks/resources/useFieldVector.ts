@@ -6,9 +6,16 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { DecodedFieldVector } from "../../api/codecs/types";
-import type { FieldComponent, FieldSampleScopeKind } from "../../api/types";
+import type {
+  FieldBinaryResponse,
+  FieldComponent,
+  FieldSampleScopeKind,
+} from "../../api/types";
 import { decodeFieldVectorOffThread } from "../../api/codecs/decodeOffThread";
-import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
+import {
+  getLiveSessionClient,
+  type LiveSessionClient,
+} from "../../api/client/LiveSessionClient";
 import { ResourceCache } from "../../api/client/cache/ResourceCache";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
 
@@ -28,6 +35,167 @@ interface UseFieldVectorResult {
   error: LiveApiError | null;
 }
 
+export interface FieldVectorRequestParams {
+  quantityId: string;
+  revision: number;
+  component: FieldComponent;
+  domainGenerationId: number;
+  scopeKind: FieldSampleScopeKind;
+  scopeId: string | null;
+}
+
+export interface FieldVectorRequestHandle {
+  key: string;
+  promise: Promise<DecodedFieldVector>;
+  release: () => void;
+}
+
+export type FieldVectorRequestClient = Pick<
+  LiveSessionClient,
+  "fields" | "getCache"
+>;
+
+interface InflightFieldVectorRequest {
+  consumers: number;
+  controller: AbortController;
+  promise: Promise<DecodedFieldVector>;
+}
+
+const inflightFieldVectorRequests = new Map<string, InflightFieldVectorRequest>();
+
+export function buildFieldVectorScopeToken(
+  scopeKind: FieldSampleScopeKind,
+  scopeId: string | null,
+): string {
+  return `${scopeKind}:${scopeId ?? "none"}`;
+}
+
+export function buildFieldVectorResourceKey(params: FieldVectorRequestParams): string {
+  return `${ResourceCache.fieldKey(
+    params.quantityId,
+    params.revision,
+    params.domainGenerationId,
+    params.component,
+  )}:${buildFieldVectorScopeToken(params.scopeKind, params.scopeId)}`;
+}
+
+export function buildFieldVectorRequestKey(params: FieldVectorRequestParams): string {
+  return `field-vector:${params.quantityId}:${params.revision}:${params.domainGenerationId}:${params.component}:${buildFieldVectorScopeToken(
+    params.scopeKind,
+    params.scopeId,
+  )}`;
+}
+
+export function loadFieldVectorRequest(
+  client: FieldVectorRequestClient,
+  params: FieldVectorRequestParams,
+): FieldVectorRequestHandle {
+  const key = buildFieldVectorRequestKey(params);
+  const resourceKey = buildFieldVectorResourceKey(params);
+  const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
+  if (cached && cached.revision === params.revision) {
+    return {
+      key,
+      promise: Promise.resolve(cached.data),
+      release: () => undefined,
+    };
+  }
+
+  const existing = inflightFieldVectorRequests.get(key);
+  if (existing) {
+    existing.consumers += 1;
+    return {
+      key,
+      promise: existing.promise,
+      release: () => releaseFieldVectorRequest(key, existing),
+    };
+  }
+
+  const controller = new AbortController();
+  const entry: InflightFieldVectorRequest = {
+    consumers: 1,
+    controller,
+    promise: fetchDecodeAndCacheFieldVector(
+      client,
+      params,
+      resourceKey,
+      cached?.eTag ?? undefined,
+      controller.signal,
+    ),
+  };
+  inflightFieldVectorRequests.set(key, entry);
+  void entry.promise.then(
+    () => {
+      if (inflightFieldVectorRequests.get(key) === entry) {
+        inflightFieldVectorRequests.delete(key);
+      }
+    },
+    () => {
+      if (inflightFieldVectorRequests.get(key) === entry) {
+        inflightFieldVectorRequests.delete(key);
+      }
+    },
+  );
+
+  return {
+    key,
+    promise: entry.promise,
+    release: () => releaseFieldVectorRequest(key, entry),
+  };
+}
+
+async function fetchDecodeAndCacheFieldVector(
+  client: FieldVectorRequestClient,
+  params: FieldVectorRequestParams,
+  resourceKey: string,
+  eTag: string | undefined,
+  signal: AbortSignal,
+): Promise<DecodedFieldVector> {
+  const response: FieldBinaryResponse = await client.fields.getVectorResponse(
+    params.quantityId,
+    {
+      component: params.component,
+      scope_kind: params.scopeKind,
+      scope_id: params.scopeId ?? undefined,
+      etag: eTag,
+    },
+    { cache: "default", signal },
+  );
+
+  const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
+  if (response.status === 304 && cached) {
+    return cached.data;
+  }
+
+  if (!response.buffer) {
+    throw new Error("received 304 without cached data");
+  }
+
+  const result = await decodeFieldVectorOffThread(response.buffer, {
+    transferInput: true,
+  });
+  client.getCache().set(
+    resourceKey,
+    result,
+    params.revision,
+    params.domainGenerationId,
+    response.etag,
+  );
+  return result;
+}
+
+function releaseFieldVectorRequest(
+  key: string,
+  entry: InflightFieldVectorRequest,
+): void {
+  entry.consumers -= 1;
+  if (entry.consumers > 0) return;
+  if (inflightFieldVectorRequests.get(key) === entry) {
+    inflightFieldVectorRequests.delete(key);
+    entry.controller.abort();
+  }
+}
+
 export function useFieldVector(
   quantityId: string | null,
   fieldRevision: number | null,
@@ -42,9 +210,10 @@ export function useFieldVector(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);
   const fetchedRevRef = useRef<string | null>(null);
+  const activeRequestRef = useRef<string | null>(null);
 
   const fetchField = useCallback(
-    async (
+    (
       qId: string,
       rev: number,
       comp: FieldComponent,
@@ -52,78 +221,73 @@ export function useFieldVector(
       scopedKind: FieldSampleScopeKind,
       scopedId: string | null,
     ) => {
-      const scopeToken = `${scopedKind}:${scopedId ?? "none"}`;
-      const cacheKey = `field-vector:${qId}:${rev}:${domainGenId}:${comp}:${scopeToken}`;
+      const params: FieldVectorRequestParams = {
+        quantityId: qId,
+        revision: rev,
+        component: comp,
+        domainGenerationId: domainGenId,
+        scopeKind: scopedKind,
+        scopeId: scopedId,
+      };
+      const cacheKey = buildFieldVectorRequestKey(params);
       if (fetchedRevRef.current === cacheKey) return;
+      activeRequestRef.current = cacheKey;
       setLoading(true);
       setError(null);
 
-      try {
-        const client = getLiveSessionClient();
-        const resourceKey = `${ResourceCache.fieldKey(qId, rev, domainGenId, comp)}:${scopeToken}`;
-        const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
-        if (cached && cached.revision === rev) {
+      const client = getLiveSessionClient();
+      const request = loadFieldVectorRequest(client, params);
+      let active = true;
+      request.promise
+        .then((result) => {
+          if (!active || activeRequestRef.current !== request.key) return;
           fetchedRevRef.current = cacheKey;
-          setField(cached.data);
+          setField(result);
           setLoading(false);
-          return;
-        }
-
-        const response = await client.fields.getVectorResponse(
-          qId,
-          {
-            component: comp,
-            scope_kind: scopedKind,
-            scope_id: scopedId ?? undefined,
-            etag: cached?.eTag ?? undefined,
-          },
-          { cache: "default" },
-        );
-
-        if (response.status === 304 && cached) {
-          fetchedRevRef.current = cacheKey;
-          setField(cached.data);
+        })
+        .catch((err) => {
+          if (!active || activeRequestRef.current !== request.key) return;
+          const apiErr =
+            err instanceof LiveApiError
+              ? err
+              : LiveApiError.networkError("field-vector", err);
+          setError(apiErr);
           setLoading(false);
-          return;
-        }
+        });
 
-        if (!response.buffer) {
-          throw new Error("received 304 without cached data");
-        }
-
-        const result = await decodeFieldVectorOffThread(response.buffer);
-        client.getCache().set(
-          resourceKey,
-          result,
-          rev,
-          domainGenId,
-          response.etag,
-        );
-        fetchedRevRef.current = cacheKey;
-        setField(result);
-        setLoading(false);
-      } catch (err) {
-        const apiErr =
-          err instanceof LiveApiError
-            ? err
-            : LiveApiError.networkError("field-vector", err);
-        setError(apiErr);
-        setLoading(false);
-      }
+      return () => {
+        active = false;
+        request.release();
+      };
     },
     [],
   );
 
   useEffect(() => {
     if (quantityId && fieldRevision != null) {
-      fetchField(quantityId, fieldRevision, component, domainGenerationId, scopeKind, scopeId);
-      return;
+      return fetchField(
+        quantityId,
+        fieldRevision,
+        component,
+        domainGenerationId,
+        scopeKind,
+        scopeId,
+      );
     }
     fetchedRevRef.current = null;
+    activeRequestRef.current = null;
     setField(null);
     setLoading(false);
     setError(null);
-  }, [quantityId, fieldRevision, component, domainGenerationId, scopeKind, scopeId, fetchField]);
+  }, [
+    quantityId,
+    fieldRevision,
+    component,
+    domainGenerationId,
+    scopeKind,
+    scopeId,
+    fetchField,
+  ]);
 
   return { field, loading, error };
 }

@@ -52,9 +52,14 @@ import {
   type WorkspaceTabInput,
 } from "@/lib/workspace/workspace-store";
 import type { ControlRoomApi } from "../controlRoomApi";
-import type { CapabilityMap, DisplayPatchRequest, SaveProfile } from "@/src/api/types";
+import type { CapabilityMap, SaveProfile, VisualizationStatePatch } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import { hasUnsyncedSceneMagnetization } from "../../../panels/settings/materialPanelMagnetization";
+import {
+  visualizationPatchForClip,
+  visualizationPatchForOpacity,
+  visualizationPatchForRenderMode,
+} from "../visualizationStateSync";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 export type QuantitySwitchCacheState =
@@ -157,7 +162,7 @@ function formatByteSize(bytes: number): string {
 
 export interface UseWorkspaceActionsParams {
   enqueueCommand: (payload: Record<string, unknown>) => Promise<void>;
-  patchDisplay: (patch: DisplayPatchRequest) => Promise<void>;
+  patchDisplay: (patch: VisualizationStatePatch) => Promise<void>;
   updatePreview: (path: string, payload?: Record<string, unknown>) => Promise<void>;
   appendFrontendTrace: (level: string, message: string) => void;
   liveApi: ControlRoomApi;
@@ -171,6 +176,7 @@ export interface UseWorkspaceActionsParams {
   domainCapabilities?: CapabilityMap | null;
   workspaceStatus: string | null;
   effectiveViewMode: ViewportMode;
+  meshRenderMode: RenderMode;
   previewControlsActive: boolean;
   selectedQuantity: string;
   runUntilInput: string;
@@ -190,9 +196,6 @@ export interface UseWorkspaceActionsParams {
   // state setters
   setViewMode: Dispatch<SetStateAction<ViewportMode>>;
   setFemDockTab: Dispatch<SetStateAction<FemDockTab>>;
-  setMeshRenderMode: Dispatch<SetStateAction<RenderMode>>;
-  setMeshClipEnabled: Dispatch<SetStateAction<boolean>>;
-  setMeshOpacity: Dispatch<SetStateAction<number>>;
   setComponent: Dispatch<SetStateAction<VectorComponent>>;
   setSelectedSidebarNodeId: Dispatch<SetStateAction<string | null>>;
   setSelectedQuantity: Dispatch<SetStateAction<string>>;
@@ -336,6 +339,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     domainCapabilities,
     workspaceStatus,
     effectiveViewMode,
+    meshRenderMode,
     previewControlsActive,
     selectedQuantity,
     runUntilInput,
@@ -353,9 +357,6 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     cachedFieldQuantities,
     setViewMode,
     setFemDockTab,
-    setMeshRenderMode,
-    setMeshClipEnabled,
-    setMeshOpacity,
     setComponent,
     setSelectedSidebarNodeId,
     setSelectedQuantity,
@@ -420,8 +421,10 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     transitionToViewMode("3D", {
       force: true,
     });
-    setMeshRenderMode((c) => (c === "surface" ? "surface+edges" : c));
-  }, [setFemDockTab, setMeshRenderMode, transitionToViewMode]);
+    if (meshRenderMode === "surface") {
+      void patchDisplay(visualizationPatchForRenderMode("surface+edges"));
+    }
+  }, [meshRenderMode, patchDisplay, setFemDockTab, transitionToViewMode]);
 
   /* ── requestFocusObject ── */
   const requestFocusObject = useCallback((objectId: string) => {
@@ -509,14 +512,25 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       },
     });
 
-    setMeshRenderMode(preset.renderMode);
-    if (preset.clipEnabled !== undefined) setMeshClipEnabled(preset.clipEnabled);
-    if (preset.opacity != null) setMeshOpacity(preset.opacity);
+    const renderPatch = visualizationPatchForRenderMode(preset.renderMode);
+    const opacityPatch =
+      preset.opacity != null ? visualizationPatchForOpacity(preset.opacity) : null;
+    const clipPatch =
+      preset.clipEnabled !== undefined
+        ? visualizationPatchForClip({ enabled: preset.clipEnabled })
+        : null;
+    void patchDisplay({
+      ...renderPatch,
+      ...clipPatch,
+      layers: {
+        ...renderPatch.layers,
+        ...opacityPatch?.layers,
+      },
+    });
   }, [
     setComponent,
-    setMeshClipEnabled,
-    setMeshOpacity,
     setSelectedSidebarNodeId,
+    patchDisplay,
     transitionToViewMode,
   ]);
 
