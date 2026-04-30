@@ -54,6 +54,7 @@ import {
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { CapabilityMap, DisplayPatchRequest, SaveProfile } from "@/src/api/types";
 import { isFemDiscretization } from "@/src/domain/capabilities";
+import { hasUnsyncedSceneMagnetization } from "../../../panels/settings/materialPanelMagnetization";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 export type QuantitySwitchCacheState =
@@ -162,6 +163,8 @@ export interface UseWorkspaceActionsParams {
   liveApi: ControlRoomApi;
   builderAutoSync: BuilderAutoSync;
   localBuilderDraft: SceneDocument | null;
+  remoteSceneDocument: SceneDocument | null;
+  refreshLiveState: () => Promise<void>;
   localBuilderSignature: string;
   session: { script_path?: string | null } | null;
   isFemBackend: boolean;
@@ -220,6 +223,62 @@ export interface UseWorkspaceActionsParams {
   lastLoggedCommandStatusRef: MutableRefObject<string | null>;
 }
 
+export async function syncSceneBeforeComputeFields(args: {
+  localScene: SceneDocument | null;
+  remoteScene: SceneDocument | null;
+  liveApi: ControlRoomApi;
+  refreshLiveState: () => Promise<void>;
+  setSceneDocument: Dispatch<SetStateAction<SceneDocument | null>>;
+  setCommandErrorMessage: Dispatch<SetStateAction<string | null>>;
+  setPreviewMessage: Dispatch<SetStateAction<string | null>>;
+  appendFrontendTrace: (level: string, message: string) => void;
+}): Promise<boolean> {
+  const {
+    localScene,
+    remoteScene,
+    liveApi,
+    refreshLiveState,
+    setSceneDocument,
+    setCommandErrorMessage,
+    setPreviewMessage,
+    appendFrontendTrace,
+  } = args;
+
+  if (
+    !hasUnsyncedSceneMagnetization({
+      localScene,
+      remoteScene,
+    })
+  ) {
+    return true;
+  }
+
+  if (!localScene) {
+    return true;
+  }
+
+  setCommandErrorMessage(null);
+  setPreviewMessage("Syncing magnetic texture before computing fields...");
+  appendFrontendTrace("info", "TX: SCENE sync before compute_fields - magnetic texture changed");
+
+  try {
+    const committedScene = await liveApi.updateSceneDocument(localScene);
+    setSceneDocument(committedScene);
+    await refreshLiveState();
+    appendFrontendTrace("success", "RX: SCENE sync complete before compute_fields");
+    return true;
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? `Compute fields blocked: magnetic texture sync failed: ${error.message}`
+        : "Compute fields blocked: magnetic texture sync failed";
+    setCommandErrorMessage(message);
+    setPreviewMessage("Compute fields blocked: magnetic texture sync failed.");
+    appendFrontendTrace("error", `RX: SCENE sync failed before compute_fields - ${message}`);
+    return false;
+  }
+}
+
 export interface UseWorkspaceActionsReturn {
   handleCompute: () => void;
   openFemMeshWorkspace: (tab?: FemDockTab) => void;
@@ -269,6 +328,8 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     liveApi,
     builderAutoSync,
     localBuilderDraft,
+    remoteSceneDocument,
+    refreshLiveState,
     localBuilderSignature,
     session,
     isFemBackend,
@@ -498,30 +559,59 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     }
   }, [effectiveViewMode, setViewMode]);
 
+  const ensureSceneSyncedBeforeComputeFields = useCallback(
+    () =>
+      syncSceneBeforeComputeFields({
+        localScene: localBuilderDraft,
+        remoteScene: remoteSceneDocument,
+        liveApi,
+        refreshLiveState,
+        setSceneDocument,
+        setCommandErrorMessage,
+        setPreviewMessage,
+        appendFrontendTrace,
+      }),
+    [
+      appendFrontendTrace,
+      liveApi,
+      localBuilderDraft,
+      refreshLiveState,
+      remoteSceneDocument,
+      setCommandErrorMessage,
+      setPreviewMessage,
+      setSceneDocument,
+    ],
+  );
+
   /* ── handleSimulationAction ── */
   const handleSimulationAction = useCallback((action: string) => {
     if (action === "compute_fields") {
-      const computeQuantity = resolveComputeFieldsQuantity({
-        femDiscretization,
-        selectedQuantity,
-      });
-      if (computeQuantity !== selectedQuantity) {
-        setSelectedQuantity(computeQuantity);
-        setPreviewMessage(
-          `${selectedQuantity} is antenna-only in native FEM preview; computing ${computeQuantity} instead.`,
+      void (async () => {
+        const sceneSynced = await ensureSceneSyncedBeforeComputeFields();
+        if (!sceneSynced) {
+          return;
+        }
+
+        const computeQuantity = resolveComputeFieldsQuantity({
+          femDiscretization,
+          selectedQuantity,
+        });
+        if (computeQuantity !== selectedQuantity) {
+          setSelectedQuantity(computeQuantity);
+          setPreviewMessage(
+            `${selectedQuantity} is antenna-only in native FEM preview; computing ${computeQuantity} instead.`,
+          );
+          await patchDisplay({ active_quantity_id: computeQuantity });
+        }
+
+        await enqueueCommand({ kind: "compute_fields" });
+      })().catch((error) => {
+        setCommandErrorMessage(
+          error instanceof Error
+            ? `Compute fields failed before start: ${error.message}`
+            : "Compute fields failed before start",
         );
-        void patchDisplay({ active_quantity_id: computeQuantity })
-          .then(() => enqueueCommand({ kind: "compute_fields" }))
-          .catch((error) => {
-            setCommandErrorMessage(
-              error instanceof Error
-                ? `Compute fields failed before start: ${error.message}`
-                : "Compute fields failed before start",
-            );
-          });
-        return;
-      }
-      void enqueueCommand({ kind: "compute_fields" });
+      });
       return;
     }
 
@@ -587,6 +677,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     }
   }, [
     enqueueCommand,
+    ensureSceneSyncedBeforeComputeFields,
     femDiscretization,
     handleCompute,
     patchDisplay,

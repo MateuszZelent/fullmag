@@ -34,6 +34,12 @@ export interface FemMeshData {
   meshGenerationId?: string | null;
   activeMask?: boolean[] | null;
   quantityDomain?: "magnetic_only" | "full_domain" | "surface_only" | null;
+  /**
+   * Stable reference to the topology-only base object (nodes/elements/faces).
+   * Used as the vertex-color WeakMap cache key so colours are not recomputed
+   * on every field update when topology has not changed.
+   */
+  topologyRef?: object;
 }
 
 export interface MeshSelectionSnapshot {

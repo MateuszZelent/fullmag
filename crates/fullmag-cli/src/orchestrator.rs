@@ -2592,27 +2592,26 @@ fn refresh_problem_preview_state(
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
 
-    let preview_field =
-        fullmag_runner::snapshot_problem_preview(&problem, &display_selection.preview_request())?;
+    let preview_request = display_selection.preview_request();
+    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
+    let cached_fields = if refresh_cache {
+        let cached_quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+        Some(fullmag_runner::snapshot_problem_vector_fields(
+            &problem,
+            &cached_quantities,
+            &preview_request,
+        )?)
+    } else {
+        None
+    };
+
     live_workspace.update(|state| {
         state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
         state.live_state.latest_step.preview_field = Some(preview_field.clone());
-        if refresh_cache {
-            clear_cached_preview_fields(state);
+        if let Some(cached_fields) = cached_fields.clone() {
+            replace_cached_preview_fields(state, cached_fields);
         }
     });
-
-    if refresh_cache {
-        let cached_quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
-        let cached_fields = fullmag_runner::snapshot_problem_vector_fields(
-            &problem,
-            &cached_quantities,
-            &display_selection.preview_request(),
-        )?;
-        live_workspace.update(|state| {
-            replace_cached_preview_fields(state, cached_fields.clone());
-        });
-    }
 
     Ok(())
 }
@@ -3805,9 +3804,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "Compute fields requested — evaluating current magnetization",
                     );
                     let display_selection = display_selection_handle.display_selection_snapshot();
+                    let live_magnetization = live_workspace.latest_magnetization_vectors();
+                    let compute_magnetization = live_magnetization
+                        .as_deref()
+                        .or(continuation_magnetization.as_deref());
                     match refresh_problem_preview_state(
                         &stages[0].ir,
-                        continuation_magnetization.as_deref(),
+                        compute_magnetization,
                         &display_selection,
                         &live_workspace,
                         true,
@@ -4558,8 +4561,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     "system",
                     "Compute fields requested — evaluating current magnetization",
                 );
+                let live_magnetization = live_workspace.latest_magnetization_vectors();
+                let compute_magnetization = live_magnetization
+                    .as_deref()
+                    .or(continuation_magnetization.as_deref());
                 match interactive_runtime_host
-                    .compute_current_fields(continuation_magnetization.as_deref(), &live_workspace)
+                    .compute_current_fields(compute_magnetization, &live_workspace)
                 {
                     Ok(()) => live_workspace.push_log(
                         "success",

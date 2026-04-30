@@ -14,6 +14,7 @@ import type {
 } from "../fdm/fdmViewportSettingsTypes";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
+import { applyLiveBufferTransition } from "./liveBufferAnimation";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -242,6 +243,8 @@ function FdmInstances({
 }: FdmInstancesProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const displayToCellRef = useRef<Uint32Array | null>(null);
+  const renderSignatureRef = useRef<string | null>(null);
+  const transitionCleanupRef = useRef<(() => void) | null>(null);
   const scheduleInvalidate = useBatchedInvalidate();
   const [nx, ny, nz] = grid;
   const count = nx * ny * nz;
@@ -381,10 +384,29 @@ function FdmInstances({
     if (!mesh) return;
     const instanceColor = mesh.instanceColor;
     if (!instanceColor) return;
+    const renderSignature = [
+      mode,
+      geometryMode ? "geometry" : "field",
+      sampling,
+      voxelGap,
+      voxelThreshold,
+      topoEnabled ? topoComponent : "flat",
+      topoMultiplier,
+      gridBounds.minIx,
+      gridBounds.maxIx,
+      gridBounds.minIy,
+      gridBounds.maxIy,
+      gridBounds.minIz,
+      gridBounds.maxIz,
+      activeMask ? "masked" : "all",
+    ].join(":");
 
     // Toolbar "vectors off" — clear instances without rebuilding geometry.
     if (!vectorsVisible) {
+      transitionCleanupRef.current?.();
+      transitionCleanupRef.current = null;
       mesh.count = 0;
+      renderSignatureRef.current = renderSignature;
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
@@ -394,6 +416,60 @@ function FdmInstances({
 
     const colors = instanceColor.array as Float32Array;
     const matrices = mesh.instanceMatrix.array as Float32Array;
+    const previousVisible = mesh.count;
+    const previousMatrices =
+      previousVisible > 0 ? matrices.slice(0, Math.min(matrices.length, previousVisible * 16)) : null;
+    const previousColors =
+      previousVisible > 0 ? colors.slice(0, Math.min(colors.length, previousVisible * 3)) : null;
+    const commitInstanceUpdate = (visible: number, animateLiveUpdate: boolean) => {
+      mesh.count = visible;
+      onVisibleCount?.(visible);
+      transitionCleanupRef.current?.();
+      const canAnimate = Boolean(
+        animateLiveUpdate &&
+        visible > 0 &&
+        previousVisible === visible &&
+        previousMatrices &&
+        previousColors &&
+        previousMatrices.length >= visible * 16 &&
+        previousColors.length >= visible * 3 &&
+        renderSignatureRef.current === renderSignature,
+      );
+      renderSignatureRef.current = renderSignature;
+      if (!canAnimate) {
+        mesh.instanceMatrix.needsUpdate = true;
+        instanceColor.needsUpdate = true;
+        scheduleInvalidate();
+        transitionCleanupRef.current = null;
+        return;
+      }
+      const matrixTarget = matrices.slice(0, visible * 16);
+      const colorTarget = colors.slice(0, visible * 3);
+      matrices.set(previousMatrices!.subarray(0, visible * 16), 0);
+      colors.set(previousColors!.subarray(0, visible * 3), 0);
+      const cleanupMatrices = applyLiveBufferTransition({
+        destination: matrices.subarray(0, visible * 16),
+        target: matrixTarget,
+        maxAnimatedValues: 320_000,
+        markNeedsUpdate: () => {
+          mesh.instanceMatrix.needsUpdate = true;
+        },
+        scheduleInvalidate,
+      });
+      const cleanupColors = applyLiveBufferTransition({
+        destination: colors.subarray(0, visible * 3),
+        target: colorTarget,
+        maxAnimatedValues: 180_000,
+        markNeedsUpdate: () => {
+          instanceColor.needsUpdate = true;
+        },
+        scheduleInvalidate,
+      });
+      transitionCleanupRef.current = () => {
+        cleanupMatrices();
+        cleanupColors();
+      };
+    };
 
     if (!displayToCellRef.current || displayToCellRef.current.length < count) {
       displayToCellRef.current = new Uint32Array(count);
@@ -405,7 +481,10 @@ function FdmInstances({
     const { minIx, maxIx, minIy, maxIy, minIz, maxIz } = gridBounds;
 
     if (gridBounds.empty) {
+      transitionCleanupRef.current?.();
+      transitionCleanupRef.current = null;
       mesh.count = 0;
+      renderSignatureRef.current = renderSignature;
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
@@ -426,7 +505,10 @@ function FdmInstances({
     }
 
     if (!hasVectors && !geometryMode) {
+      transitionCleanupRef.current?.();
+      transitionCleanupRef.current = null;
       mesh.count = 0;
+      renderSignatureRef.current = renderSignature;
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
@@ -480,11 +562,7 @@ function FdmInstances({
           }
         }
       }
-      mesh.count = visible;
-      onVisibleCount?.(visible);
-      mesh.instanceMatrix.needsUpdate = true;
-      instanceColor.needsUpdate = true;
-      scheduleInvalidate();
+      commitInstanceUpdate(visible, true);
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
         scope: "FdmInstances",
@@ -592,12 +670,7 @@ function FdmInstances({
       }
     }
 
-    mesh.count = visible;
-    onVisibleCount?.(visible);
-    mesh.instanceMatrix.needsUpdate = true;
-    instanceColor.needsUpdate = true;
-
-    scheduleInvalidate();
+    commitInstanceUpdate(visible, true);
     const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     recordFrontendPerfSample({
       scope: "FdmInstances",
@@ -646,6 +719,7 @@ function FdmInstances({
     if (!hasRenderableVectors || !vectors) return; // geometry mode uses constant gray — skip
 
     const colors = mesh.instanceColor.array as Float32Array;
+    const previousColors = colors.slice(0, visibleCount * 3);
     const displayToCell = displayToCellRef.current;
     for (let di = 0; di < visibleCount; di++) {
       const cellIndex = displayToCell[di];
@@ -656,9 +730,26 @@ function FdmInstances({
       colors[outBase + 1] = _color.g;
       colors[outBase + 2] = _color.b;
     }
-    mesh.instanceColor.needsUpdate = true;
-    scheduleInvalidate();
+    const colorTarget = colors.slice(0, visibleCount * 3);
+    colors.set(previousColors, 0);
+    transitionCleanupRef.current?.();
+    transitionCleanupRef.current = applyLiveBufferTransition({
+      destination: colors.subarray(0, visibleCount * 3),
+      target: colorTarget,
+      maxAnimatedValues: 180_000,
+      markNeedsUpdate: () => {
+        mesh.instanceColor!.needsUpdate = true;
+      },
+      scheduleInvalidate,
+    });
   }, [voxelColorMode, vectors, hasRenderableVectors, scheduleInvalidate]);
+
+  useEffect(() => {
+    return () => {
+      transitionCleanupRef.current?.();
+      transitionCleanupRef.current = null;
+    };
+  }, []);
 
   if (count === 0) {
     if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveHeatmapTooltipValue } from "../MagnetizationSlice2D";
+import {
+  buildSlice2DChartTopologyKey,
+  resolveHeatmapTooltipValue,
+} from "../MagnetizationSlice2D";
 
 describe("resolveHeatmapTooltipValue", () => {
   it("accepts direct heatmap tooltip values", () => {
@@ -15,5 +18,17 @@ describe("resolveHeatmapTooltipValue", () => {
     expect(resolveHeatmapTooltipValue(undefined)).toBeNull();
     expect(resolveHeatmapTooltipValue({})).toBeNull();
     expect(resolveHeatmapTooltipValue({ value: [] })).toBeNull();
+  });
+});
+
+describe("buildSlice2DChartTopologyKey", () => {
+  it("ignores field data revisions and only tracks the slice frame", () => {
+    expect(buildSlice2DChartTopologyKey("xy", 32, 24)).toBe("xy:32:24");
+    expect(buildSlice2DChartTopologyKey("xy", 32, 24)).toBe(
+      buildSlice2DChartTopologyKey("xy", 32, 24),
+    );
+    expect(buildSlice2DChartTopologyKey("xz", 32, 24)).not.toBe(
+      buildSlice2DChartTopologyKey("xy", 32, 24),
+    );
   });
 });

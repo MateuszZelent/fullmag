@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMagnetizationAssetFingerprint } from "../materialPanelMagnetization";
-import type { MagnetizationAsset } from "@/lib/session/types";
+import {
+  buildMagnetizationAssetFingerprint,
+  hasUnsyncedSceneMagnetization,
+} from "../materialPanelMagnetization";
+import type { MagnetizationAsset, SceneDocument } from "@/lib/session/types";
 
 function vortexAsset(presetParams: Record<string, unknown>): MagnetizationAsset {
   return {
@@ -30,6 +33,31 @@ function vortexAsset(presetParams: Record<string, unknown>): MagnetizationAsset 
     preset_version: 1,
     ui_label: "vortex",
   };
+}
+
+function uniformAsset(): MagnetizationAsset {
+  return {
+    ...vortexAsset({}),
+    preset_kind: "uniform",
+    preset_params: { direction: [1, 0, 0] },
+    ui_label: "uniform",
+  };
+}
+
+function sceneWithAsset(asset: MagnetizationAsset): SceneDocument {
+  return {
+    objects: [
+      {
+        id: "free",
+        name: "free",
+        magnetization_ref: asset.id,
+      },
+    ],
+    magnetization_assets: [asset],
+    editor: {
+      selected_object_id: null,
+    },
+  } as unknown as SceneDocument;
 }
 
 describe("buildMagnetizationAssetFingerprint", () => {
@@ -109,5 +137,78 @@ describe("buildMagnetizationAssetFingerprint", () => {
     });
 
     expect(edited).not.toBe(baseline);
+  });
+
+  it("marks uniform to vortex scene edits as solver-dirty", () => {
+    expect(
+      hasUnsyncedSceneMagnetization({
+        localScene: sceneWithAsset(vortexAsset({ circulation: 1, core_polarity: 1, plane: "xy" })),
+        remoteScene: sceneWithAsset(uniformAsset()),
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores scene editor-only changes for solver dirtiness", () => {
+    const remoteScene = sceneWithAsset(
+      vortexAsset({ circulation: 1, core_polarity: 1, plane: "xy" }),
+    );
+    const localScene = {
+      ...remoteScene,
+      editor: {
+        selected_object_id: "free",
+        active_tab: "texture",
+      },
+    } as unknown as SceneDocument;
+
+    expect(
+      hasUnsyncedSceneMagnetization({
+        localScene,
+        remoteScene,
+      }),
+    ).toBe(false);
+  });
+
+  it("marks preset params, mapping, and texture transform as solver-dirty", () => {
+    const remoteScene = sceneWithAsset(
+      vortexAsset({ circulation: 1, core_polarity: 1, plane: "xy" }),
+    );
+
+    expect(
+      hasUnsyncedSceneMagnetization({
+        localScene: sceneWithAsset(
+          vortexAsset({ circulation: 1, core_polarity: 1, core_radius: 2e-9, plane: "xy" }),
+        ),
+        remoteScene,
+      }),
+    ).toBe(true);
+
+    expect(
+      hasUnsyncedSceneMagnetization({
+        localScene: sceneWithAsset({
+          ...vortexAsset({ circulation: 1, core_polarity: 1, plane: "xy" }),
+          mapping: {
+            space: "world",
+            projection: "object_local",
+            clamp_mode: "none",
+          },
+        }),
+        remoteScene,
+      }),
+    ).toBe(true);
+
+    expect(
+      hasUnsyncedSceneMagnetization({
+        localScene: sceneWithAsset({
+          ...vortexAsset({ circulation: 1, core_polarity: 1, plane: "xy" }),
+          texture_transform: {
+            translation: [1, 0, 0],
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            pivot: [0, 0, 0],
+          },
+        }),
+        remoteScene,
+      }),
+    ).toBe(true);
   });
 });

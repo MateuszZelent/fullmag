@@ -310,7 +310,9 @@ export function computeVertexColors(
 }
 
 function getBaseVertexColorCache(meshData: FemMeshData): Map<string, Float32Array> {
-  const cacheKey = meshData;
+  // Use the stable topology reference when available so the cache survives
+  // field-data updates that create new FemMeshData wrapper objects.
+  const cacheKey = (meshData.topologyRef as FemMeshData | undefined) ?? meshData;
   let cache = BASE_VERTEX_COLOR_CACHE.get(cacheKey);
   if (!cache) {
     cache = new Map<string, Float32Array>();

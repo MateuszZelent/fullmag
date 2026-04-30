@@ -1,4 +1,4 @@
-import type { MagnetizationAsset } from "../../../lib/session/types";
+import type { MagnetizationAsset, SceneDocument } from "../../../lib/session/types";
 import { MAGNETIC_PRESET_CATALOG } from "../../../lib/magnetizationPresetCatalog";
 
 export const DEFAULT_TEXTURE_MAPPING = {
@@ -55,6 +55,50 @@ export function buildMagnetizationAssetFingerprint(args: {
     mapping,
     textureTransform,
   });
+}
+
+export function buildSceneMagnetizationFingerprint(
+  scene: SceneDocument | null | undefined,
+): string | null {
+  if (!scene) {
+    return null;
+  }
+
+  const objectRefs = scene.objects
+    .map((object) => ({
+      id: object.id,
+      name: object.name,
+      magnetizationRef: object.magnetization_ref ?? null,
+    }))
+    .sort((a, b) => `${a.id}\u0000${a.name}`.localeCompare(`${b.id}\u0000${b.name}`));
+
+  const assets = scene.magnetization_assets
+    .map((asset) => ({
+      id: asset.id,
+      name: asset.name,
+      fingerprint: buildMagnetizationAssetFingerprint({
+        objectId: "__scene_asset__",
+        asset,
+      }),
+    }))
+    .sort((a, b) => `${a.id}\u0000${a.name}`.localeCompare(`${b.id}\u0000${b.name}`));
+
+  return JSON.stringify({
+    objectRefs,
+    assets,
+  });
+}
+
+export function hasUnsyncedSceneMagnetization(args: {
+  localScene: SceneDocument | null | undefined;
+  remoteScene: SceneDocument | null | undefined;
+}): boolean {
+  const localFingerprint = buildSceneMagnetizationFingerprint(args.localScene);
+  if (!localFingerprint) return false;
+  const remoteFingerprint = buildSceneMagnetizationFingerprint(args.remoteScene);
+  // Remote scene not yet fetched: treat as unsynced so the texture is committed before compute.
+  if (!remoteFingerprint) return true;
+  return localFingerprint !== remoteFingerprint;
 }
 
 export function describeMagnetizationApplyState(args: {

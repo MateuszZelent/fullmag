@@ -565,18 +565,14 @@ impl InteractiveRuntimeHost {
             return Ok(());
         }
 
-        refresh_interactive_preview_snapshot(
-            &self.base_problem,
-            continuation_magnetization,
-            &display_selection.preview_request(),
-            live_workspace,
-        )?;
-        let cached_fields = refresh_interactive_preview_fields(
+        let (preview_field, cached_fields) = snapshot_interactive_preview_payload(
             &self.base_problem,
             continuation_magnetization,
             &display_selection.preview_request(),
         )?;
         live_workspace.update(|state| {
+            state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+            state.live_state.latest_step.preview_field = Some(preview_field.clone());
             replace_cached_preview_fields(state, cached_fields.clone());
         });
         Ok(())
@@ -865,6 +861,25 @@ fn refresh_interactive_preview_fields(
         &quantities,
         request,
     )?)
+}
+
+fn snapshot_interactive_preview_payload(
+    base_problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    request: &fullmag_runner::LivePreviewRequest,
+) -> Result<(
+    fullmag_runner::LivePreviewField,
+    Vec<fullmag_runner::LivePreviewField>,
+)> {
+    let mut problem = base_problem.clone();
+    if let Some(previous_final_magnetization) = continuation_magnetization {
+        apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
+    }
+    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    let quantities = fullmag_runner::quantities::cached_preview_quantity_ids();
+    let cached_fields =
+        fullmag_runner::snapshot_problem_vector_fields(&problem, &quantities, request)?;
+    Ok((preview_field, cached_fields))
 }
 
 fn spawn_interactive_preview_cache_refresh(

@@ -1881,6 +1881,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     liveApi,
     builderAutoSync,
     localBuilderDraft,
+    remoteSceneDocument,
+    refreshLiveState,
     localBuilderSignature,
     session,
     isFemBackend,
@@ -2418,7 +2420,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
       ? selectedBinaryFieldFrame.values
       : activeQuantityId
-        ? fieldMap[activeQuantityId] ?? null
+        ? ((fieldMap[activeQuantityId]?.length ?? 0) > 0
+            ? fieldMap[activeQuantityId]!
+            : (selectedBinaryFieldFrame?.values ?? null))
       : null;
   const selectedVectorSource = useMemo(() => {
     return selectViewportVectorField({

@@ -129,6 +129,23 @@ impl LocalLiveWorkspace {
             .unwrap_or_else(|_| panic!("local live workspace state lock poisoned"))
     }
 
+    pub fn latest_magnetization_vectors(&self) -> Option<Vec<[f64; 3]>> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| state.live_state.latest_step.magnetization.clone())
+            .and_then(|flat| {
+                if flat.is_empty() || flat.len() % 3 != 0 {
+                    return None;
+                }
+                Some(
+                    flat.chunks_exact(3)
+                        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                        .collect(),
+                )
+            })
+    }
+
     pub fn publish_snapshot(&self) {
         let snapshot = self
             .state

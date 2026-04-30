@@ -87,6 +87,14 @@ function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
 }
 
+export function buildSlice2DChartTopologyKey(
+  plane: SlicePlane,
+  xLen: number,
+  yLen: number,
+): string {
+  return `${plane}:${xLen}:${yLen}`;
+}
+
 export function resolveHeatmapTooltipValue(params: unknown): [number, number, number] | null {
   const source = Array.isArray(params) ? params[0] : params;
   if (!source || typeof source !== "object") return null;
@@ -245,7 +253,7 @@ export default function MagnetizationSlice2D({
     const axisLabel = plane === "xy" ? "x" : plane === "xz" ? "x" : "y";
     const yAxisLabel = plane === "xy" ? "y" : "z";
 
-    const topologyKey = `${plane}:${xLen}:${yLen}`;
+    const topologyKey = buildSlice2DChartTopologyKey(plane, xLen, yLen);
     const topologyChanged = chartTopologyKeyRef.current !== topologyKey;
     chartTopologyKeyRef.current = topologyKey;
 

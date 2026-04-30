@@ -494,6 +494,9 @@ export function useFemMeshDerived(params: UseFemMeshDerivedParams): UseFemMeshDe
       quantityDomain: selectedFieldDomain ?? spatialPreview?.quantity_domain ?? "full_domain",
       fieldRevision: fieldDataRevision,
       meshGenerationId: effectiveFemMesh?.generation_id ?? effectiveFemMesh?.mesh_id ?? null,
+      // Stable topology reference: vertex-color cache keys off this object so
+      // colors are not recomputed on every field update.
+      topologyRef: femMeshBase,
     };
   }, [
     activeMask,
