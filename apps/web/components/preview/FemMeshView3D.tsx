@@ -478,12 +478,24 @@ function FemMeshView3DInner({
     arrowBoundaryFaceIndices,
     baseArrowDensity,
     effectiveArrowDensity,
+    resolvedVectorDomain,
     runtimeQualityProfile,
     runtimeRenderMode,
     runtimeArrowDensity,
     shouldRenderMagneticGeometryResolved,
     shouldRenderAirGeometry,
   } = vectorDomain;
+  const effectiveArrowSamplingMode = useMemo<ArrowSamplingMode>(() => {
+    if (resolvedVectorDomain !== "airbox_only") {
+      return arrowSamplingMode;
+    }
+    const airLayer = visibleLayers.find(
+      (layer) => layer.part.role === "air" || layer.part.role === "outer_boundary",
+    );
+    return (airLayer?.viewState.vectorsScope ?? "surface") === "full"
+      ? "volume"
+      : "surface";
+  }, [arrowSamplingMode, resolvedVectorDomain, visibleLayers]);
 
   const topologySignature = topologyKey.trim();
   if (!topologySignature) {
@@ -927,7 +939,7 @@ function FemMeshView3DInner({
             arrowAlpha={arrowAlpha}
             arrowLengthScale={arrowLengthScale}
             arrowThickness={arrowThickness}
-            arrowSamplingMode={arrowSamplingMode}
+            arrowSamplingMode={effectiveArrowSamplingMode}
             arrowActiveNodeMask={arrowActiveNodeMask}
             arrowBoundaryFaceIndices={arrowBoundaryFaceIndices}
             selectedFaces={selectedFaces}

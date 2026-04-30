@@ -184,7 +184,11 @@ export interface PerObjectMeshReport {
 
 export interface MeshEntityViewState {
   visible: boolean;
+  geometryVisible?: boolean;
   renderMode: "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
+  wireframeScope?: "surface" | "full";
+  pointsScope?: "surface" | "full";
+  vectorsScope?: "surface" | "full";
   opacity: number;
   colorField:
     | "orientation"
@@ -208,7 +212,11 @@ export function defaultMeshEntityViewState(part: Pick<FemMeshPart, "role">): Mes
       part.role === "air"
         ? !airboxDisabledByDefault
         : part.role !== "outer_boundary",
+    geometryVisible: true,
     renderMode: part.role === "air" ? "wireframe" : "surface+edges",
+    wireframeScope: "surface",
+    pointsScope: "surface",
+    vectorsScope: "surface",
     opacity:
       part.role === "air"
         ? 28

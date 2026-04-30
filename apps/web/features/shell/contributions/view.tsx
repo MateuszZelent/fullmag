@@ -1,4 +1,5 @@
 import {
+  Activity,
   Blend,
   Box,
   BoxSelect,
@@ -23,7 +24,10 @@ import {
   type RibbonGroup,
 } from "../registry/ribbonRegistry";
 import type { RibbonMenuNode } from "../registry/ribbonMenuTypes";
-import type { ViewportMeshRenderMode } from "@/components/shell/ribbon/command-registry";
+import type {
+  AirboxDisplayScope,
+  ViewportMeshRenderMode,
+} from "@/components/shell/ribbon/command-registry";
 import {
   GLYPH_BUDGET_MAX,
   GLYPH_BUDGET_MIN,
@@ -79,12 +83,9 @@ function buildComponentMenuNode(
   } as RibbonMenuNode;
 }
 
-const AIRBOX_RENDER_ITEMS = [
-  { value: "surface", label: "Shaded" },
-  { value: "wireframe", label: "Wireframe" },
-  { value: "mesh", label: "Full mesh" },
-  { value: "surface+edges", label: "Shaded + wireframe" },
-  { value: "points", label: "Points (nodes)" },
+const AIRBOX_EXTENT_ITEMS: Array<{ value: AirboxDisplayScope; label: string }> = [
+  { value: "surface", label: "Surface" },
+  { value: "full", label: "Full" },
 ];
 
 const MESH_RENDER_ITEMS = [
@@ -245,7 +246,7 @@ function buildQuantityMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   ];
 }
 
-function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
+function buildPrimitiveMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3D(ctx);
   const textureDensity = ctx.magneticTextureDensity ?? 65_536;
   const meshRenderMode = (ctx.meshRenderMode ?? "surface") as ViewportMeshRenderMode;
@@ -258,28 +259,38 @@ function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   return [
     {
       type: "label",
-      id: "texture:header",
-      label: "Magnetic texture",
-      badge: ctx.magneticTextureVisible ? "on" : "off",
+      id: "primitive:header",
+      label: "Primitive display",
+      badge: ctx.primitiveVisible ? "on" : "off",
     },
     {
       type: "status",
-      id: "texture:scope",
+      id: "primitive:scope",
       label: "Scope",
       value: "Global ferromagnet base shading",
     },
     {
       type: "checkbox",
-      id: "texture:visible",
+      id: "primitive:visible",
+      label: "Primitive on/off",
+      checked: ctx.primitiveVisible,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-primitives", visible }),
+    },
+    {
+      type: "checkbox",
+      id: "primitive:texture-visible",
       label: "Texture on/off",
       checked: ctx.magneticTextureVisible,
       disabled: global.disabled,
       disabledReason: global.reason,
       onCheckedChange: (visible) => ctx.run({ id: "viewport.toggle-magnetic-texture", visible }),
     },
+    { type: "separator", id: "primitive:s0" },
     {
       type: "radio-group",
-      id: "texture:mesh-display",
+      id: "primitive:mesh-display",
       label: "Mesh display",
       value: meshRenderMode,
       disabled: global.disabled,
@@ -291,18 +302,17 @@ function buildTextureMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
         }),
       items: MESH_RENDER_ITEMS,
     },
-    { type: "separator", id: "texture:s0" },
     buildComponentMenuNode(
       ctx,
-      "texture:component",
-      "Texture component",
+      "primitive:texture-component",
+      "Primitive texture",
       component === "3D" ? "3D" : component,
       global.disabled,
       global.reason,
     ),
     {
       type: "slider",
-      id: "texture:density",
+      id: "primitive:texture-density",
       label: "Texture downsample cells",
       value: textureDensity,
       min: 8,
@@ -430,12 +440,25 @@ function buildVectorsMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3D(ctx);
   const renderMode = ctx.airMeshRenderMode ?? "wireframe";
-  const shaded = renderMode === "surface" || renderMode === "surface+edges";
-  const wireframe = renderMode === "wireframe" || renderMode === "surface+edges";
-  const points = renderMode === "points";
+  const effectiveRenderMode = renderMode === "mesh" ? "wireframe" : renderMode;
+  const wireframeScope = renderMode === "mesh" ? "full" : ctx.airMeshWireframeScope ?? "surface";
+  const pointsScope = ctx.airMeshPointsScope ?? "surface";
+  const vectorsScope = ctx.airMeshVectorsScope ?? "surface";
+  const shaded = effectiveRenderMode === "surface" || effectiveRenderMode === "surface+edges";
+  const wireframe = effectiveRenderMode === "wireframe" || effectiveRenderMode === "surface+edges";
+  const points = effectiveRenderMode === "points";
+  const geometryVisible =
+    ctx.airMeshGeometryVisible ?? (shaded || wireframe || points);
   const vectors = ctx.femVectorDomainFilter === "airbox_only" && Boolean(ctx.meshShowArrows);
   return [
-    { type: "label", id: "airbox:header", label: "Airbox display", badge: ctx.airboxVisible ? renderMode : "hidden" },
+    {
+      type: "label",
+      id: "airbox:header",
+      label: "Airbox display",
+      badge: ctx.airboxVisible
+        ? `${effectiveRenderMode}${wireframe ? ` / ${wireframeScope}` : ""}`
+        : "hidden",
+    },
     {
       type: "checkbox",
       id: "airbox:visible",
@@ -449,7 +472,7 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       type: "checkbox",
       id: "airbox:shaded",
       label: "Shaded on/off",
-      checked: ctx.airboxVisible && shaded,
+      checked: ctx.airboxVisible && geometryVisible && shaded,
       disabled: global.disabled,
       disabledReason: global.reason,
       onCheckedChange: (nextShaded) => ctx.run({ id: "viewport.set-airbox-display", patch: { shaded: nextShaded } }),
@@ -458,19 +481,47 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       type: "checkbox",
       id: "airbox:wireframe",
       label: "Wireframe on/off",
-      checked: ctx.airboxVisible && wireframe,
+      checked: ctx.airboxVisible && geometryVisible && wireframe,
       disabled: global.disabled,
       disabledReason: global.reason,
       onCheckedChange: (nextWireframe) => ctx.run({ id: "viewport.set-airbox-display", patch: { wireframe: nextWireframe } }),
     },
     {
+      type: "radio-group",
+      id: "airbox:wireframe-scope",
+      label: "Wireframe extent",
+      value: wireframeScope,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (scope) =>
+        ctx.run({
+          id: "viewport.set-airbox-display",
+          patch: { wireframeScope: scope as AirboxDisplayScope },
+        }),
+      items: AIRBOX_EXTENT_ITEMS,
+    },
+    {
       type: "checkbox",
       id: "airbox:points",
       label: "Points on/off",
-      checked: ctx.airboxVisible && points,
+      checked: ctx.airboxVisible && geometryVisible && points,
       disabled: global.disabled,
       disabledReason: global.reason,
       onCheckedChange: (nextPoints) => ctx.run({ id: "viewport.set-airbox-display", patch: { points: nextPoints } }),
+    },
+    {
+      type: "radio-group",
+      id: "airbox:points-scope",
+      label: "Points extent",
+      value: pointsScope,
+      disabled: global.disabled,
+      disabledReason: global.reason,
+      onValueChange: (scope) =>
+        ctx.run({
+          id: "viewport.set-airbox-display",
+          patch: { pointsScope: scope as AirboxDisplayScope },
+        }),
+      items: AIRBOX_EXTENT_ITEMS,
     },
     {
       type: "checkbox",
@@ -481,21 +532,21 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
       disabledReason: global.reason,
       onCheckedChange: (nextVectors) => ctx.run({ id: "viewport.set-airbox-display", patch: { vectors: nextVectors } }),
     },
-    { type: "separator", id: "airbox:s-visible" },
     {
       type: "radio-group",
-      id: "airbox:render-mode",
-      label: "Airbox render",
-      value: renderMode,
+      id: "airbox:vectors-scope",
+      label: "Vectors extent",
+      value: vectorsScope,
       disabled: global.disabled,
       disabledReason: global.reason,
-      onValueChange: (nextRenderMode) =>
+      onValueChange: (scope) =>
         ctx.run({
           id: "viewport.set-airbox-display",
-          patch: { renderMode: nextRenderMode as ViewportMeshRenderMode },
+          patch: { vectorsScope: scope as AirboxDisplayScope },
         }),
-      items: AIRBOX_RENDER_ITEMS,
+      items: AIRBOX_EXTENT_ITEMS,
     },
+    { type: "separator", id: "airbox:s-visible" },
     {
       type: "slider",
       id: "airbox:opacity",
@@ -600,7 +651,27 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
     },
     { type: "separator", id: "airbox:s0" },
     { type: "item", id: "airbox:focus", label: "Focus airbox", disabled: true, disabledReason: "Airbox focus command is pending viewport preset support" },
-    { type: "item", id: "airbox:reset", label: "Reset airbox display", action: () => ctx.run({ id: "viewport.set-airbox-display", patch: { visible: true, opacity: 35, renderMode: "wireframe", vectors: false } }) },
+    {
+      type: "item",
+      id: "airbox:reset",
+      label: "Reset airbox display",
+      action: () =>
+        ctx.run({
+          id: "viewport.set-airbox-display",
+          patch: {
+            visible: true,
+            opacity: 35,
+            shaded: false,
+            wireframe: true,
+            geometry: true,
+            wireframeScope: "surface",
+            points: false,
+            pointsScope: "surface",
+            vectors: false,
+            vectorsScope: "surface",
+          },
+        }),
+    },
   ];
 }
 
@@ -684,6 +755,12 @@ function buildRenderLayersMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
   const global = canUse3D(ctx);
   const vectorWarning = Boolean(ctx.meshShowArrows && ctx.previewPending);
+  const viewport3DStatus = ctx.viewport3DStatus ?? "active";
+  const viewport3DActive = viewport3DStatus === "active";
+  const viewport3DReason =
+    ctx.viewport3DStatusReason ??
+    (viewport3DActive ? "3D visualization is rendering" : "3D visualization is not rendering");
+  const viewport3DDetail = ctx.viewport3DStatusDetail ?? viewport3DReason;
   return {
     id: "view-global-display",
     title: "Global Display",
@@ -691,14 +768,49 @@ function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
     tone: "neutral",
     actions: [
       {
-        id: "view-texture",
+        id: "view-3d-status",
+        icon: <Activity size={20} />,
+        label: viewport3DActive ? "3D Active" : "3D Inactive",
+        tooltip: viewport3DReason,
+        active: viewport3DActive,
+        state: viewport3DStatus === "warning" ? "warning" : viewport3DActive ? "active" : "default",
+        iconColor:
+          viewport3DStatus === "warning"
+            ? "text-amber-300"
+            : viewport3DActive
+              ? "text-emerald-300"
+              : "text-muted-foreground",
+        menu: [
+          {
+            type: "label",
+            id: "3d-status:header",
+            label: "3D visualization",
+            badge: viewport3DStatus === "warning" ? "warning" : viewport3DActive ? "active" : "inactive",
+          },
+          {
+            type: "status",
+            id: "3d-status:reason",
+            label: viewport3DActive ? "Status" : "Hidden reason",
+            value: viewport3DReason,
+            tone: viewport3DStatus === "warning" ? "warning" : viewport3DActive ? "success" : "danger",
+          },
+          {
+            type: "status",
+            id: "3d-status:detail",
+            label: "Detail",
+            value: viewport3DDetail,
+          },
+        ],
+      },
+      {
+        id: "view-primitive",
         icon: <Sparkles size={20} />,
-        label: "Texture",
-        tooltip: "Control base magnetic texture shading for ferromagnets",
-        active: ctx.magneticTextureVisible,
+        label: "Primitive",
+        tooltip: "Control primitive visibility and primitive texture shading",
+        active: ctx.primitiveVisible,
         disabled: global.disabled,
         iconColor: "text-teal-300",
-        menu: buildTextureMenu(ctx),
+        menu: buildPrimitiveMenu(ctx),
       },
       {
         id: "view-quantity",
@@ -1380,6 +1492,15 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
         ],
       },
       {
+        id: "view-dimension-frame",
+        icon: <Ruler size={20} />,
+        label: "Frame",
+        tooltip: "Toggle dynamic dimension frame and axis scale",
+        active: ctx.universeWireframeVisible,
+        iconColor: "text-emerald-300",
+        action: () => ctx.run({ id: "viewport.toggle-universe-wireframe" }),
+      },
+      {
         id: "view-axes",
         icon: <Ruler size={20} />,
         label: "Axes",
@@ -1398,7 +1519,7 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
               { value: "object", label: "Object scale" },
             ],
           },
-          { type: "checkbox", id: "axes:wireframe", label: "Universe wireframe", checked: ctx.universeWireframeVisible, onCheckedChange: () => ctx.run({ id: "viewport.toggle-universe-wireframe" }) },
+          { type: "checkbox", id: "axes:wireframe", label: "Dimension frame", checked: ctx.universeWireframeVisible, onCheckedChange: () => ctx.run({ id: "viewport.toggle-universe-wireframe" }) },
         ],
       },
       {

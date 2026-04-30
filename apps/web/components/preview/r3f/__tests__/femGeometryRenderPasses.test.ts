@@ -173,7 +173,7 @@ describe("resolveFemGeometryRenderPasses", () => {
     });
   });
 
-  it("activates mesh edges in mesh render mode with geometry", () => {
+  it("activates mesh edges in legacy mesh render mode without shaded surface", () => {
     expect(
       resolveFemGeometryRenderPasses({
         renderMode: "mesh",
@@ -185,7 +185,7 @@ describe("resolveFemGeometryRenderPasses", () => {
         showPointsPass: true,
       }),
     ).toMatchObject({
-      showSurface: true,
+      showSurface: false,
       showMeshEdges: true,
       showWireOnlyEdges: false,
       showWireOnlyMesh: false,
@@ -211,7 +211,7 @@ describe("resolveFemGeometryRenderPasses", () => {
     });
   });
 
-  it("mesh mode respects showSurfacePass gate", () => {
+  it("mesh mode keeps volume edges independent of the surface pass gate", () => {
     expect(
       resolveFemGeometryRenderPasses({
         renderMode: "mesh",
@@ -225,6 +225,85 @@ describe("resolveFemGeometryRenderPasses", () => {
     ).toMatchObject({
       showSurface: false,
       showMeshEdges: true,
+    });
+  });
+
+  it("keeps surface wireframe on surface edges only", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "wireframe",
+        edgeScope: "surface",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        hasTetraEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showWireOnlyEdges: true,
+      showMeshEdges: false,
+    });
+  });
+
+  it("renders full wireframe as tetra edges without shaded surface", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "wireframe",
+        edgeScope: "full",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        hasTetraEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showWireOnlyEdges: false,
+      showWireOnlyMesh: false,
+      showMeshEdges: true,
+    });
+  });
+
+  it("renders shaded plus full wireframe as surface and tetra edges", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "surface+edges",
+        edgeScope: "full",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        hasTetraEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: true,
+      showSurfaceEdges: true,
+      showMeshEdges: true,
+    });
+  });
+
+  it("marks full points as volume points", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "points",
+        pointsScope: "full",
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showPoints: true,
+      showFullPoints: true,
     });
   });
 });

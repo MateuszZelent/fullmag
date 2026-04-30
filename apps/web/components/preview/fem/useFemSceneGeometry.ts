@@ -69,6 +69,53 @@ export interface FemSceneGeometry {
   takeScreenshot: () => Promise<void>;
 }
 
+export interface SceneFrameBounds {
+  extent: [number, number, number];
+  center: [number, number, number];
+}
+
+export function mergeSceneFrameBounds(
+  first: SceneFrameBounds,
+  second: SceneFrameBounds,
+): SceneFrameBounds {
+  const min = first.extent.map((extent, axis) =>
+    Math.min(
+      first.center[axis] - extent / 2,
+      second.center[axis] - second.extent[axis] / 2,
+    ),
+  ) as [number, number, number];
+  const max = first.extent.map((extent, axis) =>
+    Math.max(
+      first.center[axis] + extent / 2,
+      second.center[axis] + second.extent[axis] / 2,
+    ),
+  ) as [number, number, number];
+  return {
+    extent: max.map((value, axis) => value - min[axis]) as [number, number, number],
+    center: max.map((value, axis) => 0.5 * (value + min[axis])) as [number, number, number],
+  };
+}
+
+export function resolveDimensionFrameBounds({
+  dynamicExtent,
+  worldExtent,
+  worldCenter,
+}: {
+  dynamicExtent: [number, number, number];
+  worldExtent: [number, number, number] | null;
+  worldCenter: [number, number, number];
+}): SceneFrameBounds {
+  const dynamicFrame: SceneFrameBounds = {
+    extent: dynamicExtent.every((value) => Number.isFinite(value) && value > 0)
+      ? dynamicExtent
+      : [1, 1, 1] as [number, number, number],
+    center: [0, 0, 0],
+  };
+  return worldExtent
+    ? mergeSceneFrameBounds(dynamicFrame, { extent: worldExtent, center: worldCenter })
+    : dynamicFrame;
+}
+
 export function useFemSceneGeometry({
   meshData,
   hasMeshParts,
@@ -367,16 +414,27 @@ export function useFemSceneGeometry({
   const hasUniverseExtent =
     Array.isArray(worldExtent) &&
     worldExtent.every((value) => Number.isFinite(value) && value > 0);
-  const universeWireframeExtent = hasUniverseExtent
+  const worldFrameExtent = hasUniverseExtent
     ? [...worldExtent] as [number, number, number]
     : null;
-  const universeWireframeCenter = hasUniverseExtent
+  const worldFrameCenter = hasUniverseExtent
     ? [
         (worldCenter?.[0] ?? 0) - dynamicGeomCenter.x,
         (worldCenter?.[1] ?? 0) - dynamicGeomCenter.y,
         (worldCenter?.[2] ?? 0) - dynamicGeomCenter.z,
       ] as [number, number, number]
     : [0, 0, 0] as [number, number, number];
+  const dynamicFrameExtent =
+    dynamicGeomSize.every((value) => Number.isFinite(value) && value > 0)
+      ? dynamicGeomSize
+      : [1, 1, 1] as [number, number, number];
+  const dimensionFrame = resolveDimensionFrameBounds({
+    dynamicExtent: dynamicFrameExtent,
+    worldExtent: worldFrameExtent,
+    worldCenter: worldFrameCenter,
+  });
+  const universeWireframeExtent = dimensionFrame.extent;
+  const universeWireframeCenter = dimensionFrame.center;
   const selectedObjectAxes = selectedObjectOverlay
     ? {
         extent: [
@@ -394,13 +452,11 @@ export function useFemSceneGeometry({
   const axesWorldExtent =
     viewportAxesScope === "object" && selectedObjectAxes?.extent.every((value) => value > 0)
       ? selectedObjectAxes.extent
-      : universeWireframeExtent ?? dynamicGeomSize;
+      : universeWireframeExtent;
   const axesCenter =
     viewportAxesScope === "object" && selectedObjectAxes?.extent.every((value) => value > 0)
       ? selectedObjectAxes.center
-      : hasUniverseExtent
-        ? universeWireframeCenter
-        : [0, 0, 0] as [number, number, number];
+      : universeWireframeCenter;
   const sceneMaxDim = dynamicMaxDim;
 
   // ── Camera presets ────────────────────────────────────────────────

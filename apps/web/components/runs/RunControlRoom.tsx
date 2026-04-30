@@ -119,7 +119,10 @@ import type {
 } from "@/lib/study-builder/types";
 import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { resolveAirboxRenderMode } from "./control-room/airboxDisplay";
+import {
+  airboxDisplayStateFromRenderMode,
+  resolveAirboxDisplayState,
+} from "./control-room/airboxDisplay";
 
 const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
 
@@ -562,6 +565,97 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   ]);
 
   const spatialPreview = ctx.preview?.kind === "spatial" ? ctx.preview : null;
+  const viewport3DStatus = useMemo<{
+    status: "active" | "inactive" | "warning";
+    reason: string;
+    detail: string;
+  }>(() => {
+    if (ctx.effectiveViewMode !== "3D") {
+      return {
+        status: "inactive",
+        reason: `Current viewport mode is ${ctx.effectiveViewMode}; switch to 3D Viewport.`,
+        detail: "The 3D renderer is mounted only for the 3D viewport.",
+      };
+    }
+    if (ctx.previewBusy) {
+      return {
+        status: "warning",
+        reason: "3D preview data is still loading or recomputing.",
+        detail: "Visualization can be temporarily empty while field or mesh preview resources are pending.",
+      };
+    }
+    if (femDiscretization) {
+      if (!ctx.femMeshData || ctx.femMeshData.nNodes <= 0) {
+        return {
+          status: "inactive",
+          reason: "FEM mesh data is not available.",
+          detail: "Build or load a FEM mesh before the 3D visualization can render.",
+        };
+      }
+      if (!ctx.femTopologyKey && !ctx.femMeshData.meshGenerationId) {
+        return {
+          status: "inactive",
+          reason: "FEM topology key is missing.",
+          detail: "The 3D viewport needs a stable topology key to mount the FEM renderer.",
+        };
+      }
+      const any3DLayerVisible =
+        ctx.femViewportLayers.showPrimitives ||
+        ctx.femViewportLayers.showMesh ||
+        ctx.femViewportLayers.showQuantity ||
+        ctx.femViewportLayers.showMagneticTexture ||
+        ctx.meshShowArrows ||
+        ctx.airMeshVisible;
+      if (!any3DLayerVisible) {
+        return {
+          status: "inactive",
+          reason: "All 3D layers are disabled.",
+          detail: "Enable Primitive, Mesh View, Quantity, Texture, Vectors, or Airbox in the View ribbon.",
+        };
+      }
+      if (ctx.objectViewMode === "isolate" && !ctx.selectedObjectId && !ctx.selectedEntityId) {
+        return {
+          status: "warning",
+          reason: "Object isolate mode is active without a selected object.",
+          detail: "Switch Display > Context or select an object to restore a visible 3D scope.",
+        };
+      }
+      return {
+        status: "active",
+        reason: "3D visualization is active.",
+        detail: `FEM mesh: ${ctx.femMeshData.nNodes.toLocaleString()} nodes, ${ctx.femMeshData.nElements.toLocaleString()} elements.`,
+      };
+    }
+    if (!ctx.previewGrid && !spatialPreview) {
+      return {
+        status: "inactive",
+        reason: "No 3D preview/grid data is available.",
+        detail: "Run or compute a preview quantity before using the 3D visualization.",
+      };
+    }
+    return {
+      status: "active",
+      reason: "3D visualization is active.",
+      detail: "Structured-grid preview data is available for the 3D renderer.",
+    };
+  }, [
+    ctx.airMeshVisible,
+    ctx.effectiveViewMode,
+    ctx.femMeshData,
+    ctx.femTopologyKey,
+    ctx.femViewportLayers.showMagneticTexture,
+    ctx.femViewportLayers.showMesh,
+    ctx.femViewportLayers.showPrimitives,
+    ctx.femViewportLayers.showQuantity,
+    ctx.meshShowArrows,
+    ctx.objectViewMode,
+    ctx.previewBusy,
+    ctx.previewGrid,
+    ctx.selectedEntityId,
+    ctx.selectedObjectId,
+    femDiscretization,
+    spatialPreview,
+  ]);
   const [meshBuildDialogOpen, setMeshBuildDialogOpen] = useState(false);
   const [meshBuildIntent, setMeshBuildIntent] = useState<ReturnType<typeof meshBuildIntentForNode> | null>(null);
   const [meshBuildError, setMeshBuildError] = useState<string | null>(null);
@@ -1653,6 +1747,20 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     ? (ctx.meshEntityViewState[airboxRepresentativePart.id]?.renderMode
       ?? defaultMeshEntityViewState(airboxRepresentativePart).renderMode)
     : null;
+  const airboxDisplayState = airboxRepresentativePart
+    ? (() => {
+        const modeDefaults = airboxDisplayStateFromRenderMode(airMeshRenderMode ?? "wireframe");
+        const partDefaults = defaultMeshEntityViewState(airboxRepresentativePart);
+        const current = ctx.meshEntityViewState[airboxRepresentativePart.id];
+        return {
+          ...modeDefaults,
+          geometryVisible: current?.geometryVisible ?? true,
+          wireframeScope: current?.wireframeScope ?? modeDefaults.wireframeScope ?? partDefaults.wireframeScope ?? "surface",
+          pointsScope: current?.pointsScope ?? modeDefaults.pointsScope ?? partDefaults.pointsScope ?? "surface",
+          vectorsScope: current?.vectorsScope ?? modeDefaults.vectorsScope ?? partDefaults.vectorsScope ?? "surface",
+        };
+      })()
+    : airboxDisplayStateFromRenderMode("wireframe");
   const handleRibbonSlice2DToolbar = (patch: Partial<Slice2DToolbarState>) => {
     patchSlice2DToolbar(patch);
     if (patch.quantityId) {
@@ -1810,10 +1918,14 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
     const updatesRender =
       typeof patch.visible === "boolean" ||
+      typeof patch.geometry === "boolean" ||
       typeof patch.opacity === "number" ||
       typeof patch.shaded === "boolean" ||
       typeof patch.wireframe === "boolean" ||
       typeof patch.points === "boolean" ||
+      typeof patch.wireframeScope === "string" ||
+      typeof patch.pointsScope === "string" ||
+      typeof patch.vectorsScope === "string" ||
       typeof patch.renderMode === "string";
     if (!updatesRender || airboxParts.length === 0) {
       return;
@@ -1826,15 +1938,27 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       const next = { ...previous };
       for (const part of airboxParts) {
         const current = next[part.id] ?? defaultMeshEntityViewState(part);
-        const nextMode = resolveAirboxRenderMode(current.renderMode, patch);
+        const modeDefaults = airboxDisplayStateFromRenderMode(current.renderMode);
+        const currentDisplay = {
+          ...modeDefaults,
+          geometryVisible: current.geometryVisible ?? true,
+          wireframeScope: current.wireframeScope ?? modeDefaults.wireframeScope,
+          pointsScope: current.pointsScope ?? modeDefaults.pointsScope,
+          vectorsScope: current.vectorsScope ?? modeDefaults.vectorsScope,
+        };
+        const nextDisplay = resolveAirboxDisplayState(currentDisplay, patch);
         const nextVisible = typeof patch.visible === "boolean"
           ? patch.visible
           : current.visible;
         const nextOpacity = typeof patch.opacity === "number" ? patch.opacity : current.opacity;
         if (
           current.visible === nextVisible &&
-          current.renderMode === nextMode &&
-          current.opacity === nextOpacity
+          (current.geometryVisible ?? true) === nextDisplay.geometryVisible &&
+          current.renderMode === nextDisplay.renderMode &&
+          current.opacity === nextOpacity &&
+          (current.wireframeScope ?? "surface") === nextDisplay.wireframeScope &&
+          (current.pointsScope ?? "surface") === nextDisplay.pointsScope &&
+          (current.vectorsScope ?? "surface") === nextDisplay.vectorsScope
         ) {
           if (!next[part.id]) {
             next[part.id] = current;
@@ -1845,7 +1969,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         next[part.id] = {
           ...current,
           visible: nextVisible,
-          renderMode: nextMode,
+          geometryVisible: nextDisplay.geometryVisible,
+          renderMode: nextDisplay.renderMode,
+          wireframeScope: nextDisplay.wireframeScope,
+          pointsScope: nextDisplay.pointsScope,
+          vectorsScope: nextDisplay.vectorsScope,
           opacity: nextOpacity,
         };
         changed = true;
@@ -2089,6 +2217,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         skipDisabledReason={solverControlDisabledReasons.skip}
         runAction={ctx.primaryRunAction}
         runLabel={ctx.primaryRunLabel}
+        viewport3DStatus={viewport3DStatus.status}
+        viewport3DStatusReason={viewport3DStatus.reason}
+        viewport3DStatusDetail={viewport3DStatus.detail}
         onViewChange={ctx.handleViewModeChange}
         onSidebarToggle={() => ctx.setSidebarCollapsed((v) => !v)}
         onCreateVisualizationPreset={handleCreateVisualizationPreset}
@@ -2108,6 +2239,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         requestedPreviewMaxPoints={ctx.requestedPreviewMaxPoints}
         requestedPreviewAutoScale={ctx.requestedPreviewAutoScale}
         requestedPreviewQuantityDataStatus={ctx.requestedPreviewQuantityDataStatus}
+        primitiveVisible={ctx.femViewportLayers.showPrimitives}
         magneticTextureVisible={ctx.femViewportLayers.showMagneticTexture}
         magneticTextureDensity={ctx.femTextureDownsampleCells}
         quantityShaderVisible={ctx.femViewportLayers.showQuantity}
@@ -2131,6 +2263,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         femFerromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
         airMeshOpacity={ctx.airMeshOpacity}
         airMeshRenderMode={airMeshRenderMode}
+        airMeshGeometryVisible={airboxDisplayState.geometryVisible}
+        airMeshWireframeScope={airboxDisplayState.wireframeScope}
+        airMeshPointsScope={airboxDisplayState.pointsScope}
+        airMeshVectorsScope={airboxDisplayState.vectorsScope}
         slice2DEnabled={ctx.effectiveViewMode === "2D"}
         slice2DToolbar={slice2DToolbar}
         slice2DDiagnostics={null}
@@ -2142,6 +2278,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetFemVectorGlyphBudget={ctx.setFemVectorGlyphBudget}
         onSetPreviewColormap={handleRibbonPreviewColormap}
         onSetPreviewAutoScale={handleRibbonPreviewAutoScale}
+        onSetPrimitiveVisible={(visible) =>
+          ctx.setFemViewportLayers((previous) => ({
+            ...previous,
+            showPrimitives: visible,
+          }))
+        }
         onSetMagneticTextureVisible={(visible) => {
           ctx.setFemViewportLayers((previous) => ({
             ...previous,

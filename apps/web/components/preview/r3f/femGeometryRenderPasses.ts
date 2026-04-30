@@ -1,9 +1,12 @@
-import type { RenderMode } from "../fem/femMeshTypes";
+import type { MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 
 interface ResolveFemGeometryRenderPassesInput {
   renderMode: RenderMode;
+  edgeScope?: MeshDisplayScope;
+  pointsScope?: MeshDisplayScope;
   hasGeometry: boolean;
   hasEdgesGeometry: boolean;
+  hasTetraEdgesGeometry?: boolean;
   showSurfacePass: boolean;
   showSurfaceHiddenEdgesPass: boolean;
   showSurfaceVisibleEdgesPass: boolean;
@@ -19,12 +22,16 @@ export interface FemGeometryRenderPasses {
   showPoints: boolean;
   /** Show internal (volume) mesh edges — active in "mesh" render mode. */
   showMeshEdges: boolean;
+  showFullPoints: boolean;
 }
 
 export function resolveFemGeometryRenderPasses({
   renderMode,
+  edgeScope = "surface",
+  pointsScope = "surface",
   hasGeometry,
   hasEdgesGeometry,
+  hasTetraEdgesGeometry = false,
   showSurfacePass,
   showSurfaceHiddenEdgesPass,
   showSurfaceVisibleEdgesPass,
@@ -35,23 +42,32 @@ export function resolveFemGeometryRenderPasses({
 
   // Wireframe: prefer dedicated WireframeGeometry (clean lines via lineSegments),
   // but ALWAYS fall back to material wireframe so we never show nothing.
-  const showWireOnlyEdges = renderMode === "wireframe" && hasEdgesGeometry;
-  const showWireOnlyMesh = renderMode === "wireframe" && hasGeometry;
+  const fullWireframe = renderMode === "wireframe" && edgeScope === "full";
+  const showWireOnlyEdges = renderMode === "wireframe" && hasEdgesGeometry && !fullWireframe;
+  const showWireOnlyMesh = renderMode === "wireframe" && hasGeometry && !fullWireframe;
 
   const showSurfaceEdges = renderMode === "surface+edges" && hasEdgesGeometry;
   const showSurfaceEdgeFallback =
     showSurfaceEdges && !showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass;
 
-  // "mesh" mode — show surface as transparent ghost + volume wireframe edges
-  const showMeshEdges = renderMode === "mesh" && hasGeometry;
+  // "mesh" mode is a legacy preset for volume wireframe edges. Do not add a
+  // transparent surface here; shaded airbox surface is controlled separately by
+  // the "Shaded on/off" primitive toggle.
+  const showMeshEdges =
+    (renderMode === "mesh" && hasGeometry) ||
+    ((renderMode === "wireframe" || renderMode === "surface+edges") &&
+      edgeScope === "full" &&
+      (hasTetraEdgesGeometry || hasGeometry));
+  const showFullPoints = showPointsPass && renderMode === "points" && pointsScope === "full";
 
   return {
-    showSurface: showSurface || (renderMode === "mesh" && hasGeometry && showSurfacePass),
+    showSurface,
     showWireOnlyEdges,
     showWireOnlyMesh: showWireOnlyMesh && !showWireOnlyEdges,
     showSurfaceEdges,
     showSurfaceEdgeFallback,
     showPoints: showPointsPass && renderMode === "points",
     showMeshEdges,
+    showFullPoints,
   };
 }

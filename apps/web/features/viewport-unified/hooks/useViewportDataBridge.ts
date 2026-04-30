@@ -831,14 +831,23 @@ export function useViewportDataBridge() {
         : hasExplicitState
           ? resolveEffectiveMeshEntityRenderMode({ currentRenderMode: current.renderMode })
           : resolvedGlobalMeshRenderMode;
-      const effectiveRenderMode = baseRenderMode === "surface" && femLayerState.showMesh
+      let effectiveRenderMode = baseRenderMode === "surface" && femLayerState.showMesh
         ? "surface+edges"
         : baseRenderMode === "surface+edges" && !femLayerState.showMesh
           ? "surface"
           : baseRenderMode;
+      let geometryVisible = current.geometryVisible;
+      if (!airboxScoped && !femLayerState.showPrimitives) {
+        if (effectiveRenderMode === "surface+edges" || effectiveRenderMode === "mesh") {
+          effectiveRenderMode = "wireframe";
+        } else if (effectiveRenderMode === "surface") {
+          geometryVisible = false;
+        }
+      }
       next[part.id] = {
         ...current,
         renderMode: effectiveRenderMode,
+        geometryVisible,
         opacity: airboxScoped
           ? current.opacity
           : hasExplicitState
@@ -866,6 +875,7 @@ export function useViewportDataBridge() {
     femDiscretization,
     femLayerState.showMesh,
     femLayerState.showMagneticTexture,
+    femLayerState.showPrimitives,
     femLayerState.showQuantity,
   ]);
 

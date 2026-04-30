@@ -18,14 +18,19 @@ export type ResultAnalysisKind =
   | "table";
 
 export type ViewportMeshRenderMode = "surface" | "wireframe" | "mesh" | "surface+edges" | "points";
+export type AirboxDisplayScope = "surface" | "full";
 
 export type AirboxDisplayPatch = Partial<{
   visible: boolean;
+  geometry: boolean;
   opacity: number;
   vectors: boolean;
   shaded: boolean;
   wireframe: boolean;
   points: boolean;
+  wireframeScope: AirboxDisplayScope;
+  pointsScope: AirboxDisplayScope;
+  vectorsScope: AirboxDisplayScope;
   renderMode: ViewportMeshRenderMode;
 }>;
 
@@ -49,6 +54,11 @@ export interface RibbonCommandContext {
   selectedObjectId?: string | null;
   objectViewMode?: "context" | "isolate";
   airboxVisible?: boolean;
+  primitiveVisible?: boolean;
+  airMeshGeometryVisible?: boolean | null;
+  airMeshWireframeScope?: AirboxDisplayScope | null;
+  airMeshPointsScope?: AirboxDisplayScope | null;
+  airMeshVectorsScope?: AirboxDisplayScope | null;
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
   viewportLegendVisible?: boolean;
@@ -68,6 +78,7 @@ export interface RibbonCommandContext {
   onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetPrimitiveVisible?: (visible: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetMagneticTextureDensity?: (density: number) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
@@ -220,6 +231,7 @@ export type RibbonCommand =
   | { id: "viewport.set-component"; component: "3D" | "x" | "y" | "z" | "magnitude" }
   | { id: "viewport.set-colormap"; colormap: string }
   | { id: "viewport.set-auto-scale"; enabled: boolean }
+  | { id: "viewport.toggle-primitives"; visible: boolean }
   | { id: "viewport.toggle-magnetic-texture"; visible: boolean }
   | { id: "viewport.set-magnetic-texture-density"; density: number }
   | { id: "viewport.toggle-quantity-shader"; visible: boolean }
@@ -373,6 +385,8 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSetPreviewColormap === "function";
     case "viewport.set-auto-scale":
       return typeof ctx.onSetPreviewAutoScale === "function";
+    case "viewport.toggle-primitives":
+      return typeof ctx.onSetPrimitiveVisible === "function";
     case "viewport.toggle-magnetic-texture":
       return typeof ctx.onSetMagneticTextureVisible === "function";
     case "viewport.toggle-quantity-shader":
@@ -580,6 +594,9 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-auto-scale":
       ctx.onSetPreviewAutoScale?.(command.enabled);
+      return;
+    case "viewport.toggle-primitives":
+      ctx.onSetPrimitiveVisible?.(command.visible);
       return;
     case "viewport.toggle-magnetic-texture":
       ctx.onSetMagneticTextureVisible?.(command.visible);

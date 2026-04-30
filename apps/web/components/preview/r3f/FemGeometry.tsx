@@ -1,6 +1,6 @@
 import React, { memo, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import * as THREE from "three";
-import type { FemMeshData, FemColorField, RenderMode } from "../fem/femMeshTypes";
+import type { FemMeshData, FemColorField, MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
 import {
   computeVertexColors,
@@ -18,6 +18,8 @@ interface FemGeometryProps {
   meshData: FemMeshData;
   field: FemColorField;
   renderMode: RenderMode;
+  edgeScope?: MeshDisplayScope;
+  pointsScope?: MeshDisplayScope;
   opacity: number;
   uniformColor?: string;
   edgeColor?: string;
@@ -149,6 +151,8 @@ export const FemGeometry = memo(function FemGeometry({
   meshData,
   field,
   renderMode,
+  edgeScope = "surface",
+  pointsScope = "surface",
   opacity,
   uniformColor,
   edgeColor,
@@ -612,7 +616,10 @@ export const FemGeometry = memo(function FemGeometry({
   // allocations during regular mode switches. Tetrahedral elements have 6
   // edges each, so this produces a large buffer; we lazily compute it.
   const tetraEdgesGeometry = useMemo(() => {
-    if (renderMode !== "mesh") return null;
+    const needsTetraEdges =
+      renderMode === "mesh" ||
+      ((renderMode === "wireframe" || renderMode === "surface+edges") && edgeScope === "full");
+    if (!needsTetraEdges) return null;
     if (nElements === 0 || nNodes === 0) return null;
     try {
       // Each tetrahedron has 6 edges: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
@@ -665,12 +672,35 @@ export const FemGeometry = memo(function FemGeometry({
       console.warn("[fem-geometry] Tetrahedral edge geometry construction failed", error);
       return null;
     }
-  }, [renderMode, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
+  }, [edgeScope, renderMode, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
 
   // ── Points geometry memo ──────────────────────────────────────────
   const { pointsGeometry, pointsVertexMap } = useMemo(() => {
     if (renderMode !== "points") {
       return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
+    }
+    if (pointsScope === "full" && _positions) {
+      const pointNodeIndices =
+        _activeElementOffsets.length > 0
+          ? collectElementNodeIndices(elements, nElements, _activeElementOffsets)
+          : Array.from({ length: nNodes }, (_, index) => index);
+      const pointPositions = new Float32Array(pointNodeIndices.length * 3);
+      const pointVMap = new Int32Array(pointNodeIndices.length);
+      for (let i = 0; i < pointNodeIndices.length; i += 1) {
+        const nodeIndex = pointNodeIndices[i];
+        pointVMap[i] = nodeIndex;
+        const base = nodeIndex * 3;
+        pointPositions[i * 3] = _positions[base];
+        pointPositions[i * 3 + 1] = _positions[base + 1];
+        pointPositions[i * 3 + 2] = _positions[base + 2];
+      }
+      const ptsGeom = new THREE.BufferGeometry();
+      ptsGeom.setAttribute("position", new THREE.BufferAttribute(pointPositions, 3));
+      ptsGeom.computeBoundingSphere();
+      if (enableGeometryVertexColors) {
+        ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
+      }
+      return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
     }
     const displayedPositions = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;
     if (displayedPositions && displayedPositions.count > 0) {
@@ -732,7 +762,7 @@ export const FemGeometry = memo(function FemGeometry({
       ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
     }
     return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-  }, [renderMode, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
+  }, [renderMode, pointsScope, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
 
   // ── Color update (and geometry-only invalidation when vertex colors are off) ──
   useEffect(() => {
@@ -965,8 +995,11 @@ export const FemGeometry = memo(function FemGeometry({
     showMeshEdges,
   } = resolveFemGeometryRenderPasses({
     renderMode,
+    edgeScope,
+    pointsScope,
     hasGeometry: geometry != null,
     hasEdgesGeometry: edgesGeometry != null,
+    hasTetraEdgesGeometry: tetraEdgesGeometry != null,
     showSurfacePass,
     showSurfaceHiddenEdgesPass,
     showSurfaceVisibleEdgesPass,
@@ -981,6 +1014,8 @@ export const FemGeometry = memo(function FemGeometry({
     const colorAttribute = geometry?.getAttribute("color") as THREE.BufferAttribute | undefined;
     console.debug("[fem-geometry]", JSON.stringify({
       renderMode,
+      edgeScope,
+      pointsScope,
       field,
       passes: {
         showSurface,
@@ -989,6 +1024,7 @@ export const FemGeometry = memo(function FemGeometry({
         showSurfaceEdges,
         showSurfaceEdgeFallback,
         showPoints,
+        showMeshEdges,
       },
       input: {
         nNodes,
@@ -1013,6 +1049,7 @@ export const FemGeometry = memo(function FemGeometry({
         colorCount: colorAttribute?.count ?? 0,
         indexCount: geometry?.index?.count ?? 0,
         hasEdgesGeometry: Boolean(edgesGeometry),
+        hasTetraEdgesGeometry: Boolean(tetraEdgesGeometry),
         hasPointsGeometry: Boolean(pointsGeometry),
       },
       material: {
@@ -1029,6 +1066,7 @@ export const FemGeometry = memo(function FemGeometry({
     displayBoundaryFaceIndices,
     displayElementIndices,
     edgeColor,
+    edgeScope,
     edgesGeometry,
     enableGeometryNormals,
     enableGeometryVertexColors,
@@ -1043,6 +1081,7 @@ export const FemGeometry = memo(function FemGeometry({
     nNodes,
     opacity,
     pointsGeometry,
+    pointsScope,
     renderMode,
     showPointsPass,
     showPoints,
@@ -1052,6 +1091,8 @@ export const FemGeometry = memo(function FemGeometry({
     showSurfaceEdges,
     showWireOnlyEdges,
     showWireOnlyMesh,
+    showMeshEdges,
+    tetraEdgesGeometry,
     uniformColor,
   ]);
 

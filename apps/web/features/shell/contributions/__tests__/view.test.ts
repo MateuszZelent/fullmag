@@ -46,6 +46,9 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     viewMode: "3D",
     sidebarVisible: true,
     previewPending: false,
+    viewport3DStatus: "active",
+    viewport3DStatusReason: "3D visualization is active.",
+    viewport3DStatusDetail: "FEM mesh: 2048 nodes, 12881 elements.",
     airboxVisible: false,
     quantityShaderVisible: true,
     viewportAxesScope: "universe",
@@ -61,6 +64,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     requestedPreviewEveryN: 4,
     requestedPreviewAutoScale: true,
     requestedPreviewQuantityDataStatus: "ready",
+    primitiveVisible: true,
     magneticTextureVisible: true,
     magneticTextureDensity: 65_536,
     femVectorGlyphBudget: 1_200,
@@ -83,6 +87,10 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     femFerromagnetVisibilityMode: "ghost",
     airMeshOpacity: 28,
     airMeshRenderMode: "surface+edges",
+    airMeshGeometryVisible: true,
+    airMeshWireframeScope: "surface",
+    airMeshPointsScope: "surface",
+    airMeshVectorsScope: "surface",
     slice2DEnabled: false,
     slice2DToolbar,
     slice2DDiagnostics: null,
@@ -175,24 +183,38 @@ describe("View ribbon contribution", () => {
 
   it("exposes rich quantity controls and keeps disabled quantity reasons", () => {
     const group = buildViewRibbonGroups(baseContext())[0];
-    const texture = group.actions.find((action) => action.id === "view-texture");
+    const viewportStatus = group.actions.find((action) => action.id === "view-3d-status");
+    const texture = group.actions.find((action) => action.id === "view-primitive");
     const vectors = group.actions.find((action) => action.id === "view-vectors");
     const quantity = group.actions.find((action) => action.id === "view-quantity");
+    expect(viewportStatus).toMatchObject({
+      label: "3D Active",
+      active: true,
+      tooltip: "3D visualization is active.",
+    });
+    expect(findNode(viewportStatus?.menu ?? [], "3d-status:reason")).toMatchObject({
+      type: "status",
+      value: "3D visualization is active.",
+      tone: "success",
+    });
     expect(texture?.menu).toBeTruthy();
     expect(vectors?.menu).toBeTruthy();
     expect(quantity?.menu).toBeTruthy();
 
     const source = findNode(quantity?.menu ?? [], "quantity:source");
     const shader = findNode(quantity?.menu ?? [], "quantity:overlay-visible");
-    const textureVisible = findNode(texture?.menu ?? [], "texture:visible");
-    const textureComponent = findNode(texture?.menu ?? [], "texture:component");
+    const primitiveVisible = findNode(texture?.menu ?? [], "primitive:visible");
+    const textureVisible = findNode(texture?.menu ?? [], "primitive:texture-visible");
+    const textureComponent = findNode(texture?.menu ?? [], "primitive:texture-component");
     const vectorComponent = findNode(vectors?.menu ?? [], "vectors:component");
     const vectorDensity = findNode(vectors?.menu ?? [], "vectors:density");
     const vectorColoring = findNode(quantity?.menu ?? [], "quantity:vector-coloring");
 
     expect(source).toMatchObject({ type: "radio-group", value: "m" });
     expect(shader).toMatchObject({ type: "checkbox", checked: true });
+    expect(primitiveVisible).toMatchObject({ type: "checkbox", checked: true });
     expect(textureVisible).toMatchObject({ type: "checkbox", checked: true });
+    expect(texture).toMatchObject({ label: "Primitive" });
     expect(findNode(quantity?.menu ?? [], "quantity:component")).toBeNull();
     expect(findNode(quantity?.menu ?? [], "quantity:every-n")).toBeNull();
     expect(textureComponent).toMatchObject({ type: "radio-group", value: "3D" });
@@ -229,20 +251,88 @@ describe("View ribbon contribution", () => {
     });
   });
 
-  it("shows dedicated texture actions in global and selected display groups", () => {
+  it("exposes a direct dimension frame toggle in the display group", () => {
+    const run = vi.fn();
+    const display = buildViewRibbonGroups(baseContext({ run, universeWireframeVisible: true }))[5];
+    const frame = display.actions.find((action) => action.id === "view-dimension-frame");
+    const axes = display.actions.find((action) => action.id === "view-axes");
+
+    expect(frame).toMatchObject({
+      label: "Frame",
+      active: true,
+    });
+    expect(findNode(axes?.menu ?? [], "axes:wireframe")).toMatchObject({
+      type: "checkbox",
+      label: "Dimension frame",
+      checked: true,
+    });
+
+    frame?.action?.();
+
+    expect(run).toHaveBeenCalledWith({ id: "viewport.toggle-universe-wireframe" });
+  });
+
+  it("shows separate primitive and texture toggles in global display", () => {
     const groups = buildViewRibbonGroups(baseContext({ quantityShaderVisible: false, magneticTextureVisible: true }));
     const global = groups[0];
     const selected = groups[2];
 
-    expect(global.actions.map((action) => action.id)).toContain("view-texture");
+    expect(global.actions.map((action) => action.id)).toContain("view-primitive");
     expect(selected.actions.map((action) => action.id)).toContain("view-selected-texture");
-    expect(findNode(global.actions.find((action) => action.id === "view-texture")?.menu ?? [], "texture:visible")).toMatchObject({
+    expect(findNode(global.actions.find((action) => action.id === "view-primitive")?.menu ?? [], "primitive:visible")).toMatchObject({
+      type: "checkbox",
+      checked: true,
+    });
+    expect(findNode(global.actions.find((action) => action.id === "view-primitive")?.menu ?? [], "primitive:texture-visible")).toMatchObject({
       type: "checkbox",
       checked: true,
     });
     expect(findNode(selected.actions.find((action) => action.id === "view-selected-texture")?.menu ?? [], "selected-texture:visible")).toMatchObject({
       type: "checkbox",
       checked: true,
+    });
+  });
+
+  it("dispatches primitive and texture toggles through separate commands", () => {
+    const run = vi.fn();
+    const global = buildViewRibbonGroups(baseContext({ run }))[0];
+    const primitive = global.actions.find((action) => action.id === "view-primitive");
+    const primitiveVisible = findNode(primitive?.menu ?? [], "primitive:visible");
+    const textureVisible = findNode(primitive?.menu ?? [], "primitive:texture-visible");
+
+    if (primitiveVisible?.type !== "checkbox" || textureVisible?.type !== "checkbox") {
+      throw new Error("Expected primitive and texture visibility checkboxes");
+    }
+
+    primitiveVisible.onCheckedChange?.(false);
+    textureVisible.onCheckedChange?.(false);
+
+    expect(run).toHaveBeenCalledWith({ id: "viewport.toggle-primitives", visible: false });
+    expect(run).toHaveBeenCalledWith({ id: "viewport.toggle-magnetic-texture", visible: false });
+  });
+
+  it("shows inactive 3D visualization reasons in the View ribbon", () => {
+    const group = buildViewRibbonGroups(baseContext({
+      viewport3DStatus: "inactive",
+      viewport3DStatusReason: "All 3D layers are disabled.",
+      viewport3DStatusDetail: "Enable Primitive, Mesh View, Quantity, Texture, Vectors, or Airbox.",
+    }))[0];
+    const viewportStatus = group.actions.find((action) => action.id === "view-3d-status");
+
+    expect(viewportStatus).toMatchObject({
+      label: "3D Inactive",
+      active: false,
+      tooltip: "All 3D layers are disabled.",
+    });
+    expect(findNode(viewportStatus?.menu ?? [], "3d-status:reason")).toMatchObject({
+      type: "status",
+      label: "Hidden reason",
+      value: "All 3D layers are disabled.",
+      tone: "danger",
+    });
+    expect(findNode(viewportStatus?.menu ?? [], "3d-status:detail")).toMatchObject({
+      type: "status",
+      value: "Enable Primitive, Mesh View, Quantity, Texture, Vectors, or Airbox.",
     });
   });
 
@@ -282,17 +372,51 @@ describe("View ribbon contribution", () => {
       type: "checkbox",
       checked: false,
     });
-    expect(findNode(airbox?.menu ?? [], "airbox:render-mode")).toMatchObject({
+    expect(findNode(airbox?.menu ?? [], "airbox:wireframe-scope")).toMatchObject({
       type: "radio-group",
-      value: "surface+edges",
+      value: "surface",
     });
-    const renderMode = findNode(airbox?.menu ?? [], "airbox:render-mode");
-    expect(renderMode?.type === "radio-group" ? renderMode.items : null).toContainEqual({
-      value: "mesh",
-      label: "Full mesh",
+    expect(findNode(airbox?.menu ?? [], "airbox:points-scope")).toMatchObject({
+      type: "radio-group",
+      value: "surface",
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:vectors-scope")).toMatchObject({
+      type: "radio-group",
+      value: "surface",
     });
     expect(findNode(airbox?.menu ?? [], "airbox:vectors-submenu")).toMatchObject({
       type: "submenu",
+    });
+  });
+
+  it("dispatches airbox full extent patches for wireframe points and vectors", () => {
+    const run = vi.fn();
+    const global = buildViewRibbonGroups(baseContext({ airboxVisible: true, run }))[0];
+    const airbox = global.actions.find((action) => action.id === "view-airbox");
+
+    const wireframeScope = findNode(airbox?.menu ?? [], "airbox:wireframe-scope");
+    const pointsScope = findNode(airbox?.menu ?? [], "airbox:points-scope");
+    const vectorsScope = findNode(airbox?.menu ?? [], "airbox:vectors-scope");
+
+    if (wireframeScope?.type !== "radio-group" || pointsScope?.type !== "radio-group" || vectorsScope?.type !== "radio-group") {
+      throw new Error("Airbox extent controls missing");
+    }
+
+    wireframeScope.onValueChange("full");
+    pointsScope.onValueChange("full");
+    vectorsScope.onValueChange("full");
+
+    expect(run).toHaveBeenNthCalledWith(1, {
+      id: "viewport.set-airbox-display",
+      patch: { wireframeScope: "full" },
+    });
+    expect(run).toHaveBeenNthCalledWith(2, {
+      id: "viewport.set-airbox-display",
+      patch: { pointsScope: "full" },
+    });
+    expect(run).toHaveBeenNthCalledWith(3, {
+      id: "viewport.set-airbox-display",
+      patch: { vectorsScope: "full" },
     });
   });
 

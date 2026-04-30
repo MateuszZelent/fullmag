@@ -13,6 +13,7 @@ import {
 import {
   canExecuteRibbonCommand,
   executeRibbonCommand,
+  type AirboxDisplayScope,
   type AirboxDisplayPatch,
   type RibbonCommand,
   type ViewportMeshRenderMode,
@@ -70,6 +71,9 @@ interface RibbonBarProps {
   skipDisabledReason?: string | null;
   runAction?: string;
   runLabel?: string;
+  viewport3DStatus?: "active" | "inactive" | "warning";
+  viewport3DStatusReason?: string | null;
+  viewport3DStatusDetail?: string | null;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
   onCreateVisualizationPreset?: () => void;
@@ -92,6 +96,7 @@ interface RibbonBarProps {
   requestedPreviewEveryN?: number | null;
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
+  primitiveVisible?: boolean;
   magneticTextureVisible?: boolean;
   magneticTextureDensity?: number | null;
   quantityShaderVisible?: boolean;
@@ -116,6 +121,10 @@ interface RibbonBarProps {
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
+  airMeshGeometryVisible?: boolean | null;
+  airMeshWireframeScope?: AirboxDisplayScope | null;
+  airMeshPointsScope?: AirboxDisplayScope | null;
+  airMeshVectorsScope?: AirboxDisplayScope | null;
   slice2DEnabled?: boolean;
   slice2DToolbar?: Slice2DToolbarState | null;
   slice2DDiagnostics?: Slice2DDiagnostics | null;
@@ -127,6 +136,7 @@ interface RibbonBarProps {
   onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
+  onSetPrimitiveVisible?: (visible: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetMagneticTextureDensity?: (density: number) => void;
   onSetQuantityShaderVisible?: (visible: boolean) => void;
@@ -378,6 +388,9 @@ function buildContext(
     viewMode: props.viewMode ?? null,
     sidebarVisible: Boolean(props.sidebarVisible),
     previewPending: Boolean(props.previewPending),
+    viewport3DStatus: props.viewport3DStatus ?? "active",
+    viewport3DStatusReason: props.viewport3DStatusReason ?? null,
+    viewport3DStatusDetail: props.viewport3DStatusDetail ?? null,
     airboxVisible: Boolean(props.airboxVisible),
     magneticTextureVisible: props.magneticTextureVisible ?? true,
     magneticTextureDensity: props.magneticTextureDensity ?? null,
@@ -396,6 +409,7 @@ function buildContext(
     requestedPreviewMaxPoints: props.requestedPreviewMaxPoints ?? null,
     requestedPreviewAutoScale: props.requestedPreviewAutoScale ?? null,
     requestedPreviewQuantityDataStatus: props.requestedPreviewQuantityDataStatus ?? null,
+    primitiveVisible: props.primitiveVisible ?? true,
     meshRenderMode: props.meshRenderMode ?? null,
     meshOpacity: props.meshOpacity ?? null,
     selectedObjectTextureVisible: props.selectedObjectTextureVisible ?? null,
@@ -415,6 +429,10 @@ function buildContext(
     femFerromagnetVisibilityMode: props.femFerromagnetVisibilityMode ?? null,
     airMeshOpacity: props.airMeshOpacity ?? null,
     airMeshRenderMode: props.airMeshRenderMode ?? null,
+    airMeshGeometryVisible: props.airMeshGeometryVisible ?? null,
+    airMeshWireframeScope: props.airMeshWireframeScope ?? null,
+    airMeshPointsScope: props.airMeshPointsScope ?? null,
+    airMeshVectorsScope: props.airMeshVectorsScope ?? null,
     slice2DEnabled: Boolean(props.slice2DEnabled),
     slice2DToolbar: props.slice2DToolbar ?? null,
     slice2DDiagnostics: props.slice2DDiagnostics ?? null,
@@ -706,6 +724,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     activeContextualTabId,
     props.workspaceMode,
     props.viewMode,
+    props.viewport3DStatus,
+    props.viewport3DStatusReason,
+    props.viewport3DStatusDetail,
     props.airboxVisible,
     props.viewportAxesScope,
     props.universeWireframeVisible,
@@ -730,6 +751,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.requestedPreviewMaxPoints,
     props.requestedPreviewAutoScale,
     props.requestedPreviewQuantityDataStatus,
+    props.primitiveVisible,
     props.magneticTextureVisible,
     props.magneticTextureDensity,
     props.quantityShaderVisible,
@@ -753,6 +775,10 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.femFerromagnetVisibilityMode,
     props.airMeshOpacity,
     props.airMeshRenderMode,
+    props.airMeshGeometryVisible,
+    props.airMeshWireframeScope,
+    props.airMeshPointsScope,
+    props.airMeshVectorsScope,
     props.slice2DEnabled,
     props.slice2DToolbar,
     props.slice2DDiagnostics,
@@ -775,6 +801,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.onSetFemVectorGlyphBudget,
     props.onSetPreviewColormap,
     props.onSetPreviewAutoScale,
+    props.onSetPrimitiveVisible,
     props.onSetMagneticTextureVisible,
     props.onSetMagneticTextureDensity,
     props.onSetQuantityShaderVisible,

@@ -19,6 +19,7 @@ import type { ReactNode } from "react";
 import type { NodeKind, NodeDomain } from "../../model-builder/types";
 import type { StudyNodeContext } from "@/lib/study-builder/node-context";
 import type {
+  AirboxDisplayScope,
   RibbonCommand,
   ViewportMeshRenderMode,
 } from "@/components/shell/ribbon/command-registry";
@@ -159,7 +160,11 @@ export interface RibbonBuildContext {
   viewMode: string | null;
   sidebarVisible: boolean;
   previewPending: boolean;
+  viewport3DStatus?: "active" | "inactive" | "warning";
+  viewport3DStatusReason?: string | null;
+  viewport3DStatusDetail?: string | null;
   airboxVisible: boolean;
+  primitiveVisible: boolean;
   magneticTextureVisible: boolean;
   magneticTextureDensity?: number | null;
   quantityShaderVisible: boolean;
@@ -202,6 +207,10 @@ export interface RibbonBuildContext {
   femFerromagnetVisibilityMode?: string | null;
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
+  airMeshGeometryVisible?: boolean | null;
+  airMeshWireframeScope?: AirboxDisplayScope | null;
+  airMeshPointsScope?: AirboxDisplayScope | null;
+  airMeshVectorsScope?: AirboxDisplayScope | null;
   slice2DEnabled: boolean;
   slice2DToolbar: Slice2DToolbarState | null;
   slice2DDiagnostics: Slice2DDiagnostics | null;

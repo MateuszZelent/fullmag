@@ -97,6 +97,18 @@ describe("ribbon viewport commands", () => {
     expect(onSetQuantityShaderVisible).not.toHaveBeenCalled();
   });
 
+  it("dispatches primitive visibility separately from magnetic texture visibility", () => {
+    const onSetPrimitiveVisible = vi.fn();
+    const onSetMagneticTextureVisible = vi.fn();
+    const ctx = context({ onSetPrimitiveVisible, onSetMagneticTextureVisible });
+
+    expect(canExecuteRibbonCommand(ctx, { id: "viewport.toggle-primitives", visible: false })).toBe(true);
+    executeRibbonCommand(ctx, { id: "viewport.toggle-primitives", visible: false });
+
+    expect(onSetPrimitiveVisible).toHaveBeenCalledWith(false);
+    expect(onSetMagneticTextureVisible).not.toHaveBeenCalled();
+  });
+
   it("passes airbox render options through without touching global mesh render mode", () => {
     const onSetAirboxDisplay = vi.fn();
     const onSetMeshRenderMode = vi.fn();

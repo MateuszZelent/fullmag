@@ -525,9 +525,11 @@ export const FemViewportScene = React.memo(function FemViewportScene({
               const emptyElements = Array.isArray(layer.elementIndices) && layer.elementIndices.length === 0;
               return !(emptyFaces && emptyElements);
             })
+            .filter((layer) => layer.viewState.geometryVisible !== false)
             .map((layer) => {
+              const airboxScoped = layer.part.role === "air" || layer.part.role === "outer_boundary";
               const layerRenderMode =
-                layer.part.role === "air" || layer.part.role === "outer_boundary"
+                airboxScoped
                   ? layer.viewState.renderMode
                   : renderMode;
               return (
@@ -541,6 +543,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
                       : sharedVertexColorsByField.get(layer.viewState.colorField) ?? null
                   }
                   renderMode={layerRenderMode}
+                  edgeScope={airboxScoped ? layer.viewState.wireframeScope ?? "surface" : "surface"}
+                  pointsScope={airboxScoped ? layer.viewState.pointsScope ?? "surface" : "surface"}
                   opacity={layer.viewState.opacity}
                   customBoundaryFaces={layer.surfaceFaces}
                   displayBoundaryFaceIndices={layer.boundaryFaceIndices}
@@ -690,7 +694,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         />
       ) : null}
 
-      {showSceneAxes ? (
+      {showSceneAxes && universeWireframeVisible ? (
         <SceneAxes3D worldExtent={axesWorldExtent} center={axesCenter} sceneScale={[1, 1, 1]} />
       ) : null}
 
