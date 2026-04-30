@@ -444,9 +444,13 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const wireframeScope = renderMode === "mesh" ? "full" : ctx.airMeshWireframeScope ?? "surface";
   const pointsScope = ctx.airMeshPointsScope ?? "surface";
   const vectorsScope = ctx.airMeshVectorsScope ?? "surface";
-  const shaded = effectiveRenderMode === "surface" || effectiveRenderMode === "surface+edges";
-  const wireframe = effectiveRenderMode === "wireframe" || effectiveRenderMode === "surface+edges";
-  const points = effectiveRenderMode === "points";
+  const shaded =
+    ctx.airMeshSurfaceVisible ??
+    (effectiveRenderMode === "surface" || effectiveRenderMode === "surface+edges");
+  const wireframe =
+    ctx.airMeshWireframeVisible ??
+    (effectiveRenderMode === "wireframe" || effectiveRenderMode === "surface+edges");
+  const points = ctx.airMeshPointsVisible ?? (effectiveRenderMode === "points");
   const geometryVisible =
     ctx.airMeshGeometryVisible ?? (shaded || wireframe || points);
   const pointsLayerOn = geometryVisible && points;

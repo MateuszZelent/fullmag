@@ -12,6 +12,7 @@ import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
+import type { FemGeometryPassState } from "./femGeometryRenderPasses";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
 
@@ -19,6 +20,7 @@ interface FemGeometryProps {
   meshData: FemMeshData;
   field: FemColorField;
   renderMode: RenderMode;
+  renderPasses?: FemGeometryPassState;
   edgeScope?: MeshDisplayScope;
   pointsScope?: MeshDisplayScope;
   opacity: number;
@@ -147,11 +149,45 @@ export function resolveFemClipPlane({
   return new THREE.Plane(normal, planePosition);
 }
 
+export function resolveFemGeometryResourceNeeds({
+  renderMode,
+  renderPasses,
+  edgeScope = "surface",
+}: {
+  renderMode: RenderMode;
+  renderPasses?: FemGeometryPassState;
+  edgeScope?: MeshDisplayScope;
+}): {
+  edges: boolean;
+  tetraEdges: boolean;
+  points: boolean;
+} {
+  if (renderPasses) {
+    return {
+      edges: renderPasses.wireframe || renderPasses.volumeMesh,
+      tetraEdges:
+        renderPasses.volumeMesh || (renderPasses.wireframe && edgeScope === "full"),
+      points: renderPasses.points,
+    };
+  }
+  return {
+    edges:
+      renderMode === "wireframe" ||
+      renderMode === "surface+edges" ||
+      renderMode === "mesh",
+    tetraEdges:
+      renderMode === "mesh" ||
+      ((renderMode === "wireframe" || renderMode === "surface+edges") && edgeScope === "full"),
+    points: renderMode === "points",
+  };
+}
+
 /* ── Helper: compute vertex colors from field data ─────────────────── */
 export const FemGeometry = memo(function FemGeometry({
   meshData,
   field,
   renderMode,
+  renderPasses,
   edgeScope = "surface",
   pointsScope = "surface",
   opacity,
@@ -594,16 +630,18 @@ export const FemGeometry = memo(function FemGeometry({
     return plane ? [plane] : null;
   }, [clipAxis, clipEnabled, clipPos, geoSize.x, geoSize.y, geoSize.z]);
 
+  const geometryResourceNeeds = resolveFemGeometryResourceNeeds({
+    renderMode,
+    renderPasses,
+    edgeScope,
+  });
+
   // ── Edges geometry memo: used for shaded surface edge overlays and
   // wireframe-only mode. The direct material wireframe path is kept only as an
   // emergency fallback because it has proven unreliable after ribbon mode
   // changes in the hosted viewport.
   const edgesGeometry = useMemo(() => {
-    const needsEdges =
-      renderMode === "wireframe" ||
-      renderMode === "surface+edges" ||
-      renderMode === "mesh";
-    if (!needsEdges || !geometry) return null;
+    if (!geometryResourceNeeds.edges || !geometry) return null;
     try {
       const wireGeometry = new THREE.WireframeGeometry(geometry);
       wireGeometry.computeBoundingSphere();
@@ -612,16 +650,13 @@ export const FemGeometry = memo(function FemGeometry({
       console.warn("[fem-geometry] WireframeGeometry construction failed; falling back to material wireframe", error);
       return null;
     }
-  }, [geometry, renderMode]);
+  }, [geometry, geometryResourceNeeds.edges]);
 
   // Volume-edge wireframes: built ONLY in "mesh" mode to avoid transient
   // allocations during regular mode switches. Tetrahedral elements have 6
   // edges each, so this produces a large buffer; we lazily compute it.
   const tetraEdgesGeometry = useMemo(() => {
-    const needsTetraEdges =
-      renderMode === "mesh" ||
-      ((renderMode === "wireframe" || renderMode === "surface+edges") && edgeScope === "full");
-    if (!needsTetraEdges) return null;
+    if (!geometryResourceNeeds.tetraEdges) return null;
     if (nElements === 0 || nNodes === 0) return null;
     try {
       // Each tetrahedron has 6 edges: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
@@ -675,11 +710,11 @@ export const FemGeometry = memo(function FemGeometry({
       console.warn("[fem-geometry] Tetrahedral edge geometry construction failed", error);
       return null;
     }
-  }, [edgeScope, renderMode, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
+  }, [geometryResourceNeeds.tetraEdges, nElements, nNodes, elements, nodes, centerX, centerY, centerZ]);
 
   // ── Points geometry memo ──────────────────────────────────────────
   const { pointsGeometry, pointsVertexMap } = useMemo(() => {
-    if (renderMode !== "points") {
+    if (!geometryResourceNeeds.points) {
       return { pointsGeometry: null as THREE.BufferGeometry | null, pointsVertexMap: null as Int32Array | null };
     }
     if (pointsScope === "full" && _positions) {
@@ -765,7 +800,7 @@ export const FemGeometry = memo(function FemGeometry({
       ptsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointPositions.length), 3));
     }
     return { pointsGeometry: ptsGeom, pointsVertexMap: pointVMap };
-  }, [renderMode, pointsScope, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
+  }, [geometryResourceNeeds.points, pointsScope, geometry, vertexMap, nNodes, enableGeometryVertexColors, _positions, _resolvedBoundaryFaces, customBoundaryFaces, _activeElementOffsets, elements, nElements, _preferredFaceIndices]);
 
   // ── Color update (and geometry-only invalidation when vertex colors are off) ──
   useEffect(() => {
@@ -1027,6 +1062,7 @@ export const FemGeometry = memo(function FemGeometry({
     showMeshEdges,
   } = resolveFemGeometryRenderPasses({
     renderMode,
+    renderPasses,
     edgeScope,
     pointsScope,
     hasGeometry: (geometry?.getAttribute("position")?.count ?? 0) > 0,
@@ -1050,6 +1086,7 @@ export const FemGeometry = memo(function FemGeometry({
       pointsScope,
       field,
       passes: {
+        explicit: renderPasses ?? null,
         showSurface,
         showWireOnlyEdges,
         showWireOnlyMesh,
@@ -1115,6 +1152,7 @@ export const FemGeometry = memo(function FemGeometry({
     pointsGeometry,
     pointsScope,
     renderMode,
+    renderPasses,
     showPointsPass,
     showPoints,
     showSurfacePass,

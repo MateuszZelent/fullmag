@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { resolveFemClipPlane } from "../FemGeometry";
+import { resolveFemClipPlane, resolveFemGeometryResourceNeeds } from "../FemGeometry";
+import { resolveFemGeometryRenderPasses } from "../femGeometryRenderPasses";
 
 describe("resolveFemClipPlane", () => {
   it("returns null when clipping is disabled or geometry has no extent", () => {
@@ -53,5 +54,95 @@ describe("resolveFemClipPlane", () => {
     expect(yPlane?.constant).toBe(-2);
     expect(zPlane?.normal.toArray()).toEqual([0, 0, -1]);
     expect(zPlane?.constant).toBe(1);
+  });
+});
+
+describe("resolveFemGeometryRenderPasses", () => {
+  it("uses explicit render passes instead of legacy exclusive render mode", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "points",
+        renderPasses: {
+          surface: true,
+          wireframe: true,
+          volumeMesh: false,
+          points: true,
+        },
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: true,
+      showSurfaceEdges: true,
+      showPoints: true,
+    });
+  });
+
+  it("keeps airbox vectors/points independent from shaded surface", () => {
+    expect(
+      resolveFemGeometryRenderPasses({
+        renderMode: "surface",
+        renderPasses: {
+          surface: false,
+          wireframe: true,
+          volumeMesh: false,
+          points: true,
+        },
+        hasGeometry: true,
+        hasEdgesGeometry: true,
+        edgeScope: "surface",
+        pointsScope: "surface",
+        showSurfacePass: true,
+        showSurfaceHiddenEdgesPass: true,
+        showSurfaceVisibleEdgesPass: true,
+        showPointsPass: true,
+      }),
+    ).toMatchObject({
+      showSurface: false,
+      showWireOnlyEdges: true,
+      showPoints: true,
+    });
+  });
+});
+
+describe("resolveFemGeometryResourceNeeds", () => {
+  it("does not allocate edge or point resources when explicit passes hide them", () => {
+    expect(
+      resolveFemGeometryResourceNeeds({
+        renderMode: "surface+edges",
+        renderPasses: {
+          surface: true,
+          wireframe: false,
+          volumeMesh: false,
+          points: false,
+        },
+      }),
+    ).toEqual({
+      edges: false,
+      tetraEdges: false,
+      points: false,
+    });
+  });
+
+  it("allocates only resources required by independent pass state", () => {
+    expect(
+      resolveFemGeometryResourceNeeds({
+        renderMode: "surface",
+        renderPasses: {
+          surface: false,
+          wireframe: true,
+          volumeMesh: false,
+          points: true,
+        },
+      }),
+    ).toEqual({
+      edges: true,
+      tetraEdges: false,
+      points: true,
+    });
   });
 });

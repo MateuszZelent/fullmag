@@ -51,6 +51,10 @@ import {
   restoreViewportCameraState,
 } from "./camera/persistedViewportCamera";
 import type { ViewportCameraState } from "@/features/workspace-graph";
+import type {
+  AirboxRenderPassState,
+  MeshRenderPassState,
+} from "@/features/viewport-unified/model/unifiedViewportTypes";
 export type {
   FemMeshData,
   MeshSelectionSnapshot,
@@ -120,6 +124,8 @@ interface Props {
   topologyKey: string;
   toolbarMode?: "visible" | "hidden";
   renderMode?: RenderMode;
+  renderPasses?: MeshRenderPassState;
+  airboxPasses?: AirboxRenderPassState;
   opacity?: number;
   clipEnabled?: boolean;
   clipAxis?: ClipAxis;
@@ -220,6 +226,8 @@ function FemMeshView3DInner({
   quantityOptions = [],
   toolbarMode = "visible",
   renderMode: controlledRenderMode,
+  renderPasses,
+  airboxPasses,
   opacity: controlledOpacity,
   clipEnabled: controlledClipEnabled,
   clipAxis: controlledClipAxis,
@@ -534,15 +542,33 @@ function FemMeshView3DInner({
       resolveAirboxArrowSamplingMode({
         resolvedVectorDomain,
         arrowSamplingMode,
-        visibleLayers,
-      }),
+      visibleLayers,
+    }),
     [arrowSamplingMode, resolvedVectorDomain, visibleLayers],
   );
+  const hasMagneticGeometryPass =
+    !renderPasses ||
+    renderPasses.surface ||
+    renderPasses.wireframe ||
+    renderPasses.volumeMesh ||
+    renderPasses.points;
+  const hasAirboxGeometryPass =
+    !airboxPasses || airboxPasses.surface || airboxPasses.wireframe || airboxPasses.points;
   const renderableGeometryLayerCount = useMemo(() => {
     if (!hasMeshParts) {
-      return Number(shouldRenderAirGeometry) + Number(shouldRenderMagneticGeometryResolved);
+      return (
+        Number(shouldRenderAirGeometry && hasAirboxGeometryPass) +
+        Number(shouldRenderMagneticGeometryResolved && hasMagneticGeometryPass)
+      );
     }
     return visibleLayers.filter((layer) => {
+      const airboxScoped = layer.part.role === "air" || layer.part.role === "outer_boundary";
+      if (airboxScoped && !hasAirboxGeometryPass) {
+        return false;
+      }
+      if (!airboxScoped && !hasMagneticGeometryPass) {
+        return false;
+      }
       if (layer.viewState.geometryVisible === false) {
         return false;
       }
@@ -553,7 +579,9 @@ function FemMeshView3DInner({
       return hasFaces || hasElements;
     }).length;
   }, [
+    hasAirboxGeometryPass,
     hasMeshParts,
+    hasMagneticGeometryPass,
     shouldRenderAirGeometry,
     shouldRenderMagneticGeometryResolved,
     visibleLayers,
@@ -1106,6 +1134,8 @@ function FemMeshView3DInner({
             airColorField={airColorField ?? colorField}
             magneticColorField={magneticColorField ?? colorField}
             renderMode={runtimeRenderMode}
+            renderPasses={renderPasses}
+            airboxPasses={airboxPasses}
             effectiveOpacity={effectiveOpacity}
             magneticBoundaryFaceIndices={magneticBoundaryFaceIndices}
             magneticElementIndices={magneticElementIndices}

@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResourceCache } from "../../../api/client/cache/ResourceCache";
 import type { FieldBinaryResponse } from "../../../api/types";
 import type { DecodedFieldVector } from "../../../api/codecs/types";
+import { decodeFieldVectorOffThread } from "../../../api/codecs/decodeOffThread";
 import {
   buildFieldVectorRequestKey,
   buildFieldVectorResourceKey,
@@ -32,6 +33,8 @@ vi.mock("../../../api/codecs/decodeOffThread", () => ({
     values: new Float64Array([1, 2, 3]),
   })),
 }));
+
+const decodeFieldVectorOffThreadMock = vi.mocked(decodeFieldVectorOffThread);
 
 function baseParams(): FieldVectorRequestParams {
   return {
@@ -64,6 +67,19 @@ function binaryResponse(buffer = new ArrayBuffer(16)): FieldBinaryResponse {
 }
 
 describe("useFieldVector request helpers", () => {
+  beforeEach(() => {
+    decodeFieldVectorOffThreadMock.mockClear();
+    decodeFieldVectorOffThreadMock.mockResolvedValue({
+      quantityId: "m",
+      nComp: 3,
+      grid: [1, 1, 1],
+      pointCount: 1,
+      valueCount: 3,
+      dtype: "float64",
+      values: new Float64Array([1, 2, 3]),
+    });
+  });
+
   it("builds scope-aware stable keys", () => {
     const params = baseParams();
 
@@ -118,5 +134,49 @@ describe("useFieldVector request helpers", () => {
     request.release();
 
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("keeps a shared inflight fetch alive when one consumer releases twice", () => {
+    let signal: AbortSignal | undefined;
+    const getVectorResponse = vi.fn((_quantityId, _vectorOptions, opts) => {
+      signal = opts?.signal;
+      return new Promise<FieldBinaryResponse>(() => undefined);
+    });
+    const client = createClient(getVectorResponse);
+    const params = baseParams();
+
+    const first = loadFieldVectorRequest(client, params);
+    const second = loadFieldVectorRequest(client, params);
+
+    first.release();
+    first.release();
+    expect(signal?.aborted).toBe(false);
+
+    second.release();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("does not cache a decoded response after all consumers released it", async () => {
+    let resolveDecode:
+      | ((value: DecodedFieldVector) => void)
+      | undefined;
+    decodeFieldVectorOffThreadMock.mockReturnValueOnce(
+      new Promise<DecodedFieldVector>((resolve) => {
+        resolveDecode = resolve;
+      }),
+    );
+    const getVectorResponse = vi.fn(async () => binaryResponse(new ArrayBuffer(16)));
+    const client = createClient(getVectorResponse);
+    const params = baseParams();
+    const resourceKey = buildFieldVectorResourceKey(params);
+
+    const request = loadFieldVectorRequest(client, params);
+    await vi.waitFor(() => expect(decodeFieldVectorOffThreadMock).toHaveBeenCalled());
+
+    request.release();
+    resolveDecode?.(decodedField);
+
+    await expect(request.promise).rejects.toThrow(/aborted/i);
+    expect(client.getCache().get(resourceKey)).toBeNull();
   });
 });

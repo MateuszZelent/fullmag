@@ -35,6 +35,24 @@ export const DEFAULT_FEM_VIEWPORT_LAYER_STATE: FemViewportLayerState = {
   showQuantity: true,
 };
 
+export interface MeshRenderPassState {
+  surface: boolean;
+  wireframe: boolean;
+  volumeMesh: boolean;
+  points: boolean;
+  vectors: boolean;
+  quantityOverlay: boolean;
+}
+
+export interface AirboxRenderPassState {
+  visible: boolean;
+  surface: boolean;
+  wireframe: boolean;
+  points: boolean;
+  vectors: boolean;
+  opacityPercent: number;
+}
+
 export interface UnifiedRenderState {
   // Common
   selectedLayer: number;
@@ -63,6 +81,13 @@ export interface UnifiedRenderState {
    * capability is active. Undefined for FDM.
    */
   femLayers?: FemViewportLayerState;
+
+  /**
+   * Canonical render pass visibility resolved from VisualizationState.
+   * Legacy meshRenderMode remains as a toolbar preset/compatibility field.
+   */
+  renderPasses?: MeshRenderPassState;
+  airboxPasses?: AirboxRenderPassState;
 }
 
 export const DEFAULT_UNIFIED_RENDER_STATE: UnifiedRenderState = {

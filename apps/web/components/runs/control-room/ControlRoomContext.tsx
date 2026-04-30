@@ -159,13 +159,7 @@ import {
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
 import {
-  clipAxisFromVisualizationState,
-  ferromagnetVisibilityFromVisualizationState,
-  femLayersFromVisualizationState,
-  femVectorDomainFromVisualizationState,
-  opacityUnitToPercent,
-  renderModeFromVisualizationState,
-  vectorColorModeFromVisualizationState,
+  resolveRenderPlanFromVisualizationState,
 } from "./visualizationStateSync";
 import {
   resolveFailedWorkspaceSelectionPersistence,
@@ -496,36 +490,37 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const lastFieldDataRevisionRef = useRef<string | null>(null);
   const fieldDataTimestampRef = useRef<number | null>(null);
   const applyVisualizationStateResource = useCallback((state: VisualizationStateResource) => {
+    const plan = resolveRenderPlanFromVisualizationState(state, femViewportLayers);
+
     setSelectedQuantity((previous) =>
-      previous === state.quantity.active_quantity_id
+      previous === plan.quantity.activeQuantityId
         ? previous
-        : state.quantity.active_quantity_id,
+        : plan.quantity.activeQuantityId,
     );
     setComponent((previous) =>
-      previous === state.quantity.field_component
+      previous === plan.quantity.fieldComponent
         ? previous
-        : state.quantity.field_component,
+        : plan.quantity.fieldComponent,
     );
-    setMeshRenderMode((previous) => {
-      const next = renderModeFromVisualizationState(state);
-      return previous === next ? previous : next;
-    });
-    setMeshOpacity((previous) => {
-      const next = opacityUnitToPercent(state.layers.surface.opacity, previous);
-      return previous === next ? previous : next;
-    });
+    setMeshRenderMode((previous) =>
+      previous === plan.layers.renderMode ? previous : plan.layers.renderMode,
+    );
+    setMeshOpacity((previous) =>
+      previous === plan.layers.meshOpacityPercent ? previous : plan.layers.meshOpacityPercent,
+    );
     setMeshShowArrows((previous) =>
-      previous === state.layers.vectors.visible ? previous : state.layers.vectors.visible,
+      previous === plan.layers.vectorsVisible ? previous : plan.layers.vectorsVisible,
     );
     setFemVectorGlyphBudget((previous) =>
-      previous === state.sampling.max_glyphs ? previous : state.sampling.max_glyphs,
+      previous === plan.sampling.maxGlyphs ? previous : plan.sampling.maxGlyphs,
     );
-    setFemVectorDomainFilter((previous) => {
-      const next = femVectorDomainFromVisualizationState(state.layers.vectors.domain);
-      return next == null || previous === next ? previous : next;
-    });
+    setFemVectorDomainFilter((previous) =>
+      plan.layers.vectorDomainFilter == null || previous === plan.layers.vectorDomainFilter
+        ? previous
+        : plan.layers.vectorDomainFilter,
+    );
     setFemViewportLayers((previous) => {
-      const next = femLayersFromVisualizationState(state, previous);
+      const next = plan.layers.femLayers;
       return previous.showPrimitives === next.showPrimitives &&
         previous.showMesh === next.showMesh &&
         previous.showMagneticTexture === next.showMagneticTexture &&
@@ -534,54 +529,60 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         : next;
     });
     setAirMeshVisible((previous) =>
-      previous === state.layers.airbox.visible ? previous : state.layers.airbox.visible,
+      previous === plan.layers.airboxVisible ? previous : plan.layers.airboxVisible,
     );
-    setAirMeshOpacity((previous) => {
-      const next = opacityUnitToPercent(state.layers.airbox.opacity, previous);
-      return previous === next ? previous : next;
-    });
-    setMeshClipEnabled((previous) =>
-      previous === state.clip.enabled ? previous : state.clip.enabled,
-    );
-    setMeshClipAxis((previous) => {
-      const next = clipAxisFromVisualizationState(state.clip.axis);
-      return previous === next ? previous : next;
-    });
-    setMeshClipPos((previous) =>
-      previous === state.clip.position_percent
+    setAirMeshOpacity((previous) =>
+      previous === plan.layers.airboxOpacityPercent
         ? previous
-        : state.clip.position_percent,
+        : plan.layers.airboxOpacityPercent,
+    );
+    setMeshClipEnabled((previous) =>
+      previous === plan.clip.enabled ? previous : plan.clip.enabled,
+    );
+    setMeshClipAxis((previous) =>
+      previous === plan.clip.axis ? previous : plan.clip.axis,
+    );
+    setMeshClipPos((previous) =>
+      previous === plan.clip.positionPercent
+        ? previous
+        : plan.clip.positionPercent,
     );
     setMeshClipFlip((previous) =>
-      previous === state.clip.flipped ? previous : state.clip.flipped,
+      previous === plan.clip.flipped ? previous : plan.clip.flipped,
     );
-    setFemArrowColorMode((previous) => {
-      const next = vectorColorModeFromVisualizationState(state.vector_style.color_mode);
-      return previous === next ? previous : next;
-    });
+    setFemArrowColorMode((previous) =>
+      previous === plan.vectorStyle.colorMode ? previous : plan.vectorStyle.colorMode,
+    );
     setFemArrowMonoColor((previous) =>
-      previous === state.vector_style.mono_color
+      previous === plan.vectorStyle.monoColor
         ? previous
-        : state.vector_style.mono_color,
+        : plan.vectorStyle.monoColor,
     );
     setFemArrowAlpha((previous) =>
-      previous === state.vector_style.alpha ? previous : state.vector_style.alpha,
+      previous === plan.vectorStyle.alpha ? previous : plan.vectorStyle.alpha,
     );
     setFemArrowLengthScale((previous) =>
-      previous === state.vector_style.length_scale
+      previous === plan.vectorStyle.lengthScale
         ? previous
-        : state.vector_style.length_scale,
+        : plan.vectorStyle.lengthScale,
     );
     setFemArrowThickness((previous) =>
-      previous === state.vector_style.thickness ? previous : state.vector_style.thickness,
+      previous === plan.vectorStyle.thickness ? previous : plan.vectorStyle.thickness,
     );
-    setFemFerromagnetVisibilityMode((previous) => {
-      const next = ferromagnetVisibilityFromVisualizationState(
-        state.vector_style.ferromagnet_visibility,
-      );
-      return previous === next ? previous : next;
-    });
-  }, []);
+    setFemFerromagnetVisibilityMode((previous) =>
+      previous === plan.vectorStyle.ferromagnetVisibility
+        ? previous
+        : plan.vectorStyle.ferromagnetVisibility,
+    );
+  }, [femViewportLayers]);
+
+  const resolvedRenderPlan = useMemo(
+    () =>
+      visualizationStateResource
+        ? resolveRenderPlanFromVisualizationState(visualizationStateResource, femViewportLayers)
+        : null,
+    [femViewportLayers, visualizationStateResource],
+  );
 
   useEffect(() => {
     if (!visualizationStateResource) {
@@ -3051,7 +3052,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         modelBuilderGraph?.study.requested_cpu_threads ??
         null,
     },
-    material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
+    material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
@@ -3113,7 +3114,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
-    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh,
+    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,

@@ -185,6 +185,7 @@ export interface PerObjectMeshReport {
 export interface MeshEntityViewState {
   visible: boolean;
   geometryVisible?: boolean;
+  renderPasses?: MeshEntityRenderPassState;
   renderMode: "surface" | "surface+edges" | "wireframe" | "mesh" | "points";
   wireframeScope?: "surface" | "full";
   pointsScope?: "surface" | "full";
@@ -201,6 +202,13 @@ export interface MeshEntityViewState {
     | "none";
 }
 
+export interface MeshEntityRenderPassState {
+  surface: boolean;
+  wireframe: boolean;
+  volumeMesh?: boolean;
+  points: boolean;
+}
+
 export type MeshEntityViewStateMap = Record<string, MeshEntityViewState>;
 
 /** Single source of truth for default per-part view state. */
@@ -213,6 +221,10 @@ export function defaultMeshEntityViewState(part: Pick<FemMeshPart, "role">): Mes
         ? !airboxDisabledByDefault
         : part.role !== "outer_boundary",
     geometryVisible: true,
+    renderPasses:
+      part.role === "air"
+        ? { surface: false, wireframe: true, points: false }
+        : { surface: true, wireframe: true, points: false },
     renderMode: part.role === "air" ? "wireframe" : "surface+edges",
     wireframeScope: "surface",
     pointsScope: "surface",

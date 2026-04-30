@@ -208,6 +208,9 @@ export interface RibbonBuildContext {
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
   airMeshGeometryVisible?: boolean | null;
+  airMeshSurfaceVisible?: boolean | null;
+  airMeshWireframeVisible?: boolean | null;
+  airMeshPointsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;

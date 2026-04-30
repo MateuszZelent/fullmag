@@ -88,6 +88,9 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     airMeshOpacity: 28,
     airMeshRenderMode: "surface+edges",
     airMeshGeometryVisible: true,
+    airMeshSurfaceVisible: true,
+    airMeshWireframeVisible: true,
+    airMeshPointsVisible: false,
     airMeshWireframeScope: "surface",
     airMeshPointsScope: "surface",
     airMeshVectorsScope: "surface",
@@ -428,6 +431,35 @@ describe("View ribbon contribution", () => {
     });
   });
 
+  it("shows airbox points independently from shaded and wireframe when render mode cannot encode it", () => {
+    const global = buildViewRibbonGroups(baseContext({
+      airboxVisible: true,
+      airMeshRenderMode: "surface+edges",
+      airMeshSurfaceVisible: true,
+      airMeshWireframeVisible: true,
+      airMeshPointsVisible: true,
+      airMeshPointsScope: "full",
+    }))[0];
+    const airbox = global.actions.find((action) => action.id === "view-airbox");
+
+    expect(findNode(airbox?.menu ?? [], "airbox:header")).toMatchObject({
+      badge: "points/full + wire/surface + shaded",
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:shaded")).toMatchObject({
+      checked: true,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:wireframe")).toMatchObject({
+      checked: true,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:points")).toMatchObject({
+      checked: true,
+    });
+    expect(findNode(airbox?.menu ?? [], "airbox:points-scope")).toMatchObject({
+      disabled: false,
+      value: "full",
+    });
+  });
+
   it("dispatches airbox full extent patches for wireframe points and vectors", () => {
     const run = vi.fn();
     const global = buildViewRibbonGroups(
@@ -472,6 +504,9 @@ describe("View ribbon contribution", () => {
       baseContext({
         airboxVisible: true,
         airMeshRenderMode: "points",
+        airMeshSurfaceVisible: false,
+        airMeshWireframeVisible: false,
+        airMeshPointsVisible: true,
         airMeshPointsScope: "full",
         airMeshVectorsScope: "surface",
         femVectorDomainFilter: "airbox_only",

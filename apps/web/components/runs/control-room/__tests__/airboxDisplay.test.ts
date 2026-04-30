@@ -18,8 +18,8 @@ describe("resolveAirboxRenderMode", () => {
     });
   });
 
-  it("switches shaded-only airbox to wireframe when shaded is toggled off", () => {
-    expect(resolveAirboxRenderMode("surface", { shaded: false })).toBe("wireframe");
+  it("hides shaded-only airbox geometry when shaded is toggled off", () => {
+    expect(resolveAirboxRenderMode("surface", { shaded: false })).toBe("surface");
     expect(
       resolveAirboxDisplayState(airboxDisplayStateFromRenderMode("surface"), {
         shaded: false,
@@ -34,9 +34,19 @@ describe("resolveAirboxRenderMode", () => {
     expect(resolveAirboxRenderMode("surface+edges", { shaded: false })).toBe("wireframe");
   });
 
-  it("uses points as an exclusive render mode and keeps point configuration when disabled", () => {
-    expect(resolveAirboxRenderMode("surface+edges", { points: true })).toBe("points");
+  it("keeps points independent from shaded and wireframe passes", () => {
+    expect(resolveAirboxRenderMode("surface+edges", { points: true })).toBe("surface+edges");
     expect(resolveAirboxRenderMode("points", { points: false })).toBe("points");
+    expect(
+      resolveAirboxDisplayState(airboxDisplayStateFromRenderMode("surface+edges"), {
+        points: true,
+      }),
+    ).toMatchObject({
+      geometryVisible: true,
+      surface: true,
+      wireframe: true,
+      points: true,
+    });
     expect(
       resolveAirboxDisplayState(airboxDisplayStateFromRenderMode("points"), {
         points: false,
@@ -118,7 +128,9 @@ describe("resolveAirboxRenderMode", () => {
         { points: true },
       ),
     ).toMatchObject({
-      renderMode: "points",
+      renderMode: "wireframe",
+      wireframe: true,
+      points: true,
       pointsScope: "surface",
       vectorsScope: "full",
     });

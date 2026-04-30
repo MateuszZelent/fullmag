@@ -57,6 +57,9 @@ export interface RibbonCommandContext {
   airboxVisible?: boolean;
   primitiveVisible?: boolean;
   airMeshGeometryVisible?: boolean | null;
+  airMeshSurfaceVisible?: boolean | null;
+  airMeshWireframeVisible?: boolean | null;
+  airMeshPointsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
@@ -341,20 +344,39 @@ function patchForAirboxDisplay(
   const airbox: NonNullable<
     NonNullable<VisualizationStatePatch["layers"]>["airbox"]
   > = {};
+  if (patch.renderMode) {
+    airbox.surface = {
+      visible: patch.renderMode === "surface" || patch.renderMode === "surface+edges",
+    };
+    airbox.wireframe = {
+      visible:
+        patch.renderMode === "wireframe" ||
+        patch.renderMode === "surface+edges" ||
+        patch.renderMode === "mesh",
+    };
+    airbox.points = { visible: patch.renderMode === "points" };
+  }
   if (typeof patch.visible === "boolean") {
     airbox.visible = patch.visible;
   }
   if (typeof patch.opacity === "number") {
     airbox.opacity = patch.opacity;
   }
-  if (patch.geometry != null || patch.shaded != null) {
-    airbox.surface = { visible: patch.geometry ?? patch.shaded };
+  if (typeof patch.geometry === "boolean") {
+    airbox.surface = { ...(airbox.surface ?? {}), visible: patch.geometry };
+    if (!patch.geometry) {
+      airbox.wireframe = { ...(airbox.wireframe ?? {}), visible: false };
+      airbox.points = { ...(airbox.points ?? {}), visible: false };
+    }
   }
-  if (patch.wireframe != null || patch.renderMode === "wireframe") {
-    airbox.wireframe = { visible: patch.wireframe ?? true };
+  if (typeof patch.shaded === "boolean") {
+    airbox.surface = { ...(airbox.surface ?? {}), visible: patch.shaded };
   }
-  if (patch.points != null || patch.renderMode === "points") {
-    airbox.points = { visible: patch.points ?? true };
+  if (typeof patch.wireframe === "boolean") {
+    airbox.wireframe = { ...(airbox.wireframe ?? {}), visible: patch.wireframe };
+  }
+  if (typeof patch.points === "boolean") {
+    airbox.points = { ...(airbox.points ?? {}), visible: patch.points };
   }
   if (patch.vectors != null) {
     airbox.vectors = { visible: patch.vectors, domain: "airbox_only" };
@@ -741,6 +763,13 @@ export function executeRibbonCommand(
   command: RibbonCommand,
 ): void {
   if (!canExecuteRibbonCommand(ctx, command)) {
+    return;
+  }
+  if (
+    command.id === "viewport.set-airbox-display" &&
+    typeof ctx.onSetAirboxDisplay === "function"
+  ) {
+    ctx.onSetAirboxDisplay(command.patch);
     return;
   }
   const visualizationPatch = visualizationPatchFromRibbonCommand(command);

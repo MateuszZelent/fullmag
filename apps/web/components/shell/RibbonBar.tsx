@@ -126,6 +126,9 @@ interface RibbonBarProps {
   airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
   airMeshGeometryVisible?: boolean | null;
+  airMeshSurfaceVisible?: boolean | null;
+  airMeshWireframeVisible?: boolean | null;
+  airMeshPointsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
@@ -435,6 +438,9 @@ function buildContext(
     airMeshOpacity: props.airMeshOpacity ?? null,
     airMeshRenderMode: props.airMeshRenderMode ?? null,
     airMeshGeometryVisible: props.airMeshGeometryVisible ?? null,
+    airMeshSurfaceVisible: props.airMeshSurfaceVisible ?? null,
+    airMeshWireframeVisible: props.airMeshWireframeVisible ?? null,
+    airMeshPointsVisible: props.airMeshPointsVisible ?? null,
     airMeshWireframeScope: props.airMeshWireframeScope ?? null,
     airMeshPointsScope: props.airMeshPointsScope ?? null,
     airMeshVectorsScope: props.airMeshVectorsScope ?? null,
@@ -781,6 +787,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     props.airMeshOpacity,
     props.airMeshRenderMode,
     props.airMeshGeometryVisible,
+    props.airMeshSurfaceVisible,
+    props.airMeshWireframeVisible,
+    props.airMeshPointsVisible,
     props.airMeshWireframeScope,
     props.airMeshPointsScope,
     props.airMeshVectorsScope,

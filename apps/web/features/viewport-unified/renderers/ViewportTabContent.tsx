@@ -319,6 +319,13 @@ export function ViewportTabContent({
     />
   );
 
+  const femRenderPassesForViewport = geometryViewportPresetActive
+    ? undefined
+    : bridge.viewport3DRenderState.renderPasses;
+  const femAirboxPassesForViewport = geometryViewportPresetActive
+    ? undefined
+    : bridge.viewport3DRenderState.airboxPasses;
+
   const renderHostedFemMeshViewport = () => {
     if (!ctx.femMeshData) {
       if (
@@ -361,6 +368,16 @@ export function ViewportTabContent({
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
                 : ctx.meshRenderMode
+            }
+            renderPasses={
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
+                ? undefined
+                : femRenderPassesForViewport
+            }
+            airboxPasses={
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
+                ? undefined
+                : femAirboxPassesForViewport
             }
             opacity={bridge.femOpacityForRender}
             clipEnabled={
@@ -487,6 +504,16 @@ export function ViewportTabContent({
                   : FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                   ? "wireframe"
                   : ctx.meshRenderMode
+              }
+              renderPasses={
+                FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
+                  ? undefined
+                  : femRenderPassesForViewport
+              }
+              airboxPasses={
+                FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
+                  ? undefined
+                  : femAirboxPassesForViewport
               }
               opacity={bridge.femOpacityForRender}
               clipEnabled={

@@ -4,6 +4,7 @@ import React from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 import { FemGeometry } from "../r3f/FemGeometry";
+import type { FemGeometryPassState } from "../r3f/femGeometryRenderPasses";
 import { FemArrows } from "../r3f/FemArrows";
 import { FemHighlightView } from "../r3f/FemHighlightView";
 import { getSharedVertexColors } from "../r3f/femVertexColors";
@@ -19,6 +20,10 @@ import type {
   RenderMode,
 } from "./femMeshTypes";
 import type { FemMeshPart, MeshEntityViewState } from "../../../lib/session/types";
+import type {
+  AirboxRenderPassState,
+  MeshRenderPassState,
+} from "@/features/viewport-unified/model/unifiedViewportTypes";
 
 export interface FemViewportRenderLayer {
   part: {
@@ -272,6 +277,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   airColorField,
   magneticColorField,
   renderMode,
+  renderPasses,
+  airboxPasses,
   effectiveOpacity,
   magneticBoundaryFaceIndices,
   magneticElementIndices,
@@ -345,6 +352,8 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   airColorField: FemColorField;
   magneticColorField: FemColorField;
   renderMode: RenderMode;
+  renderPasses?: MeshRenderPassState;
+  airboxPasses?: AirboxRenderPassState;
   effectiveOpacity: number;
   magneticBoundaryFaceIndices: number[] | null;
   magneticElementIndices: number[] | null;
@@ -515,6 +524,33 @@ export const FemViewportScene = React.memo(function FemViewportScene({
     return next;
   }, [meshData, qualityPerFace, sharedColorFields]);
 
+  const magneticGeometryPasses = React.useMemo<FemGeometryPassState | undefined>(() => {
+    if (!renderPasses) return undefined;
+    return {
+      surface: renderPasses.surface,
+      wireframe: renderPasses.wireframe,
+      volumeMesh: renderPasses.volumeMesh,
+      points: renderPasses.points,
+    };
+  }, [renderPasses]);
+  const airboxGeometryPasses = React.useMemo<FemGeometryPassState | undefined>(() => {
+    if (!airboxPasses) return undefined;
+    return {
+      surface: airboxPasses.surface,
+      wireframe: airboxPasses.wireframe,
+      volumeMesh: false,
+      points: airboxPasses.points,
+    };
+  }, [airboxPasses]);
+  const hasMagneticGeometryPass =
+    !renderPasses ||
+    renderPasses.surface ||
+    renderPasses.wireframe ||
+    renderPasses.volumeMesh ||
+    renderPasses.points;
+  const hasAirboxGeometryPass =
+    !airboxPasses || airboxPasses.surface || airboxPasses.wireframe || airboxPasses.points;
+
   return (
     <>
       {showSceneGeometry && showPerPartGeometry && hasMeshParts
@@ -525,13 +561,23 @@ export const FemViewportScene = React.memo(function FemViewportScene({
               const emptyElements = Array.isArray(layer.elementIndices) && layer.elementIndices.length === 0;
               return !(emptyFaces && emptyElements);
             })
-            .filter((layer) => layer.viewState.geometryVisible !== false)
+            .filter((layer) => {
+              const airboxScoped = layer.part.role === "air" || layer.part.role === "outer_boundary";
+              if (airboxScoped && airboxPasses) {
+                return hasAirboxGeometryPass;
+              }
+              if (!airboxScoped && renderPasses && !hasMagneticGeometryPass) {
+                return false;
+              }
+              return layer.viewState.geometryVisible !== false;
+            })
             .map((layer) => {
               const airboxScoped = layer.part.role === "air" || layer.part.role === "outer_boundary";
               const layerRenderMode =
                 airboxScoped
                   ? layer.viewState.renderMode
                   : renderMode;
+              const layerRenderPasses = airboxScoped ? airboxGeometryPasses : magneticGeometryPasses;
               return (
                 <FemGeometry
                   key={layer.part.id}
@@ -543,6 +589,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
                       : sharedVertexColorsByField.get(layer.viewState.colorField) ?? null
                   }
                   renderMode={layerRenderMode}
+                  renderPasses={layerRenderPasses}
                   edgeScope={airboxScoped ? layer.viewState.wireframeScope ?? "surface" : "surface"}
                   pointsScope={airboxScoped ? layer.viewState.pointsScope ?? "surface" : "surface"}
                   opacity={layer.viewState.opacity}
@@ -578,12 +625,13 @@ export const FemViewportScene = React.memo(function FemViewportScene({
             })
         : null}
 
-      {showSceneGeometry && showAirGeometry && !hasMeshParts && shouldRenderAirGeometry ? (
+      {showSceneGeometry && showAirGeometry && !hasMeshParts && shouldRenderAirGeometry && hasAirboxGeometryPass ? (
         <FemGeometry
           meshData={meshData}
           field={meshData.quantityDomain === "full_domain" ? airColorField : "none"}
           sharedBaseVertexColors={sharedVertexColorsByField.get(meshData.quantityDomain === "full_domain" ? airColorField : "none") ?? null}
           renderMode={renderMode}
+          renderPasses={airboxGeometryPasses}
           opacity={airSegmentOpacity}
           displayBoundaryFaceIndices={airBoundaryFaceIndices}
           displayElementIndices={airElementIndices}
@@ -611,7 +659,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         />
       ) : null}
 
-      {showSceneGeometry && showMagneticGeometry && !hasMeshParts && shouldRenderMagneticGeometry ? (
+      {showSceneGeometry && showMagneticGeometry && !hasMeshParts && shouldRenderMagneticGeometry && hasMagneticGeometryPass ? (
         <FemGeometry
           meshData={meshData}
           field={magneticVisibilityMode === "ghost" ? "none" : magneticColorField}
@@ -621,6 +669,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
               : sharedVertexColorsByField.get(magneticColorField) ?? null
           }
           renderMode={renderMode}
+          renderPasses={magneticGeometryPasses}
           opacity={magneticVisibilityMode === "ghost" ? Math.min(effectiveOpacity, 22) : effectiveOpacity}
           uniformColor={magneticVisibilityMode === "ghost" ? "#94a3b8" : undefined}
           edgeColor={magneticVisibilityMode === "ghost" ? "#cbd5e1" : undefined}

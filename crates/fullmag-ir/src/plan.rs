@@ -1,0 +1,734 @@
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+#[allow(unused_imports)]
+use crate::{
+    AdaptiveTimeStepIR, BackendTarget, CurrentModuleIR, DomainFrameIR, EigenDampingPolicyIR,
+    EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR, EquilibriumSourceIR,
+    ExecutionMode, ExecutionPrecision, ExchangeBoundaryCondition, FdmDemagPeriodicityIR,
+    FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR,
+    MaterialIR, MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR,
+    RelaxationAlgorithmIR, SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+};
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExecutionPlanSummary {
+    pub requested_backend: BackendTarget,
+    pub resolved_backend: BackendTarget,
+    pub execution_mode: ExecutionMode,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExecutionPlanIR {
+    pub common: CommonPlanMeta,
+    pub backend_plan: BackendPlanIR,
+    pub output_plan: OutputPlanIR,
+    pub provenance: ProvenancePlanIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CommonPlanMeta {
+    pub ir_version: String,
+    pub requested_backend: BackendTarget,
+    pub resolved_backend: BackendTarget,
+    pub execution_mode: ExecutionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BackendPlanIR {
+    Fdm(FdmPlanIR),
+    FdmMultilayer(FdmMultilayerPlanIR),
+    Fem(FemPlanIR),
+    FemEigen(FemEigenPlanIR),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct GridDimensions {
+    pub cells: [u32; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FdmPlanIR {
+    pub grid: GridDimensions,
+    pub cell_size: [f64; 3],
+    pub region_mask: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_mask: Option<Vec<bool>>,
+    pub initial_magnetization: Vec<[f64; 3]>,
+    pub material: FdmMaterialIR,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_field: Option<[f64; 3]>,
+    /// Inter-region exchange coupling overrides.
+    /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
+    /// between regions i and j (symmetric: A_ij = A_ji).
+    /// When empty, cross-region exchange defaults to zero (free-surface BC).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inter_region_exchange: Vec<(u32, u32, f64)>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
+    pub exchange_bc: ExchangeBoundaryCondition,
+    /// Periodic boundary conditions configuration.
+    /// `None` means fully open (no PBC), equivalent to `axes: [Open, Open, Open]`.
+    /// See `docs/physics/0600-periodic-boundary-conditions.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub periodicity: Option<FdmPeriodicityIR>,
+    pub integrator: IntegratorChoice,
+    pub fixed_timestep: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_refresh: Option<FieldRefreshPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation: Option<RelaxationControlIR>,
+    /// Boundary correction tier: "none" | "volume" (T0) | "full" (T1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_correction: Option<String>,
+    /// Minimum volume fraction for numerical stability (clamps φ_eff >= phi_floor).
+    /// Default in backend: 0.05.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_phi_floor: Option<f64>,
+    /// Minimum intersection distance δ for T1 ECB stencil stability [cells].
+    /// Default in backend: 0.0 (no clamping).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_delta_min: Option<f64>,
+    /// Sub-cell geometry data (computed by planner when boundary_correction is set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_geometry: Option<BoundaryGeometryIR>,
+    /// Global current density for Zhang-Li STT [A/m^2]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_density: Option<[f64; 3]>,
+    /// Spin polarization degree for Zhang-Li STT (P)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_degree: Option<f64>,
+    /// Non-adiabaticity parameter for Zhang-Li STT (beta)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_beta: Option<f64>,
+
+    /// Fixed spin polarization vector for Slonczewski STT (p)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_spin_polarization: Option<[f64; 3]>,
+    /// Slonczewski asymmetry parameter (Lambda)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_lambda: Option<f64>,
+    /// Slonczewski secondary spin-transfer term (epsilon')
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_epsilon_prime: Option<f64>,
+
+    // ── Spin-Orbit Torque (SOT) ────────────────────────
+    /// Charge current density magnitude for SOT |Je| [A/m²]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_current_density: Option<f64>,
+    /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_dl: Option<f64>,
+    /// Field-like efficiency ξ_FL (Rashba term, often ~0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_xi_fl: Option<f64>,
+    /// Spin polarisation unit vector σ̂ (normalised at runtime)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_sigma: Option<[f64; 3]>,
+    /// FM layer thickness t_F [m] (for SOT amplitude)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_thickness: Option<f64>,
+
+    // ── Oersted field (cylindrical conductor) ──
+    /// Whether to include the Oersted field from a cylindrical conductor.
+    #[serde(default)]
+    pub has_oersted_cylinder: bool,
+    /// DC current [A] for Oersted computation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_current: Option<f64>,
+    /// Cylinder radius [m].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_radius: Option<f64>,
+    /// Cross-section centre [m].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_center: Option<[f64; 3]>,
+    /// Current-flow axis (unit vector).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_axis: Option<[f64; 3]>,
+    /// Plan-only per-cell Oersted field used by generalized FDM lowering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_field_xyz: Option<Vec<[f64; 3]>>,
+    /// Time-dependence kind: 0=constant, 1=sinusoidal, 2=pulse
+    #[serde(default)]
+    pub oersted_time_dep_kind: u32,
+    /// Sinusoidal: frequency [Hz]
+    #[serde(default)]
+    pub oersted_time_dep_freq: f64,
+    /// Sinusoidal: phase [rad]
+    #[serde(default)]
+    pub oersted_time_dep_phase: f64,
+    /// Sinusoidal: offset
+    #[serde(default)]
+    pub oersted_time_dep_offset: f64,
+    /// Pulse: t_on [s]
+    #[serde(default)]
+    pub oersted_time_dep_t_on: f64,
+    /// Pulse: t_off [s]
+    #[serde(default)]
+    pub oersted_time_dep_t_off: f64,
+    /// Oersted field realization model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_realization: Option<OerstedRealization>,
+
+    /// Temperature in Kelvin for Brown thermal field (sLLG). None or 0 = no thermal noise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+
+    // ── Dzyaloshinskii-Moriya interaction ──
+    /// Interfacial DMI constant D [J/m²]. None = disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interfacial_dmi: Option<f64>,
+    /// Bulk (Bloch) DMI constant D [J/m³]. None = disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bulk_dmi: Option<f64>,
+
+    // ── Magnetoelastic coupling (prescribed strain) ──
+    /// First magnetoelastic coupling constant B₁ [Pa]. None = disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mel_b1: Option<f64>,
+    /// Second magnetoelastic coupling constant B₂ [Pa].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mel_b2: Option<f64>,
+    /// Uniform prescribed strain tensor in Voigt order [ε₁₁, ε₂₂, ε₃₃, 2ε₂₃, 2ε₁₃, 2ε₁₂].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mel_uniform_strain: Option<[f64; 6]>,
+}
+
+/// Sub-cell boundary geometry arrays computed from SDF during planning.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BoundaryGeometryIR {
+    /// Per-cell volume fraction φ ∈ [0,1], length = cell_count.
+    pub volume_fraction: Vec<f64>,
+    /// Face-link fractions per direction, each length = cell_count.
+    pub face_link_xp: Vec<f64>,
+    pub face_link_xm: Vec<f64>,
+    pub face_link_yp: Vec<f64>,
+    pub face_link_ym: Vec<f64>,
+    pub face_link_zp: Vec<f64>,
+    pub face_link_zm: Vec<f64>,
+    /// Intersection distances per direction (T1 only), each length = cell_count.
+    pub delta_xp: Vec<f64>,
+    pub delta_xm: Vec<f64>,
+    pub delta_yp: Vec<f64>,
+    pub delta_ym: Vec<f64>,
+    pub delta_zp: Vec<f64>,
+    pub delta_zm: Vec<f64>,
+    /// Sparse demag correction data (T0+T1).
+    #[serde(default)]
+    pub demag_corr_target_idx: Vec<i32>,
+    #[serde(default)]
+    pub demag_corr_source_idx: Vec<i32>,
+    #[serde(default)]
+    pub demag_corr_tensor: Vec<f64>,
+    #[serde(default)]
+    pub demag_corr_stencil_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FdmMaterialIR {
+    pub name: String,
+    pub saturation_magnetisation: f64,
+    pub exchange_stiffness: f64,
+    pub damping: f64,
+    // ── Uniaxial anisotropy ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniaxial_anisotropy_ku1: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniaxial_anisotropy_ku2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anisotropy_axis: Option<[f64; 3]>,
+    // ── Cubic anisotropy ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cubic_anisotropy_kc1: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cubic_anisotropy_kc2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cubic_anisotropy_kc3: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cubic_anisotropy_axis1: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cubic_anisotropy_axis2: Option<[f64; 3]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemObjectSegmentIR {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_id: Option<String>,
+    pub node_start: u32,
+    pub node_count: u32,
+    pub element_start: u32,
+    pub element_count: u32,
+    pub boundary_face_start: u32,
+    pub boundary_face_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMeshPartRole {
+    Air,
+    MagneticObject,
+    Interface,
+    OuterBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FemMeshPartSelector {
+    ElementMarkerSet { markers: Vec<u32> },
+    ElementRange { start: u32, count: u32 },
+    BoundaryFaceRange { start: u32, count: u32 },
+    NodeRange { start: u32, count: u32 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemMeshPartIR {
+    pub id: String,
+    pub label: String,
+    pub role: FemMeshPartRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_id: Option<String>,
+    pub element_selector: FemMeshPartSelector,
+    pub boundary_face_selector: FemMeshPartSelector,
+    pub node_selector: FemMeshPartSelector,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_face_indices: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_indices: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_faces: Vec<[u32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds_min: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds_max: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemRegionMaterialIR {
+    pub object_id: String,
+    pub material: MaterialIR,
+    pub element_marker: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemDomainMeshModeIR {
+    #[default]
+    MergedMagneticMesh,
+    SharedDomainMeshWithAir,
+}
+
+/// What the user/script requested for FEM demagnetization realization.
+///
+/// `Auto` lets the planner choose a Poisson realization based on
+/// shared-domain mesh metadata and explicit boundary policy.
+///
+/// Phase-1A: extended to multi-model hierarchy. The serde representation
+/// stays as simple strings for backward compatibility with existing Python
+/// scripts. The model concept (airbox/BEM/FK/FMM) is expressed through the
+/// variant names. BEM/FK/FMM are new variants that will be rejected by the
+/// planner as unimplemented.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedFemDemagIR {
+    #[default]
+    Auto,
+    /// Airbox Poisson with u=0 BC (COMSOL Dirichlet style).
+    #[serde(alias = "airbox_dirichlet")]
+    PoissonDirichlet,
+    /// Airbox Poisson with Robin BC (default airbox variant).
+    #[serde(alias = "poisson_airbox", alias = "airbox_robin", alias = "airbox")]
+    PoissonRobin,
+    /// Boundary Element Method (tetmag-style). Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    Bem,
+    /// Fredkin–Koehler FEM/BEM hybrid (TetraX-style). Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    FredkinKoehler,
+    /// Fast Multipole Method. Body-only mesh.
+    /// Not yet implemented — planner will reject.
+    Fmm,
+}
+
+impl RequestedFemDemagIR {
+    /// Whether this request requires a shared-domain mesh with air elements.
+    pub fn requires_airbox(&self) -> bool {
+        match self {
+            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin => true,
+            Self::Bem | Self::FredkinKoehler | Self::Fmm => false,
+        }
+    }
+
+    /// Whether this demag model is currently implemented.
+    pub fn is_implemented(&self) -> bool {
+        match self {
+            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin => true,
+            Self::Bem | Self::FredkinKoehler | Self::Fmm => false,
+        }
+    }
+
+    /// User-facing model name.
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::PoissonDirichlet | Self::PoissonRobin => "airbox",
+            Self::Bem => "bem",
+            Self::FredkinKoehler => "fredkin_koehler",
+            Self::Fmm => "fmm",
+        }
+    }
+
+    /// Normalize: identity (no legacy aliases to collapse in the flat enum).
+    pub fn normalized(self) -> Self {
+        self
+    }
+}
+
+/// Planner-resolved FEM demagnetization realization. No `Auto` variant —
+/// must be concrete before reaching the runner.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedFemDemagIR {
+    #[serde(alias = "airbox_dirichlet")]
+    PoissonDirichlet,
+    #[serde(alias = "poisson_airbox", alias = "airbox_robin")]
+    PoissonRobin,
+    /// Future: BEM-resolved (not yet implemented).
+    Bem,
+    /// Future: Fredkin–Koehler-resolved (not yet implemented).
+    FredkinKoehler,
+    /// Future: FMM-resolved (not yet implemented).
+    Fmm,
+}
+
+impl ResolvedFemDemagIR {
+    /// Canonical provenance name for artifact metadata.
+    pub fn provenance_name(&self) -> &'static str {
+        match self {
+            Self::PoissonDirichlet => "fem_poisson_dirichlet",
+            Self::PoissonRobin => "fem_poisson_robin",
+            Self::Bem => "fem_bem",
+            Self::FredkinKoehler => "fem_fredkin_koehler",
+            Self::Fmm => "fem_fmm",
+        }
+    }
+
+    /// Whether this realization uses a Poisson-based airbox solver.
+    pub fn is_poisson(&self) -> bool {
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+    }
+
+    /// Whether this realization uses Robin boundary conditions.
+    pub fn is_robin(&self) -> bool {
+        matches!(self, Self::PoissonRobin)
+    }
+
+    /// Whether this realization requires a shared-domain mesh with air.
+    pub fn requires_airbox(&self) -> bool {
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+    }
+
+    /// Whether this realization is currently implemented in the backend.
+    pub fn is_implemented(&self) -> bool {
+        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+    }
+
+    /// User-facing model name.
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::PoissonDirichlet | Self::PoissonRobin => "airbox",
+            Self::Bem => "bem",
+            Self::FredkinKoehler => "fredkin_koehler",
+            Self::Fmm => "fmm",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemPlanIR {
+    pub mesh_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<String>,
+    pub mesh: MeshIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_segments: Vec<FemObjectSegmentIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default)]
+    pub domain_mesh_mode: FemDomainMeshModeIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_frame: Option<DomainFrameIR>,
+    pub fe_order: u32,
+    pub hmax: f64,
+    pub initial_magnetization: Vec<[f64; 3]>,
+    pub material: MaterialIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_materials: Vec<FemRegionMaterialIR>,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_field: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_modules: Vec<CurrentModuleIR>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
+    pub exchange_bc: ExchangeBoundaryCondition,
+    pub integrator: IntegratorChoice,
+    pub fixed_timestep: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<AdaptiveTimeStepIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_refresh: Option<FieldRefreshPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation: Option<RelaxationControlIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_realization: Option<ResolvedFemDemagIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air_box_config: Option<AirBoxConfigIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interfacial_dmi: Option<f64>,
+    /// Interface normal direction for interfacial DMI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dmi_interface_normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bulk_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dind_field: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbulk_field: Option<Vec<f64>>,
+    /// Temperature in Kelvin for thermal noise (0 = no thermal noise)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+
+    /// Global current density for Zhang-Li STT [A/m^2]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_density: Option<[f64; 3]>,
+    /// Spin polarization degree for Zhang-Li STT (P)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_degree: Option<f64>,
+    /// Non-adiabaticity parameter for Zhang-Li STT (beta)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_beta: Option<f64>,
+
+    /// Fixed spin polarization vector for Slonczewski STT (p)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_spin_polarization: Option<[f64; 3]>,
+    /// Slonczewski asymmetry parameter (Lambda)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_lambda: Option<f64>,
+    /// Slonczewski secondary spin-transfer term (epsilon')
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_epsilon_prime: Option<f64>,
+
+    /// Oersted field from cylindrical conductor
+    #[serde(default)]
+    pub has_oersted_cylinder: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_current: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_radius: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_center: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_axis: Option<[f64; 3]>,
+    /// Plan-only per-node Oersted field used by generalized FEM lowering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_field_xyz: Option<Vec<f64>>,
+    #[serde(default)]
+    pub oersted_time_dep_kind: u32,
+    #[serde(default)]
+    pub oersted_time_dep_freq: f64,
+    #[serde(default)]
+    pub oersted_time_dep_phase: f64,
+    #[serde(default)]
+    pub oersted_time_dep_offset: f64,
+    #[serde(default)]
+    pub oersted_time_dep_t_on: f64,
+    #[serde(default)]
+    pub oersted_time_dep_t_off: f64,
+
+    /// Prescribed-strain magnetoelastic coupling
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetoelastic: Option<FemMagnetoelasticPlanIR>,
+
+    /// Policy for the demag linear solver (CG+AMG etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_solver_policy: Option<FemLinearSolverPolicy>,
+
+    /// Seed/stochastic policy for thermal noise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_seed_config: Option<ThermalSeedConfig>,
+
+    /// Oersted field realization model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oersted_realization: Option<OerstedRealization>,
+
+    /// FEM-029 fix: explicit GPU device index. `None` means use env / default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_device_index: Option<i32>,
+
+    /// FEM-030 fix: explicit MFEM device string (e.g. "ceed-cuda:/gpu/cuda/shared", "cuda", "cpu").
+    /// `None` means use env var `FULLMAG_FEM_MFEM_DEVICE` or compiled-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mfem_device_string: Option<String>,
+
+    /// FND-013: use consistent (full) mass matrix for exchange instead of lumped.
+    /// `None` or `false` = lumped (default), `true` = consistent (CG solve).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_consistent_mass: Option<bool>,
+}
+
+/// Prescribed-strain magnetoelastic coupling plan for FEM backend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemMagnetoelasticPlanIR {
+    /// First magnetoelastic coupling constant B₁ [Pa].
+    pub b1: f64,
+    /// Second magnetoelastic coupling constant B₂ [Pa].
+    pub b2: f64,
+    /// Prescribed strain in Voigt notation [ε₁₁, ε₂₂, ε₃₃, 2ε₂₃, 2ε₁₃, 2ε₁₂].
+    /// If Some, treated as uniform strain across the entire body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prescribed_strain: Option<[f64; 6]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenPlanIR {
+    pub mesh_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_source: Option<String>,
+    pub mesh: MeshIR,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_segments: Vec<FemObjectSegmentIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default)]
+    pub domain_mesh_mode: FemDomainMeshModeIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_frame: Option<DomainFrameIR>,
+    pub fe_order: u32,
+    pub hmax: f64,
+    pub equilibrium_magnetization: Vec<[f64; 3]>,
+    pub material: MaterialIR,
+    pub operator: EigenOperatorConfigIR,
+    pub count: u32,
+    pub target: EigenTargetIR,
+    pub equilibrium: EquilibriumSourceIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k_sampling: Option<KSamplingIR>,
+    pub normalization: EigenNormalizationIR,
+    pub damping_policy: EigenDampingPolicyIR,
+    pub enable_exchange: bool,
+    pub enable_demag: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interfacial_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dmi_interface_normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bulk_dmi: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_field: Option<[f64; 3]>,
+    pub gyromagnetic_ratio: f64,
+    pub precision: ExecutionPrecision,
+    pub exchange_bc: ExchangeBoundaryCondition,
+    /// Spin-wave boundary condition. Legacy values (`free`, `pinned`, `periodic`)
+    /// remain supported for backward compatibility; structured configs enable
+    /// richer boundary metadata such as periodic pair ids and surface terms.
+    #[serde(default)]
+    pub spin_wave_bc: SpinWaveBoundaryConditionIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_realization: Option<ResolvedFemDemagIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode_tracking: Option<ModeTrackingIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AirBoxConfigIR {
+    pub factor: f64,
+    pub grading: f64,
+    pub boundary_marker: u32,
+    /// Boundary condition kind: `"dirichlet"` or `"robin"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bc_kind: Option<String>,
+    /// Robin beta mode: `"legacy"` (c=1), `"dipole"` (c=2), `"user"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robin_beta_mode: Option<String>,
+    /// User-specified c in β = c/R*.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robin_beta_factor: Option<f64>,
+    /// Airbox shape: `"bbox"` or `"sphere"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
+    /// How the air-box factor was derived: `"user"`, `"study_universe"`, `"mesh_auto"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factor_source: Option<String>,
+    /// How the boundary marker was selected: `"mesh_marker_99"`, `"mesh_max_marker"`, `"fallback_99"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_marker_source: Option<String>,
+}
+
+/// User-configurable policy for air-box construction.
+/// Any field left as `None` will use the planner's default heuristic.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct AirBoxPolicyIR {
+    /// Mesh grading factor for the air-box region (default: 1.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<f64>,
+    /// Explicit boundary marker to use for the air-box outer surface.
+    /// If `None`, the planner picks marker 99 or the mesh maximum.
+    /// In executable strict mode, planners may require this value to be set
+    /// and refuse heuristic marker selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_marker: Option<u32>,
+    /// Robin beta mode override: `"legacy"`, `"dipole"`, or `"user"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robin_beta_mode: Option<String>,
+    /// Robin beta factor override (c in β = c/R*).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub robin_beta_factor: Option<f64>,
+    /// Air-box shape override: `"bbox"` or `"sphere"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelaxationControlIR {
+    pub algorithm: RelaxationAlgorithmIR,
+    pub stop: RelaxStopIR,
+}
+
+impl RelaxationControlIR {
+    pub fn torque_tolerance_apm(&self) -> Option<f64> {
+        self.stop.torque_tolerance_apm
+    }
+
+    pub fn energy_tolerance_j(&self) -> Option<f64> {
+        self.stop.energy_tolerance_j
+    }
+
+    pub fn max_steps(&self) -> Option<u64> {
+        self.stop.max_steps
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutputPlanIR {
+    pub outputs: Vec<OutputIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProvenancePlanIR {
+    pub notes: Vec<String>,
+}

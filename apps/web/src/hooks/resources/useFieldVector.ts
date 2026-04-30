@@ -104,11 +104,7 @@ export function loadFieldVectorRequest(
   const existing = inflightFieldVectorRequests.get(key);
   if (existing) {
     existing.consumers += 1;
-    return {
-      key,
-      promise: existing.promise,
-      release: () => releaseFieldVectorRequest(key, existing),
-    };
+    return createFieldVectorRequestHandle(key, existing);
   }
 
   const controller = new AbortController();
@@ -137,10 +133,22 @@ export function loadFieldVectorRequest(
     },
   );
 
+  return createFieldVectorRequestHandle(key, entry);
+}
+
+function createFieldVectorRequestHandle(
+  key: string,
+  entry: InflightFieldVectorRequest,
+): FieldVectorRequestHandle {
+  let released = false;
   return {
     key,
     promise: entry.promise,
-    release: () => releaseFieldVectorRequest(key, entry),
+    release: () => {
+      if (released) return;
+      released = true;
+      releaseFieldVectorRequest(key, entry);
+    },
   };
 }
 
@@ -161,6 +169,7 @@ async function fetchDecodeAndCacheFieldVector(
     },
     { cache: "default", signal },
   );
+  throwIfAborted(signal);
 
   const cached = client.getCache().get<DecodedFieldVector>(resourceKey);
   if (response.status === 304 && cached) {
@@ -174,6 +183,7 @@ async function fetchDecodeAndCacheFieldVector(
   const result = await decodeFieldVectorOffThread(response.buffer, {
     transferInput: true,
   });
+  throwIfAborted(signal);
   client.getCache().set(
     resourceKey,
     result,
@@ -184,16 +194,25 @@ async function fetchDecodeAndCacheFieldVector(
   return result;
 }
 
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (typeof DOMException !== "undefined") {
+    throw new DOMException("field vector request aborted", "AbortError");
+  }
+  throw new Error("field vector request aborted");
+}
+
 function releaseFieldVectorRequest(
   key: string,
   entry: InflightFieldVectorRequest,
 ): void {
+  if (inflightFieldVectorRequests.get(key) !== entry) {
+    return;
+  }
   entry.consumers -= 1;
   if (entry.consumers > 0) return;
-  if (inflightFieldVectorRequests.get(key) === entry) {
-    inflightFieldVectorRequests.delete(key);
-    entry.controller.abort();
-  }
+  inflightFieldVectorRequests.delete(key);
+  entry.controller.abort();
 }
 
 export function useFieldVector(

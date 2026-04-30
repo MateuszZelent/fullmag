@@ -122,8 +122,11 @@ import { extractFemCpuThreadSummary } from "./control-room/helpers";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   airboxDisplayStateFromRenderMode,
-  resolveAirboxDisplayState,
 } from "./control-room/airboxDisplay";
+import {
+  reduceAirboxDisplayTransaction,
+  type AirboxVectorRestoreState,
+} from "./control-room/airboxDisplayReducer";
 import {
   visualizationPatchForClip,
   visualizationPatchForOpacity,
@@ -1798,6 +1801,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         return {
           ...modeDefaults,
           geometryVisible: current?.geometryVisible ?? true,
+          surface: current?.renderPasses?.surface ?? modeDefaults.surface,
+          wireframe: current?.renderPasses?.wireframe ?? modeDefaults.wireframe,
+          points: current?.renderPasses?.points ?? modeDefaults.points,
           wireframeScope: current?.wireframeScope ?? modeDefaults.wireframeScope ?? partDefaults.wireframeScope ?? "surface",
           pointsScope: current?.pointsScope ?? modeDefaults.pointsScope ?? partDefaults.pointsScope ?? "surface",
           vectorsScope: current?.vectorsScope ?? modeDefaults.vectorsScope ?? partDefaults.vectorsScope ?? "surface",
@@ -1941,155 +1947,24 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     });
   };
 
-  const airboxVectorDomainRef = useRef<{
-    active: boolean;
-    vectorDomainFilter: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
-    ferromagnetVisibilityMode: "hide" | "ghost";
-  } | null>(null);
+  const airboxVectorDomainRef = useRef<AirboxVectorRestoreState | null>(null);
 
   const handleRibbonAirboxDisplay = (patch: AirboxDisplayPatch) => {
-    if (typeof patch.vectors === "boolean") {
-      if (patch.vectors) {
-        if (!airboxVectorDomainRef.current?.active) {
-          airboxVectorDomainRef.current = {
-            active: true,
-            vectorDomainFilter: ctx.femVectorDomainFilter,
-            ferromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
-          };
-        }
-        void ctx.patchDisplay({
-          layers: {
-            airbox: {
-              visible: true,
-            },
-            vectors: {
-              visible: true,
-              domain: "airbox_only",
-            },
-          },
-          vector_style: {
-            ferromagnet_visibility:
-              ctx.femFerromagnetVisibilityMode === "hide"
-                ? "ghost"
-                : ctx.femFerromagnetVisibilityMode,
-          },
-        });
-      } else if (airboxVectorDomainRef.current?.active) {
-        const saved = airboxVectorDomainRef.current;
-        void ctx.patchDisplay({
-          layers: {
-            vectors: {
-              visible: false,
-              domain: saved.vectorDomainFilter,
-            },
-          },
-          vector_style: {
-            ferromagnet_visibility: saved.ferromagnetVisibilityMode,
-          },
-        });
-        airboxVectorDomainRef.current = null;
-      } else {
-        void ctx.patchDisplay({
-          layers: {
-            vectors: {
-              visible: false,
-              domain: "auto",
-            },
-          },
-        });
-      }
-    }
-    if (typeof patch.opacity === "number") {
-      void ctx.patchDisplay({
-        layers: {
-          airbox: {
-            opacity: Math.max(0, Math.min(100, patch.opacity)) / 100,
-          },
-        },
-      });
-    }
-    const updatesRender =
-      typeof patch.visible === "boolean" ||
-      typeof patch.geometry === "boolean" ||
-      typeof patch.opacity === "number" ||
-      typeof patch.shaded === "boolean" ||
-      typeof patch.wireframe === "boolean" ||
-      typeof patch.points === "boolean" ||
-      typeof patch.wireframeScope === "string" ||
-      typeof patch.pointsScope === "string" ||
-      typeof patch.vectorsScope === "string" ||
-      typeof patch.renderMode === "string";
-    if (!updatesRender || airboxParts.length === 0) {
-      return;
-    }
-    if (typeof patch.visible === "boolean") {
-      void ctx.patchDisplay({
-        layers: {
-          airbox: {
-            visible: patch.visible,
-          },
-        },
-      });
-    }
-    ctx.setMeshEntityViewState((previous) => {
-      let changed = false;
-      const next = { ...previous };
-      const representativePart =
-        airboxParts.find((part) => part.role === "air") ?? airboxParts[0];
-      const representativeCurrent =
-        next[representativePart.id] ?? defaultMeshEntityViewState(representativePart);
-      const representativeModeDefaults = airboxDisplayStateFromRenderMode(
-        representativeCurrent.renderMode,
-      );
-      const sharedCurrentDisplay = {
-        ...representativeModeDefaults,
-        geometryVisible: representativeCurrent.geometryVisible ?? true,
-        wireframeScope:
-          representativeCurrent.wireframeScope ??
-          representativeModeDefaults.wireframeScope,
-        pointsScope:
-          representativeCurrent.pointsScope ??
-          representativeModeDefaults.pointsScope,
-        vectorsScope:
-          representativeCurrent.vectorsScope ??
-          representativeModeDefaults.vectorsScope,
-      };
-      for (const part of airboxParts) {
-        const current = next[part.id] ?? defaultMeshEntityViewState(part);
-        const nextDisplay = resolveAirboxDisplayState(sharedCurrentDisplay, patch);
-        const nextVisible = typeof patch.visible === "boolean"
-          ? patch.visible
-          : current.visible;
-        const nextOpacity = typeof patch.opacity === "number" ? patch.opacity : current.opacity;
-        if (
-          current.visible === nextVisible &&
-          (current.geometryVisible ?? true) === nextDisplay.geometryVisible &&
-          current.renderMode === nextDisplay.renderMode &&
-          current.opacity === nextOpacity &&
-          (current.wireframeScope ?? "surface") === nextDisplay.wireframeScope &&
-          (current.pointsScope ?? "surface") === nextDisplay.pointsScope &&
-          (current.vectorsScope ?? "surface") === nextDisplay.vectorsScope
-        ) {
-          if (!next[part.id]) {
-            next[part.id] = current;
-            changed = true;
-          }
-          continue;
-        }
-        next[part.id] = {
-          ...current,
-          visible: nextVisible,
-          geometryVisible: nextDisplay.geometryVisible,
-          renderMode: nextDisplay.renderMode,
-          wireframeScope: nextDisplay.wireframeScope,
-          pointsScope: nextDisplay.pointsScope,
-          vectorsScope: nextDisplay.vectorsScope,
-          opacity: nextOpacity,
-        };
-        changed = true;
-      }
-      return changed ? next : previous;
+    const transaction = reduceAirboxDisplayTransaction({
+      patch,
+      airboxParts,
+      meshEntityViewState: ctx.meshEntityViewState,
+      vectorDomainFilter: ctx.femVectorDomainFilter,
+      ferromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
+      vectorRestoreState: airboxVectorDomainRef.current,
     });
+    airboxVectorDomainRef.current = transaction.vectorRestoreState;
+    if (transaction.displayPatch) {
+      void ctx.patchDisplay(transaction.displayPatch);
+    }
+    if (transaction.meshEntityViewStateChanged) {
+      ctx.setMeshEntityViewState(transaction.meshEntityViewState);
+    }
   };
 
   const selectedObjectPartIds = ctx.selectedObjectId
@@ -2382,6 +2257,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         airMeshOpacity={ctx.airMeshOpacity}
         airMeshRenderMode={airMeshRenderMode}
         airMeshGeometryVisible={airboxDisplayState.geometryVisible}
+        airMeshSurfaceVisible={airboxDisplayState.surface}
+        airMeshWireframeVisible={airboxDisplayState.wireframe}
+        airMeshPointsVisible={airboxDisplayState.points}
         airMeshWireframeScope={airboxDisplayState.wireframeScope}
         airMeshPointsScope={airboxDisplayState.pointsScope}
         airMeshVectorsScope={airboxDisplayState.vectorsScope}

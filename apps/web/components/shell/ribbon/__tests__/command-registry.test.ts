@@ -239,6 +239,64 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshRenderMode).not.toHaveBeenCalled();
   });
 
+  it("routes airbox display through the transactional handler even when canonical patching is available", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetAirboxDisplay = vi.fn();
+    const ctx = context({ onPatchVisualizationState, onSetAirboxDisplay });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-airbox-display",
+      patch: { points: true },
+    });
+
+    expect(onSetAirboxDisplay).toHaveBeenCalledWith({ points: true });
+    expect(onPatchVisualizationState).not.toHaveBeenCalled();
+  });
+
+  it("maps airbox display controls to independent visualization sublayers", () => {
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-airbox-display",
+        patch: {
+          visible: true,
+          shaded: true,
+          wireframe: true,
+          points: true,
+          vectors: true,
+          opacity: 0.24,
+        },
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          visible: true,
+          opacity: 0.24,
+          surface: { visible: true },
+          wireframe: { visible: true },
+          points: { visible: true },
+          vectors: { visible: true, domain: "airbox_only" },
+        },
+      },
+    });
+  });
+
+  it("maps airbox render mode presets to canonical sublayer presets", () => {
+    expect(
+      visualizationPatchFromRibbonCommand({
+        id: "viewport.set-airbox-display",
+        patch: { renderMode: "points" },
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          surface: { visible: false },
+          wireframe: { visible: false },
+          points: { visible: true },
+        },
+      },
+    });
+  });
+
   it("dispatches global mesh render mode changes for texture mesh display controls", () => {
     const onSetMeshRenderMode = vi.fn();
     const ctx = context({ onSetMeshRenderMode });

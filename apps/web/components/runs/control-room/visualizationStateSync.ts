@@ -4,7 +4,11 @@ import type {
   FemArrowColorMode,
   FemFerromagnetVisibilityMode,
 } from "@/components/preview/fem/femMeshTypes";
-import type { FemViewportLayerState } from "@/features/viewport-unified/model/unifiedViewportTypes";
+import type {
+  AirboxRenderPassState,
+  FemViewportLayerState,
+  MeshRenderPassState,
+} from "@/features/viewport-unified/model/unifiedViewportTypes";
 import type {
   FerromagnetVisibilityMode,
   VectorLayerDomain,
@@ -18,6 +22,51 @@ export type FemVectorDomainFilter =
   | "magnetic_only"
   | "full_domain"
   | "airbox_only";
+
+export interface ResolvedRenderPlan {
+  quantity: {
+    activeQuantityId: string;
+    fieldComponent: VisualizationStateResource["quantity"]["field_component"];
+    colormap: string;
+    autoContrast: boolean;
+  };
+  layers: {
+    renderMode: RenderMode;
+    meshOpacityPercent: number;
+    vectorsVisible: boolean;
+    vectorDomainFilter: FemVectorDomainFilter | null;
+    femLayers: FemViewportLayerState;
+    passes: MeshRenderPassState;
+    airbox: AirboxRenderPassState;
+    /**
+     * Compatibility mirrors for legacy consumers that still expect scalar airbox fields.
+     * New renderer code should consume layers.airbox.
+     */
+    airboxVisible: boolean;
+    airboxOpacityPercent: number;
+  };
+  sampling: {
+    maxPoints: number;
+    maxGlyphs: number;
+    profile: VisualizationStateResource["sampling"]["profile"];
+    progressive: boolean;
+  };
+  clip: {
+    enabled: boolean;
+    axis: ClipAxis;
+    positionPercent: number;
+    flipped: boolean;
+  };
+  vectorStyle: {
+    colorMode: FemArrowColorMode;
+    monoColor: string;
+    alpha: number;
+    lengthScale: number;
+    thickness: number;
+    ferromagnetVisibility: FemFerromagnetVisibilityMode;
+  };
+  diagnostics: VisualizationStateResource["diagnostics"];
+}
 
 export function clipAxisFromVisualizationState(axis: "x" | "y" | "z"): ClipAxis {
   return axis;
@@ -89,6 +138,81 @@ export function femVectorDomainFromVisualizationState(
     default:
       return null;
   }
+}
+
+export function renderPassesFromVisualizationState(
+  state: VisualizationStateResource,
+): MeshRenderPassState {
+  return {
+    surface: state.layers.surface.visible,
+    wireframe: state.layers.wireframe.visible,
+    volumeMesh: state.layers.volume_mesh.visible,
+    points: state.layers.points.visible,
+    vectors: state.layers.vectors.visible,
+    quantityOverlay: state.layers.quantity_overlay.visible,
+  };
+}
+
+export function airboxPassesFromVisualizationState(
+  state: VisualizationStateResource,
+): AirboxRenderPassState {
+  return {
+    visible: state.layers.airbox.visible,
+    surface: state.layers.airbox.surface.visible,
+    wireframe: state.layers.airbox.wireframe.visible,
+    points: state.layers.airbox.points.visible,
+    vectors: state.layers.airbox.vectors.visible,
+    opacityPercent: opacityUnitToPercent(state.layers.airbox.opacity, 28),
+  };
+}
+
+export function resolveRenderPlanFromVisualizationState(
+  state: VisualizationStateResource,
+  previousFemLayers: FemViewportLayerState,
+): ResolvedRenderPlan {
+  const airbox = airboxPassesFromVisualizationState(state);
+  return {
+    quantity: {
+      activeQuantityId: state.quantity.active_quantity_id,
+      fieldComponent: state.quantity.field_component,
+      colormap: state.quantity.colormap,
+      autoContrast: state.quantity.auto_contrast,
+    },
+    layers: {
+      renderMode: renderModeFromVisualizationState(state),
+      meshOpacityPercent: opacityUnitToPercent(state.layers.surface.opacity, 100),
+      vectorsVisible: state.layers.vectors.visible,
+      vectorDomainFilter: femVectorDomainFromVisualizationState(state.layers.vectors.domain),
+      femLayers: femLayersFromVisualizationState(state, previousFemLayers),
+      passes: renderPassesFromVisualizationState(state),
+      airbox,
+      airboxVisible: airbox.visible,
+      airboxOpacityPercent: airbox.opacityPercent,
+    },
+    sampling: {
+      maxPoints: state.sampling.max_points,
+      maxGlyphs: state.sampling.max_glyphs,
+      profile: state.sampling.profile,
+      progressive: state.sampling.progressive,
+    },
+    clip: {
+      enabled: state.clip.enabled,
+      axis: clipAxisFromVisualizationState(state.clip.axis),
+      positionPercent: state.clip.position_percent,
+      flipped: state.clip.flipped,
+    },
+    vectorStyle: {
+      colorMode: vectorColorModeFromVisualizationState(state.vector_style.color_mode),
+      monoColor: state.vector_style.mono_color,
+      alpha: state.vector_style.alpha,
+      lengthScale: state.vector_style.length_scale,
+      thickness: state.vector_style.thickness,
+      ferromagnetVisibility: ferromagnetVisibilityFromVisualizationState(
+        state.vector_style.ferromagnet_visibility,
+      ),
+    },
+    diagnostics: state.diagnostics,
+  };
 }
 
 export function visualizationPatchForRenderMode(

@@ -76,6 +76,7 @@ import type {
   ViewportMode,
 } from "./shared";
 import { computeMeshFaceDetail } from "./shared";
+import type { ResolvedRenderPlan } from "./visualizationStateSync";
 import type {
   ActivityInfo,
   BackendErrorInfo,
@@ -320,6 +321,7 @@ export interface ModelContextValue {
   antennaOverlays: AntennaOverlay[];
   objectOverlays: BuilderObjectOverlay[];
   femMesh: FemLiveMesh | null;
+  resolvedRenderPlan: ResolvedRenderPlan | null;
   meshRenderMode: RenderMode;
   meshOpacity: number;
   meshClipEnabled: boolean;

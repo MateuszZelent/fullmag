@@ -6,6 +6,9 @@ import type {
 
 export interface AirboxDisplayState {
   geometryVisible: boolean;
+  surface: boolean;
+  wireframe: boolean;
+  points: boolean;
   renderMode: ViewportMeshRenderMode;
   wireframeScope: AirboxDisplayScope;
   pointsScope: AirboxDisplayScope;
@@ -18,6 +21,9 @@ export function airboxDisplayStateFromRenderMode(
   if (renderMode === "mesh") {
     return {
       geometryVisible: true,
+      surface: false,
+      wireframe: true,
+      points: false,
       renderMode: "wireframe",
       wireframeScope: "full",
       pointsScope: "surface",
@@ -26,6 +32,9 @@ export function airboxDisplayStateFromRenderMode(
   }
   return {
     geometryVisible: true,
+    surface: renderMode === "surface" || renderMode === "surface+edges",
+    wireframe: renderMode === "wireframe" || renderMode === "surface+edges",
+    points: renderMode === "points",
     renderMode,
     wireframeScope: "surface",
     pointsScope: "surface",
@@ -41,6 +50,9 @@ export function resolveAirboxDisplayState(
   const normalizedCurrent = {
     ...modeDefaults,
     geometryVisible: current.geometryVisible,
+    surface: current.surface,
+    wireframe: current.wireframe,
+    points: current.points,
     wireframeScope:
       current.renderMode === "mesh"
         ? modeDefaults.wireframeScope
@@ -55,32 +67,31 @@ export function resolveAirboxDisplayState(
       }
     : normalizedCurrent;
 
-  let shaded = base.renderMode === "surface" || base.renderMode === "surface+edges";
-  let wireframe = base.renderMode === "wireframe" || base.renderMode === "surface+edges";
-  let points = base.renderMode === "points";
-  const pointsWasActive = points;
+  let shaded = base.surface;
+  let wireframe = base.wireframe;
+  let points = base.points;
 
   if (typeof patch.points === "boolean") {
     points = patch.points;
-    if (points) {
-      shaded = false;
-      wireframe = false;
-    }
   }
   if (typeof patch.shaded === "boolean") {
     shaded = patch.shaded;
-    if (shaded) points = false;
   }
   if (typeof patch.wireframe === "boolean") {
     wireframe = patch.wireframe;
-    if (wireframe) points = false;
   }
 
   let geometryVisible =
     typeof patch.geometry === "boolean" ? patch.geometry : base.geometryVisible;
+  if (patch.geometry === false) {
+    shaded = false;
+    wireframe = false;
+    points = false;
+  }
   if (!shaded && !wireframe && !points) {
     geometryVisible = false;
   } else if (
+    patch.geometry === true ||
     patch.shaded === true ||
     patch.wireframe === true ||
     patch.points === true ||
@@ -90,19 +101,26 @@ export function resolveAirboxDisplayState(
   }
 
   const renderMode: ViewportMeshRenderMode = points
-    ? "points"
+    ? shaded || wireframe
+      ? shaded && wireframe
+        ? "surface+edges"
+        : shaded
+          ? "surface"
+          : "wireframe"
+      : "points"
     : shaded && wireframe
       ? "surface+edges"
       : shaded
         ? "surface"
         : wireframe
           ? "wireframe"
-          : pointsWasActive && patch.points === false
-            ? base.renderMode
-            : "wireframe";
+          : base.renderMode;
 
   return {
     geometryVisible,
+    surface: shaded,
+    wireframe,
+    points,
     renderMode,
     wireframeScope: patch.wireframeScope ?? base.wireframeScope,
     pointsScope: patch.pointsScope ?? base.pointsScope,

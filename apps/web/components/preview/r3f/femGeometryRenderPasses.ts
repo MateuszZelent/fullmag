@@ -2,6 +2,7 @@ import type { MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 
 interface ResolveFemGeometryRenderPassesInput {
   renderMode: RenderMode;
+  renderPasses?: FemGeometryPassState;
   edgeScope?: MeshDisplayScope;
   pointsScope?: MeshDisplayScope;
   hasGeometry: boolean;
@@ -11,6 +12,13 @@ interface ResolveFemGeometryRenderPassesInput {
   showSurfaceHiddenEdgesPass: boolean;
   showSurfaceVisibleEdgesPass: boolean;
   showPointsPass: boolean;
+}
+
+export interface FemGeometryPassState {
+  surface: boolean;
+  wireframe: boolean;
+  volumeMesh: boolean;
+  points: boolean;
 }
 
 export interface FemGeometryRenderPasses {
@@ -27,6 +35,7 @@ export interface FemGeometryRenderPasses {
 
 export function resolveFemGeometryRenderPasses({
   renderMode,
+  renderPasses,
   edgeScope = "surface",
   pointsScope = "surface",
   hasGeometry,
@@ -37,6 +46,34 @@ export function resolveFemGeometryRenderPasses({
   showSurfaceVisibleEdgesPass,
   showPointsPass,
 }: ResolveFemGeometryRenderPassesInput): FemGeometryRenderPasses {
+  if (renderPasses) {
+    const showSurface = showSurfacePass && renderPasses.surface;
+    const showWireframe = renderPasses.wireframe;
+    const fullWireframe = showWireframe && edgeScope === "full";
+    const showWireOnlyEdges =
+      showWireframe && !showSurface && hasEdgesGeometry && !fullWireframe;
+    const showWireOnlyMesh =
+      showWireframe && !showSurface && hasGeometry && !fullWireframe;
+    const showSurfaceEdges = showWireframe && showSurface && hasEdgesGeometry;
+    const showSurfaceEdgeFallback =
+      showSurfaceEdges && !showSurfaceHiddenEdgesPass && !showSurfaceVisibleEdgesPass;
+    const showMeshEdges =
+      (renderPasses.volumeMesh && hasGeometry) ||
+      (showWireframe && edgeScope === "full" && (hasTetraEdgesGeometry || hasGeometry));
+    const showPoints = showPointsPass && renderPasses.points;
+
+    return {
+      showSurface,
+      showWireOnlyEdges,
+      showWireOnlyMesh: showWireOnlyMesh && !showWireOnlyEdges,
+      showSurfaceEdges,
+      showSurfaceEdgeFallback,
+      showPoints,
+      showMeshEdges,
+      showFullPoints: showPoints && pointsScope === "full",
+    };
+  }
+
   const isSurfaceMode = renderMode === "surface" || renderMode === "surface+edges";
   const showSurface = showSurfacePass && isSurfaceMode;
 
