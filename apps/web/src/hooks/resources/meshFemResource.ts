@@ -153,7 +153,9 @@ export function buildFemMeshFromDecodedTopology(
     summary?.mesh_id ??
     (generationId ? `resource-mesh:${generationId}` : "resource-mesh:shared-domain");
 
-  const legacyArrays = options.legacyArrays ?? "materialize";
+  // Default is "lazy" so that typed topology_buffers remain the canonical source.
+  // Pass legacyArrays: "materialize" only in tests or legacy code that needs tuple arrays.
+  const legacyArrays = options.legacyArrays ?? "lazy";
   const nodes =
     legacyArrays === "lazy"
       ? createLazyTupleArray(topology.nodeCount, (index) => tripleAt(topology.positions, index))

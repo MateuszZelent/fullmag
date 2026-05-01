@@ -285,6 +285,8 @@ type ScopedBinaryFieldFrame = {
 const BINARY_FIELD_CACHE_MAX_ENTRIES = 4;
 const BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const AIRBOX_DISABLED_BY_DEFAULT =
+  FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;
 
 function estimateBinaryFieldFrameBytes(frame: BinaryFieldFrame): number {
   return frame.values.byteLength + frame.key.length * 2 + frame.quantityId.length * 2 + 128;
@@ -1456,7 +1458,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       femVectorDomainFilter: hydratedScene.editor.vector_domain_filter ?? "auto",
       femFerromagnetVisibilityMode:
         hydratedScene.editor.ferromagnet_visibility_mode ?? "hide",
-      airMeshVisible: airboxDisabledByDefault
+      airMeshVisible: AIRBOX_DISABLED_BY_DEFAULT
         ? false
         : (hydratedScene.editor.air_mesh_visible ?? false),
       airMeshOpacity:
@@ -3166,5 +3168,3 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     </TransportCtx.Provider>
   );
 }
-  const airboxDisabledByDefault =
-    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;

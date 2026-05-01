@@ -9,6 +9,23 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 
 function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
+  // Fast path: topology_buffers are the canonical typed representation.
+  // Avoid per-element Proxy traversal when binary topology is available.
+  const tb = mesh.topology_buffers;
+  if (tb && tb.nodes.length > 0) {
+    return {
+      nodes: tb.nodes,
+      elements: tb.elements,
+      boundaryFaces: tb.boundary_faces,
+      nNodes: mesh.node_count ?? Math.floor(tb.nodes.length / 3),
+      nElements: mesh.element_count ?? Math.floor(tb.elements.length / 4),
+      meshGenerationId: mesh.generation_id ?? mesh.mesh_id ?? null,
+      fieldData: undefined,
+      activeMask: null,
+      quantityDomain: "full_domain",
+    };
+  }
+  // Legacy fallback for JSON-transported meshes without typed buffers.
   const flatNodes = new Float64Array(mesh.nodes.length * 3);
   for (let i = 0; i < mesh.nodes.length; i += 1) {
     const node = mesh.nodes[i];
@@ -16,7 +33,6 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
     flatNodes[i * 3 + 1] = node[1];
     flatNodes[i * 3 + 2] = node[2];
   }
-
   const flatElements = new Uint32Array(mesh.elements.length * 4);
   for (let i = 0; i < mesh.elements.length; i += 1) {
     const element = mesh.elements[i];
@@ -25,7 +41,6 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
     flatElements[i * 4 + 2] = element[2];
     flatElements[i * 4 + 3] = element[3];
   }
-
   const flatFaces = new Uint32Array(mesh.boundary_faces.length * 3);
   for (let i = 0; i < mesh.boundary_faces.length; i += 1) {
     const face = mesh.boundary_faces[i];
@@ -33,11 +48,10 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
     flatFaces[i * 3 + 1] = face[1];
     flatFaces[i * 3 + 2] = face[2];
   }
-
   return {
-    nodes: Array.from(flatNodes),
-    elements: Array.from(flatElements),
-    boundaryFaces: Array.from(flatFaces),
+    nodes: flatNodes,
+    elements: flatElements,
+    boundaryFaces: flatFaces,
     nNodes: mesh.nodes.length,
     nElements: mesh.elements.length,
     meshGenerationId: mesh.generation_id ?? mesh.mesh_id ?? null,

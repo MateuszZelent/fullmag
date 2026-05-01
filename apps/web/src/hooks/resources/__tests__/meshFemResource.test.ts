@@ -59,9 +59,11 @@ function makeDecodedTopology() {
 
 describe("meshFemResource helpers", () => {
   it("builds FemLiveMesh from decoded topology and summary metadata", () => {
+    // Use "materialize" so the test can compare against plain tuple arrays.
     const mesh = buildFemMeshFromDecodedTopology(
       makeDecodedTopology(),
       makeSummary(),
+      { legacyArrays: "materialize" },
     );
 
     expect(mesh.generation_id).toBe("gen-1");
@@ -77,6 +79,23 @@ describe("meshFemResource helpers", () => {
     expect(mesh.topology_transport).toBe("binary");
     expect(mesh.node_count).toBe(4);
     expect(mesh.element_markers).toEqual([7]);
+  });
+
+  it("uses lazy legacy arrays by default while keeping typed buffers canonical", () => {
+    const topology = makeDecodedTopology();
+    const mesh = buildFemMeshFromDecodedTopology(topology, makeSummary());
+
+    expect(mesh.nodes.length).toBe(4);
+    expect(mesh.elements.length).toBe(1);
+    expect(mesh.boundary_faces.length).toBe(4);
+    expect(mesh.nodes[1]).toEqual([1, 0, 0]);
+    expect(mesh.elements[0]).toEqual([0, 1, 2, 3]);
+    expect(mesh.boundary_faces[3]).toEqual([1, 2, 3]);
+    expect(mesh.topology_buffers?.nodes).toBe(topology.positions);
+    expect(mesh.topology_buffers?.elements).toBe(topology.indices);
+    expect(Object.keys(mesh.nodes)).toEqual([]);
+    expect(Object.keys(mesh.elements)).toEqual([]);
+    expect(Object.keys(mesh.boundary_faces)).toEqual([]);
   });
 
   it("applies shared-domain manifest metadata needed by the FEM tree", () => {

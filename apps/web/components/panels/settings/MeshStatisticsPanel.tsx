@@ -6,6 +6,12 @@ import { AlertTriangle, BarChart3, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtSI } from "@/lib/format";
 import type { FemLiveMesh, FemMeshPart, MeshQualityStats } from "@/lib/session/types";
+import {
+  getFemElementCount,
+  readFemElementMarker,
+  readFemElementNode,
+  readFemNode,
+} from "@/lib/session/femTopology";
 
 import { useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { SidebarSection } from "./primitives";
@@ -256,32 +262,6 @@ function histogram(values: readonly number[], bins: number, min: number, max: nu
   return counts;
 }
 
-function meshNode(mesh: FemLiveMesh, index: number): [number, number, number] | null {
-  const flat = mesh.topology_buffers?.nodes;
-  if (flat && index >= 0 && index * 3 + 2 < flat.length) {
-    return [Number(flat[index * 3]), Number(flat[index * 3 + 1]), Number(flat[index * 3 + 2])];
-  }
-  const node = mesh.nodes[index];
-  return node ? [Number(node[0]), Number(node[1]), Number(node[2])] : null;
-}
-
-function meshElementNode(mesh: FemLiveMesh, elementIndex: number, localIndex: number): number | null {
-  const flat = mesh.topology_buffers?.elements;
-  if (flat && elementIndex >= 0 && elementIndex * 4 + localIndex < flat.length) {
-    return Number(flat[elementIndex * 4 + localIndex]);
-  }
-  const element = mesh.elements[elementIndex];
-  return element ? Number(element[localIndex]) : null;
-}
-
-function meshElementMarker(mesh: FemLiveMesh, elementIndex: number): number | null {
-  const flat = mesh.topology_buffers?.element_markers;
-  if (flat && elementIndex >= 0 && elementIndex < flat.length) return Number(flat[elementIndex]);
-  const markers = mesh.element_markers;
-  if (markers && elementIndex >= 0 && elementIndex < markers.length) return Number(markers[elementIndex]);
-  return null;
-}
-
 function sub(a: readonly number[], b: readonly number[]): [number, number, number] {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
@@ -418,18 +398,18 @@ function partForComputedGroup(
 
 function computeMeshQualityFallback(mesh: FemLiveMesh | null | undefined): ComputedMeshQualityFallback | null {
   if (!mesh) return null;
-  const elementCount = mesh.topology_buffers?.elements
-    ? Math.floor(mesh.topology_buffers.elements.length / 4)
-    : mesh.elements.length;
+  const elementCount = getFemElementCount(mesh);
   if (elementCount <= 0) return null;
   const metrics: ComputedTetraMetric[] = [];
   for (let elementIndex = 0; elementIndex < elementCount; elementIndex += 1) {
-    const indices = [0, 1, 2, 3].map((localIndex) => meshElementNode(mesh, elementIndex, localIndex));
+    const indices = [0, 1, 2, 3].map((localIndex) =>
+      readFemElementNode(mesh, elementIndex, localIndex),
+    );
     if (indices.some((index) => index == null)) continue;
-    const a = meshNode(mesh, indices[0]!);
-    const b = meshNode(mesh, indices[1]!);
-    const c = meshNode(mesh, indices[2]!);
-    const d = meshNode(mesh, indices[3]!);
+    const a = readFemNode(mesh, indices[0]!);
+    const b = readFemNode(mesh, indices[1]!);
+    const c = readFemNode(mesh, indices[2]!);
+    const d = readFemNode(mesh, indices[3]!);
     if (!a || !b || !c || !d) continue;
     const signedVolume = dot(sub(b, a), cross(sub(c, a), sub(d, a))) / 6;
     const volume = Math.abs(signedVolume);
@@ -446,7 +426,7 @@ function computeMeshQualityFallback(mesh: FemLiveMesh | null | undefined): Compu
     const orientation = signedVolume < 0 ? -1 : 1;
     metrics.push({
       elementIndex,
-      marker: meshElementMarker(mesh, elementIndex),
+      marker: readFemElementMarker(mesh, elementIndex),
       gamma,
       sicn: orientation * gamma,
       volume,

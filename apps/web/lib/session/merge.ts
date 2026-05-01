@@ -13,6 +13,11 @@ import type {
   ScriptBuilderState,
 } from "./types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
+import {
+  getFemBoundaryFaceCount,
+  getFemElementCount,
+  getFemNodeCount,
+} from "./femTopology";
 
 function lastScalarStep(rows: ScalarRow[]): number {
   return rows.length > 0 ? rows[rows.length - 1]?.step ?? -1 : -1;
@@ -48,9 +53,9 @@ function femMeshIdentity(mesh: FemLiveMesh | null): string | null {
   if (mesh.generation_id) return `gen:${mesh.generation_id}`;
   if (mesh.mesh_id) return `mesh:${mesh.mesh_id}`;
   return [
-    mesh.nodes.length,
-    mesh.elements.length,
-    mesh.boundary_faces.length,
+    getFemNodeCount(mesh),
+    getFemElementCount(mesh),
+    getFemBoundaryFaceCount(mesh),
   ].join(":");
 }
 

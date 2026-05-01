@@ -14,15 +14,31 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 
 function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
-  const flatNodes = new Array<number>(mesh.nodes.length * 3);
+  // Fast path: topology_buffers are the canonical typed representation.
+  // Avoid per-element Proxy traversal when binary topology is available.
+  const tb = mesh.topology_buffers;
+  if (tb && tb.nodes.length > 0) {
+    return {
+      nodes: tb.nodes,
+      elements: tb.elements,
+      boundaryFaces: tb.boundary_faces,
+      nNodes: mesh.node_count ?? Math.floor(tb.nodes.length / 3),
+      nElements: mesh.element_count ?? Math.floor(tb.elements.length / 4),
+      meshGenerationId: mesh.generation_id ?? mesh.mesh_id ?? null,
+      fieldData: undefined,
+      activeMask: null,
+      quantityDomain: "full_domain",
+    };
+  }
+  // Legacy fallback for JSON-transported meshes without typed buffers.
+  const flatNodes = new Float64Array(mesh.nodes.length * 3);
   for (let i = 0; i < mesh.nodes.length; i += 1) {
     const node = mesh.nodes[i];
     flatNodes[i * 3] = node[0];
     flatNodes[i * 3 + 1] = node[1];
     flatNodes[i * 3 + 2] = node[2];
   }
-
-  const flatElements = new Array<number>(mesh.elements.length * 4);
+  const flatElements = new Uint32Array(mesh.elements.length * 4);
   for (let i = 0; i < mesh.elements.length; i += 1) {
     const element = mesh.elements[i];
     flatElements[i * 4] = element[0];
@@ -30,21 +46,20 @@ function flattenFemMesh(mesh: FemLiveMesh): FemMeshData {
     flatElements[i * 4 + 2] = element[2];
     flatElements[i * 4 + 3] = element[3];
   }
-
-  const flatFaces = new Array<number>(mesh.boundary_faces.length * 3);
+  const flatFaces = new Uint32Array(mesh.boundary_faces.length * 3);
   for (let i = 0; i < mesh.boundary_faces.length; i += 1) {
     const face = mesh.boundary_faces[i];
     flatFaces[i * 3] = face[0];
     flatFaces[i * 3 + 1] = face[1];
     flatFaces[i * 3 + 2] = face[2];
   }
-
   return {
     nodes: flatNodes,
     elements: flatElements,
     boundaryFaces: flatFaces,
     nNodes: mesh.nodes.length,
     nElements: mesh.elements.length,
+    meshGenerationId: mesh.generation_id ?? mesh.mesh_id ?? null,
     fieldData: undefined,
     activeMask: null,
     quantityDomain: "full_domain",
@@ -59,13 +74,29 @@ function computeMeshCenterAndExtent(mesh: FemLiveMesh) {
   let maxY = Number.NEGATIVE_INFINITY;
   let maxZ = Number.NEGATIVE_INFINITY;
 
-  for (const [x, y, z] of mesh.nodes) {
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-    if (z > maxZ) maxZ = z;
+  // Fast path: use flat typed buffer to avoid per-element Proxy interceptions.
+  const flatNodes = mesh.topology_buffers?.nodes;
+  if (flatNodes && flatNodes.length > 0) {
+    for (let i = 0; i < flatNodes.length; i += 3) {
+      const x = flatNodes[i] ?? 0;
+      const y = flatNodes[i + 1] ?? 0;
+      const z = flatNodes[i + 2] ?? 0;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
+  } else {
+    for (const [x, y, z] of mesh.nodes) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
   }
 
   const center = new THREE.Vector3(
