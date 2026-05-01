@@ -8,6 +8,7 @@
 
 import type { FemMeshPart, MeshEntityViewState, MeshEntityViewStateMap } from "../../../lib/session/types";
 import { defaultMeshEntityViewState } from "../../../lib/session/types";
+import type { VisualizationStatePatch } from "@/src/api/types";
 import type { ViewportSelectionScope } from "./femViewportSelection";
 import { scopeTargetPartIds } from "./femViewportSelection";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
@@ -43,6 +44,61 @@ export interface ResetViewportDisplayResult {
   resetGlobals: boolean;
   /** Global defaults to apply (only meaningful when resetGlobals is true). */
   globals: ViewportDisplayDefaults;
+}
+
+export function visualizationPatchForViewportDisplayDefaults(
+  defaults: ViewportDisplayDefaults = VIEWPORT_DISPLAY_DEFAULTS,
+): VisualizationStatePatch {
+  const opacity = Math.max(0, Math.min(100, defaults.meshOpacity)) / 100;
+  const airboxOpacity = Math.max(0, Math.min(100, defaults.airMeshOpacity)) / 100;
+  return {
+    layers: {
+      surface: {
+        visible: defaults.meshRenderMode === "surface" || defaults.meshRenderMode === "surface+edges",
+        opacity,
+      },
+      quantity_overlay: {
+        opacity,
+        visible: true,
+      },
+      wireframe: {
+        visible: defaults.meshRenderMode === "wireframe" || defaults.meshRenderMode === "surface+edges",
+      },
+      volume_mesh: {
+        visible: defaults.meshRenderMode === "mesh",
+      },
+      points: {
+        visible: defaults.meshRenderMode === "points",
+      },
+      vectors: {
+        visible: defaults.meshShowArrows,
+      },
+      primitives: {
+        visible: true,
+      },
+      airbox: {
+        visible: defaults.airMeshVisible,
+        opacity: airboxOpacity,
+      },
+    },
+    fem: {
+      topology_mode:
+        defaults.meshRenderMode === "mesh"
+          ? "volume"
+          : defaults.meshRenderMode === "wireframe" || defaults.meshRenderMode === "surface+edges"
+            ? "boundary"
+            : "surface",
+    },
+    clip: {
+      enabled: defaults.meshClipEnabled,
+      axis:
+        defaults.meshClipAxis === "y" || defaults.meshClipAxis === "z"
+          ? defaults.meshClipAxis
+          : "x",
+      position_percent: defaults.meshClipPos,
+      flipped: false,
+    },
+  };
 }
 
 /* ── Reset ──────────────────────────────────────────────────────── */

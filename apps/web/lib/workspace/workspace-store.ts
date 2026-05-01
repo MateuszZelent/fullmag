@@ -12,7 +12,8 @@ import type { LaunchIntent } from "./launch-intent";
 export type WorkspaceStage = "build" | "study";
 export type WorkspaceMode = WorkspaceStage | "analyze";
 export type RightInspectorTab = "properties" | "selected-submeshes" | "tools" | "console";
-export type WorkspaceTabLifecycle = "unmount-on-hide" | "warm";
+export type WorkspaceTabMountPolicy = "active-only" | "hidden-mounted";
+type LegacyWorkspaceTabLifecycle = "unmount-on-hide" | "warm";
 
 export type WorkspaceTabKind =
   | "viewport-3d"
@@ -37,8 +38,7 @@ export interface WorkspaceTab {
   title: string;
   closable: boolean;
   pinned: boolean;
-  keepAlive: boolean;
-  lifecycle: WorkspaceTabLifecycle;
+  mountPolicy: WorkspaceTabMountPolicy;
   payload?: {
     resultWorkspaceId?: string;
     quantityId?: string;
@@ -55,10 +55,20 @@ export interface WorkspaceTabInput {
   title: string;
   closable?: boolean;
   pinned?: boolean;
+  mountPolicy?: WorkspaceTabMountPolicy;
+  /** @deprecated Migration-only input. Use mountPolicy instead. */
   keepAlive?: boolean;
-  lifecycle?: WorkspaceTabLifecycle;
+  /** @deprecated Migration-only input. Use mountPolicy instead. */
+  lifecycle?: LegacyWorkspaceTabLifecycle;
   payload?: WorkspaceTab["payload"];
 }
+
+type WorkspaceTabNormalizerInput = WorkspaceTabInput & {
+  id: string;
+  mountPolicy?: WorkspaceTabMountPolicy;
+  keepAlive?: boolean;
+  lifecycle?: LegacyWorkspaceTabLifecycle;
+};
 
 interface StageLayoutState {
   leftDock: string | null;
@@ -83,8 +93,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "3D Viewport",
       closable: false,
       pinned: true,
-      keepAlive: true,
-      lifecycle: "warm",
+      mountPolicy: "active-only",
       payload: { viewMode: "3D" },
     },
     {
@@ -94,8 +103,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "2D Slice",
       closable: false,
       pinned: true,
-      keepAlive: true,
-      lifecycle: "warm",
+      mountPolicy: "active-only",
       payload: { viewMode: "2D" },
     },
     {
@@ -105,8 +113,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "Analyze",
       closable: false,
       pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
+      mountPolicy: "active-only",
       payload: { viewMode: "Analyze", analyzeDomain: "eigenmodes", analyzeTab: "spectrum" },
     },
     {
@@ -116,8 +123,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "Charts",
       closable: false,
       pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
+      mountPolicy: "active-only",
       payload: { viewMode: "Analyze" },
     },
   ];
@@ -131,23 +137,29 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
   };
 }
 
-function shouldWarmWorkspaceTab(tab: Pick<WorkspaceTab, "id" | "key" | "kind">): boolean {
+function isWebGLWorkspaceTabKind(kind: WorkspaceTabKind): boolean {
   return (
-    tab.id === "core:3d" ||
-    tab.key === "core:3d" ||
-    tab.id === "core:2d" ||
-    tab.key === "core:2d"
+    kind === "viewport-3d" ||
+    kind === "viewport-2d" ||
+    kind === "viewport-mesh" ||
+    kind === "result-quantity"
   );
 }
 
-function normalizeWorkspaceTab(tab: WorkspaceTab): WorkspaceTab {
-  const lifecycle: WorkspaceTabLifecycle = shouldWarmWorkspaceTab(tab)
-    ? "warm"
-    : "unmount-on-hide";
+export function normalizeWorkspaceTab(tab: WorkspaceTabNormalizerInput): WorkspaceTab {
+  const requestedMountPolicy: WorkspaceTabMountPolicy =
+    tab.mountPolicy ?? (tab.lifecycle === "warm" || tab.keepAlive ? "hidden-mounted" : "active-only");
+  const mountPolicy: WorkspaceTabMountPolicy = isWebGLWorkspaceTabKind(tab.kind)
+    ? "active-only"
+    : requestedMountPolicy;
   return {
-    ...tab,
-    keepAlive: lifecycle === "warm",
-    lifecycle,
+    id: tab.id,
+    key: tab.key,
+    kind: tab.kind,
+    title: tab.title,
+    closable: tab.closable ?? true,
+    pinned: tab.pinned ?? false,
+    mountPolicy,
     payload: tab.payload ? { ...tab.payload } : undefined,
   };
 }
@@ -401,8 +413,7 @@ function ensureCoreTabsForStage(tabs: WorkspaceTab[] | undefined): WorkspaceTab[
       title: core.title,
       closable: core.closable,
       pinned: core.pinned,
-      keepAlive: core.keepAlive,
-      lifecycle: core.lifecycle,
+      mountPolicy: core.mountPolicy,
       payload: core.payload,
     });
   });
@@ -539,8 +550,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           title: tabInput.title,
           closable: tabInput.closable ?? true,
           pinned: tabInput.pinned ?? false,
-          keepAlive: tabInput.keepAlive ?? false,
-          lifecycle: tabInput.lifecycle ?? (tabInput.keepAlive ? "warm" : "unmount-on-hide"),
+          mountPolicy: tabInput.mountPolicy,
+          keepAlive: tabInput.keepAlive,
+          lifecycle: tabInput.lifecycle,
           payload: tabInput.payload,
         });
 
@@ -652,7 +664,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
             kind: "result-spectrum",
             title: "Eigen Spectrum",
             closable: true,
-            keepAlive: false,
             payload: { analyzeDomain: "eigenmodes", analyzeTab: "spectrum" },
           });
         }
@@ -662,7 +673,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
             kind: "result-dispersion",
             title: "Eigen Dispersion",
             closable: true,
-            keepAlive: false,
             payload: { analyzeDomain: "eigenmodes", analyzeTab: "dispersion" },
           });
         }
@@ -672,7 +682,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
             kind: "result-modes",
             title: "Mode Inspector",
             closable: true,
-            keepAlive: false,
             payload: { analyzeDomain: "eigenmodes", analyzeTab: "modes" },
           });
         }
@@ -691,8 +700,9 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
               title: candidate.title,
               closable: candidate.closable ?? true,
               pinned: candidate.pinned ?? false,
-              keepAlive: candidate.keepAlive ?? false,
-              lifecycle: candidate.lifecycle ?? (candidate.keepAlive ? "warm" : "unmount-on-hide"),
+              mountPolicy: candidate.mountPolicy,
+              keepAlive: candidate.keepAlive,
+              lifecycle: candidate.lifecycle,
               payload: candidate.payload,
             }));
           }

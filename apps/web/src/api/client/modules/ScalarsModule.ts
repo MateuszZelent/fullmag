@@ -8,6 +8,7 @@ export class ScalarsModule {
   async getWindow(opts?: {
     sinceRevision?: number;
     limit?: number;
+    columns?: string[];
   }, requestOptions?: RequestOptions): Promise<ScalarWindow> {
     const params = new URLSearchParams();
     if (opts?.sinceRevision != null) {
@@ -15,6 +16,9 @@ export class ScalarsModule {
     }
     if (opts?.limit != null) {
       params.set("limit", String(opts.limit));
+    }
+    if (opts?.columns && opts.columns.length > 0) {
+      params.set("columns", opts.columns.join(","));
     }
     const qs = params.toString();
     const path = `${sessionApiPaths.data.scalars}${qs ? `?${qs}` : ""}`;

@@ -24,7 +24,7 @@ interface UseScalarHistoryResult {
 const POLL_INTERVAL_MS = 2000;
 
 export function fetchScalarWindow(
-  opts?: { sinceRevision?: number; limit?: number },
+  opts?: { sinceRevision?: number; limit?: number; columns?: string[] },
   requestOptions?: { signal?: AbortSignal },
 ): Promise<ScalarWindow> {
   return getLiveSessionClient().scalars.getWindow(opts, requestOptions);

@@ -160,6 +160,15 @@ describe("ribbonContextForTarget", () => {
     expect(ctx.coreTab).toBe("geometry");
     expect(ctx.contextualTab).toBe("object");
   });
+
+  it("returns mesh coreTab for mesh quality targets", () => {
+    const ctx = ribbonContextForTarget({
+      kind: "mesh_quality",
+      nodeId: "mesh-quality",
+      label: "Mesh Quality",
+    });
+    expect(ctx.coreTab).toBe("mesh");
+  });
 });
 
 describe("inspectorPanelForTarget", () => {

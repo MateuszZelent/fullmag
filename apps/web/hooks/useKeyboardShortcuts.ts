@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useCommand, useViewport, useModel } from "../components/runs/control-room/ControlRoomContext";
+import { visualizationPatchForRenderMode } from "@/components/runs/control-room/visualizationStateSync";
 
 /**
  * useKeyboardShortcuts — global keyboard shortcut handler for the control room.
@@ -28,8 +29,8 @@ export interface KeyboardShortcutCallbacks {
 
 export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
   const { handleSimulationAction } = useCommand();
-  const { handleViewModeChange, setSidebarCollapsed } = useViewport();
-  const { setSelectedSidebarNodeId, setObjectViewMode, setMeshRenderMode } = useModel();
+  const { handleViewModeChange, patchDisplay, setSidebarCollapsed } = useViewport();
+  const { meshRenderMode, setSelectedSidebarNodeId, setObjectViewMode } = useModel();
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -110,13 +111,11 @@ export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
       /* Z → Cycle render mode (FEM) */
       if (e.key === "z" && !ctrl && !shift) {
         e.preventDefault();
-        setMeshRenderMode((current) => {
-          const cycle: Array<"surface" | "surface+edges" | "wireframe" | "mesh" | "points"> = [
-            "surface", "surface+edges", "wireframe", "mesh", "points",
-          ];
-          const idx = cycle.indexOf(current);
-          return cycle[(idx + 1) % cycle.length];
-        });
+        const cycle: Array<"surface" | "surface+edges" | "wireframe" | "mesh" | "points"> = [
+          "surface", "surface+edges", "wireframe", "mesh", "points",
+        ];
+        const idx = cycle.indexOf(meshRenderMode);
+        void patchDisplay(visualizationPatchForRenderMode(cycle[(idx + 1) % cycle.length]));
         return;
       }
 
@@ -137,5 +136,14 @@ export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleSimulationAction, handleViewModeChange, setSidebarCollapsed, setSelectedSidebarNodeId, setObjectViewMode, setMeshRenderMode, callbacks]);
+  }, [
+    callbacks,
+    handleSimulationAction,
+    handleViewModeChange,
+    meshRenderMode,
+    patchDisplay,
+    setObjectViewMode,
+    setSelectedSidebarNodeId,
+    setSidebarCollapsed,
+  ]);
 }

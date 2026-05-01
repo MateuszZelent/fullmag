@@ -16,6 +16,8 @@ pub struct ScalarsQuery {
     pub since_revision: Option<u64>,
     #[serde(default)]
     pub limit: Option<u64>,
+    #[serde(default)]
+    pub columns: Option<String>,
 }
 
 #[utoipa::path(
@@ -24,6 +26,7 @@ pub struct ScalarsQuery {
     params(
         ("since_revision" = Option<u64>, Query, description = "Only rows after this revision"),
         ("limit" = Option<u64>, Query, description = "Max rows to return"),
+        ("columns" = Option<String>, Query, description = "Comma-separated scalar columns to return, e.g. step,time,e_total"),
     ),
     responses(
         (status = 200, description = "Scalar history window", body = ScalarWindow),
@@ -55,48 +58,63 @@ pub async fn get_scalars(
         window
     };
 
-    let columns = vec![
-        "step".into(),
-        "time".into(),
-        "solver_dt".into(),
-        "mx".into(),
-        "my".into(),
-        "mz".into(),
-        "e_ex".into(),
-        "e_demag".into(),
-        "e_ext".into(),
-        "e_ani".into(),
-        "e_dmi".into(),
-        "e_total".into(),
-        "max_dm_dt".into(),
-        "max_h_eff".into(),
-        "max_h_demag".into(),
-        "max_torque_Apm".into(),
-        "max_torque_T".into(),
+    let all_columns = [
+        "step",
+        "time",
+        "solver_dt",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_ani",
+        "e_dmi",
+        "e_total",
+        "max_dm_dt",
+        "max_h_eff",
+        "max_h_demag",
+        "max_torque_Apm",
+        "max_torque_T",
     ];
+    let mut columns: Vec<&str> = Vec::new();
+    columns.push("step");
+    if let Some(requested_columns) = query.columns.as_deref() {
+        for column in requested_columns.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+            if all_columns.contains(&column) && !columns.contains(&column) {
+                columns.push(column);
+            }
+        }
+    } else {
+        columns = all_columns.to_vec();
+    }
 
     let rows: Vec<Vec<f64>> = window
         .iter()
         .map(|r| {
-            vec![
-                r.step as f64,
-                r.time,
-                r.solver_dt,
-                r.mx,
-                r.my,
-                r.mz,
-                r.e_ex,
-                r.e_demag,
-                r.e_ext,
-                r.e_ani,
-                r.e_dmi,
-                r.e_total,
-                r.max_dm_dt,
-                r.max_h_eff,
-                r.max_h_demag,
-                r.max_torque_Apm,
-                r.max_torque_T,
-            ]
+            columns
+                .iter()
+                .map(|column| match *column {
+                    "step" => r.step as f64,
+                    "time" => r.time,
+                    "solver_dt" => r.solver_dt,
+                    "mx" => r.mx,
+                    "my" => r.my,
+                    "mz" => r.mz,
+                    "e_ex" => r.e_ex,
+                    "e_demag" => r.e_demag,
+                    "e_ext" => r.e_ext,
+                    "e_ani" => r.e_ani,
+                    "e_dmi" => r.e_dmi,
+                    "e_total" => r.e_total,
+                    "max_dm_dt" => r.max_dm_dt,
+                    "max_h_eff" => r.max_h_eff,
+                    "max_h_demag" => r.max_h_demag,
+                    "max_torque_Apm" => r.max_torque_Apm,
+                    "max_torque_T" => r.max_torque_T,
+                    _ => 0.0,
+                })
+                .collect()
         })
         .collect();
 
@@ -106,7 +124,7 @@ pub async fn get_scalars(
         revision: total,
         total_rows: total,
         returned_rows: returned,
-        columns,
+        columns: columns.into_iter().map(str::to_string).collect(),
         rows,
     }))
 }

@@ -148,10 +148,19 @@ export function useChartPersistence(): [
     (next: ChartState | ((prev: ChartState) => ChartState)) => {
       setStateRaw((prev) => {
         const resolved = typeof next === "function" ? next(prev) : next;
+        // Fast path: updater returned the exact same reference — nothing changed.
+        if (resolved === prev) return prev;
         const clampedKeys = clampSeriesByUnitLimit(resolved.activeSeriesKeys);
-        const activeSeriesKeys = clampedKeys.length > 0
+        const rawKeys = clampedKeys.length > 0
           ? clampedKeys
           : DEFAULT_CHART_STATE.activeSeriesKeys;
+        // Stable reference: reuse prev array when values are identical to avoid
+        // spurious downstream useMemo recomputations that cause infinite effect loops.
+        const activeSeriesKeys =
+          rawKeys.length === prev.activeSeriesKeys.length &&
+          rawKeys.every((k, i) => k === prev.activeSeriesKeys[i])
+            ? prev.activeSeriesKeys
+            : rawKeys;
         const xAxis = resolved.xColumn === "step" ? "step" : "time";
         const selectedDomain = resolved.selectedDomain ?? null;
         const activeSeriesSpecs = specsMatchState({
@@ -171,6 +180,17 @@ export function useChartPersistence(): [
           activeSeriesKeys,
           activeSeriesSpecs,
         };
+        // Bail out if nothing actually changed — prevents React from scheduling a
+        // re-render and breaking the effect dep chain (especially yColumns).
+        if (
+          sanitized.xColumn === prev.xColumn &&
+          sanitized.selectedDomain === prev.selectedDomain &&
+          sanitized.activePreset === prev.activePreset &&
+          sanitized.activeSeriesKeys === prev.activeSeriesKeys &&
+          sanitized.activeSeriesSpecs === prev.activeSeriesSpecs
+        ) {
+          return prev;
+        }
         // Schedule debounced write
         if (timerRef.current !== null) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {

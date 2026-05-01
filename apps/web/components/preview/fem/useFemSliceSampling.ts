@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample, type PerfSample } from "@/lib/debug/frontendPerfDebug";
+import { useViewportResourceOwner } from "@/lib/workspace/viewport-resource-owner-context";
 import type { FemMeshData } from "./femMeshTypes";
 import type { SliceVisibilityState } from "./femSliceUtils";
 import {
@@ -26,6 +27,10 @@ import {
   writeSliceTopologyCache,
 } from "./femSliceCache";
 import type { FemSliceQuery } from "./femSliceQuery";
+import {
+  buildFemSliceSamplingWorkerPayload,
+  type FemSliceSamplingResponse,
+} from "./femSliceSamplingTransport";
 
 type CommittedPerfSample = Omit<PerfSample, "timestampMs">;
 
@@ -47,50 +52,96 @@ function useCommittedPerfSample(sample: CommittedPerfSample | null): void {
   }, [sample]);
 }
 
-interface WorkerSamplingRequest {
-  id: number;
-  type: "compute";
-  payload: {
-    meshData: FemMeshData;
-    plane: SlicePlane;
-    planeCoord: number;
-    component: VectorComponent;
-    visibilityState: SliceVisibilityState;
-    boundsStrategy: SliceBoundsStrategy;
-  };
-}
-
-interface WorkerSamplingSuccess {
-  id: number;
-  ok: true;
-  topology: SliceTopologyCollection;
-  slice: SliceCollection;
-  topologyDurationMs: number;
-  fieldDurationMs: number;
-}
-
-interface WorkerSamplingFailure {
-  id: number;
-  ok: false;
-  error: string;
-}
-
-type WorkerSamplingResponse = WorkerSamplingSuccess | WorkerSamplingFailure;
-
-let femSliceSamplingWorker: Worker | null = null;
 let nextWorkerRequestId = 1;
 
-function getFemSliceSamplingWorker(): Worker | null {
-  if (typeof window === "undefined" || typeof Worker === "undefined") {
-    return null;
+export interface FemSliceSamplingWorkerCallbacks {
+  onSuccess: (
+    message: Extract<FemSliceSamplingResponse, { ok: true }>,
+    roundtripDurationMs: number,
+  ) => void;
+  onFailure: (message: Extract<FemSliceSamplingResponse, { ok: false }>) => void;
+}
+
+export class FemSliceSamplingWorkerClient {
+  private worker: Worker | null = null;
+  private activeRequestId: number | null = null;
+  private activeHandler: ((event: MessageEvent<FemSliceSamplingResponse>) => void) | null = null;
+  private disposed = false;
+
+  postCompute(
+    args: Omit<Parameters<typeof buildFemSliceSamplingWorkerPayload>[0], "id">,
+    callbacks: FemSliceSamplingWorkerCallbacks,
+  ): { ok: true; requestId: number; estimatedBytes: number } | { ok: false } {
+    if (this.disposed || typeof window === "undefined" || typeof Worker === "undefined") {
+      return { ok: false };
+    }
+    this.cancel("superseded");
+    const worker = this.ensureWorker();
+    if (!worker) {
+      return { ok: false };
+    }
+    const requestId = nextWorkerRequestId++;
+    const workerStart = perfNow();
+    const builtPayload = buildFemSliceSamplingWorkerPayload({ ...args, id: requestId });
+    const handleMessage = (event: MessageEvent<FemSliceSamplingResponse>) => {
+      const message = event.data;
+      if (!message || message.id !== requestId || this.activeRequestId !== requestId || this.disposed) {
+        return;
+      }
+      this.detachHandler();
+      this.activeRequestId = null;
+      if (message.ok) {
+        callbacks.onSuccess(message, perfNow() - workerStart);
+      } else {
+        callbacks.onFailure(message);
+      }
+    };
+    this.activeRequestId = requestId;
+    this.activeHandler = handleMessage;
+    worker.addEventListener("message", handleMessage);
+    worker.postMessage(builtPayload.message, builtPayload.transferList);
+    return { ok: true, requestId, estimatedBytes: builtPayload.estimatedBytes };
   }
-  if (!femSliceSamplingWorker) {
-    femSliceSamplingWorker = new Worker(new URL("./femSliceSampling.worker.ts", import.meta.url), {
-      type: "module",
-      name: "fem-slice-sampling",
-    });
+
+  cancel(_reason: string): void {
+    this.detachHandler();
+    this.activeRequestId = null;
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
   }
-  return femSliceSamplingWorker;
+
+  cancelRequest(requestId: number, reason: string): void {
+    if (this.activeRequestId === requestId) {
+      this.cancel(reason);
+    }
+  }
+
+  dispose(reason = "dispose"): void {
+    this.disposed = true;
+    this.cancel(reason);
+  }
+
+  private ensureWorker(): Worker | null {
+    if (!this.worker) {
+      this.worker = new Worker(new URL("./femSliceSampling.worker.ts", import.meta.url), {
+        type: "module",
+        name: "fem-slice-sampling",
+      });
+      this.worker.addEventListener("error", () => {
+        this.cancel("worker-error");
+      });
+    }
+    return this.worker;
+  }
+
+  private detachHandler(): void {
+    if (this.worker && this.activeHandler) {
+      this.worker.removeEventListener("message", this.activeHandler);
+    }
+    this.activeHandler = null;
+  }
 }
 
 export interface UseFemSliceSamplingArgs {
@@ -130,6 +181,33 @@ export function useFemSliceSampling(args: UseFemSliceSamplingArgs): UseFemSliceS
   const inflightKeyRef = useRef<string | null>(null);
   const failedWorkerKeysRef = useRef<Set<string>>(new Set());
   const lastStableResultRef = useRef<UseFemSliceSamplingResult | null>(null);
+  const workerClientRef = useRef<FemSliceSamplingWorkerClient | null>(null);
+  const viewportResourceOwner = useViewportResourceOwner();
+  if (!workerClientRef.current) {
+    workerClientRef.current = new FemSliceSamplingWorkerClient();
+  }
+
+  useEffect(() => {
+    const workerClient = workerClientRef.current;
+    return () => {
+      workerClient?.dispose("unmount");
+      workerClientRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const owner = viewportResourceOwner;
+    const workerClient = workerClientRef.current;
+    if (!owner || !workerClient) {
+      return;
+    }
+    const cleanupKey = "fem-slice-sampling-worker";
+    const cleanup = () => workerClient.dispose("viewport-resource-owner-dispose");
+    owner.registerCleanup(cleanupKey, cleanup);
+    return () => {
+      owner.unregisterCleanup(cleanupKey, cleanup);
+    };
+  }, [viewportResourceOwner]);
 
   const topologyKey = useMemo(
     () =>
@@ -308,12 +386,13 @@ export function useFemSliceSampling(args: UseFemSliceSamplingArgs): UseFemSliceS
 
   useEffect(() => {
     if (shouldFallbackToSync) {
+      workerClientRef.current?.cancel("fallback");
       setWorkerPending(false);
       inflightKeyRef.current = null;
       return;
     }
-    const worker = getFemSliceSamplingWorker();
-    if (!worker) {
+    const workerClient = workerClientRef.current;
+    if (!workerClient) {
       failedWorkerKeysRef.current.add(requestKey);
       setWorkerRevision((version) => version + 1);
       setWorkerPending(false);
@@ -324,57 +403,10 @@ export function useFemSliceSampling(args: UseFemSliceSamplingArgs): UseFemSliceS
       return;
     }
 
-    const requestId = nextWorkerRequestId++;
     inflightKeyRef.current = requestKey;
     setWorkerPending(true);
-    const workerStart = perfNow();
-
-    const handleMessage = (event: MessageEvent<WorkerSamplingResponse>) => {
-      const message = event.data;
-      if (!message || message.id !== requestId) {
-        return;
-      }
-      worker.removeEventListener("message", handleMessage);
-      inflightKeyRef.current = null;
-      if (!message.ok) {
-        failedWorkerKeysRef.current.add(requestKey);
-        setWorkerRevision((version) => version + 1);
-        setWorkerPending(false);
-        return;
-      }
-
-      failedWorkerKeysRef.current.delete(requestKey);
-      writeSliceTopologyCache(topologyKey, message.topology);
-      writeSliceFieldCache(fieldKey, message.slice);
-
-      if (ENABLE_SLICE_PERF_SAMPLES) {
-        const cacheSnapshot = getSliceCacheSnapshot();
-        recordFrontendPerfSample({
-          scope: "FemSlice2D",
-          phase: "worker-roundtrip",
-          durationMs: perfNow() - workerStart,
-          timestampMs: perfNow(),
-          meta: {
-            plane: effectivePlane,
-            component: effectiveComponent,
-            quantity: quantityId ?? "m",
-            topologyDurationMs: message.topologyDurationMs,
-            fieldDurationMs: message.fieldDurationMs,
-            topologyCacheEntries: cacheSnapshot.topologyEntries,
-            fieldCacheEntries: cacheSnapshot.fieldEntries,
-          },
-        });
-      }
-
-      setWorkerRevision((version) => version + 1);
-      setWorkerPending(false);
-    };
-
-    worker.addEventListener("message", handleMessage);
-    worker.postMessage({
-      id: requestId,
-      type: "compute",
-      payload: {
+    const postResult = workerClient.postCompute(
+      {
         meshData,
         plane: effectivePlane,
         planeCoord,
@@ -382,13 +414,62 @@ export function useFemSliceSampling(args: UseFemSliceSamplingArgs): UseFemSliceS
         visibilityState,
         boundsStrategy,
       },
-    } satisfies WorkerSamplingRequest);
+      {
+        onSuccess: (message, roundtripDurationMs) => {
+          if (inflightKeyRef.current !== requestKey) {
+            return;
+          }
+          inflightKeyRef.current = null;
+          failedWorkerKeysRef.current.delete(requestKey);
+          writeSliceTopologyCache(topologyKey, message.topology);
+          writeSliceFieldCache(fieldKey, message.slice);
+
+          if (ENABLE_SLICE_PERF_SAMPLES) {
+            const cacheSnapshot = getSliceCacheSnapshot();
+            recordFrontendPerfSample({
+              scope: "FemSlice2D",
+              phase: "worker-roundtrip",
+              durationMs: roundtripDurationMs,
+              timestampMs: perfNow(),
+              meta: {
+                plane: effectivePlane,
+                component: effectiveComponent,
+                quantity: quantityId ?? "m",
+                topologyDurationMs: message.topologyDurationMs,
+                fieldDurationMs: message.fieldDurationMs,
+                topologyCacheEntries: cacheSnapshot.topologyEntries,
+                fieldCacheEntries: cacheSnapshot.fieldEntries,
+              },
+            });
+          }
+
+          setWorkerRevision((version) => version + 1);
+          setWorkerPending(false);
+        },
+        onFailure: () => {
+          if (inflightKeyRef.current !== requestKey) {
+            return;
+          }
+          inflightKeyRef.current = null;
+          failedWorkerKeysRef.current.add(requestKey);
+          setWorkerRevision((version) => version + 1);
+          setWorkerPending(false);
+        },
+      },
+    );
+    if (!postResult.ok) {
+      failedWorkerKeysRef.current.add(requestKey);
+      setWorkerRevision((version) => version + 1);
+      setWorkerPending(false);
+      inflightKeyRef.current = null;
+      return;
+    }
 
     return () => {
-      worker.removeEventListener("message", handleMessage);
       if (inflightKeyRef.current === requestKey) {
         inflightKeyRef.current = null;
       }
+      workerClient.cancelRequest(postResult.requestId, "effect-cleanup");
     };
   }, [
     boundsStrategy,

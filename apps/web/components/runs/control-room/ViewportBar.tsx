@@ -361,7 +361,10 @@ export const ViewportBar = memo(function ViewportBar() {
       nextLayers.showQuantity !== currentLayers.showQuantity
     ) {
       if (nextLayers.showMagneticTexture !== currentLayers.showMagneticTexture) {
-        model.setFemViewportLayers(nextLayers);
+        model.setViewportVisualizationState((previous) => ({
+          ...previous,
+          femViewportLayers: nextLayers,
+        }));
       }
       if (
         nextLayers.showPrimitives !== currentLayers.showPrimitives ||

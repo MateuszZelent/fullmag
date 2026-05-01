@@ -918,6 +918,8 @@ function UnifiedVectorFieldRendererInner({
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const r3fSceneRef = useRef<THREE.Scene | null>(null);
   const r3fCameraRef = useRef<THREE.Camera | null>(null);
+  const canvasContextCleanupRef = useRef<(() => void) | null>(null);
+  const [canvasContextGeneration, setCanvasContextGeneration] = useState(0);
   const [rotationSnapshots, setRotationSnapshots] = useState<Record<RotationPanelKey, OrientationDebugSnapshot | null>>({
     viewport: null,
     viewCube: null,
@@ -978,6 +980,13 @@ function UnifiedVectorFieldRendererInner({
   const [cx, cy, cz] = sceneFrame.center;
   const orbitDist = Math.max(...sceneFrame.extent, 1) * 1.5;
   const sceneTarget = sceneFrame.center;
+  // P-20 fix: capture the orbit pivot once so step-update JSON (which produces new worldExtent
+  // array references with the same values) does not cause TrackballControls to snap back to
+  // center via its reactive `target` useEffect. If the geometry changes substantially the user
+  // can use the fit-to-bounds control; no auto-reset on every poll tick.
+  const [stableOrbitTarget] = useState<[number, number, number]>(
+    () => [...sceneFrame.center] as [number, number, number],
+  );
   const cameraPersistenceKey = useMemo(
     () =>
       viewportDocumentId
@@ -1185,6 +1194,17 @@ function UnifiedVectorFieldRendererInner({
     link.download = `fullmag_3d_${Date.now()}.png`;
     link.href = gl.domElement.toDataURL("image/png");
     link.click();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      canvasContextCleanupRef.current?.();
+      canvasContextCleanupRef.current = null;
+      canvasRef.current = null;
+      glRef.current = null;
+      r3fSceneRef.current = null;
+      r3fCameraRef.current = null;
+    };
   }, []);
 
   const selectedAxesOverlay = useMemo(
@@ -1772,6 +1792,7 @@ function UnifiedVectorFieldRendererInner({
           </div>
         ) : hostNode ? (
           <Canvas
+            key={canvasContextGeneration}
             eventSource={hostNode}
             frameloop={viewportVisible ? "demand" : "never"}
             className="w-full h-full pointer-events-auto"
@@ -1790,10 +1811,35 @@ function UnifiedVectorFieldRendererInner({
               antialias: settings.quality !== "low",
             }}
             onCreated={({ gl, scene, camera }) => {
+              canvasContextCleanupRef.current?.();
               canvasRef.current = gl.domElement;
               glRef.current = gl;
               r3fSceneRef.current = scene;
               r3fCameraRef.current = camera;
+              const canvas = gl.domElement;
+              let remountTimer: number | null = null;
+              const handleContextLost = (event: Event) => {
+                event.preventDefault();
+                canvasRef.current = null;
+                glRef.current = null;
+                r3fSceneRef.current = null;
+                r3fCameraRef.current = null;
+                remountTimer = window.setTimeout(() => {
+                  setCanvasContextGeneration((generation) => generation + 1);
+                }, 100);
+              };
+              const handleContextRestored = () => {
+                setCanvasContextGeneration((generation) => generation + 1);
+              };
+              canvas.addEventListener("webglcontextlost", handleContextLost, false);
+              canvas.addEventListener("webglcontextrestored", handleContextRestored, false);
+              canvasContextCleanupRef.current = () => {
+                if (remountTimer != null) {
+                  window.clearTimeout(remountTimer);
+                }
+                canvas.removeEventListener("webglcontextlost", handleContextLost, false);
+                canvas.removeEventListener("webglcontextrestored", handleContextRestored, false);
+              };
             }}
             dpr={canvasDpr}
             style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}
@@ -1864,7 +1910,7 @@ function UnifiedVectorFieldRendererInner({
             <SyncedControls
               controlsRefObject={controlsRef}
               viewCubeBridgeRef={viewCubeSceneRef}
-              target={sceneTarget}
+              target={stableOrbitTarget}
               cameraEnabled={cameraActive && viewportVisible}
             />
 

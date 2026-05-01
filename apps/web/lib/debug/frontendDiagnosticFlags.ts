@@ -37,11 +37,6 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableAnalyzeViewport: true,
     enableViewportCanvas: true,
     enablePinOverlayButton: true,
-    // Keep a small number of hidden WebGL viewport tabs mounted with frameloop=never.
-    // This avoids destructive tab-switch remounts while bounding GPU context pressure.
-    // FF-1: reduced from 2 → 1 to lower the chance of context loss; Firefox overrides to 0 at runtime.
-    enableWebGLWarmKeepAlive: true,
-    webGLWarmKeepAliveHiddenTabLimit: 1,
   },
   session: {
     enableLiveWebSocket: true,

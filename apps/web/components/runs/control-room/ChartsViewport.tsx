@@ -210,6 +210,13 @@ export default function ChartsViewport() {
     () => yColumns.map((_key, index) => seriesColor(index)),
     [yColumns],
   );
+  const historyColumns = useMemo(
+    () => {
+      const columns = [chartState.xColumn, ...yColumns];
+      return [...new Set(columns)];
+    },
+    [chartState.xColumn, yColumns],
+  );
 
   const samplingSummary = useMemo(
     () => extractSamplingSummary(cmd.metadata),
@@ -223,6 +230,7 @@ export default function ChartsViewport() {
     sessionKey,
     liveRows: tp.scalarRows,
     scalarRowsTotal,
+    columns: historyColumns,
   });
 
   const chartRows = chartHistory.deferredRows;

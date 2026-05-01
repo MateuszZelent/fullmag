@@ -1,0 +1,680 @@
+# Workspace, Tabs, Ribbon and Viewport Architecture Audit
+
+## 1. Metadata
+
+| Field | Value |
+| --- | --- |
+| Title | Workspace, tabs, ribbon and viewport architecture audit |
+| Analysis date | 2026-05-01 |
+| Repository | `fullmag` |
+| Branch | `master` |
+| Commit hash | `df6736c726a850936b1cae6d2588069b7dc776de` |
+| Working tree | Dirty, with uncommitted changes present before this audit |
+| Analysis type | Static code analysis only |
+| Tests/build/profiling | Not run. No runtime profiling, browser stress run, heap snapshot, or build was executed for this report. |
+| Scope | Main workspace, center tabs, tab switching, ribbon commands, Model Builder integration, 2D/3D/Mesh viewport lifecycle, R3F Canvas, WebGL resources, frontend caches, request lifecycle, worker transfer lifecycle, API architecture, memory-safety risks. |
+| Limitations | Findings marked `requires runtime validation` need browser instrumentation, heap snapshots, WebGL context counters, and tab-switch stress tests. Static analysis can confirm mechanisms, but not actual heap plateau or GPU driver behavior. |
+
+Dirty files observed at analysis start:
+
+```text
+M apps/web/components/preview/r3f/FemGeometry.tsx
+M apps/web/components/preview/r3f/__tests__/femGeometryResources.test.ts
+M apps/web/components/preview/r3f/femGeometryResources.ts
+M apps/web/components/runs/control-room/ChartsViewport.tsx
+M apps/web/components/workspace/docking/center-tabs/__tests__/tabRenderPolicy.test.ts
+M apps/web/components/workspace/docking/center-tabs/tabRenderPolicy.ts
+M apps/web/components/workspace/settings/FrontendDiagnosticSettingsPage.tsx
+M apps/web/features/viewport-unified/renderers/UnifiedVectorFieldRenderer.tsx
+M apps/web/hooks/useChartPersistence.ts
+M apps/web/hooks/useScalarChartHistory.ts
+M apps/web/lib/debug/frontendDiagnosticFlags.ts
+M apps/web/src/api/client/__tests__/LiveSessionClient.test.ts
+M apps/web/src/api/client/modules/ScalarsModule.ts
+M apps/web/src/hooks/resources/useScalarHistory.ts
+M crates/fullmag-api/src/router_v2/handlers/data/scalars.rs
+```
+
+## 2. Executive verdict
+
+The current frontend architecture is **partially good, but still too transitional and ad-hoc to call architecturally optimal or memory-safe under stress**.
+
+The strongest recent decision is that hidden WebGL workspace tabs are now treated as active-only and unmounted rather than kept warm. That is the right direction for memory stability. However, the rest of the system still contains mixed lifecycle models, parallel sources of truth, entry-count-only caches for large binary fields, stale async risk in the data-plane bridge, and a ribbon command layer split between newer `VisualizationStatePatch` commands and older independent setter callbacks.
+
+Component-level verdict:
+
+| Area | Verdict |
+| --- | --- |
+| Workspace | Mostly coherent shell/docking structure, but workspace state does not own resource lifecycle explicitly. |
+| Tab lifecycle | Improved for WebGL because hidden WebGL tabs unmount, but the store still declares warm/keep-alive semantics for 2D/3D tabs while render policy overrides them. |
+| Ribbon | Registry-based contribution model is good; command execution is only partially transactional. Legacy callbacks still create multi-step state transitions. |
+| Model Builder | Domain store is intentionally separated from rendering, but integration through `ControlRoomContext`, viewport bridge, and shared model context is still tightly coupled. |
+| Viewport lifecycle | FEM R3F shell has strong lifecycle/context-loss handling; unified vector renderer has a separate Canvas path with weaker lifecycle handling. |
+| API client | Better than ad-hoc fetches: typed modules, abort support, ETag/304 support in several places, binary helpers. The application architecture is hybrid REST/RPC/live-session rather than pure REST. |
+| Resource/cache lifecycle | Uneven. Some caches have byte-budget LRU and transfer lists. Other large caches are only entry-count bounded or global without tab/session cleanup. |
+| Memory safety | Not guaranteed. Current code reduces hidden WebGL retention, but still has realistic risks of stale async updates, transient duplicate buffers, cache growth, repeated decode, and missing per-tab resource ownership. |
+
+## 3. Architecture map
+
+High-level current flow:
+
+```text
+WorkspaceShell
+  -> RunControlRoom
+    -> ControlRoomProvider
+      -> WorkspaceDockingShell
+        -> DockCenterTabs
+          -> DockCenterTabContent
+            -> ViewportTabPanel
+              -> ViewportCanvasArea
+                -> useViewportDataBridge
+                -> ViewportTabContent
+                  -> FemMeshView3D
+                    -> ScientificViewportShell
+                      -> R3F Canvas / WebGL
+                  -> UnifiedVectorFieldRenderer
+                    -> direct R3F Canvas / WebGL
+
+RibbonBar
+  -> ribbonRegistry contributions
+  -> executeRibbonCommand
+    -> VisualizationStatePatch path
+    -> legacy callback/setter path
+    -> ControlRoomContext local state and API patchDisplay
+
+Data/resource flow
+  -> LiveSessionClient singleton
+    -> typed modules
+    -> ResourceCache
+    -> binary codecs and workers
+  -> useDataPlaneBridge / resource hooks
+    -> Zustand runtime store
+    -> viewport render models
+```
+
+Important ownership observation: React component ownership, workspace tab ownership, API resource ownership, GPU resource ownership, and cache ownership are not represented by one common lifecycle object. Disposal mostly happens indirectly through component unmount and local hook cleanup.
+
+## 4. Workspace and tabs audit
+
+### Current model
+
+`apps/web/components/workspace/shell/WorkspaceShell.tsx` dynamically loads `RunControlRoom` and diagnostic pages, then passes `initialWorkspaceMode` into the main control-room workspace. `apps/web/components/workspace/docking/WorkspaceDockingShell.tsx` wraps the layout with `flexlayout-react`, creates dock nodes through a factory, and delegates model persistence to `useWorkspaceDockingRuntime`.
+
+The main center tab surface is `apps/web/components/workspace/docking/DockCenterTabs.tsx`. It reads workspace tab state from `useWorkspaceStore`, computes active tab state, renders `TabsList`, then renders one `TabsContent` per tab only when `resolveWorkspaceTabRenderDecision()` says that tab should render.
+
+Confirmed code evidence:
+
+- `DockCenterTabs.tsx` reads `currentStage`, `tabs`, `activeTabId`, and workspace actions from `useWorkspaceStore` around lines 34-42.
+- It maintains recent WebGL tab IDs and computes warm candidates around lines 149-201.
+- It passes `forceMount`, `aria-hidden`, `viewportVisible`, and hidden CSS into tab panels around lines 299-323.
+- `DockCenterTabContent.tsx` routes viewport tabs into `ViewportTabPanel`, which renders `ViewportCanvasArea` with `viewportVisible`.
+
+### Tab lifecycle and warm policy
+
+The store and render policy disagree semantically.
+
+`apps/web/lib/workspace/workspace-store.ts` defines `WorkspaceTabLifecycle` as `"unmount-on-hide" | "warm"` and sets default core 3D/2D tabs with `keepAlive: true` and `lifecycle: "warm"` around lines 77-100. `shouldWarmWorkspaceTab()` also returns true for `core:3d` and `core:2d`, and `normalizeWorkspaceTab()` forces those tabs back to warm around lines 134-153.
+
+However, `apps/web/components/workspace/docking/center-tabs/tabRenderPolicy.ts` now explicitly disables warm hidden WebGL tabs. Active tabs render. Hidden WebGL tabs return `render: false`, `forceMount: false`, and a reason such as `"warm-disabled"` or `"webgl-hidden-unmounted"`. The file comment around lines 63-70 says hidden WebGL panels must unmount because keeping them mounted caused WebGL context/resource growth.
+
+This is a good runtime safety choice, but the architecture is inconsistent:
+
+- Store-level state says 3D/2D tabs are warm.
+- Render policy says hidden WebGL tabs must unmount.
+- Diagnostic flags still contain `dockCenterTabs.enableWebGLWarmKeepAlive`, but it defaults to false in `apps/web/lib/debug/frontendDiagnosticFlags.ts`.
+
+Status: `confirmed from code`.
+
+### Are hidden heavy tabs kept mounted?
+
+For WebGL viewport tabs, current policy says no. `tabRenderPolicy.ts` treats `viewport-3d`, `viewport-2d`, `viewport-mesh`, and `result-quantity` as WebGL-like tab IDs and unmounts them when inactive.
+
+For non-WebGL warm tabs, `DockCenterTabs.tsx` can still use `forceMount` and CSS-hidden panels. That is less dangerous for GPU memory, but it still means hidden React components may keep subscriptions, timers, async operations, or cached data alive unless their own hooks are paused.
+
+### Close/switch lifecycle
+
+Closing a tab in `workspace-store.ts` removes tab metadata and picks a next active tab. There is no explicit call to a tab-scoped resource owner, cache cleanup, request abort registry, worker cancellation registry, or viewport disposal API. For WebGL tabs, disposal is expected to happen indirectly through React unmount. For caches, cleanup is mostly LRU/generation based, not tab-close based.
+
+Status: `confirmed from code`.
+
+### Switching safety
+
+Switching between WebGL tabs is safer now than a warm-hidden Canvas design because inactive WebGL panels are not rendered. Still, it is not architecturally complete:
+
+- The store still exposes warm semantics that new code could accidentally trust.
+- `applyWorkspaceTabSelection()` in `apps/web/components/workspace/docking/center-tabs/tabSelection.ts` changes workspace stage for viewport tabs, but the viewport tab branch does not directly call `handleViewModeChange("3D" | "2D" | "Mesh")` even though the tab payload contains a `viewMode`. This may be handled elsewhere, but from this function alone the view-mode transition is not explicit.
+- Resource cleanup on tab switch/close is not first-class.
+
+Status of tab-selection issue: `requires runtime validation`.
+
+## 5. Ribbon and command architecture audit
+
+### Current model
+
+`apps/web/components/shell/RibbonBar.tsx` builds a large `RibbonBuildContext` from props and builder state, then resolves UI groups via `ribbonRegistry`. That part is a reasonable contribution architecture. `apps/web/features/shell/registry/ribbonRegistry.ts` keeps module-level contributions, filters them by tab/context, sorts by priority/order, and returns grouped ribbon controls.
+
+Good elements:
+
+- Ribbon rendering is declarative through registry contributions.
+- Ribbon resource hydration/persistence uses workspace revision state and guards against hydration loops with refs.
+- Several command paths are moving toward `VisualizationStatePatch`.
+
+### Transactionality
+
+`apps/web/components/shell/ribbon/command-registry.ts` is the critical file.
+
+Confirmed behavior:
+
+- `executeRibbonCommand()` calls `visualizationPatchFromRibbonCommand()` and, if a patch exists and `ctx.onPatchVisualizationState` exists, it sends the patch and returns around lines 815-819.
+- Commands not covered by a visualization patch fall through to a switch of legacy callbacks around lines 820-970.
+- `viewport.set-global-clip` calls up to four independent callbacks: `onSetMeshClipEnabled`, `onSetMeshClipAxis`, `onSetMeshClipPos`, and `onSetMeshClipFlip` around lines 910-914.
+- `viewport.set-slice-render-mode` builds one toolbar patch object, which is better, but other slice commands remain individual patch calls around lines 919-965.
+- `ControlRoomContext.tsx` still has display reset logic that calls many local setters in sequence: mesh entity view state, render mode, opacity, clipping, arrows, air mesh visibility, air mesh opacity, and FEM layers around lines 2997-3023.
+
+Verdict: ribbon actions are **partially transactional**, not fully transactional. The newer `VisualizationStatePatch` path is good, but there are still commands that are a series of independent setter calls. React may batch some of these in event handlers, but the architecture does not guarantee one atomic resolved renderer state across async boundaries or command paths.
+
+### Communication with workspace, viewport, and model builder
+
+`RibbonBar.tsx` receives a broad prop surface and builds `RibbonBuildContext` around lines 352-470. It uses:
+
+- workspace state from `useWorkspaceStore`,
+- session runtime revisions from `useSessionRuntimeStore`,
+- geometry builder selectors from `useGeometryBuilderStore`,
+- capability fetching through `useGeometryCapabilities`,
+- command execution via `executeRibbonCommand`.
+
+The ribbon does not talk to a narrow command bus. It talks to a large contextual object containing UI state, renderer state, model state, and callbacks. This scales poorly because adding a new control often means adding more fields/callbacks to the same shared command context.
+
+### Ad-hoc coupling
+
+`RibbonBar.tsx` auto-activates core ribbon tabs based on substring checks of `selectedNodeId`: `"physics"`, `"interaction"`, `"material"`, `"geometry"`, `"mesh"`, `"study"`, `"result"`, and so on around lines 536-570. That is an ad-hoc dependency on string naming conventions rather than typed selection metadata.
+
+Status: `confirmed from code`.
+
+## 6. Model Builder integration audit
+
+### Current model
+
+`apps/web/features/geometry-builder/store/useGeometryBuilderStore.ts` is a Zustand store for builder authoring state. The top comment states that canonical production authoring is the backend `SceneDocument`, and the local store is domain-only with no rendering concerns. That is a good boundary in intent.
+
+Good elements confirmed from code:
+
+- The store tracks a dirty chain explicitly: geometry draft, realization, mesh, initial state, results.
+- Transform transactions exist to batch drag updates into one undo entry.
+- Undo stack is capped to the last 50 entries.
+- `useBuilderAutoSync.ts` explicitly says hidden auto-push was removed, and cleanup clears timers on unmount.
+
+### Coupling risks
+
+The integration layer is much less separated than the store comment suggests.
+
+`apps/web/components/runs/control-room/hooks/useModelBuilderActions.ts` mutates multiple representations:
+
+- solver settings update local solver state and model builder graph around lines 69-84;
+- mesh options update local mesh options and model builder graph around lines 86-101;
+- requested runtime updates model builder graph, scene document draft, and asynchronously patches backend runtime around lines 123-178;
+- `setSceneDocument()` rebuilds a model builder graph from a scene document around lines 236-260.
+
+`apps/web/features/viewport-unified/hooks/useViewportDataBridge.ts` subscribes to geometry builder state and installs `useBuilderKeyboardShortcuts()` inside the viewport bridge. The shortcut hook registers a global `keydown` listener and gates behavior at runtime with `builderActive`; cleanup removes the listener around lines 159-162 of `useBuilderKeyboardShortcuts.ts`.
+
+This is safe from a simple listener-leak perspective, but architecturally it means the viewport bridge is also the place where builder keyboard lifecycle is installed. That is a cross-cutting ownership boundary.
+
+### Ownership of domain data and render resources
+
+There is no single canonical frontend model that owns all of:
+
+- builder graph,
+- scene document draft,
+- remote scene document,
+- workspace tab state,
+- visualization/display state,
+- runtime normalized data,
+- render resources.
+
+Instead, ownership is split between `useGeometryBuilderStore`, `ControlRoomContext`, `useSessionRuntimeStore`, `useWorkspaceStore`, local component state, `ResourceCache`, and renderer-local resources.
+
+Verdict: Model Builder has a reasonably clean local domain store, but its integration with viewport/workspace/control-room remains too coupled and too multi-source.
+
+## 7. Viewport lifecycle audit
+
+### 3D/FEM viewport
+
+The FEM path is the strongest viewport lifecycle implementation.
+
+`apps/web/components/preview/shared/ScientificViewportShell.tsx` owns a R3F Canvas with:
+
+- hidden/paused resolution,
+- `frameloop` selection: `"never"` when hidden/paused, otherwise demand/always around lines 430-442,
+- WebGL telemetry registration around lines 443-448,
+- context-loss and context-restore listeners installed in `onCreated` around lines 490-556,
+- listener cleanup through `canvasContextCleanupRef` around lines 612-621,
+- remount generation control after context loss.
+
+`apps/web/components/preview/FemMeshView3D.tsx` passes `hidden={!viewportVisible}` into `ScientificViewportShell` and uses demand/always render policy depending on interaction/capture state around lines 1057-1104.
+
+This is a good pattern and should become the shared WebGL shell for all WebGL viewports.
+
+### 2D/vector viewport
+
+`apps/web/features/viewport-unified/renderers/UnifiedVectorFieldRenderer.tsx` contains a separate direct `Canvas` path. It uses `frameloop={viewportVisible ? "demand" : "never"}` around the Canvas region and defers vector data with `useDeferredValue(viewportVisible ? effectiveVectors : null)`, which is a good hidden-state pressure reducer.
+
+However, static search did not find explicit `webglcontextlost` or `webglcontextrestored` handling in this direct Canvas path. This means context-loss handling is not uniform across WebGL surfaces.
+
+Status: `confirmed from code` for missing handler in the inspected file; runtime behavior still `requires runtime validation`.
+
+### Mesh viewport
+
+The old `viewport-mesh` tab is treated as deprecated in `workspace-store.ts`; `coreTabIdForViewMode("Mesh")` maps Mesh to `core:3d`. The workspace has effectively folded Mesh into the 3D core tab, while render routing decides whether the 3D tab is geometry authoring, FEM mesh, result quantity, or other route.
+
+This is a good simplification for WebGL tab count, but it also increases the need for a clear resolved render model inside the 3D viewport.
+
+### `frameloop="never"` semantics
+
+`frameloop="never"` stops R3F rendering, but it does not free:
+
+- WebGL context,
+- GPU buffers,
+- geometries,
+- materials,
+- textures,
+- event listeners,
+- decoded typed arrays,
+- cache entries.
+
+Because hidden WebGL workspace tabs now unmount, this is acceptable for current tab switching. It would not be sufficient if warm-hidden WebGL tabs are re-enabled.
+
+### Geometry/material/texture disposal
+
+Good patterns exist:
+
+- `apps/web/components/preview/r3f/useFemGeometryDisposalAudit.ts` tracks geometry resources and releases them on unmount.
+- `apps/web/components/preview/r3f/femGeometryResources.ts` estimates volume edge bytes and skips volume edge generation above a 32 MB default budget.
+- `apps/web/components/preview/r3f/FdmInstances.tsx` tracks geometry, material, and instance buffers through resource tracking hooks.
+- `apps/web/components/preview/r3f/ViewportResourceManager.ts` has byte-budget buckets and `disposeAll()`.
+
+But these patterns are not universal and not tied to workspace tab close.
+
+## 8. API and REST architecture audit
+
+The frontend does not use pure REST. It uses a **hybrid live-session API**:
+
+- REST-like resource paths in `apps/web/src/api/client/sessionPaths.ts`,
+- command/RPC-style endpoints such as simulation commands and mesh build commands,
+- WebSocket events at `/v2/sessions/current/events/ws`,
+- workspace resources for layout/ribbon/selection,
+- visualization state patching,
+- binary resource transport for field vectors and topology.
+
+This hybrid architecture is appropriate for an interactive simulation workspace, but it requires strict revision, cache, abort, and resource ownership rules.
+
+Good API architecture:
+
+- `LiveSessionClient` has typed modules (`status`, `domain`, `fields`, `mesh`, `workspace`, `scene`, etc.) around lines 80-99.
+- It centralizes request execution, timeout, retry, cache mode, and abort wiring.
+- `RequestOptions` support `signal`, `timeoutMs`, headers, cache, and allow-not-modified.
+- `getJsonResponse()` and `getBinaryResponse()` support `304 Not Modified`.
+- `ResourceCache` has byte-size estimation, a default 100 MB budget, LRU eviction, generation invalidation, and ETag storage.
+
+Weak spots:
+
+- Some modern resource hooks use the client correctly with abort, ETag, inflight dedupe, and stale guards.
+- The data-plane bridge still uses direct async fire-and-forget flows without consistent abort/stale guards.
+- Binary field caches in `ControlRoomContext.tsx` use entry-count caps rather than byte budgets.
+- There is no single canonical frontend data model. DTOs, runtime store state, display state, builder state, renderer props, and cache entries coexist.
+
+## 9. Resource ownership and memory safety audit
+
+### Caches
+
+Good caches:
+
+- `ResourceCache`: byte-budget LRU, ETag support.
+- `femSliceCache`: topology and field caches with entry and byte budgets.
+- `useFieldVector` and `useFieldSlice2D`: inflight dedupe, abort when last consumer releases, ETag/304, stale guard.
+
+Risky caches:
+
+- `binaryFieldCacheRef` and `scopedBinaryFieldCacheRef` in `ControlRoomContext.tsx` keep up to four entries each, but capacity is count-based, not byte-based.
+- `femMeshTopologyCacheRef` is only two entries, but each cached mesh may duplicate typed topology buffers into nested JS arrays.
+- Global debug/resource maps such as `viewportResourceManager.ts` and frontend resource bucket maps rely on explicit release/updates and are not tab-scoped.
+
+### Typed arrays and binary transport
+
+Good:
+
+- `decodeFieldVectorOffThread()` can transfer input buffers to the worker with `transferInput: true`.
+- `binaryDecode.worker.ts` posts decoded payloads back with a transfer list.
+- Transfer list tests exist for binary codecs.
+
+Risk:
+
+- `useFemSliceSampling.ts` posts `meshData` to the worker without a transfer list. The worker path is disabled by default through diagnostic flags, but if enabled it can structured-clone large mesh buffers and create transient memory spikes.
+- `ControlRoomContext.tsx` converts decoded topology typed arrays into nested JS arrays and also keeps typed `topology_buffers`, duplicating topology memory.
+- `FdmInstances.tsx` uses `.slice()` on previous visible matrices/colors during animation, which can duplicate large buffers transiently.
+
+### Abort, stale guards, and inflight dedupe
+
+Strong:
+
+- `useFieldVector.ts` has a global inflight map, per-consumer release, `AbortController`, post-await abort checks, and active request refs before state updates.
+- `useFieldSlice2D.ts` has the same pattern.
+
+Weak:
+
+- `useDataPlaneBridge.ts` watchers call async fetch functions via `void fetch...`.
+- `fetchFieldVector()` does not pass `AbortSignal` into `client.fields.getVectorResponse()`.
+- `fetchFieldVector()` writes into `useSessionRuntimeStore` after fetch/decode without checking that the runtime scope, revision, quantity, or tab is still current.
+- `fetchMeshTopology()` does a `Promise.all()`, decodes topology off-thread, and writes into the runtime store without a request token/stale guard after every await.
+
+### Event listeners and observers
+
+Confirmed safe patterns:
+
+- `WorkspaceDockingShell.tsx` adds and removes resize listeners.
+- `ScientificViewportShell.tsx` removes WebGL context listeners.
+- `useBuilderKeyboardShortcuts.ts` removes the global keydown listener.
+- `UnifiedVectorFieldRenderer.tsx` removes its keyboard transform listener.
+
+No confirmed event-listener leak was found in the inspected code. Remaining listener behavior still needs runtime validation under tab churn because hidden non-WebGL panels can remain force-mounted.
+
+## 10. Findings table
+
+| ID | Severity | Status | File(s) | Finding | Evidence | Impact | Recommendation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| F01 | P1 | confirmed from code | `workspace-store.ts`, `tabRenderPolicy.ts`, `frontendDiagnosticFlags.ts` | Store says core 2D/3D tabs are warm, but render policy unmounts hidden WebGL tabs. | `workspace-store.ts` default tabs use `keepAlive: true` and `lifecycle: "warm"`; `tabRenderPolicy.ts` returns `render: false` for hidden WebGL. | Inconsistent architecture; future code may rely on warm state and accidentally retain WebGL resources. | Replace ambiguous `keepAlive/lifecycle` with explicit `TabLifecycle`: active, hidden-mounted, suspended, unmounted. For WebGL, make active-only policy explicit in state. |
+| F02 | P1 | confirmed from code | `workspace-store.ts`, `DockCenterTabs.tsx` | Closing/switching tabs does not invoke a tab-scoped resource cleanup owner. | Store actions remove tab metadata; render policy controls unmount, but no cache/request/worker/resource owner is called. | Caches and async work can outlive tab close; WebGL relies on indirect React unmount only. | Add `ViewportResourceOwner` keyed by tab/session. Close/switch should abort requests, release cache scopes, terminate/refcount workers, and dispose renderer resources. |
+| F03 | P1 | confirmed from code | `useDataPlaneBridge.ts` | Heavy data-plane fetches lack consistent abort, stale guards, and inflight dedupe. | `fetchFieldVector()` awaits vector response and worker decode then writes store; watchers call `void fetch...`; mesh topology fetch has `Promise.all()` and store write without request token. | Stale async updates after session/run/tab/revision change; repeated fetch/decode; memory pressure from obsolete work. | Use the `useFieldVector`/`useFieldSlice2D` pattern: request keys, `AbortController`, post-await stale checks, last-consumer cleanup, and inflight dedupe. |
+| F04 | P1 | confirmed from code | `ControlRoomContext.tsx` | Binary field caches are entry-count capped, not byte-budget capped. | `binaryFieldCacheRef` and `scopedBinaryFieldCacheRef` evict while `cache.size > 4`; estimated bytes are telemetry only. | Four large fields can exceed heap/GPU budget and trigger transient or retained OOM. | Replace with byte-budget LRU, scoped by session/run/quantity, with explicit clear on session change and tab close. |
+| F05 | P1 | confirmed from code | `ControlRoomContext.tsx` | FEM topology hydration duplicates topology as nested arrays and typed buffers. | Binary topology decode builds `nodes`, `elements`, `boundary_faces` arrays and also stores `topology_buffers`. | Large FEM meshes may retain duplicated CPU memory. | Make typed topology buffers canonical; expose array-like adapters only where needed, or convert lazily per consumer with bounded lifetime. |
+| F06 | P2 | confirmed from code | `ScientificViewportShell.tsx`, `UnifiedVectorFieldRenderer.tsx` | WebGL context-loss handling is not uniform. | `ScientificViewportShell` handles `webglcontextlost/restored`; direct Canvas in `UnifiedVectorFieldRenderer` does not show equivalent handlers. | Context loss recovery differs by viewport; direct Canvas can fail or retain bad state under GPU pressure. | Route all WebGL canvases through `ScientificViewportShell` or extract a shared `ManagedR3FCanvas`. |
+| F07 | P2 | high-confidence mechanism | `ScientificViewportShell.tsx`, `UnifiedVectorFieldRenderer.tsx`, `tabRenderPolicy.ts` | `frameloop="never"` pauses rendering but does not free resources. | Hidden/paused paths set frameloop to never; current tab policy unmounts hidden WebGL. | If warm WebGL is re-enabled, hidden canvases retain contexts, buffers, textures, and listeners. | Keep WebGL active-only unless a suspended lifecycle explicitly releases GPU resources and can restore deterministically. |
+| F08 | P1 | high-confidence mechanism | `useFemSliceSampling.ts` | FEM slice worker path posts large mesh data without transfer list and uses a singleton worker. | Worker is module-level; `worker.postMessage({ meshData, ... })` has no transfer list. Feature flag is currently off. | If enabled, structured clone can duplicate large buffers and cause transient OOM/repeated worker cost. | Transfer compact typed buffers, add request cancellation/refcounting, and terminate worker on last consumer or session close. |
+| F09 | P2 | confirmed from code | `FdmInstances.tsx` | Instance animation snapshots duplicate large arrays with `.slice()`. | Previous visible matrices/colors are stored using `matrices.slice()` and `colors.slice()`. | Large FDM grids can transiently double CPU memory during animation/update. | Use reusable scratch buffers, size thresholds, or disable animated interpolation above a buffer budget. |
+| F10 | P2 | confirmed from code | `command-registry.ts`, `ControlRoomContext.tsx` | Ribbon commands are not fully transactional. | Some commands return through `VisualizationStatePatch`; others call legacy callbacks, and global clip/reset calls multiple setters. | One user action can produce several intermediate renderer states and invalidations. | Move all visualization-affecting commands to one command reducer producing one `VisualizationStatePatch` or one local transaction. |
+| F11 | P2 | confirmed from code | `ControlRoomContext.tsx`, `context-hooks.tsx` | Frontend state is fragmented across many local states and contexts. | `ControlRoomContext.tsx` has dozens of `useState` calls; `modelValue` is a huge memo with a broad dependency list. | Renderer decisions derive from distributed props; unnecessary re-renders and resource rebuilds become hard to reason about. | Introduce canonical `WorkspaceState`, `VisualizationState`, `ViewportState`, and a derived `ResolvedRenderModel`. |
+| F12 | P2 | confirmed from code | `RibbonBar.tsx` | Ribbon tab auto-activation depends on substring heuristics in node IDs. | Selection strings are lowercased and matched with `includes("physics")`, `includes("mesh")`, etc. | Renaming IDs or adding nodes can silently change ribbon behavior. | Replace with typed selection metadata: node kind, domain area, contextual ribbon group IDs. |
+| F13 | P2 | requires runtime validation | `tabSelection.ts` | Viewport tab selection does not explicitly call view-mode transition for core viewport tabs. | `applyWorkspaceTabSelection()` sets workspace mode for viewport tabs, but the branch does not use `payload.viewMode`. | Clicking 2D/3D/Mesh tabs may leave view mode stale if no other code corrects it. | Make tab activation one transaction: active tab, workspace mode, viewport mode, selected result quantity, and render route. |
+| F14 | P2 | confirmed from code | `sessionPaths.ts`, `controlRoomApi.ts`, `LiveSessionClient.ts` | API architecture is hybrid REST/RPC/live-session, not pure REST. | Paths include resources, commands, WebSocket events, visualization patching, binary samples, and workspace resources. | This is appropriate, but state consistency depends on revision discipline and cache invalidation. | Document API categories and require request keying, ETag, abort, and binary transport rules per category. |
+| F15 | P3 | confirmed from code | `viewportResourceManager.ts`, frontend diagnostic resource managers | Some resource telemetry/global maps are process-global and rely on manual release. | Module-level `Map` records resources/buckets. | Debug data can drift; missing release can keep references in diagnostic paths. | Scope diagnostics by session and owner, and remove buckets/resources on owner disposal. |
+| F16 | P3 | confirmed from code | `ControlRoomContext.tsx` | Stray top-level `airboxDisabledByDefault` remains after provider code. | Tail of file defines `const airboxDisabledByDefault = ...` outside the provider. | Not a memory problem, but indicates unfinished cleanup and may trip strict unused checks. | Remove or move into the provider where it is used. |
+
+## 11. What is already good
+
+- Hidden WebGL workspace tabs are currently unmounted, which is the right default for memory safety.
+- `ScientificViewportShell` has real WebGL context-loss/context-restore handling and cleanup.
+- `ResourceCache` is byte-budgeted and supports generation invalidation and ETags.
+- `useFieldVector` and `useFieldSlice2D` are good examples of abortable, deduped, stale-guarded resource hooks.
+- Binary codec worker transport uses transfer lists for input and decoded typed-array outputs.
+- FEM geometry resource code includes byte preflight for volume edges and disposal tracking.
+- `femSliceCache` has both entry and byte budgets.
+- Geometry Builder store has clear domain intent, dirty-chain comments, capped undo, and transform transactions.
+- Ribbon registry/contribution architecture is a reasonable direction for scalable UI composition.
+- Workspace docking factory and persistence are separated from tab content rendering.
+
+## 12. What is ad-hoc or dirty
+
+- Warm tab state exists in the store while WebGL warm rendering is disabled in policy. The architecture says two different things.
+- Ribbon selected-node auto-tab logic is string-substring based.
+- `ControlRoomContext.tsx` is a central accumulation point for UI state, model builder state, renderer state, resource caches, API calls, and command callbacks.
+- Visualization state is partly server-patched and partly local setter driven.
+- Large field caches in `ControlRoomContext.tsx` are capped by number of entries, not bytes.
+- Model Builder is domain-separated internally, but its integration mutates model graph, scene draft, solver/mesh settings, and backend runtime from the same hook.
+- Direct WebGL Canvas usage exists outside the managed viewport shell.
+- Some worker paths are strong and transferable; other worker paths still structured-clone large objects.
+
+## 13. Recommended target architecture
+
+Target model:
+
+```text
+WorkspaceState
+  tabs: TabDescriptor[]
+  activeTabId
+  activeWorkspaceMode
+  tabLifecycleById: TabLifecycle
+
+TabLifecycle
+  state: active | hidden-mounted | suspended | unmounted | disposed
+  resourceOwnerId
+  allowedRetention: none | cpu-cache | gpu-cache
+
+VisualizationState
+  display selection
+  render mode
+  clip
+  opacity
+  layer visibility
+  vector style
+  slice state
+
+ResolvedRenderModel
+  derived once from WorkspaceState + VisualizationState + RuntimeData
+  passed to renderer as stable, explicit data
+
+ResourcePlan
+  required CPU buffers
+  required GPU resources
+  cache keys
+  worker jobs
+  byte budgets
+
+ViewportResourceOwner
+  owns AbortControllers
+  owns worker requests
+  owns cache scope
+  owns Three resources
+  disposes on hidden/suspended/unmounted/closed
+```
+
+Recommended flow:
+
+```text
+Ribbon command / tab activation / model change
+  -> command reducer
+    -> one WorkspaceState or VisualizationState transaction
+      -> derive ResolvedRenderModel
+        -> diff ResourcePlan
+          -> ViewportResourceOwner acquire/release
+            -> renderer receives ready resources
+```
+
+The renderer should not infer major data-fetch/resource decisions from many independent props. It should receive a resolved model and a resource owner context.
+
+## 14. Migration plan
+
+### Stage 1: P0/P1 stabilizations
+
+Files:
+
+- `apps/web/features/session-runtime/hooks/useDataPlaneBridge.ts`
+- `apps/web/components/runs/control-room/ControlRoomContext.tsx`
+- `apps/web/components/workspace/docking/center-tabs/tabRenderPolicy.ts`
+- `apps/web/lib/workspace/workspace-store.ts`
+
+Scope:
+
+- Add request tokens and `AbortController` to data-plane bridge fetches.
+- Add post-await stale checks before each `applyNormalizedState`.
+- Replace entry-count binary field caches with byte-budget LRU.
+- Align workspace store lifecycle names with current active-only WebGL policy.
+
+Expected effect:
+
+- Lower stale update risk.
+- Lower transient OOM risk for fields.
+- Less ambiguity around hidden WebGL tabs.
+
+### Stage 2: Lifecycle and resource ownership
+
+Files:
+
+- `DockCenterTabs.tsx`
+- `workspace-store.ts`
+- `useViewportDataBridge.ts`
+- `viewportResourceManager.ts`
+- `ViewportResourceManager.ts`
+
+Scope:
+
+- Introduce `ViewportResourceOwner` per tab/session.
+- Close/switch lifecycle should call owner suspend/dispose.
+- Move request abort, cache-scope cleanup, worker cancellation, and Three resource disposal behind that owner.
+
+Expected effect:
+
+- Tab close becomes an actual resource lifecycle event rather than a metadata update.
+
+### Stage 3: Transactional ribbon and visualization state
+
+Files:
+
+- `command-registry.ts`
+- `RibbonBar.tsx`
+- `ControlRoomContext.tsx`
+- `ViewportBar.tsx`
+
+Scope:
+
+- Convert remaining legacy visualization setter commands into `VisualizationStatePatch`.
+- Add one local transaction path for display reset, clip, slice, opacity, layers, and vector style.
+- Remove selected-node substring heuristics and use typed selection metadata.
+
+Expected effect:
+
+- One user action produces one renderer state transition.
+- Fewer intermediate resource invalidations.
+
+### Stage 4: Renderer and cache refactor
+
+Files:
+
+- `ScientificViewportShell.tsx`
+- `UnifiedVectorFieldRenderer.tsx`
+- `FemMeshView3D.tsx`
+- `useFemSliceSampling.ts`
+- `FdmInstances.tsx`
+
+Scope:
+
+- Route direct Canvas renderers through a managed shared WebGL shell.
+- Add uniform context-loss handling.
+- Convert FEM slice worker payloads to transferable compact buffers.
+- Remove large `.slice()` animation snapshots above a budget.
+- Make `ResolvedRenderModel` the renderer input and isolate resource rebuilding behind explicit keys.
+
+Expected effect:
+
+- Fewer duplicated buffers.
+- Uniform WebGL recovery.
+- More predictable renderer invalidation.
+
+## 15. Validation plan
+
+Unit tests:
+
+- `tabRenderPolicy`: active-only WebGL, no warm hidden WebGL, non-WebGL force-mount behavior.
+- `WorkspaceState` reducer: tab activation/close disposes the right owner.
+- `ResourceCache`: byte eviction for large typed arrays.
+- `BinaryFieldCache`: byte-budget eviction and session-scope clearing.
+- `VisualizationState` command reducer: one command produces one patch/transaction.
+- `useDataPlaneBridge`: stale request cannot write after scope/revision changes.
+- Worker transfer utilities: every large binary path has expected transfer lists.
+
+Integration tests:
+
+- Open 3D, 2D, result quantity, charts, analyze; switch repeatedly; assert WebGL tabs unmount when inactive.
+- Close a tab with inflight field/topology fetch; assert request abort and no store write.
+- Switch sessions/runs during a field decode; assert stale response is discarded.
+- Change ribbon clip settings; assert only one resolved render model version is emitted.
+
+Playwright/stress harness:
+
+- Repeatedly switch `core:3d` and `core:2d` 200 times.
+- Open/close result quantity tabs with large field data.
+- Toggle FEM Mesh/2D slice/vector overlays repeatedly.
+- Enable context-loss simulation and verify recovery for all WebGL canvases.
+
+Runtime metrics to collect:
+
+- mounted tabs,
+- mounted WebGL tabs,
+- active canvases,
+- WebGL contexts,
+- `three.info.memory.geometries`,
+- `three.info.memory.textures`,
+- resource cache bytes,
+- topology cache bytes,
+- field vector inflight count,
+- worker decode pending count,
+- binary field cache bytes,
+- scoped binary field cache bytes,
+- heap plateau after tab switching,
+- retained ArrayBuffers after session switch,
+- context-lost/context-restored event counts.
+
+Pass criteria:
+
+- Hidden WebGL tab count is zero.
+- WebGL contexts return to baseline after tab close.
+- Heap reaches a plateau after repeated tab switching.
+- Binary field cache stays under configured byte budget.
+- No stale data-plane write after session/run/revision switch.
+- Worker pending count returns to zero.
+
+## 16. Final recommendation
+
+The current architecture is **not a clean final architecture**, but it contains several good stabilization moves. The most important one is the active-only WebGL tab policy. Keep that.
+
+The critical next work is not a full rewrite. The first repairs should be targeted:
+
+1. Fix stale async and missing abort/stale guards in `useDataPlaneBridge.ts`.
+2. Replace count-capped binary field caches with byte-budgeted scoped caches.
+3. Align workspace tab lifecycle state with the actual WebGL unmount policy.
+4. Introduce a tab/viewport resource owner that explicitly disposes requests, cache scopes, workers, and renderer resources.
+5. Finish moving ribbon visualization commands into a single transactional state patch path.
+
+After that, the larger architectural cleanup should focus on a canonical `VisualizationState`, a resolved render model, and managed WebGL Canvas ownership across all viewport implementations.
+
+## Most important files analyzed
+
+- `apps/web/components/workspace/shell/WorkspaceShell.tsx`
+- `apps/web/components/workspace/docking/WorkspaceDockingShell.tsx`
+- `apps/web/components/workspace/docking/DockCenterTabs.tsx`
+- `apps/web/components/workspace/docking/center-tabs/tabRenderPolicy.ts`
+- `apps/web/components/workspace/docking/center-tabs/tabSelection.ts`
+- `apps/web/components/workspace/docking/center-tabs/DockCenterTabContent.tsx`
+- `apps/web/components/workspace/docking/center-tabs/panels/ViewportTabPanel.tsx`
+- `apps/web/lib/workspace/workspace-store.ts`
+- `apps/web/lib/debug/frontendDiagnosticFlags.ts`
+- `apps/web/components/shell/RibbonBar.tsx`
+- `apps/web/components/shell/ribbon/command-registry.ts`
+- `apps/web/features/shell/registry/ribbonRegistry.ts`
+- `apps/web/components/runs/control-room/ControlRoomContext.tsx`
+- `apps/web/components/runs/control-room/context-hooks.tsx`
+- `apps/web/components/runs/control-room/controlRoomApi.ts`
+- `apps/web/components/runs/control-room/hooks/useModelBuilderActions.ts`
+- `apps/web/components/runs/control-room/hooks/useBuilderAutoSync.ts`
+- `apps/web/features/geometry-builder/store/useGeometryBuilderStore.ts`
+- `apps/web/features/geometry-builder/viewport/useBuilderKeyboardShortcuts.ts`
+- `apps/web/features/viewport-unified/hooks/useViewportDataBridge.ts`
+- `apps/web/features/viewport-unified/renderers/ViewportTabContent.tsx`
+- `apps/web/features/viewport-unified/renderers/UnifiedVectorFieldRenderer.tsx`
+- `apps/web/components/preview/FemMeshView3D.tsx`
+- `apps/web/components/preview/shared/ScientificViewportShell.tsx`
+- `apps/web/components/preview/r3f/FemGeometry.tsx`
+- `apps/web/components/preview/r3f/femGeometryResources.ts`
+- `apps/web/components/preview/r3f/useFemGeometryDisposalAudit.ts`
+- `apps/web/components/preview/r3f/ViewportResourceManager.ts`
+- `apps/web/components/preview/r3f/FdmInstances.tsx`
+- `apps/web/components/preview/fem/femSliceCache.ts`
+- `apps/web/components/preview/fem/useFemSliceSampling.ts`
+- `apps/web/src/api/client/LiveSessionClient.ts`
+- `apps/web/src/api/client/sessionPaths.ts`
+- `apps/web/src/api/client/cache/ResourceCache.ts`
+- `apps/web/src/api/client/modules/FieldsModule.ts`
+- `apps/web/src/api/codecs/decodeOffThread.ts`
+- `apps/web/src/api/codecs/binaryDecode.worker.ts`
+- `apps/web/src/api/codecs/transferables.ts`
+- `apps/web/src/hooks/resources/useFieldVector.ts`
+- `apps/web/src/hooks/resources/useFieldSlice2D.ts`
+- `apps/web/features/session-runtime/store/useSessionRuntimeStore.ts`

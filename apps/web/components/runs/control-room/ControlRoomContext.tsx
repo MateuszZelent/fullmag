@@ -18,6 +18,7 @@ import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelection";
 import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
+import { buildFemMeshFromDecodedTopology } from "@/src/hooks/resources/meshFemResource";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import {
@@ -29,6 +30,7 @@ import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
 import { useFemMeshDerived } from "./hooks/useFemMeshDerived";
 import { useMeshCommandPipeline } from "./hooks/useMeshCommandPipeline";
+import { useViewportVisualizationState } from "./hooks/useViewportVisualizationState";
 import { useVisualizationPresets } from "./hooks/useVisualizationPresets";
 import { useWorkspaceActions } from "./hooks/useWorkspaceActions";
 import { buildAuthoredMagnetizationPreview } from "./authoredMagnetizationPreview";
@@ -143,6 +145,7 @@ import {
 } from "./femVectorScopes";
 import {
   buildViewportDisplayReset,
+  visualizationPatchForViewportDisplayDefaults,
   type ViewportDisplayDefaults,
 } from "../../../features/viewport-fem/model/femResetCommand";
 
@@ -159,7 +162,9 @@ import {
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
 import {
+  projectResolvedRenderPlanToViewportState,
   resolveRenderPlanFromVisualizationState,
+  type ViewportVisualizationState,
 } from "./visualizationStateSync";
 import {
   resolveFailedWorkspaceSelectionPersistence,
@@ -277,13 +282,61 @@ type ScopedBinaryFieldFrame = {
   scopes: FemVectorScope[];
 };
 
+const BINARY_FIELD_CACHE_MAX_ENTRIES = 4;
+const BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+
+function estimateBinaryFieldFrameBytes(frame: BinaryFieldFrame): number {
+  return frame.values.byteLength + frame.key.length * 2 + frame.quantityId.length * 2 + 128;
+}
+
+function estimateScopedBinaryFieldFrameBytes(frame: ScopedBinaryFieldFrame): number {
+  const maskBytes = frame.activeMask ? frame.activeMask.length : 0;
+  const scopeBytes = frame.scopes.reduce(
+    (total, scope) => total + scope.kind.length * 2 + (scope.id?.length ?? 0) * 2 + 32,
+    0,
+  );
+  return frame.values.byteLength + maskBytes + scopeBytes + frame.key.length * 2 + frame.quantityId.length * 2 + 160;
+}
+
 function estimateBinaryFieldCacheBytes(cache: Map<string, BinaryFieldFrame>): number {
   let bytes = 0;
   for (const frame of cache.values()) {
-    bytes += frame.values.byteLength;
-    bytes += 96;
+    bytes += estimateBinaryFieldFrameBytes(frame);
   }
   return bytes;
+}
+
+function estimateScopedBinaryFieldCacheBytes(cache: Map<string, ScopedBinaryFieldFrame>): number {
+  let bytes = 0;
+  for (const frame of cache.values()) {
+    bytes += estimateScopedBinaryFieldFrameBytes(frame);
+  }
+  return bytes;
+}
+
+function pruneBinaryFieldCache<T>(
+  cache: Map<string, T>,
+  estimateFrameBytes: (frame: T) => number,
+  maxBytes: number,
+): number {
+  let estimatedBytes = Array.from(cache.values()).reduce(
+    (total, frame) => total + estimateFrameBytes(frame),
+    0,
+  );
+  while (
+    cache.size > 0 &&
+    (cache.size > BINARY_FIELD_CACHE_MAX_ENTRIES || estimatedBytes > maxBytes)
+  ) {
+    const firstKey = cache.keys().next().value;
+    if (!firstKey) {
+      break;
+    }
+    const evicted = cache.get(firstKey);
+    cache.delete(firstKey);
+    estimatedBytes -= evicted ? estimateFrameBytes(evicted) : 0;
+  }
+  return Math.max(0, estimatedBytes);
 }
 
 function femVectorScopeKey(scopes: FemVectorScope[]): string {
@@ -399,31 +452,50 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [femDockTab, setFemDockTab] = useState<FemDockTab>("mesh");
-  const [meshRenderMode, setMeshRenderMode] = useState<RenderMode>("surface");
-  const [meshOpacity, setMeshOpacity] = useState(100);
-  const [meshClipEnabled, setMeshClipEnabled] = useState(false);
-  const [meshClipAxis, setMeshClipAxis] = useState<ClipAxis>("x");
-  const [meshClipPos, setMeshClipPos] = useState(50);
-  const [meshClipFlip, setMeshClipFlip] = useState(false);
-  const [meshShowArrows, setMeshShowArrows] = useState(false);
   const [femTextureDownsampleCells, setFemTextureDownsampleCells] = useState(65_536);
-  const [femVectorGlyphBudget, setFemVectorGlyphBudget] = useState(1_200);
-  const [femArrowColorMode, setFemArrowColorMode] = useState<
-    "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome"
-  >("orientation");
-  const [femArrowMonoColor, setFemArrowMonoColor] = useState("#00c2ff");
-  const [femArrowAlpha, setFemArrowAlpha] = useState(1);
-  const [femArrowLengthScale, setFemArrowLengthScale] = useState(1);
-  const [femArrowThickness, setFemArrowThickness] = useState(1);
-  const [femVectorDomainFilter, setFemVectorDomainFilter] = useState<
-    "auto" | "magnetic_only" | "full_domain" | "airbox_only"
-  >("auto");
-  const [femFerromagnetVisibilityMode, setFemFerromagnetVisibilityMode] = useState<
-    "hide" | "ghost"
-  >("hide");
-  const [femViewportLayers, setFemViewportLayers] = useState<FemViewportLayerState>(
-    DEFAULT_FEM_VIEWPORT_LAYER_STATE,
-  );
+  const [
+    viewportVisualizationState,
+    setViewportVisualizationState,
+  ] = useViewportVisualizationState({
+    meshRenderMode: "surface",
+    meshOpacity: 100,
+    meshClipEnabled: false,
+    meshClipAxis: "x",
+    meshClipPos: 50,
+    meshClipFlip: false,
+    meshShowArrows: false,
+    femVectorGlyphBudget: 1_200,
+    femArrowColorMode: "orientation",
+    femArrowMonoColor: "#00c2ff",
+    femArrowAlpha: 1,
+    femArrowLengthScale: 1,
+    femArrowThickness: 1,
+    femVectorDomainFilter: "auto",
+    femFerromagnetVisibilityMode: "hide",
+    femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+    airMeshVisible: false,
+    airMeshOpacity: DEFAULT_AIR_MESH_OPACITY,
+  });
+  const {
+    meshRenderMode,
+    meshOpacity,
+    meshClipEnabled,
+    meshClipAxis,
+    meshClipPos,
+    meshClipFlip,
+    meshShowArrows,
+    femVectorGlyphBudget,
+    femArrowColorMode,
+    femArrowMonoColor,
+    femArrowAlpha,
+    femArrowLengthScale,
+    femArrowThickness,
+    femVectorDomainFilter,
+    femFerromagnetVisibilityMode,
+    femViewportLayers,
+    airMeshVisible,
+    airMeshOpacity,
+  } = viewportVisualizationState;
   const [viewportLegendVisible, setViewportLegendVisible] = useState(false);
   const [viewportAxesScope, setViewportAxesScope] = useState<"universe" | "object">("universe");
   const [universeWireframeVisible, setUniverseWireframeVisible] = useState(true);
@@ -440,8 +512,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [focusObjectRequest, setFocusObjectRequest] = useState<FocusObjectRequest | null>(null);
   const [objectViewMode, setObjectViewMode] = useState<ObjectViewMode>("context");
   const [activeTransformScope, setActiveTransformScope] = useState<"object" | "texture" | null>(null);
-  const [airMeshVisible, setAirMeshVisible] = useState(false);
-  const [airMeshOpacity, setAirMeshOpacity] = useState(DEFAULT_AIR_MESH_OPACITY);
   const [meshEntityViewState, setMeshEntityViewState] = useState<MeshEntityViewStateMap>({});
   const [visibleSubmeshSnapshot, setVisibleSubmeshSnapshot] =
     useState<VisibleSubmeshSnapshot | null>(null);
@@ -502,79 +572,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         ? previous
         : plan.quantity.fieldComponent,
     );
-    setMeshRenderMode((previous) =>
-      previous === plan.layers.renderMode ? previous : plan.layers.renderMode,
+    setViewportVisualizationState((previous) =>
+      projectResolvedRenderPlanToViewportState(plan, previous),
     );
-    setMeshOpacity((previous) =>
-      previous === plan.layers.meshOpacityPercent ? previous : plan.layers.meshOpacityPercent,
-    );
-    setMeshShowArrows((previous) =>
-      previous === plan.layers.vectorsVisible ? previous : plan.layers.vectorsVisible,
-    );
-    setFemVectorGlyphBudget((previous) =>
-      previous === plan.sampling.maxGlyphs ? previous : plan.sampling.maxGlyphs,
-    );
-    setFemVectorDomainFilter((previous) =>
-      plan.layers.vectorDomainFilter == null || previous === plan.layers.vectorDomainFilter
-        ? previous
-        : plan.layers.vectorDomainFilter,
-    );
-    setFemViewportLayers((previous) => {
-      const next = plan.layers.femLayers;
-      return previous.showPrimitives === next.showPrimitives &&
-        previous.showMesh === next.showMesh &&
-        previous.showMagneticTexture === next.showMagneticTexture &&
-        previous.showQuantity === next.showQuantity
-        ? previous
-        : next;
-    });
-    setAirMeshVisible((previous) =>
-      previous === plan.layers.airboxVisible ? previous : plan.layers.airboxVisible,
-    );
-    setAirMeshOpacity((previous) =>
-      previous === plan.layers.airboxOpacityPercent
-        ? previous
-        : plan.layers.airboxOpacityPercent,
-    );
-    setMeshClipEnabled((previous) =>
-      previous === plan.clip.enabled ? previous : plan.clip.enabled,
-    );
-    setMeshClipAxis((previous) =>
-      previous === plan.clip.axis ? previous : plan.clip.axis,
-    );
-    setMeshClipPos((previous) =>
-      previous === plan.clip.positionPercent
-        ? previous
-        : plan.clip.positionPercent,
-    );
-    setMeshClipFlip((previous) =>
-      previous === plan.clip.flipped ? previous : plan.clip.flipped,
-    );
-    setFemArrowColorMode((previous) =>
-      previous === plan.vectorStyle.colorMode ? previous : plan.vectorStyle.colorMode,
-    );
-    setFemArrowMonoColor((previous) =>
-      previous === plan.vectorStyle.monoColor
-        ? previous
-        : plan.vectorStyle.monoColor,
-    );
-    setFemArrowAlpha((previous) =>
-      previous === plan.vectorStyle.alpha ? previous : plan.vectorStyle.alpha,
-    );
-    setFemArrowLengthScale((previous) =>
-      previous === plan.vectorStyle.lengthScale
-        ? previous
-        : plan.vectorStyle.lengthScale,
-    );
-    setFemArrowThickness((previous) =>
-      previous === plan.vectorStyle.thickness ? previous : plan.vectorStyle.thickness,
-    );
-    setFemFerromagnetVisibilityMode((previous) =>
-      previous === plan.vectorStyle.ferromagnetVisibility
-        ? previous
-        : plan.vectorStyle.ferromagnetVisibility,
-    );
-  }, [femViewportLayers]);
+  }, [femViewportLayers, setViewportVisualizationState]);
 
   const resolvedRenderPlan = useMemo(
     () =>
@@ -582,6 +583,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         ? resolveRenderPlanFromVisualizationState(visualizationStateResource, femViewportLayers)
         : null,
     [femViewportLayers, visualizationStateResource],
+  );
+  const effectiveViewportVisualizationState = useMemo(
+    () => projectResolvedRenderPlanToViewportState(
+      resolvedRenderPlan,
+      viewportVisualizationState,
+    ),
+    [resolvedRenderPlan, viewportVisualizationState],
   );
 
   useEffect(() => {
@@ -807,37 +815,19 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       })
       .then((buffer) => {
         const topo = decodeTopology(buffer);
-        const nextMesh: typeof streamFemMesh = {
+        const decodedMesh = buildFemMeshFromDecodedTopology(topo, null, {
+          legacyArrays: "lazy",
+        });
+        const nextMesh: FemLiveMesh = {
           ...streamFemMesh,
-          nodes: Array.from({ length: topo.nodeCount }, (_, i) => [
-            topo.positions[i * 3] ?? 0,
-            topo.positions[i * 3 + 1] ?? 0,
-            topo.positions[i * 3 + 2] ?? 0,
-          ] as [number, number, number]),
-          elements: Array.from({ length: topo.elementCount }, (_, i) => [
-            topo.indices[i * 4] ?? 0,
-            topo.indices[i * 4 + 1] ?? 0,
-            topo.indices[i * 4 + 2] ?? 0,
-            topo.indices[i * 4 + 3] ?? 0,
-          ] as [number, number, number, number]),
-          boundary_faces: Array.from({ length: topo.boundaryFaceCount }, (_, i) => [
-            topo.boundaryFaces[i * 3] ?? 0,
-            topo.boundaryFaces[i * 3 + 1] ?? 0,
-            topo.boundaryFaces[i * 3 + 2] ?? 0,
-          ] as [number, number, number]),
-          element_markers: Array.from(topo.elementMarkers),
-          boundary_markers: Array.from(topo.boundaryMarkers),
-          topology_buffers: {
-            nodes: topo.positions,
-            elements: topo.indices,
-            boundary_faces: topo.boundaryFaces,
-            element_markers: topo.elementMarkers,
-            boundary_markers: topo.boundaryMarkers,
-          },
-          topology_transport: "binary",
-          node_count: topo.nodeCount,
-          element_count: topo.elementCount,
-          boundary_face_count: topo.boundaryFaceCount,
+          ...decodedMesh,
+          mesh_name: streamFemMesh.mesh_name ?? decodedMesh.mesh_name,
+          mesh_id: streamFemMesh.mesh_id ?? decodedMesh.mesh_id,
+          generation_id: streamFemMesh.generation_id ?? decodedMesh.generation_id,
+          object_segments: streamFemMesh.object_segments ?? decodedMesh.object_segments,
+          mesh_parts: streamFemMesh.mesh_parts ?? decodedMesh.mesh_parts,
+          domain_mesh_mode: streamFemMesh.domain_mesh_mode ?? decodedMesh.domain_mesh_mode ?? null,
+          domain_frame: streamFemMesh.domain_frame ?? decodedMesh.domain_frame ?? null,
         };
         const cache = femMeshTopologyCacheRef.current;
         cache.set(streamFemMeshKey, nextMesh);
@@ -1028,16 +1018,19 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setFocusObjectRequest(null);
     setObjectViewMode("context");
     setActiveTransformScope(null);
-    setAirMeshVisible(false);
-    setAirMeshOpacity(DEFAULT_AIR_MESH_OPACITY);
+    setViewportVisualizationState((previous) => ({
+      ...previous,
+      airMeshVisible: false,
+      airMeshOpacity: DEFAULT_AIR_MESH_OPACITY,
+      femArrowColorMode: "orientation",
+      femArrowMonoColor: "#00c2ff",
+      femArrowAlpha: 1,
+      femArrowLengthScale: 1,
+      femArrowThickness: 1,
+    }));
     setMeshEntityViewState({});
     setSelectedEntityId(null);
     setFocusedEntityId(null);
-    setFemArrowColorMode("orientation");
-    setFemArrowMonoColor("#00c2ff");
-    setFemArrowAlpha(1);
-    setFemArrowLengthScale(1);
-    setFemArrowThickness(1);
     setFdmVisualizationSettings(DEFAULT_FDM_VISUALIZATION_SETTINGS);
     setActiveVisualizationPresetRef(null);
     setSceneDocumentDraft((previousScene) =>
@@ -1458,21 +1451,20 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       workspaceSelection?.selected_object_id ?? hydratedScene.editor.selected_object_id,
     );
     setObjectViewMode(normalizePersistedObjectViewMode(hydratedScene.editor.object_view_mode));
-    setFemVectorDomainFilter(hydratedScene.editor.vector_domain_filter ?? "auto");
-    setFemFerromagnetVisibilityMode(
-      hydratedScene.editor.ferromagnet_visibility_mode ?? "hide",
-    );
-    setAirMeshVisible(
-      airboxDisabledByDefault
+    setViewportVisualizationState((previous) => ({
+      ...previous,
+      femVectorDomainFilter: hydratedScene.editor.vector_domain_filter ?? "auto",
+      femFerromagnetVisibilityMode:
+        hydratedScene.editor.ferromagnet_visibility_mode ?? "hide",
+      airMeshVisible: airboxDisabledByDefault
         ? false
         : (hydratedScene.editor.air_mesh_visible ?? false),
-    );
-    setAirMeshOpacity(
-      typeof hydratedScene.editor.air_mesh_opacity === "number" &&
+      airMeshOpacity:
+        typeof hydratedScene.editor.air_mesh_opacity === "number" &&
         Number.isFinite(hydratedScene.editor.air_mesh_opacity)
-        ? hydratedScene.editor.air_mesh_opacity
-        : DEFAULT_AIR_MESH_OPACITY,
-    );
+          ? hydratedScene.editor.air_mesh_opacity
+          : DEFAULT_AIR_MESH_OPACITY,
+    }));
     setMeshEntityViewState((previous) => {
       const next = normalizePersistedMeshEntityViewState(
         hydratedScene.editor.mesh_entity_view_state,
@@ -1582,18 +1574,18 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         return previousScene;
       }
       const previousEditor = previousScene.editor;
-      const nextAirMeshOpacity = Number.isFinite(airMeshOpacity)
-        ? airMeshOpacity
+      const nextAirMeshOpacity = Number.isFinite(effectiveViewportVisualizationState.airMeshOpacity)
+        ? effectiveViewportVisualizationState.airMeshOpacity
         : DEFAULT_AIR_MESH_OPACITY;
       if (
         previousEditor.selected_object_id === selectedObjectId &&
         previousEditor.selected_entity_id === selectedEntityId &&
         previousEditor.focused_entity_id === focusedEntityId &&
         previousEditor.object_view_mode === objectViewMode &&
-        previousEditor.vector_domain_filter === femVectorDomainFilter &&
-        previousEditor.ferromagnet_visibility_mode === femFerromagnetVisibilityMode &&
+        previousEditor.vector_domain_filter === effectiveViewportVisualizationState.femVectorDomainFilter &&
+        previousEditor.ferromagnet_visibility_mode === effectiveViewportVisualizationState.femFerromagnetVisibilityMode &&
         previousEditor.active_transform_scope === activeTransformScope &&
-        previousEditor.air_mesh_visible === airMeshVisible &&
+        previousEditor.air_mesh_visible === effectiveViewportVisualizationState.airMeshVisible &&
         previousEditor.air_mesh_opacity === nextAirMeshOpacity &&
         sameVisualizationPresets(
           previousEditor.visualization_presets,
@@ -1618,10 +1610,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
           selected_entity_id: selectedEntityId,
           focused_entity_id: focusedEntityId,
           object_view_mode: objectViewMode,
-          vector_domain_filter: femVectorDomainFilter,
-          ferromagnet_visibility_mode: femFerromagnetVisibilityMode,
+          vector_domain_filter: effectiveViewportVisualizationState.femVectorDomainFilter,
+          ferromagnet_visibility_mode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
           active_transform_scope: activeTransformScope,
-          air_mesh_visible: airMeshVisible,
+          air_mesh_visible: effectiveViewportVisualizationState.airMeshVisible,
           air_mesh_opacity: nextAirMeshOpacity,
           mesh_entity_view_state: persistedMeshEntityViewState,
           visualization_presets: projectVisualizationPresets,
@@ -1630,10 +1622,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       };
     });
   }, [
-    airMeshOpacity,
-    airMeshVisible,
-    femFerromagnetVisibilityMode,
-    femVectorDomainFilter,
+    effectiveViewportVisualizationState.airMeshOpacity,
+    effectiveViewportVisualizationState.airMeshVisible,
+    effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
+    effectiveViewportVisualizationState.femVectorDomainFilter,
     activeVisualizationPresetRef,
     focusedEntityId,
     meshEntityViewState,
@@ -2003,7 +1995,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     domainCapabilities,
     workspaceStatus,
     effectiveViewMode,
-    meshRenderMode,
+    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
     previewControlsActive,
     selectedQuantity,
     runUntilInput,
@@ -2058,23 +2050,23 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     isFemBackend,
     domainCapabilities,
     requestedPreviewQuantity,
-    meshRenderMode,
-    meshOpacity,
-    meshClipEnabled,
-    meshClipAxis,
-    meshClipPos,
-    meshShowArrows,
+    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
+    meshOpacity: effectiveViewportVisualizationState.meshOpacity,
+    meshClipEnabled: effectiveViewportVisualizationState.meshClipEnabled,
+    meshClipAxis: effectiveViewportVisualizationState.meshClipAxis,
+    meshClipPos: effectiveViewportVisualizationState.meshClipPos,
+    meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
     requestedPreviewMaxPoints,
-    femArrowColorMode,
-    femArrowMonoColor,
-    femArrowAlpha,
-    femArrowLengthScale,
-    femArrowThickness,
+    femArrowColorMode: effectiveViewportVisualizationState.femArrowColorMode,
+    femArrowMonoColor: effectiveViewportVisualizationState.femArrowMonoColor,
+    femArrowAlpha: effectiveViewportVisualizationState.femArrowAlpha,
+    femArrowLengthScale: effectiveViewportVisualizationState.femArrowLengthScale,
+    femArrowThickness: effectiveViewportVisualizationState.femArrowThickness,
     objectViewMode,
-    femVectorDomainFilter,
-    femFerromagnetVisibilityMode,
-    airMeshVisible,
-    airMeshOpacity,
+    femVectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
+    femFerromagnetVisibilityMode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
+    airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
+    airMeshOpacity: effectiveViewportVisualizationState.airMeshOpacity,
     meshEntityViewState,
     fdmVisualizationSettings,
     component,
@@ -2174,16 +2166,16 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     if (
       isFemBackend &&
       effectiveViewMode === "3D" &&
-      femViewportLayers.showMagneticTexture &&
-      !femViewportLayers.showQuantity &&
+      effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture &&
+      !effectiveViewportVisualizationState.femViewportLayers.showQuantity &&
       selectedQuantity !== "m"
     ) {
       setSelectedQuantity("m");
     }
   }, [
     effectiveViewMode,
-    femViewportLayers.showMagneticTexture,
-    femViewportLayers.showQuantity,
+    effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture,
+    effectiveViewportVisualizationState.femViewportLayers.showQuantity,
     isFemBackend,
     selectedQuantity,
   ]);
@@ -2269,11 +2261,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       deriveFemVectorScopes({
         meshParts: femMesh?.mesh_parts ?? [],
         meshEntityViewState,
-        airMeshVisible,
-        vectorDomainFilter: femVectorDomainFilter,
+        airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
+        vectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
         selectedFieldDomain,
       }),
-    [airMeshVisible, femMesh?.mesh_parts, femVectorDomainFilter, meshEntityViewState, selectedFieldDomain],
+    [
+      effectiveViewportVisualizationState.airMeshVisible,
+      effectiveViewportVisualizationState.femVectorDomainFilter,
+      femMesh?.mesh_parts,
+      meshEntityViewState,
+      selectedFieldDomain,
+    ],
   );
   const scopedFieldTransportKey = useMemo(() => {
     if (
@@ -2281,9 +2279,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       !isFemBackend ||
       effectiveViewMode !== "3D" ||
       (
-        !meshShowArrows &&
-        !femViewportLayers.showQuantity &&
-        !(femViewportLayers.showMagneticTexture && activeQuantityId === "m")
+        !effectiveViewportVisualizationState.meshShowArrows &&
+        !effectiveViewportVisualizationState.femViewportLayers.showQuantity &&
+        !(effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture && activeQuantityId === "m")
       ) ||
       !activeQuantityId ||
       !selectedFieldFrame ||
@@ -2312,10 +2310,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     femMesh?.generation_id,
     femMesh?.mesh_id,
     femMesh?.node_count,
-    femViewportLayers.showMagneticTexture,
-    femViewportLayers.showQuantity,
+    effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture,
+    effectiveViewportVisualizationState.femViewportLayers.showQuantity,
     isFemBackend,
-    meshShowArrows,
+    effectiveViewportVisualizationState.meshShowArrows,
     scopedFemVectorScopes,
     selectedFieldFrame,
   ]);
@@ -2346,7 +2344,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         label: "Binary field cache",
         entries: binaryFieldCacheRef.current.size,
         estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: 4,
+        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
       });
       return;
     }
@@ -2357,7 +2355,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         label: "Binary field cache",
         entries: binaryFieldCacheRef.current.size,
         estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: 4,
+        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
       });
       return;
     }
@@ -2369,7 +2367,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         label: "Binary field cache",
         entries: binaryFieldCacheRef.current.size,
         estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: 4,
+        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
       });
       return;
     }
@@ -2389,19 +2387,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         };
         const cache = binaryFieldCacheRef.current;
         cache.set(selectedFieldTransportKey, nextFrame);
-        while (cache.size > 4) {
-          const firstKey = cache.keys().next().value;
-          if (!firstKey) {
-            break;
-          }
-          cache.delete(firstKey);
-        }
+        const estimatedBytes = pruneBinaryFieldCache(
+          cache,
+          estimateBinaryFieldFrameBytes,
+          BINARY_FIELD_CACHE_MAX_BYTES,
+        );
         updateFrontendResourceBucket({
           id: "binary-field-cache",
           label: "Binary field cache",
           entries: cache.size,
-          estimatedBytes: estimateBinaryFieldCacheBytes(cache),
-          capacity: 4,
+          estimatedBytes,
+          capacity: BINARY_FIELD_CACHE_MAX_BYTES,
         });
         if (!controller.signal.aborted) {
           setSelectedBinaryFieldFrame(nextFrame);
@@ -2473,20 +2469,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         };
         const cache = scopedBinaryFieldCacheRef.current;
         cache.set(scopedFieldTransportKey, nextFrame);
-        while (cache.size > 4) {
-          const firstKey = cache.keys().next().value;
-          if (!firstKey) break;
-          cache.delete(firstKey);
-        }
+        const estimatedBytes = pruneBinaryFieldCache(
+          cache,
+          estimateScopedBinaryFieldFrameBytes,
+          SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
+        );
         updateFrontendResourceBucket({
           id: "scoped-binary-field-cache",
           label: "Scoped binary field cache",
           entries: cache.size,
-          estimatedBytes: Array.from(cache.values()).reduce(
-            (sum, frame) => sum + frame.values.byteLength + 128,
-            0,
-          ),
-          capacity: 4,
+          estimatedBytes,
+          capacity: SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
         });
         return nextFrame;
       })
@@ -2841,7 +2834,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     fieldDataRevision,
     activeMask: selectedScopedBinaryFieldFrame?.activeMask ?? activeMask,
     spatialPreview,
-    meshShowArrows,
+    meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
     effectiveViewMode,
     activeQuantityId,
     isFemBackend,
@@ -2852,8 +2845,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshWorkspace,
     selectedSidebarNodeId,
     selectedObjectId,
-    airMeshVisible,
-    airMeshOpacity,
+    airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
+    airMeshOpacity: effectiveViewportVisualizationState.airMeshOpacity,
     effectiveVectorComponent,
     sliceIndex,
     plane,
@@ -2864,7 +2857,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     session,
     engineLog,
     frontendTraceLog,
-    meshRenderMode,
+    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
     femDockTab,
     meshConfigSignature,
     lastBuiltMeshConfigSignature,
@@ -3010,20 +3003,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     );
     setMeshEntityViewState(result.meshEntityViewState);
     if (result.resetGlobals) {
-      setMeshRenderMode(result.globals.meshRenderMode as RenderMode);
-      setMeshOpacity(result.globals.meshOpacity);
-      setMeshClipEnabled(result.globals.meshClipEnabled);
-      setMeshClipAxis(result.globals.meshClipAxis as ClipAxis);
-      setMeshClipPos(result.globals.meshClipPos);
-      setMeshClipFlip(false);
-      setMeshShowArrows(result.globals.meshShowArrows);
-      setAirMeshVisible(result.globals.airMeshVisible);
-      setAirMeshOpacity(result.globals.airMeshOpacity);
-      setFemViewportLayers(DEFAULT_FEM_VIEWPORT_LAYER_STATE);
+      void patchDisplay(visualizationPatchForViewportDisplayDefaults(result.globals));
+      setViewportVisualizationState((previous) => ({
+        ...previous,
+        femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+      }));
     }
   }, [
     selectedSidebarNodeId, selectedObjectId, selectedEntityId,
-    meshParts, meshEntityViewState, visibleMeshPartIds,
+    meshParts, meshEntityViewState, visibleMeshPartIds, patchDisplay, setViewportVisualizationState,
   ]);
 
   const modelValue = useMemo<ModelContextValue>(() => ({
@@ -3053,9 +3041,24 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         null,
     },
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
-    femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
+    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
+    meshOpacity: effectiveViewportVisualizationState.meshOpacity,
+    meshClipEnabled: effectiveViewportVisualizationState.meshClipEnabled,
+    meshClipAxis: effectiveViewportVisualizationState.meshClipAxis,
+    meshClipPos: effectiveViewportVisualizationState.meshClipPos,
+    meshClipFlip: effectiveViewportVisualizationState.meshClipFlip,
+    meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
+    femTextureDownsampleCells,
+    femVectorGlyphBudget: effectiveViewportVisualizationState.femVectorGlyphBudget,
+    femArrowColorMode: effectiveViewportVisualizationState.femArrowColorMode,
+    femArrowMonoColor: effectiveViewportVisualizationState.femArrowMonoColor,
+    femArrowAlpha: effectiveViewportVisualizationState.femArrowAlpha,
+    femArrowLengthScale: effectiveViewportVisualizationState.femArrowLengthScale,
+    femArrowThickness: effectiveViewportVisualizationState.femArrowThickness,
+    femVectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
+    femFerromagnetVisibilityMode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
+    femViewportLayers: effectiveViewportVisualizationState.femViewportLayers,
+    viewportLegendVisible,
     viewportAxesScope, universeWireframeVisible,
     fdmVisualizationSettings,
     visualizationProjectPresets: projectVisualizationPresets,
@@ -3086,8 +3089,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     focusObjectRequest,
     objectViewMode,
     activeTransformScope,
-    airMeshVisible,
-    airMeshOpacity,
+    airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
+    airMeshOpacity: effectiveViewportVisualizationState.airMeshOpacity,
     meshEntityViewState,
     visibleSubmeshSnapshot,
     selectedEntityId,
@@ -3105,16 +3108,16 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     activeResultWorkspaceId,
     workspaceTabs,
     activeWorkspaceTabId,
-    setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis, setMeshRenderMode, setMeshOpacity, setMeshClipEnabled, setMeshClipAxis,
-    setMeshClipPos, setMeshClipFlip, setMeshShowArrows, setFemTextureDownsampleCells, setFemVectorGlyphBudget, setFemArrowColorMode, setFemArrowMonoColor, setFemArrowAlpha, setFemArrowLengthScale, setFemArrowThickness, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
-    setFemVectorDomainFilter, setFemFerromagnetVisibilityMode, setFemViewportLayers, setViewportLegendVisible,
+    setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
+    setViewportVisualizationState, setFemTextureDownsampleCells, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
+    setViewportLegendVisible,
     setViewportAxesScope, setUniverseWireframeVisible,
-    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setAirMeshVisible, setAirMeshOpacity, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
-    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
+    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan, effectiveViewportVisualizationState,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
     femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,

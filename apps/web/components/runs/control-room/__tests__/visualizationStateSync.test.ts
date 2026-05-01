@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { VisualizationStateResource } from "@/src/api/types";
+import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import {
   airboxPassesFromVisualizationState,
   femLayersFromVisualizationState,
   femVectorDomainFromVisualizationState,
   opacityUnitToPercent,
+  projectResolvedRenderPlanToViewportState,
   renderModeFromVisualizationState,
   renderPassesFromVisualizationState,
   resolveRenderPlanFromVisualizationState,
@@ -199,14 +201,14 @@ describe("visualization state local sync", () => {
     });
   });
 
-  it("normalizes opacity and domain filters for legacy controls", () => {
+  it("normalizes opacity and domain filters for viewport controls", () => {
     expect(opacityUnitToPercent(0.42, 100)).toBe(42);
     expect(opacityUnitToPercent(88, 100)).toBe(88);
     expect(femVectorDomainFromVisualizationState("airbox_only")).toBe("airbox_only");
     expect(femVectorDomainFromVisualizationState("selection")).toBeNull();
   });
 
-  it("keeps render passes independent from legacy render mode presets", () => {
+  it("keeps render passes independent from render mode presets", () => {
     const next = state({
       layers: {
         ...state().layers,
@@ -343,6 +345,109 @@ describe("visualization state local sync", () => {
       thickness: 2,
       ferromagnetVisibility: "ghost",
     });
+  });
+
+  it("projects a resolved render plan into the viewport visualization state", () => {
+    const fallback = {
+      meshRenderMode: "surface" as const,
+      meshOpacity: 100,
+      meshClipEnabled: false,
+      meshClipAxis: "x" as const,
+      meshClipPos: 50,
+      meshClipFlip: false,
+      meshShowArrows: false,
+      femVectorGlyphBudget: 1_200,
+      femArrowColorMode: "orientation" as const,
+      femArrowMonoColor: "#00c2ff",
+      femArrowAlpha: 1,
+      femArrowLengthScale: 1,
+      femArrowThickness: 1,
+      femVectorDomainFilter: "auto" as const,
+      femFerromagnetVisibilityMode: "hide" as const,
+      femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+      airMeshVisible: false,
+      airMeshOpacity: 28,
+    };
+    const baseState = state();
+    const plan = resolveRenderPlanFromVisualizationState(
+      state({
+        layers: {
+          ...baseState.layers,
+          surface: { visible: true, opacity: 0.42 },
+          wireframe: { visible: true, opacity: 1 },
+          vectors: { visible: true, density: 1, domain: "magnetic_only" },
+          airbox: {
+            ...baseState.layers.airbox,
+            visible: true,
+            opacity: 0.31,
+          },
+        },
+        sampling: {
+          ...baseState.sampling,
+          max_glyphs: 3456,
+        },
+        clip: {
+          enabled: true,
+          axis: "z",
+          position_percent: 72,
+          flipped: true,
+        },
+        vector_style: {
+          color_mode: "monochrome",
+          mono_color: "#ff00aa",
+          alpha: 0.6,
+          length_scale: 1.8,
+          thickness: 2.4,
+          ferromagnet_visibility: "ghost",
+        },
+      }),
+      DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+    );
+
+    expect(projectResolvedRenderPlanToViewportState(plan, fallback)).toMatchObject({
+      meshRenderMode: "surface+edges",
+      meshOpacity: 42,
+      meshClipEnabled: true,
+      meshClipAxis: "z",
+      meshClipPos: 72,
+      meshClipFlip: true,
+      meshShowArrows: true,
+      femVectorGlyphBudget: 3456,
+      femArrowColorMode: "monochrome",
+      femArrowMonoColor: "#ff00aa",
+      femArrowAlpha: 0.6,
+      femArrowLengthScale: 1.8,
+      femArrowThickness: 2.4,
+      femVectorDomainFilter: "magnetic_only",
+      femFerromagnetVisibilityMode: "ghost",
+      airMeshVisible: true,
+      airMeshOpacity: 31,
+    });
+  });
+
+  it("keeps the fallback adapter state when no render plan is available", () => {
+    const fallback = {
+      meshRenderMode: "points" as const,
+      meshOpacity: 12,
+      meshClipEnabled: true,
+      meshClipAxis: "y" as const,
+      meshClipPos: 25,
+      meshClipFlip: true,
+      meshShowArrows: true,
+      femVectorGlyphBudget: 99,
+      femArrowColorMode: "x" as const,
+      femArrowMonoColor: "#fff",
+      femArrowAlpha: 0.2,
+      femArrowLengthScale: 0.5,
+      femArrowThickness: 0.75,
+      femVectorDomainFilter: "airbox_only" as const,
+      femFerromagnetVisibilityMode: "ghost" as const,
+      femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
+      airMeshVisible: true,
+      airMeshOpacity: 19,
+    };
+
+    expect(projectResolvedRenderPlanToViewportState(null, fallback)).toBe(fallback);
   });
 
   it("builds canonical patches for viewport toolbar controls", () => {

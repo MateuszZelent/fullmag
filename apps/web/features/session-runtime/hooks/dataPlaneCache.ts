@@ -11,6 +11,7 @@ export async function getCachedJsonResource<T>({
   fetcher,
   responseFetcher,
   generationId = 0,
+  requestOptions,
 }: {
   client: LiveSessionClient;
   cacheKey: string;
@@ -18,6 +19,7 @@ export async function getCachedJsonResource<T>({
   fetcher: () => Promise<T>;
   responseFetcher?: (opts?: RequestOptions) => Promise<JsonResourceResponse<T>>;
   generationId?: number;
+  requestOptions?: RequestOptions;
 }): Promise<T> {
   const cached = client.getCache().get<T>(cacheKey);
   if (cached && cached.revision === revision) {
@@ -25,14 +27,17 @@ export async function getCachedJsonResource<T>({
   }
 
   if (responseFetcher) {
+    const requestHeaders = requestOptions?.headers as Record<string, string> | undefined;
     const response = await responseFetcher({
+      ...requestOptions,
       cache: "default",
       headers:
         cached?.eTag != null
           ? {
+              ...requestHeaders,
               "If-None-Match": cached.eTag,
             }
-          : undefined,
+          : requestHeaders,
     });
     if (response.status === 304 && cached) {
       return cached.data;

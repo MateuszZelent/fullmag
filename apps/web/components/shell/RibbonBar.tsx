@@ -33,6 +33,11 @@ import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
 import type { VisualizationAction } from "@/components/runs/control-room/visualizationReducer";
+import {
+  parseNodeIdToTarget,
+  ribbonContextForTarget,
+  type RibbonCoreTab,
+} from "@/features/interaction/model/selection";
 
 // ── Registry imports ──
 import {
@@ -284,6 +289,18 @@ const RIBBON_TAB_TO_ID: Record<RibbonTab, RibbonTabId> = {
   Automation: "automation",
 };
 
+const RIBBON_CORE_TAB_TO_TAB: Record<RibbonCoreTab, RibbonTab> = {
+  home: "Home",
+  definitions: "Definitions",
+  geometry: "Geometry",
+  materials: "Materials",
+  physics: "Physics",
+  mesh: "Mesh",
+  study: "Study",
+  results: "Results",
+  automation: "Automation",
+};
+
 function tabsForMode(mode: WorkspaceMode | undefined): RibbonTab[] {
   void mode;
   return [
@@ -300,31 +317,30 @@ function tabsForMode(mode: WorkspaceMode | undefined): RibbonTab[] {
   ];
 }
 
-function contextualTabsForSelection(p: RibbonBarProps): ContextualRibbonTab[] {
-  const nodeId = p.selectedNodeId ?? "";
+export function contextualTabsForSelection(p: Pick<RibbonBarProps, "selectedNodeId">): ContextualRibbonTab[] {
+  const target = parseNodeIdToTarget(p.selectedNodeId ?? null);
   const tabs: ContextualRibbonTab[] = [];
-  if (nodeId.includes("interface") || nodeId.includes("boundary")) {
-    tabs.push({ id: "interface", label: "Interface" });
-  }
-  if (nodeId.includes("work-plane") || nodeId.includes("plane")) {
-    tabs.push({ id: "work-plane", label: "Work Plane" });
-  }
-  if (
-    nodeId.includes("mesh-statistics")
-    || nodeId === "universe-mesh-statistics"
-  ) {
-    tabs.push({ id: "mesh-quality", label: "Mesh Statistics" });
-  } else if (
-    nodeId.includes("mesh-quality")
-    || nodeId === "mesh-pipeline"
-    || nodeId === "universe-mesh-quality"
-    || nodeId === "universe-mesh-pipeline"
-  ) {
-    tabs.push({ id: "mesh-quality", label: "Mesh Quality" });
+  switch (target.kind) {
+    case "outer_boundary":
+    case "interface_boundary":
+      tabs.push({ id: "interface", label: "Interface" });
+      break;
+    case "work_plane":
+      tabs.push({ id: "work-plane", label: "Work Plane" });
+      break;
+    case "mesh_quality":
+      tabs.push({ id: "mesh-quality", label: target.label });
+      break;
   }
   // Plot/Table contextual tabs removed — charts and tables are accessed
   // directly via the dock center tab bar, not via ribbon context tabs.
   return tabs;
+}
+
+export function ribbonTabForSelectedNode(nodeId: string | null | undefined): RibbonTab | null {
+  const target = parseNodeIdToTarget(nodeId ?? null);
+  const context = ribbonContextForTarget(target);
+  return RIBBON_CORE_TAB_TO_TAB[context.coreTab] ?? null;
 }
 
 function workspaceRibbonIdentity(value: {
@@ -539,28 +555,12 @@ export default function RibbonBar(props: RibbonBarProps) {
     if (builderEnabled && activeCoreTab === "Geometry") {
       return;
     }
-    const nodeId = props.selectedNodeId ?? "";
+    const nodeId = props.selectedNodeId ?? null;
     if (!nodeId || nodeId === prevAutoActivateNodeIdRef.current) {
       return;
     }
     prevAutoActivateNodeIdRef.current = nodeId;
-    let targetTab: RibbonTab | null = null;
-    const lower = nodeId.toLowerCase();
-    if (lower.includes("physics") || lower.includes("interaction") || lower.includes("anisotropy") || lower.includes("zeeman") || lower.includes("stochastic")) {
-      targetTab = "Physics";
-    } else if (lower.includes("material")) {
-      targetTab = "Materials";
-    } else if (lower.includes("geometry") || (lower.includes("object") && !lower.includes("study"))) {
-      targetTab = "Geometry";
-    } else if (lower.includes("mesh") && !lower.includes("study")) {
-      targetTab = "Mesh";
-    } else if (lower.includes("study") || lower.includes("stage")) {
-      targetTab = "Study";
-    } else if (lower.includes("result") || lower.includes("analysis") || lower.includes("plot") || lower.includes("spectrum") || lower.includes("dispersion")) {
-      targetTab = "Results";
-    } else if (lower.includes("definition") || lower.includes("parameter") || lower.includes("constant")) {
-      targetTab = "Definitions";
-    }
+    const targetTab = ribbonTabForSelectedNode(nodeId);
     if (targetTab) {
       const currentVisible = tabsForMode(workspaceStage);
       if (currentVisible.includes(targetTab)) {
@@ -680,7 +680,7 @@ export default function RibbonBar(props: RibbonBarProps) {
   const contextualTabs = useMemo(
     () => contextualTabsForSelection(props),
     // Only the fields contextualTabsForSelection actually reads:
-    [props.selectedNodeId, props.viewMode],
+    [props.selectedNodeId],
   );
   const activeTab = activeCoreTab && visibleTabs.includes(activeCoreTab as RibbonTab)
     ? (activeCoreTab as RibbonTab)

@@ -119,14 +119,20 @@ export function applyWorkspaceTabSelection(
 
   if (tab.kind === "viewport-3d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
+    const viewMode = tab.payload?.viewMode === "3D" ? tab.payload.viewMode : "3D";
+    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
     return;
   }
   if (tab.kind === "viewport-2d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
+    const viewMode = tab.payload?.viewMode === "2D" ? tab.payload.viewMode : "2D";
+    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
     return;
   }
   if (tab.kind === "viewport-mesh") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
+    const viewMode = tab.payload?.viewMode === "Mesh" ? tab.payload.viewMode : "Mesh";
+    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
     return;
   }
   if (tab.kind === "viewport-charts") {

@@ -27,6 +27,9 @@ export type SelectionTarget =
   | { kind: "regions"; objectId: string }
   | { kind: "domain_frame" }
   | { kind: "outer_boundary" }
+  | { kind: "interface_boundary"; nodeId: string }
+  | { kind: "work_plane"; nodeId: string }
+  | { kind: "mesh_quality"; nodeId: string; label: "Mesh Statistics" | "Mesh Quality" }
   | { kind: "study_domain_mesh" }
   | { kind: "study_defaults" }
   | { kind: "runtime_backend" }
@@ -152,6 +155,9 @@ export function isTargetTransformable(target: SelectionTarget): boolean {
  *   "domain-frame"      → domain_frame
  *   "airbox"            → airbox
  *   "outer-boundary"    → outer_boundary
+ *   "interface"/"interface-*" → interface_boundary
+ *   "work-plane"/"work-plane-*" → work_plane
+ *   mesh quality/statistics node IDs → mesh_quality
  *   "study-domain-mesh" → study_domain_mesh
  *   "objects"           → workspace (objects root)
  *   "obj-{id}"          → object
@@ -187,6 +193,23 @@ export function parseNodeIdToTarget(nodeId: string | null): SelectionTarget {
   if (nodeId === "domain-frame") return { kind: "domain_frame" };
   if (nodeId === "airbox") return { kind: "airbox" };
   if (nodeId === "outer-boundary") return { kind: "outer_boundary" };
+  if (nodeId === "interface" || nodeId.startsWith("interface-")) {
+    return { kind: "interface_boundary", nodeId };
+  }
+  if (nodeId === "work-plane" || nodeId.startsWith("work-plane-")) {
+    return { kind: "work_plane", nodeId };
+  }
+  if (nodeId === "mesh-statistics" || nodeId === "universe-mesh-statistics") {
+    return { kind: "mesh_quality", nodeId, label: "Mesh Statistics" };
+  }
+  if (
+    nodeId === "mesh-quality" ||
+    nodeId === "mesh-pipeline" ||
+    nodeId === "universe-mesh-quality" ||
+    nodeId === "universe-mesh-pipeline"
+  ) {
+    return { kind: "mesh_quality", nodeId, label: "Mesh Quality" };
+  }
   if (nodeId === "study-domain-mesh") return { kind: "study_domain_mesh" };
   if (nodeId === "study" || nodeId === "study-root") return { kind: "study_stage", nodeId };
   if (nodeId === "study-defaults") return { kind: "study_defaults" };
@@ -312,6 +335,7 @@ export function ribbonContextForTarget(target: SelectionTarget): RibbonContext {
     case "magnetic_parameters":
       return { coreTab: "physics", contextualTab: null, defaultTransformScope: null };
     case "mesh_domain":
+    case "mesh_quality":
       return { coreTab: "mesh", contextualTab: "mesh-domain", defaultTransformScope: null };
     case "study_stage":
     case "stages":
@@ -326,6 +350,11 @@ export function ribbonContextForTarget(target: SelectionTarget): RibbonContext {
     case "builder_primitive_transform":
     case "builder_lifecycle":
       return { coreTab: "geometry", contextualTab: null, defaultTransformScope: "object" };
+    case "outer_boundary":
+    case "interface_boundary":
+      return { coreTab: "geometry", contextualTab: null, defaultTransformScope: null };
+    case "work_plane":
+      return { coreTab: "geometry", contextualTab: null, defaultTransformScope: null };
     default:
       return { coreTab: "home", contextualTab: null, defaultTransformScope: null };
   }

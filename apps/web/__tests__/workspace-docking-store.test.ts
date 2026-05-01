@@ -159,24 +159,21 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 
-  it("keeps core 3D and 2D tabs warm while leaving charts cold", () => {
+  it("keeps core viewport tabs active-only", () => {
     const defaults = getDefaultWorkspaceTabsByStage();
     const studyTabs = defaults.study;
-    expect(studyTabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("warm");
-    expect(studyTabs.find((tab) => tab.id === "core:3d")?.keepAlive).toBe(true);
-    expect(studyTabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("warm");
-    expect(studyTabs.find((tab) => tab.id === "core:2d")?.keepAlive).toBe(true);
+    expect(studyTabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("active-only");
+    expect(studyTabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("active-only");
     expect(studyTabs.some((tab) => tab.id === "core:mesh")).toBe(false);
-    expect(studyTabs.find((tab) => tab.id === "core:charts")?.lifecycle).toBe("unmount-on-hide");
-    expect(studyTabs.find((tab) => tab.id === "core:charts")?.keepAlive).toBe(false);
+    expect(studyTabs.find((tab) => tab.id === "core:charts")?.mountPolicy).toBe("active-only");
   });
 
-  it("normalizes persisted core charts tabs back to cold lifecycle", () => {
+  it("normalizes persisted legacy core charts warm lifecycle back to active-only", () => {
     const tabs = getDefaultWorkspaceTabsByStage();
     for (const stage of ["build", "study", "analyze"] as const) {
       tabs[stage] = tabs[stage].map((tab) =>
         tab.id === "core:charts" ? { ...tab, keepAlive: true, lifecycle: "warm" } : tab,
-      );
+      ) as typeof tabs[typeof stage];
     }
 
     const imported = useWorkspaceStore.getState().importUiStateSnapshot({
@@ -195,12 +192,13 @@ describe("workspace docking store", () => {
     const chartsTab = useWorkspaceStore
       .getState()
       .workspaceTabsByStage.study.find((tab) => tab.id === "core:charts");
-    expect(chartsTab?.lifecycle).toBe("unmount-on-hide");
-    expect(chartsTab?.keepAlive).toBe(false);
+    expect(chartsTab?.mountPolicy).toBe("active-only");
+    expect(chartsTab).not.toHaveProperty("lifecycle");
+    expect(chartsTab).not.toHaveProperty("keepAlive");
   });
 
-  it("normalizes non-core warm lifecycle inputs back to cold tabs", () => {
-    const warmId = useWorkspaceStore.getState().openTab("study", {
+  it("normalizes legacy mount lifecycle inputs to mount policy", () => {
+    const hiddenMountedId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:charts-clone",
       kind: "viewport-charts",
       title: "Charts Clone",
@@ -213,12 +211,27 @@ describe("workspace docking store", () => {
     });
 
     const tabs = useWorkspaceStore.getState().workspaceTabsByStage.study;
-    expect(tabs.find((tab) => tab.id === warmId)?.keepAlive).toBe(false);
-    expect(tabs.find((tab) => tab.id === warmId)?.lifecycle).toBe("unmount-on-hide");
-    expect(tabs.find((tab) => tab.id === coldId)?.keepAlive).toBe(false);
-    expect(tabs.find((tab) => tab.id === coldId)?.lifecycle).toBe("unmount-on-hide");
-    expect(tabs.find((tab) => tab.id === "core:3d")?.lifecycle).toBe("warm");
-    expect(tabs.find((tab) => tab.id === "core:2d")?.lifecycle).toBe("warm");
+    expect(tabs.find((tab) => tab.id === hiddenMountedId)?.mountPolicy).toBe("hidden-mounted");
+    expect(tabs.find((tab) => tab.id === coldId)?.mountPolicy).toBe("active-only");
+    expect(tabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("active-only");
+    expect(tabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("active-only");
+  });
+
+  it("normalizes legacy WebGL warm lifecycle inputs to active-only", () => {
+    const warmWebGLId = useWorkspaceStore.getState().openTab("study", {
+      key: "manual:legacy-warm-3d",
+      kind: "viewport-3d",
+      title: "Legacy Warm 3D",
+      keepAlive: true,
+      lifecycle: "warm",
+    });
+
+    const tab = useWorkspaceStore
+      .getState()
+      .workspaceTabsByStage.study.find((candidate) => candidate.id === warmWebGLId);
+    expect(tab?.mountPolicy).toBe("active-only");
+    expect(tab).not.toHaveProperty("lifecycle");
+    expect(tab).not.toHaveProperty("keepAlive");
   });
 
   it("keeps simple UI setters idempotent for unchanged values", () => {

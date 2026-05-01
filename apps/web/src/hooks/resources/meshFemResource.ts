@@ -41,6 +41,92 @@ function tetAt(
   ];
 }
 
+type LegacyArrayMode = "materialize" | "lazy";
+
+export interface BuildFemMeshFromDecodedTopologyOptions {
+  legacyArrays?: LegacyArrayMode;
+}
+
+function isArrayIndex(property: string | symbol): property is string {
+  if (typeof property !== "string" || property.length === 0) {
+    return false;
+  }
+  const index = Number(property);
+  return Number.isInteger(index) && index >= 0 && String(index) === property;
+}
+
+function createLazyTupleArray<T extends readonly number[]>(
+  length: number,
+  read: (index: number) => T,
+): T[] {
+  const target: T[] = [];
+  target.length = length;
+  return new Proxy(target, {
+    get(array, property, receiver) {
+      if (isArrayIndex(property)) {
+        const index = Number(property);
+        return index < length ? read(index) : undefined;
+      }
+      return Reflect.get(array, property, receiver);
+    },
+    has(array, property) {
+      if (isArrayIndex(property)) {
+        return Number(property) < length;
+      }
+      return Reflect.has(array, property);
+    },
+    getOwnPropertyDescriptor(array, property) {
+      if (isArrayIndex(property)) {
+        const index = Number(property);
+        if (index >= length) {
+          return undefined;
+        }
+        return {
+          configurable: true,
+          enumerable: true,
+          value: read(index),
+          writable: false,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(array, property);
+    },
+  });
+}
+
+function createLazyNumberArray(values: Uint32Array): number[] {
+  const target: number[] = [];
+  target.length = values.length;
+  return new Proxy(target, {
+    get(array, property, receiver) {
+      if (isArrayIndex(property)) {
+        return values[Number(property)];
+      }
+      return Reflect.get(array, property, receiver);
+    },
+    has(array, property) {
+      if (isArrayIndex(property)) {
+        return Number(property) < values.length;
+      }
+      return Reflect.has(array, property);
+    },
+    getOwnPropertyDescriptor(array, property) {
+      if (isArrayIndex(property)) {
+        const index = Number(property);
+        if (index >= values.length) {
+          return undefined;
+        }
+        return {
+          configurable: true,
+          enumerable: true,
+          value: values[index],
+          writable: false,
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(array, property);
+    },
+  });
+}
+
 function meshIdentity(mesh: FemLiveMesh | null): string | null {
   if (!mesh) {
     return null;
@@ -57,6 +143,7 @@ function meshIdentity(mesh: FemLiveMesh | null): string | null {
 export function buildFemMeshFromDecodedTopology(
   topology: DecodedTopology,
   summary: MeshSummaryState | null,
+  options: BuildFemMeshFromDecodedTopologyOptions = {},
 ): FemLiveMesh {
   const generationId =
     summary?.generation_id && summary.generation_id.length > 0
@@ -66,6 +153,36 @@ export function buildFemMeshFromDecodedTopology(
     summary?.mesh_id ??
     (generationId ? `resource-mesh:${generationId}` : "resource-mesh:shared-domain");
 
+  const legacyArrays = options.legacyArrays ?? "materialize";
+  const nodes =
+    legacyArrays === "lazy"
+      ? createLazyTupleArray(topology.nodeCount, (index) => tripleAt(topology.positions, index))
+      : Array.from({ length: topology.nodeCount }, (_, index) =>
+          tripleAt(topology.positions, index),
+        );
+  const elements =
+    legacyArrays === "lazy"
+      ? createLazyTupleArray(topology.elementCount, (index) => tetAt(topology.indices, index))
+      : Array.from({ length: topology.elementCount }, (_, index) =>
+          tetAt(topology.indices, index),
+        );
+  const boundaryFaces =
+    legacyArrays === "lazy"
+      ? createLazyTupleArray(topology.boundaryFaceCount, (index) =>
+          faceAt(topology.boundaryFaces, index),
+        )
+      : Array.from({ length: topology.boundaryFaceCount }, (_, index) =>
+          faceAt(topology.boundaryFaces, index),
+        );
+  const elementMarkers =
+    legacyArrays === "lazy"
+      ? createLazyNumberArray(topology.elementMarkers)
+      : Array.from(topology.elementMarkers);
+  const boundaryMarkers =
+    legacyArrays === "lazy"
+      ? createLazyNumberArray(topology.boundaryMarkers)
+      : Array.from(topology.boundaryMarkers);
+
   return {
     mesh_name:
       summary?.mesh_name && summary.mesh_name.length > 0
@@ -73,17 +190,11 @@ export function buildFemMeshFromDecodedTopology(
         : "resource-shared-domain-mesh",
     mesh_id: meshId,
     generation_id: generationId ?? null,
-    nodes: Array.from({ length: topology.nodeCount }, (_, index) =>
-      tripleAt(topology.positions, index),
-    ),
-    elements: Array.from({ length: topology.elementCount }, (_, index) =>
-      tetAt(topology.indices, index),
-    ),
-    element_markers: Array.from(topology.elementMarkers),
-    boundary_faces: Array.from({ length: topology.boundaryFaceCount }, (_, index) =>
-      faceAt(topology.boundaryFaces, index),
-    ),
-    boundary_markers: Array.from(topology.boundaryMarkers),
+    nodes,
+    elements,
+    element_markers: elementMarkers,
+    boundary_faces: boundaryFaces,
+    boundary_markers: boundaryMarkers,
     topology_buffers: {
       nodes: topology.positions,
       elements: topology.indices,

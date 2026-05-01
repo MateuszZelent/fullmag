@@ -1,67 +1,32 @@
 import {
   collectSliceTopology,
   sampleSliceField,
-  type SliceBoundsStrategy,
-  type SliceCollection,
-  type SlicePlane,
-  type SliceTopologyCollection,
-  type VectorComponent,
 } from "./femSliceGeometry";
-import type { FemMeshData } from "./femMeshTypes";
-import type { SliceVisibilityState } from "./femSliceUtils";
-
-interface ComputeSliceSamplingPayload {
-  meshData: FemMeshData;
-  plane: SlicePlane;
-  planeCoord: number;
-  component: VectorComponent;
-  visibilityState: SliceVisibilityState;
-  boundsStrategy: SliceBoundsStrategy;
-}
-
-interface ComputeSliceSamplingRequest {
-  id: number;
-  type: "compute";
-  payload: ComputeSliceSamplingPayload;
-}
-
-interface ComputeSliceSamplingSuccess {
-  id: number;
-  ok: true;
-  topology: SliceTopologyCollection;
-  slice: SliceCollection;
-  topologyDurationMs: number;
-  fieldDurationMs: number;
-}
-
-interface ComputeSliceSamplingFailure {
-  id: number;
-  ok: false;
-  error: string;
-}
-
-type ComputeSliceSamplingResponse =
-  | ComputeSliceSamplingSuccess
-  | ComputeSliceSamplingFailure;
+import {
+  visibilityPayloadToState,
+  type FemSliceSamplingRequest,
+  type FemSliceSamplingResponse,
+} from "./femSliceSamplingTransport";
 
 const workerScope = self as unknown as {
-  onmessage: ((event: MessageEvent<ComputeSliceSamplingRequest>) => void) | null;
-  postMessage: (message: ComputeSliceSamplingResponse) => void;
+  onmessage: ((event: MessageEvent<FemSliceSamplingRequest>) => void) | null;
+  postMessage: (message: FemSliceSamplingResponse) => void;
 };
 
-workerScope.onmessage = (event: MessageEvent<ComputeSliceSamplingRequest>) => {
+workerScope.onmessage = (event: MessageEvent<FemSliceSamplingRequest>) => {
   const message = event.data;
   if (!message || message.type !== "compute") {
     return;
   }
   try {
     const { meshData, plane, planeCoord, component, visibilityState, boundsStrategy } = message.payload;
+    const resolvedVisibilityState = visibilityPayloadToState(visibilityState);
     const topologyStart = typeof performance !== "undefined" ? performance.now() : Date.now();
     const topology = collectSliceTopology(
       meshData,
       plane,
       planeCoord,
-      visibilityState,
+      resolvedVisibilityState,
       boundsStrategy,
     );
     const fieldStart = typeof performance !== "undefined" ? performance.now() : Date.now();

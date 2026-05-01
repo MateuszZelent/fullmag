@@ -5,7 +5,9 @@ import {
   buildFemPointsGeometryResource,
   buildFemSurfaceEdgeGeometryResource,
   buildFemVolumeEdgeGeometryResource,
+  estimateVolumeEdgeBytes,
   resolveFemGeometryResourceNeeds,
+  VOLUME_EDGE_BYTE_BUDGET_DEFAULT,
 } from "../femGeometryResources";
 
 describe("femGeometryResources", () => {
@@ -208,5 +210,82 @@ describe("femGeometryResources", () => {
     expect(resource.pointsGeometry?.getAttribute("color")).toBeUndefined();
     surface.dispose();
     resource.pointsGeometry?.dispose();
+  });
+
+  // ── Volume edge byte budget ───────────────────────────────────────────────
+
+  describe("estimateVolumeEdgeBytes", () => {
+    it("returns 0 for 0 elements", () => {
+      expect(estimateVolumeEdgeBytes(0)).toBe(0);
+    });
+
+    it("is proportional to element count at 144 bytes/element", () => {
+      // 6 edges/tet × 2 endpoints × 3 coords × 4 bytes = 144
+      expect(estimateVolumeEdgeBytes(1000)).toBe(1000 * 144);
+      expect(estimateVolumeEdgeBytes(50_000)).toBe(50_000 * 144);
+    });
+
+    it("VOLUME_EDGE_BYTE_BUDGET_DEFAULT covers at least 100 K elements", () => {
+      expect(estimateVolumeEdgeBytes(100_000)).toBeLessThan(VOLUME_EDGE_BYTE_BUDGET_DEFAULT);
+    });
+  });
+
+  describe("buildFemVolumeEdgeGeometryResource — maxBytes guard", () => {
+    const SMALL_MESH = {
+      enabled: true,
+      nElements: 2,
+      nNodes: 5,
+      elements: new Uint32Array([0, 1, 2, 3, 0, 1, 2, 4]),
+      nodes: new Float32Array([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1,
+      ]),
+      centerX: 0,
+      centerY: 0,
+      centerZ: 0,
+    } as const;
+
+    it("builds geometry when under budget", () => {
+      const geo = buildFemVolumeEdgeGeometryResource({
+        ...SMALL_MESH,
+        maxBytes: VOLUME_EDGE_BYTE_BUDGET_DEFAULT,
+      });
+      expect(geo).not.toBeNull();
+      geo?.dispose();
+    });
+
+    it("returns null when estimated bytes exceed maxBytes", () => {
+      // 2 elements × 144 bytes = 288 — budget of 1 byte triggers the guard.
+      const geo = buildFemVolumeEdgeGeometryResource({
+        ...SMALL_MESH,
+        maxBytes: 1,
+      });
+      expect(geo).toBeNull();
+    });
+
+    it("builds geometry when maxBytes is undefined (no cap)", () => {
+      const geo = buildFemVolumeEdgeGeometryResource({ ...SMALL_MESH });
+      expect(geo).not.toBeNull();
+      geo?.dispose();
+    });
+
+    it("budget guard is tight: exactly at limit still passes", () => {
+      const exactBudget = estimateVolumeEdgeBytes(SMALL_MESH.nElements);
+      // estimatedBytes === maxBytes → should build (> not >=)
+      const geo = buildFemVolumeEdgeGeometryResource({
+        ...SMALL_MESH,
+        maxBytes: exactBudget,
+      });
+      expect(geo).not.toBeNull();
+      geo?.dispose();
+    });
+
+    it("budget guard triggers one byte below limit", () => {
+      const exactBudget = estimateVolumeEdgeBytes(SMALL_MESH.nElements);
+      const geo = buildFemVolumeEdgeGeometryResource({
+        ...SMALL_MESH,
+        maxBytes: exactBudget - 1,
+      });
+      expect(geo).toBeNull();
+    });
   });
 });

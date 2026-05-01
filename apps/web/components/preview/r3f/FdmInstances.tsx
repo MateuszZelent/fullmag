@@ -128,6 +128,48 @@ export function resolveFdmGridBounds(
   };
 }
 
+export const FDM_INSTANCE_ANIMATION_BYTE_BUDGET = 64 * 1024 * 1024;
+const FDM_MATRIX_ANIMATION_MAX_VALUES = 320_000;
+const FDM_COLOR_ANIMATION_MAX_VALUES = 180_000;
+
+export function estimateFdmInstanceAnimationSnapshotBytes({
+  visible,
+  includeMatrices,
+}: {
+  visible: number;
+  includeMatrices: boolean;
+}): number {
+  const matrixValues = includeMatrices ? visible * 16 : 0;
+  const colorValues = visible * 3;
+  // Previous and target snapshots are both required before interpolation starts.
+  return (matrixValues + colorValues) * Float32Array.BYTES_PER_ELEMENT * 2;
+}
+
+export function shouldAnimateFdmInstanceBuffers({
+  previousVisible,
+  visible,
+  renderSignatureMatches,
+  includeMatrices,
+  byteBudget = FDM_INSTANCE_ANIMATION_BYTE_BUDGET,
+}: {
+  previousVisible: number;
+  visible: number;
+  renderSignatureMatches: boolean;
+  includeMatrices: boolean;
+  byteBudget?: number;
+}): boolean {
+  if (visible <= 0 || previousVisible !== visible || !renderSignatureMatches) {
+    return false;
+  }
+  if (includeMatrices && visible * 16 > FDM_MATRIX_ANIMATION_MAX_VALUES) {
+    return false;
+  }
+  if (visible * 3 > FDM_COLOR_ANIMATION_MAX_VALUES) {
+    return false;
+  }
+  return estimateFdmInstanceAnimationSnapshotBytes({ visible, includeMatrices }) <= byteBudget;
+}
+
 /* ── Color helpers ─────────────────────────────────────────────────── */
 
 function applyComponentColor(value: number, color: THREE.Color) {
@@ -461,23 +503,32 @@ function FdmInstances({
     const colors = instanceColor.array as Float32Array;
     const matrices = mesh.instanceMatrix.array as Float32Array;
     const previousVisible = mesh.count;
+    const previousSnapshotsAllowed = shouldAnimateFdmInstanceBuffers({
+      previousVisible,
+      visible: previousVisible,
+      renderSignatureMatches: renderSignatureRef.current === renderSignature,
+      includeMatrices: true,
+    });
     const previousMatrices =
-      previousVisible > 0 ? matrices.slice(0, Math.min(matrices.length, previousVisible * 16)) : null;
+      previousSnapshotsAllowed ? matrices.slice(0, Math.min(matrices.length, previousVisible * 16)) : null;
     const previousColors =
-      previousVisible > 0 ? colors.slice(0, Math.min(colors.length, previousVisible * 3)) : null;
+      previousSnapshotsAllowed ? colors.slice(0, Math.min(colors.length, previousVisible * 3)) : null;
     const commitInstanceUpdate = (visible: number, animateLiveUpdate: boolean) => {
       mesh.count = visible;
       onVisibleCount?.(visible);
       transitionCleanupRef.current?.();
       const canAnimate = Boolean(
         animateLiveUpdate &&
-        visible > 0 &&
-        previousVisible === visible &&
         previousMatrices &&
         previousColors &&
         previousMatrices.length >= visible * 16 &&
         previousColors.length >= visible * 3 &&
-        renderSignatureRef.current === renderSignature,
+        shouldAnimateFdmInstanceBuffers({
+          previousVisible,
+          visible,
+          renderSignatureMatches: renderSignatureRef.current === renderSignature,
+          includeMatrices: true,
+        }),
       );
       renderSignatureRef.current = renderSignature;
       if (!canAnimate) {
@@ -494,7 +545,7 @@ function FdmInstances({
       const cleanupMatrices = applyLiveBufferTransition({
         destination: matrices.subarray(0, visible * 16),
         target: matrixTarget,
-        maxAnimatedValues: 320_000,
+        maxAnimatedValues: FDM_MATRIX_ANIMATION_MAX_VALUES,
         markNeedsUpdate: () => {
           mesh.instanceMatrix.needsUpdate = true;
         },
@@ -503,7 +554,7 @@ function FdmInstances({
       const cleanupColors = applyLiveBufferTransition({
         destination: colors.subarray(0, visible * 3),
         target: colorTarget,
-        maxAnimatedValues: 180_000,
+        maxAnimatedValues: FDM_COLOR_ANIMATION_MAX_VALUES,
         markNeedsUpdate: () => {
           instanceColor.needsUpdate = true;
         },
@@ -763,7 +814,13 @@ function FdmInstances({
     if (!hasRenderableVectors || !vectors) return; // geometry mode uses constant gray — skip
 
     const colors = mesh.instanceColor.array as Float32Array;
-    const previousColors = colors.slice(0, visibleCount * 3);
+    const canAnimateColorPatch = shouldAnimateFdmInstanceBuffers({
+      previousVisible: visibleCount,
+      visible: visibleCount,
+      renderSignatureMatches: true,
+      includeMatrices: false,
+    });
+    const previousColors = canAnimateColorPatch ? colors.slice(0, visibleCount * 3) : null;
     const displayToCell = displayToCellRef.current;
     for (let di = 0; di < visibleCount; di++) {
       const cellIndex = displayToCell[di];
@@ -774,13 +831,19 @@ function FdmInstances({
       colors[outBase + 1] = _color.g;
       colors[outBase + 2] = _color.b;
     }
+    transitionCleanupRef.current?.();
+    if (!canAnimateColorPatch || !previousColors) {
+      mesh.instanceColor.needsUpdate = true;
+      scheduleInvalidate();
+      transitionCleanupRef.current = null;
+      return;
+    }
     const colorTarget = colors.slice(0, visibleCount * 3);
     colors.set(previousColors, 0);
-    transitionCleanupRef.current?.();
     transitionCleanupRef.current = applyLiveBufferTransition({
       destination: colors.subarray(0, visibleCount * 3),
       target: colorTarget,
-      maxAnimatedValues: 180_000,
+      maxAnimatedValues: FDM_COLOR_ANIMATION_MAX_VALUES,
       markNeedsUpdate: () => {
         mesh.instanceColor!.needsUpdate = true;
       },

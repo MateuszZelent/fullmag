@@ -76,7 +76,10 @@ import type {
   ViewportMode,
 } from "./shared";
 import { computeMeshFaceDetail } from "./shared";
-import type { ResolvedRenderPlan } from "./visualizationStateSync";
+import type {
+  ResolvedRenderPlan,
+  ViewportVisualizationState,
+} from "./visualizationStateSync";
 import type {
   ActivityInfo,
   BackendErrorInfo,
@@ -430,27 +433,8 @@ export interface ModelContextValue {
   setScriptBuilderExcitationAnalysis: React.Dispatch<
     React.SetStateAction<ScriptBuilderExcitationAnalysisEntry | null>
   >;
-  setMeshRenderMode: React.Dispatch<React.SetStateAction<RenderMode>>;
-  setMeshOpacity: React.Dispatch<React.SetStateAction<number>>;
-  setMeshClipEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  setMeshClipAxis: React.Dispatch<React.SetStateAction<ClipAxis>>;
-  setMeshClipPos: React.Dispatch<React.SetStateAction<number>>;
-  setMeshClipFlip: React.Dispatch<React.SetStateAction<boolean>>;
-  setMeshShowArrows: React.Dispatch<React.SetStateAction<boolean>>;
+  setViewportVisualizationState: React.Dispatch<React.SetStateAction<ViewportVisualizationState>>;
   setFemTextureDownsampleCells: React.Dispatch<React.SetStateAction<number>>;
-  setFemVectorGlyphBudget: React.Dispatch<React.SetStateAction<number>>;
-  setFemArrowColorMode: React.Dispatch<
-    React.SetStateAction<"orientation" | "x" | "y" | "z" | "magnitude" | "monochrome">
-  >;
-  setFemArrowMonoColor: React.Dispatch<React.SetStateAction<string>>;
-  setFemArrowAlpha: React.Dispatch<React.SetStateAction<number>>;
-  setFemArrowLengthScale: React.Dispatch<React.SetStateAction<number>>;
-  setFemArrowThickness: React.Dispatch<React.SetStateAction<number>>;
-  setFemVectorDomainFilter: React.Dispatch<
-    React.SetStateAction<"auto" | "magnetic_only" | "full_domain" | "airbox_only">
-  >;
-  setFemFerromagnetVisibilityMode: React.Dispatch<React.SetStateAction<"hide" | "ghost">>;
-  setFemViewportLayers: React.Dispatch<React.SetStateAction<FemViewportLayerState>>;
   setViewportLegendVisible: React.Dispatch<React.SetStateAction<boolean>>;
   setViewportAxesScope: React.Dispatch<React.SetStateAction<"universe" | "object">>;
   setUniverseWireframeVisible: React.Dispatch<React.SetStateAction<boolean>>;
@@ -465,8 +449,6 @@ export interface ModelContextValue {
   setViewportScope: React.Dispatch<React.SetStateAction<ViewportScope>>;
   setObjectViewMode: React.Dispatch<React.SetStateAction<ObjectViewMode>>;
   setActiveTransformScope: React.Dispatch<React.SetStateAction<"object" | "texture" | null>>;
-  setAirMeshVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  setAirMeshOpacity: React.Dispatch<React.SetStateAction<number>>;
   setMeshEntityViewState: React.Dispatch<React.SetStateAction<MeshEntityViewStateMap>>;
   setVisibleSubmeshSnapshot: React.Dispatch<
     React.SetStateAction<VisibleSubmeshSnapshot | null>

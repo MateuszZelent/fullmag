@@ -11,8 +11,7 @@ function makeTab(patch: Partial<WorkspaceTab>): WorkspaceTab {
     title: "3D Viewport",
     closable: false,
     pinned: true,
-    keepAlive: true,
-    lifecycle: "warm",
+    mountPolicy: "active-only",
     payload: { viewMode: "3D" },
     ...patch,
   };
@@ -138,10 +137,44 @@ describe("applyWorkspaceTabSelection", () => {
     expect(api.openAnalyzeSurface).not.toHaveBeenCalled();
   });
 
-  it("keeps viewport tabs as tab-driven routing without forcing another view-mode transition", () => {
+  it("selects 3D mode when the 3D viewport tab is activated", () => {
     const api = makeApi({ effectiveViewMode: "2D" });
     applyWorkspaceTabSelection(stage, makeTab({ kind: "viewport-3d" }), api);
 
-    expect(api.handleViewModeChange).not.toHaveBeenCalled();
+    expect(api.handleViewModeChange).toHaveBeenCalledWith("3D");
+  });
+
+  it("selects 2D mode when the 2D viewport tab is activated", () => {
+    const api = makeApi({ effectiveViewMode: "3D" });
+    applyWorkspaceTabSelection(
+      stage,
+      makeTab({
+        id: "core:2d",
+        key: "core:2d",
+        kind: "viewport-2d",
+        title: "2D Slice",
+        payload: { viewMode: "2D" },
+      }),
+      api,
+    );
+
+    expect(api.handleViewModeChange).toHaveBeenCalledWith("2D");
+  });
+
+  it("selects Mesh mode when the mesh viewport tab is activated", () => {
+    const api = makeApi({ effectiveViewMode: "3D" });
+    applyWorkspaceTabSelection(
+      stage,
+      makeTab({
+        id: "core:mesh",
+        key: "core:mesh",
+        kind: "viewport-mesh",
+        title: "Mesh",
+        payload: { viewMode: "Mesh" },
+      }),
+      api,
+    );
+
+    expect(api.handleViewModeChange).toHaveBeenCalledWith("Mesh");
   });
 });

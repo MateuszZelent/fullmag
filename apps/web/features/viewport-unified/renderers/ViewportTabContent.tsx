@@ -70,7 +70,7 @@ export function ViewportTabContent({
   const ctx = bridge.ctx;
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
   const handleMeshRenderModeChange = React.useCallback(
-    (renderMode: Parameters<typeof ctx.setMeshRenderMode>[0]) => {
+    (renderMode: React.SetStateAction<typeof ctx.meshRenderMode>) => {
       const resolvedRenderMode =
         typeof renderMode === "function" ? renderMode(ctx.meshRenderMode) : renderMode;
       void ctx.patchDisplay(visualizationPatchForRenderMode(resolvedRenderMode));
@@ -78,7 +78,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleMeshOpacityChange = React.useCallback(
-    (opacity: Parameters<typeof ctx.setMeshOpacity>[0]) => {
+    (opacity: React.SetStateAction<typeof ctx.meshOpacity>) => {
       const resolvedOpacity =
         typeof opacity === "function" ? opacity(ctx.meshOpacity) : opacity;
       void ctx.patchDisplay(visualizationPatchForOpacity(resolvedOpacity));
@@ -86,7 +86,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleShowArrowsChange = React.useCallback(
-    (visible: Parameters<typeof ctx.setMeshShowArrows>[0]) => {
+    (visible: React.SetStateAction<typeof ctx.meshShowArrows>) => {
       const resolvedVisible =
         typeof visible === "function" ? visible(ctx.meshShowArrows) : visible;
       void ctx.patchDisplay({
@@ -100,7 +100,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleVectorDomainFilterChange = React.useCallback(
-    (domain: Parameters<typeof ctx.setFemVectorDomainFilter>[0]) => {
+    (domain: React.SetStateAction<typeof ctx.femVectorDomainFilter>) => {
       const resolvedDomain =
         typeof domain === "function" ? domain(ctx.femVectorDomainFilter) : domain;
       void ctx.patchDisplay({
@@ -114,7 +114,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleClipEnabledChange = React.useCallback(
-    (enabled: Parameters<typeof ctx.setMeshClipEnabled>[0]) => {
+    (enabled: React.SetStateAction<typeof ctx.meshClipEnabled>) => {
       const resolvedEnabled =
         typeof enabled === "function" ? enabled(ctx.meshClipEnabled) : enabled;
       void ctx.patchDisplay(visualizationPatchForClip({ enabled: resolvedEnabled }));
@@ -122,14 +122,14 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleClipAxisChange = React.useCallback(
-    (axis: Parameters<typeof ctx.setMeshClipAxis>[0]) => {
+    (axis: React.SetStateAction<typeof ctx.meshClipAxis>) => {
       const resolvedAxis = typeof axis === "function" ? axis(ctx.meshClipAxis) : axis;
       void ctx.patchDisplay(visualizationPatchForClip({ axis: resolvedAxis }));
     },
     [ctx],
   );
   const handleClipPosChange = React.useCallback(
-    (positionPercent: Parameters<typeof ctx.setMeshClipPos>[0]) => {
+    (positionPercent: React.SetStateAction<typeof ctx.meshClipPos>) => {
       const resolvedPosition =
         typeof positionPercent === "function"
           ? positionPercent(ctx.meshClipPos)
@@ -139,7 +139,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleClipFlipChange = React.useCallback(
-    (flipped: Parameters<typeof ctx.setMeshClipFlip>[0]) => {
+    (flipped: React.SetStateAction<typeof ctx.meshClipFlip>) => {
       const resolvedFlipped =
         typeof flipped === "function" ? flipped(ctx.meshClipFlip) : flipped;
       void ctx.patchDisplay(visualizationPatchForClip({ flipped: resolvedFlipped }));
@@ -147,7 +147,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleArrowColorModeChange = React.useCallback(
-    (colorMode: Parameters<typeof ctx.setFemArrowColorMode>[0]) => {
+    (colorMode: React.SetStateAction<typeof ctx.femArrowColorMode>) => {
       const resolvedColorMode =
         typeof colorMode === "function" ? colorMode(ctx.femArrowColorMode) : colorMode;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ colorMode: resolvedColorMode }));
@@ -155,7 +155,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleArrowMonoColorChange = React.useCallback(
-    (monoColor: Parameters<typeof ctx.setFemArrowMonoColor>[0]) => {
+    (monoColor: React.SetStateAction<typeof ctx.femArrowMonoColor>) => {
       const resolvedMonoColor =
         typeof monoColor === "function" ? monoColor(ctx.femArrowMonoColor) : monoColor;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ monoColor: resolvedMonoColor }));
@@ -163,7 +163,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleArrowAlphaChange = React.useCallback(
-    (alpha: Parameters<typeof ctx.setFemArrowAlpha>[0]) => {
+    (alpha: React.SetStateAction<typeof ctx.femArrowAlpha>) => {
       const resolvedAlpha =
         typeof alpha === "function" ? alpha(ctx.femArrowAlpha) : alpha;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ alpha: resolvedAlpha }));
@@ -171,7 +171,7 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleArrowLengthScaleChange = React.useCallback(
-    (lengthScale: Parameters<typeof ctx.setFemArrowLengthScale>[0]) => {
+    (lengthScale: React.SetStateAction<typeof ctx.femArrowLengthScale>) => {
       const resolvedLengthScale =
         typeof lengthScale === "function" ? lengthScale(ctx.femArrowLengthScale) : lengthScale;
       void ctx.patchDisplay(
@@ -181,10 +181,24 @@ export function ViewportTabContent({
     [ctx],
   );
   const handleArrowThicknessChange = React.useCallback(
-    (thickness: Parameters<typeof ctx.setFemArrowThickness>[0]) => {
+    (thickness: React.SetStateAction<typeof ctx.femArrowThickness>) => {
       const resolvedThickness =
         typeof thickness === "function" ? thickness(ctx.femArrowThickness) : thickness;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ thickness: resolvedThickness }));
+    },
+    [ctx],
+  );
+  const handleFerromagnetVisibilityModeChange = React.useCallback(
+    (ferromagnetVisibility: React.SetStateAction<typeof ctx.femFerromagnetVisibilityMode>) => {
+      const resolvedFerromagnetVisibility =
+        typeof ferromagnetVisibility === "function"
+          ? ferromagnetVisibility(ctx.femFerromagnetVisibilityMode)
+          : ferromagnetVisibility;
+      void ctx.patchDisplay(
+        visualizationPatchForVectorStyle({
+          ferromagnetVisibility: resolvedFerromagnetVisibility,
+        }),
+      );
     },
     [ctx],
   );
@@ -547,7 +561,7 @@ export function ViewportTabContent({
               onArrowLengthScaleChange={handleArrowLengthScaleChange}
               onArrowThicknessChange={handleArrowThicknessChange}
               onVectorDomainFilterChange={handleVectorDomainFilterChange}
-              onFerromagnetVisibilityModeChange={ctx.setFemFerromagnetVisibilityMode}
+              onFerromagnetVisibilityModeChange={handleFerromagnetVisibilityModeChange}
               onPreviewMaxPointsChange={bridge.handlePreviewMaxPointsChange}
               onSelectionChange={ctx.setMeshSelection}
               antennaOverlays={ctx.antennaOverlays}

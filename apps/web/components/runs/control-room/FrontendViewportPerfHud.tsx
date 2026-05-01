@@ -131,7 +131,7 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
   const hidden = process.env.NODE_ENV === "production" || !FRONTEND_DIAGNOSTIC_FLAGS.viewportChrome.showTelemetryHud;
   const metrics = useMemo(() => {
     const webglEntries = viewportEntries.filter((entry) => entry.renderer === "webgl");
-    const warmTabs = stageTabs.filter((tab) => tab.lifecycle === "warm").length;
+    const hiddenMountedTabs = stageTabs.filter((tab) => tab.mountPolicy === "hidden-mounted").length;
     const resourceBytes = resourceBuckets.reduce((sum, bucket) => sum + bucket.estimatedBytes, 0);
     // Approximate VRAM-like proxy for quick diagnostics (not exact GPU memory).
     const webglProxyBytes =
@@ -140,7 +140,7 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
       webglEntries.reduce((sum, entry) => sum + entry.triangles * 36, 0);
     return {
       activeCanvases: webglEntries.length,
-      warmTabs,
+      hiddenMountedTabs,
       stage: currentStage,
       resourceBytes,
       webglProxyBytes,
@@ -262,8 +262,8 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1">
           <span className="text-muted-foreground">stage</span>
           <span>{metrics.stage}</span>
-          <span className="text-muted-foreground">warm tabs</span>
-          <span>{fmtInt(metrics.warmTabs)}</span>
+          <span className="text-muted-foreground">hidden-mounted tabs</span>
+          <span>{fmtInt(metrics.hiddenMountedTabs)}</span>
           <span className="text-muted-foreground">resource cache</span>
           <span>{fmtBytes(metrics.resourceBytes)}</span>
           <span className="text-muted-foreground">webgl proxy</span>

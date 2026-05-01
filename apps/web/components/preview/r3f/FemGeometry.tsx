@@ -11,6 +11,7 @@ import {
   useFemEdgeGeometryResource,
   useFemPointsGeometryResource,
   useFemSurfaceGeometryResource,
+  VOLUME_EDGE_BYTE_BUDGET_DEFAULT,
 } from "./femGeometryResources";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { useFemVertexColorResource } from "./useFemVertexColorResource";
@@ -567,6 +568,7 @@ export const FemGeometry = memo(function FemGeometry({
     centerX,
     centerY,
     centerZ,
+    volumeEdgeMaxBytes: VOLUME_EDGE_BYTE_BUDGET_DEFAULT,
   });
 
   // Points material uses vertexColors={false} — no color attribute needed on pointsGeometry.

@@ -11,7 +11,11 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
-import { useWebGLWarmKeepAliveDisabledForSession } from "@/lib/viewport/webglWarmKeepAliveGuard";
+import {
+  disposeViewportResourceOwner,
+  workspaceViewportResourceOwnerId,
+} from "@/lib/workspace/viewport-resource-owner";
+import { ViewportResourceOwnerProvider } from "@/lib/workspace/viewport-resource-owner-context";
 import { type WorkspaceTab, useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import {
   workspaceHrefForTabSlug,
@@ -25,6 +29,10 @@ import {
   isWebGLWorkspaceTab,
   resolveWorkspaceTabRenderDecision,
 } from "./center-tabs/tabRenderPolicy";
+import {
+  resolveWorkspaceTabResourceDisposals,
+  type WorkspaceTabResourceLifecycleSnapshot,
+} from "./center-tabs/tabResourceLifecycle";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
 
 export default function DockCenterTabs() {
@@ -40,7 +48,6 @@ export default function DockCenterTabs() {
   const closeTab = useWorkspaceStore((state) => state.closeTab);
   const pinTab = useWorkspaceStore((state) => state.pinTab);
   const openTab = useWorkspaceStore((state) => state.openTab);
-  const webGLWarmKeepAliveDisabledByContextLoss = useWebGLWarmKeepAliveDisabledForSession();
 
   const vp = useViewport();
   const model = useModel();
@@ -56,6 +63,7 @@ export default function DockCenterTabs() {
   const activeResultWorkspaceId = model.activeResultWorkspaceId;
   const analyzeSelection = model.analyzeSelection;
   const openAnalyzeSurface = model.openAnalyzeSurface;
+  const tabResourceLifecycleRef = useRef<WorkspaceTabResourceLifecycleSnapshot | null>(null);
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
   // canvases that would be immediately disabled (causes WebGL context churn).
@@ -98,8 +106,7 @@ export default function DockCenterTabs() {
       title: "Charts",
       closable: false,
       pinned: true,
-      keepAlive: false,
-      lifecycle: "unmount-on-hide",
+      mountPolicy: "active-only",
       payload: { viewMode: "Analyze" },
     });
   }, [
@@ -142,73 +149,47 @@ export default function DockCenterTabs() {
     api: selectionApi,
   });
 
+  useEffect(() => {
+    const currentSnapshot: WorkspaceTabResourceLifecycleSnapshot = {
+      stage: currentStage,
+      tabs,
+      activeTabId,
+    };
+    const disposals = resolveWorkspaceTabResourceDisposals(
+      tabResourceLifecycleRef.current,
+      currentSnapshot,
+    );
+    tabResourceLifecycleRef.current = currentSnapshot;
+    for (const disposal of disposals) {
+      disposeViewportResourceOwner(disposal.ownerId, disposal.reason);
+    }
+  }, [activeTabId, currentStage, tabs]);
+
   const spatialPreview = tp.preview?.kind === "spatial" ? tp.preview : null;
   const previewNoticesVisible =
     FRONTEND_DIAGNOSTIC_FLAGS.shell.showPreviewNotices && dockCenterFlags.showPreviewNotices;
 
-  // P-22: Track recently activated WebGL tabs in LRU order so that warm-hide keeps the most
-  // recently used tabs alive rather than the last N tabs by array index.
-  const recentWebGLTabIdsRef = useRef<string[]>([]);
-  useEffect(() => {
-    if (!activeTab || !isWebGLWorkspaceTab(activeTab)) return;
-    const id = activeTab.id;
-    recentWebGLTabIdsRef.current = [
-      id,
-      ...recentWebGLTabIdsRef.current.filter((tid) => tid !== id),
-    ].slice(0, 8); // Keep reasonable history for large tab sets
-  }, [activeTab]);
-
   const activeTabIsCharts = activeTab?.kind === "viewport-charts";
-  const warmWebGLTabIds = useMemo(() => {
-    if (
-      !dockCenterFlags.enableWebGLWarmKeepAlive ||
-      webGLWarmKeepAliveDisabledByContextLoss ||
-      !activeTab
-    ) {
-      return null;
-    }
-    const budget = Math.max(0, dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit ?? 1);
-    // FF-1: Firefox loses WebGL contexts when multiple renderers are active. Force
-    // budget=0 on Firefox so hidden tabs are never warm-mounted there.
-    const isFirefox = typeof navigator !== "undefined" && navigator.userAgent.includes("Firefox");
-    const effectiveBudget = isFirefox ? 0 : budget;
-    const ids = new Set<string>();
-    // LRU policy: prefer most-recently-activated WebGL tabs (recentWebGLTabIdsRef is updated by
-    // the effect above; reads stale value here but tabs[]-based fallback fills any gap).
-    for (const recentId of recentWebGLTabIdsRef.current) {
-      if (ids.size >= effectiveBudget) break;
-      if (recentId === activeTab.id) continue;
-      const tab = tabs.find((t) => t.id === recentId);
-      if (tab && isWebGLWorkspaceTab(tab)) {
-        ids.add(recentId);
-      }
-    }
-    // Fallback: fill remaining budget from tabs array (last-to-first) for tabs not yet in LRU list
-    for (let index = tabs.length - 1; index >= 0 && ids.size < effectiveBudget; index -= 1) {
-      const tab = tabs[index];
-      if (!tab || tab.id === activeTab.id || !isWebGLWorkspaceTab(tab)) {
-        continue;
-      }
-      ids.add(tab.id);
-    }
-    return ids;
-  }, [
-    activeTab,
-    dockCenterFlags.enableWebGLWarmKeepAlive,
-    dockCenterFlags.webGLWarmKeepAliveHiddenTabLimit,
-    tabs,
-    webGLWarmKeepAliveDisabledByContextLoss,
-  ]);
 
-  const renderTabContent = (tab: WorkspaceTab, viewportVisible = tab.id === activeTab?.id) => (
-    <DockCenterTabContent
-      tab={tab}
-      flags={dockCenterFlags}
-      chartsDisabled={chartsDisabled}
-      preview3dDisabled={preview3dDisabled}
-      viewportVisible={viewportVisible}
-    />
-  );
+  const renderTabContent = (tab: WorkspaceTab, viewportVisible = tab.id === activeTab?.id) => {
+    const content = (
+      <DockCenterTabContent
+        tab={tab}
+        flags={dockCenterFlags}
+        chartsDisabled={chartsDisabled}
+        preview3dDisabled={preview3dDisabled}
+        viewportVisible={viewportVisible}
+      />
+    );
+    if (!isWebGLWorkspaceTab(tab)) {
+      return content;
+    }
+    return (
+      <ViewportResourceOwnerProvider ownerId={workspaceViewportResourceOwnerId(currentStage, tab.id)}>
+        {content}
+      </ViewportResourceOwnerProvider>
+    );
+  };
 
   const previewNotices = previewNoticesVisible ? (
     <DockCenterPreviewNotices
@@ -297,11 +278,7 @@ export default function DockCenterTabs() {
       />
 
       {tabs.map((tab) => {
-        const renderDecision = resolveWorkspaceTabRenderDecision(tab, activeTab?.id, {
-          enableWebGLWarmKeepAlive: dockCenterFlags.enableWebGLWarmKeepAlive,
-          warmWebGLTabIds,
-          webGLWarmKeepAliveDisabledByContextLoss,
-        });
+        const renderDecision = resolveWorkspaceTabRenderDecision(tab, activeTab?.id);
         if (!renderDecision.render) {
           return null;
         }

@@ -104,6 +104,8 @@ export function useMeshCommandPipeline({
   setScriptSyncMessage,
   applyVisualizationStateResource,
 }: UseMeshCommandPipelineParams): UseMeshCommandPipelineReturn {
+  const displayPatchRequestSeqRef = useRef(0);
+
   const selectionToDisplayPatch = useCallback(
     (selection: DisplaySelection): DisplayPatchRequest => ({
       active_quantity_id: selection.quantity,
@@ -348,6 +350,8 @@ export function useMeshCommandPipeline({
     optimisticSelectionOverride?: DisplaySelection,
     message?: string,
   ) => {
+    const requestSeq = displayPatchRequestSeqRef.current + 1;
+    displayPatchRequestSeqRef.current = requestSeq;
     const nextSelection = optimisticSelectionOverride ?? applyDisplayPatchToSelection(
       requestedDisplaySelection,
       patch,
@@ -360,13 +364,23 @@ export function useMeshCommandPipeline({
     );
     try {
       const nextVisualizationState = await liveApi.patchDisplay(patch);
+      if (displayPatchRequestSeqRef.current !== requestSeq) {
+        return;
+      }
       applyVisualizationStateResource?.(nextVisualizationState);
     }
     catch (e) {
+      if (displayPatchRequestSeqRef.current !== requestSeq) {
+        return;
+      }
       setOptimisticDisplaySelection(null);
       setPreviewMessage(e instanceof Error ? e.message : "Failed to update preview");
     }
-    finally { setPreviewPostInFlight(false); }
+    finally {
+      if (displayPatchRequestSeqRef.current === requestSeq) {
+        setPreviewPostInFlight(false);
+      }
+    }
   }, [
     applyDisplayPatchToSelection,
     applyVisualizationStateResource,

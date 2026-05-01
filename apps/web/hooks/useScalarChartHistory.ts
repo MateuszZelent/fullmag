@@ -23,6 +23,7 @@ interface UseScalarChartHistoryOptions {
   sessionKey: string | null;
   liveRows: ScalarRow[];
   scalarRowsTotal: number;
+  columns: string[];
 }
 
 interface UseScalarChartHistoryResult {
@@ -168,6 +169,7 @@ export function useScalarChartHistory({
   sessionKey,
   liveRows,
   scalarRowsTotal,
+  columns,
 }: UseScalarChartHistoryOptions): UseScalarChartHistoryResult {
   const [state, dispatch] = useReducer(
     reducer,
@@ -177,6 +179,8 @@ export function useScalarChartHistory({
   const fetchedSessionRef = useRef<string | null>(null);
   /** Track last fetched total so we can refetch when backend publishes more rows. */
   const fetchedTotalRef = useRef<number>(0);
+  const fetchedColumnsKeyRef = useRef<string>("");
+  const columnsKey = columns.join(",");
 
   useEffect(() => {
     liveRowsRef.current = liveRows;
@@ -185,12 +189,29 @@ export function useScalarChartHistory({
   useEffect(() => {
     fetchedSessionRef.current = null;
     fetchedTotalRef.current = 0;
+    fetchedColumnsKeyRef.current = "";
     dispatch({
       type: "session_reset",
       sessionKey,
       liveRows: liveRowsRef.current,
     });
   }, [sessionKey]);
+
+  useEffect(() => {
+    if (fetchedColumnsKeyRef.current === columnsKey) {
+      return;
+    }
+    fetchedSessionRef.current = null;
+    fetchedTotalRef.current = 0;
+    fetchedColumnsKeyRef.current = "";
+    startTransition(() => {
+      dispatch({
+        type: "session_reset",
+        sessionKey,
+        liveRows: liveRowsRef.current,
+      });
+    });
+  }, [columnsKey, sessionKey]);
 
   useEffect(() => {
     startTransition(() => {
@@ -207,7 +228,10 @@ export function useScalarChartHistory({
     if (!enabled || !sessionKey) {
       return undefined;
     }
-    if (fetchedSessionRef.current === sessionKey) {
+    if (
+      fetchedSessionRef.current === sessionKey &&
+      fetchedColumnsKeyRef.current === columnsKey
+    ) {
       // CH-004 fix: allow refetch when scalarRowsTotal has grown significantly
       // beyond what we previously fetched (at least 10% more rows or 100+ new rows).
       const growth = scalarRowsTotal - fetchedTotalRef.current;
@@ -219,6 +243,7 @@ export function useScalarChartHistory({
     if (scalarRowsTotal <= liveRows.length) {
       fetchedSessionRef.current = sessionKey;
       fetchedTotalRef.current = scalarRowsTotal;
+      fetchedColumnsKeyRef.current = columnsKey;
       startTransition(() => {
         dispatch({ type: "hydrate_live_window", sessionKey });
       });
@@ -230,13 +255,14 @@ export function useScalarChartHistory({
       dispatch({ type: "full_history_start", sessionKey });
     });
 
-    void fetchScalarWindow(undefined, { signal: abortController.signal })
+    void fetchScalarWindow({ columns }, { signal: abortController.signal })
       .then((window) => {
         if (abortController.signal.aborted) {
           return;
         }
         fetchedSessionRef.current = sessionKey;
         fetchedTotalRef.current = scalarRowsTotal;
+        fetchedColumnsKeyRef.current = columnsKey;
         const fetchedRows = scalarWindowToRows(window);
         startTransition(() => {
           dispatch({
@@ -269,7 +295,7 @@ export function useScalarChartHistory({
     return () => {
       abortController.abort();
     };
-  }, [enabled, liveRows.length, scalarRowsTotal, sessionKey]);
+  }, [columns, columnsKey, enabled, liveRows.length, scalarRowsTotal, sessionKey]);
 
   useEffect(() => {
     if (!enabled || !sessionKey) {

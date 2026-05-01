@@ -1051,7 +1051,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
         title: entry.label,
         closable: true,
         pinned: entry.pinned,
-        keepAlive: tabKind === "result-quantity",
+        mountPolicy: "active-only",
         payload: {
           resultWorkspaceId: entry.id,
           quantityId: entry.quantityId ?? undefined,

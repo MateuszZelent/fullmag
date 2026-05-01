@@ -21,7 +21,6 @@ import {
 } from "../camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
-import { disableWebGLWarmKeepAliveForSession } from "@/lib/viewport/webglWarmKeepAliveGuard";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 
 export type ShellProjection = "perspective" | "orthographic";
@@ -503,8 +502,7 @@ export default function ScientificViewportShell({
         const handleContextLost = (event: Event) => {
           event.preventDefault();
           if (resolvedHidden) {
-            disableWebGLWarmKeepAliveForSession();
-            console.warn("[viewport-webgl] hidden context lost; disabling WebGL warm keepalive", {
+            console.warn("[viewport-webgl] hidden context lost; hidden WebGL tabs should be active-only", {
               telemetryLabel,
               generation: canvasContextGeneration,
             });

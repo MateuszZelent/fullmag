@@ -71,6 +71,23 @@ export function buildFemSurfaceEdgeGeometryResource({
   }
 }
 
+/**
+ * Default byte budget for volume-edge geometry (32 MiB).
+ * Each edge costs 2 endpoints × 3 coords × 4 bytes = 24 bytes.
+ * At the pessimistic upper bound of 6 edges/tet the budget covers ~222 K tetrahedra;
+ * for typical meshes (≈3.2 shared edges/tet) it covers ~415 K tetrahedra.
+ */
+export const VOLUME_EDGE_BYTE_BUDGET_DEFAULT = 32 * 1024 * 1024;
+
+/**
+ * Pessimistic upper-bound byte estimate for volume-edge geometry before building.
+ * Uses the maximum 6 unique edges per tetrahedron (before deduplication).
+ * Safe to call synchronously as a pre-flight check.
+ */
+export function estimateVolumeEdgeBytes(nElements: number): number {
+  return nElements * 6 * 24; // 6 edges/tet × 2 endpoints × 3 coords × 4 bytes
+}
+
 export function buildFemVolumeEdgeGeometryResource({
   enabled,
   nElements,
@@ -80,6 +97,7 @@ export function buildFemVolumeEdgeGeometryResource({
   centerX,
   centerY,
   centerZ,
+  maxBytes,
 }: {
   enabled: boolean;
   nElements: number;
@@ -89,9 +107,22 @@ export function buildFemVolumeEdgeGeometryResource({
   centerX: number | null;
   centerY: number | null;
   centerZ: number | null;
+  /** Byte budget guard. When the pessimistic estimate exceeds this limit the
+   * function returns `null` to prevent OOM on large meshes. */
+  maxBytes?: number;
 }): THREE.BufferGeometry | null {
   if (!enabled) return null;
   if (nElements === 0 || nNodes === 0) return null;
+  if (maxBytes !== undefined) {
+    const estimatedBytes = estimateVolumeEdgeBytes(nElements);
+    if (estimatedBytes > maxBytes) {
+      console.warn(
+        `[fem-geometry] Volume edge geometry skipped: pessimistic estimate ${estimatedBytes} bytes exceeds budget ${maxBytes} bytes` +
+          ` (${nElements} elements). Switch to surface-only edge scope for large meshes.`,
+      );
+      return null;
+    }
+  }
   try {
     const edgePairsByTet = [
       [0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3],
@@ -310,6 +341,8 @@ export function useFemEdgeGeometryResource(args: {
   centerX: number | null;
   centerY: number | null;
   centerZ: number | null;
+  /** Byte budget passed to `buildFemVolumeEdgeGeometryResource`. Omit to use no cap. */
+  volumeEdgeMaxBytes?: number;
 }): {
   edgesGeometry: THREE.BufferGeometry | null;
   tetraEdgesGeometry: THREE.BufferGeometry | null;
@@ -332,6 +365,7 @@ export function useFemEdgeGeometryResource(args: {
       centerX: args.centerX,
       centerY: args.centerY,
       centerZ: args.centerZ,
+      maxBytes: args.volumeEdgeMaxBytes,
     }),
     [
       args.centerX,
@@ -342,6 +376,7 @@ export function useFemEdgeGeometryResource(args: {
       args.nElements,
       args.nNodes,
       args.nodes,
+      args.volumeEdgeMaxBytes,
     ],
   );
 

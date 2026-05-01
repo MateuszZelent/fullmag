@@ -68,6 +68,37 @@ describe("LiveSessionClient v2 transport contract", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("requests scalar history with selected columns only", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe(
+        "http://api.test/v2/sessions/current/data/scalars?since_revision=12&limit=500&columns=time%2Ce_total",
+      );
+      return new Response(
+        JSON.stringify({
+          revision: 12,
+          total_rows: 12,
+          returned_rows: 0,
+          columns: ["step", "time", "e_total"],
+          rows: [],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new LiveSessionClient({ baseUrl: "http://api.test" });
+    await client.scalars.getWindow({
+      sinceRevision: 12,
+      limit: 500,
+      columns: ["time", "e_total"],
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reuses the global singleton when the resolved config is unchanged", () => {
     const first = initLiveSessionClient({ baseUrl: "http://api.test/" });
     const second = initLiveSessionClient({ baseUrl: "http://api.test" });

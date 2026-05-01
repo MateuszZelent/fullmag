@@ -40,7 +40,7 @@ export interface ResolvedRenderPlan {
     passes: MeshRenderPassState;
     airbox: AirboxRenderPassState;
     /**
-     * Compatibility mirrors for legacy consumers that still expect scalar airbox fields.
+     * Compatibility mirrors for consumers that still expect scalar airbox fields.
      * New renderer code should consume layers.airbox.
      */
     airboxVisible: boolean;
@@ -68,6 +68,27 @@ export interface ResolvedRenderPlan {
   };
   slice: Slice2DToolbarState;
   diagnostics: VisualizationStateResource["diagnostics"];
+}
+
+export interface ViewportVisualizationState {
+  meshRenderMode: RenderMode;
+  meshOpacity: number;
+  meshClipEnabled: boolean;
+  meshClipAxis: ClipAxis;
+  meshClipPos: number;
+  meshClipFlip: boolean;
+  meshShowArrows: boolean;
+  femVectorGlyphBudget: number;
+  femArrowColorMode: FemArrowColorMode;
+  femArrowMonoColor: string;
+  femArrowAlpha: number;
+  femArrowLengthScale: number;
+  femArrowThickness: number;
+  femVectorDomainFilter: FemVectorDomainFilter;
+  femFerromagnetVisibilityMode: FemFerromagnetVisibilityMode;
+  femViewportLayers: FemViewportLayerState;
+  airMeshVisible: boolean;
+  airMeshOpacity: number;
 }
 
 export function clipAxisFromVisualizationState(axis: "x" | "y" | "z"): ClipAxis {
@@ -240,6 +261,35 @@ export function resolveRenderPlanFromVisualizationState(
     },
     slice: sliceToolbarFromVisualizationState(state),
     diagnostics: state.diagnostics,
+  };
+}
+
+export function projectResolvedRenderPlanToViewportState(
+  plan: ResolvedRenderPlan | null,
+  fallback: ViewportVisualizationState,
+): ViewportVisualizationState {
+  if (!plan) {
+    return fallback;
+  }
+  return {
+    meshRenderMode: plan.layers.renderMode,
+    meshOpacity: plan.layers.meshOpacityPercent,
+    meshClipEnabled: plan.clip.enabled,
+    meshClipAxis: plan.clip.axis,
+    meshClipPos: plan.clip.positionPercent,
+    meshClipFlip: plan.clip.flipped,
+    meshShowArrows: plan.layers.vectorsVisible,
+    femVectorGlyphBudget: plan.sampling.maxGlyphs,
+    femArrowColorMode: plan.vectorStyle.colorMode,
+    femArrowMonoColor: plan.vectorStyle.monoColor,
+    femArrowAlpha: plan.vectorStyle.alpha,
+    femArrowLengthScale: plan.vectorStyle.lengthScale,
+    femArrowThickness: plan.vectorStyle.thickness,
+    femVectorDomainFilter: plan.layers.vectorDomainFilter ?? fallback.femVectorDomainFilter,
+    femFerromagnetVisibilityMode: plan.vectorStyle.ferromagnetVisibility,
+    femViewportLayers: plan.layers.femLayers,
+    airMeshVisible: plan.layers.airboxVisible,
+    airMeshOpacity: plan.layers.airboxOpacityPercent,
   };
 }
 

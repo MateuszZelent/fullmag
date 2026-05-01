@@ -3,7 +3,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { FemMeshPart } from "@/lib/session/types";
-import { buildViewportDisplayReset, VIEWPORT_DISPLAY_DEFAULTS } from "../femResetCommand";
+import {
+  buildViewportDisplayReset,
+  VIEWPORT_DISPLAY_DEFAULTS,
+  visualizationPatchForViewportDisplayDefaults,
+} from "../femResetCommand";
 import type { ViewportSelectionScope } from "../femViewportSelection";
 
 function makePart(partial: Partial<FemMeshPart>): FemMeshPart {
@@ -97,5 +101,79 @@ describe("buildViewportDisplayReset", () => {
     expect(result.resetGlobals).toBe(false);
     expect(result.meshEntityViewState["mag-1"].renderMode).toBe("surface+edges");
     expect(result.meshEntityViewState["mag-1"].opacity).toBe(100);
+  });
+});
+
+describe("visualizationPatchForViewportDisplayDefaults", () => {
+  it("maps viewport defaults to one canonical visualization state patch", () => {
+    expect(visualizationPatchForViewportDisplayDefaults()).toEqual({
+      layers: {
+        surface: {
+          visible: true,
+          opacity: 1,
+        },
+        quantity_overlay: {
+          visible: true,
+          opacity: 1,
+        },
+        wireframe: {
+          visible: true,
+        },
+        volume_mesh: {
+          visible: false,
+        },
+        points: {
+          visible: false,
+        },
+        vectors: {
+          visible: false,
+        },
+        primitives: {
+          visible: true,
+        },
+        airbox: {
+          visible: VIEWPORT_DISPLAY_DEFAULTS.airMeshVisible,
+          opacity: 0.28,
+        },
+      },
+      fem: {
+        topology_mode: "boundary",
+      },
+      clip: {
+        enabled: false,
+        axis: "x",
+        position_percent: 50,
+        flipped: false,
+      },
+    });
+  });
+
+  it("normalizes alternate render modes and percentage opacity values", () => {
+    const patch = visualizationPatchForViewportDisplayDefaults({
+      ...VIEWPORT_DISPLAY_DEFAULTS,
+      meshRenderMode: "mesh",
+      meshOpacity: 35,
+      meshClipEnabled: true,
+      meshClipAxis: "z",
+      meshClipPos: 80,
+      meshShowArrows: true,
+      airMeshVisible: false,
+      airMeshOpacity: 15,
+    });
+
+    expect(patch.layers?.surface?.visible).toBe(false);
+    expect(patch.layers?.surface?.opacity).toBe(0.35);
+    expect(patch.layers?.quantity_overlay?.opacity).toBe(0.35);
+    expect(patch.layers?.wireframe?.visible).toBe(false);
+    expect(patch.layers?.volume_mesh?.visible).toBe(true);
+    expect(patch.layers?.vectors?.visible).toBe(true);
+    expect(patch.layers?.airbox).toEqual({ visible: false, opacity: 0.15 });
+    expect(patch.fem?.topology_mode).toBe("volume");
+    expect(patch.clip).toEqual({
+      enabled: true,
+      axis: "z",
+      position_percent: 80,
+      flipped: false,
+    });
   });
 });
