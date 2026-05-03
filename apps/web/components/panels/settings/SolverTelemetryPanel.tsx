@@ -121,7 +121,7 @@ export default function SolverTelemetryPanel() {
           />
         </div>
         {!ctx.hasSolverTelemetry && (
-          <div className="text-xs text-muted-foreground leading-relaxed mt-4 p-3 rounded-md bg-muted/30 border border-border/40">{ctx.solverNotStartedMessage}</div>
+          <div className="text-xs text-muted-foreground leading-relaxed mt-4 p-3 rounded-md bg-card/40 border border-border/10">{ctx.solverNotStartedMessage}</div>
         )}
       </SidebarSection>
     </div>

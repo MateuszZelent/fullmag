@@ -83,7 +83,7 @@ export default function StateIoPanel() {
           >
             {ctx.stateIoBusy ? "Working…" : "Open Session"}
           </Button>
-          <div className="text-[0.68rem] leading-relaxed text-muted-foreground/80 border border-border/30 bg-background/30 p-2.5 rounded-lg mt-1">
+          <div className="text-[0.68rem] leading-relaxed text-muted-foreground/80 border border-border/10 bg-card/40 p-2.5 rounded-lg mt-1">
             Fullmag imports canonical `.fms` bundles. The control room now inspects the package first and then restores the selected session mode.
           </div>
         </div>
@@ -91,7 +91,7 @@ export default function StateIoPanel() {
 
       {ctx.scriptInitialState && (
         <SidebarSection title="Script Initial State" defaultOpen={false}>
-          <div className="grid gap-1 rounded-md border border-border/40 bg-background/40 p-3">
+          <div className="grid gap-1 rounded-md border border-border/10 bg-card/40 p-3">
             <span className="font-mono text-xs text-foreground break-all">
               {ctx.scriptInitialState.source_path}
             </span>
@@ -105,7 +105,7 @@ export default function StateIoPanel() {
 
       {ctx.stateIoMessage && (
         <div className="p-3">
-          <div className="text-[0.68rem] leading-relaxed text-muted-foreground p-3 rounded-md bg-muted/40 border border-border/50">
+          <div className="text-[0.68rem] leading-relaxed text-muted-foreground p-3 rounded-md bg-card/40 border border-border/10">
             {ctx.stateIoMessage}
           </div>
         </div>

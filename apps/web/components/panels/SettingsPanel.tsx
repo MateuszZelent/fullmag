@@ -266,7 +266,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
           const hasComposite = descriptor.compositeKeys?.includes(PanelKey.MESH_SETTINGS);
 
           return (
-            <>
+            <div className="flex flex-col gap-2 rounded-xl border border-border/30 bg-background/40 backdrop-blur-md p-2 shadow-sm mb-2">
               {descriptor.infoBanner && (
                 <SidebarSection title="Object Mesh Defaults" defaultOpen={true}>
                   <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
@@ -276,7 +276,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               )}
               {renderPrimary()}
               {hasComposite && <MeshSettingsPanel {...meshSettingsProps} />}
-            </>
+            </div>
           );
         }}
       </InspectorRegistryHost>

@@ -19,6 +19,11 @@ import {
 
 import { cn } from "@/lib/utils";
 import {
+  getFemBoundaryFaceCount,
+  getFemElementCount,
+  getFemNodeCount,
+} from "@/lib/session/femTopology";
+import {
   formatMetersTextAsNanometers,
   metersTextToNanometersInput,
   nanometersInputToMetersText,
@@ -421,7 +426,10 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
   } = ctx;
 
   const meshHighlights = useMemo(() => extractMeshLogHighlights(engineLog), [engineLog]);
-  const estimatedRamGb = effectiveFemMesh ? estimateDenseSolverRamGb(effectiveFemMesh.nodes.length) : 0;
+  const femNodeCount = effectiveFemMesh ? getFemNodeCount(effectiveFemMesh) : 0;
+  const femElementCount = effectiveFemMesh ? getFemElementCount(effectiveFemMesh) : 0;
+  const femBoundaryFaceCount = effectiveFemMesh ? getFemBoundaryFaceCount(effectiveFemMesh) : 0;
+  const estimatedRamGb = effectiveFemMesh ? estimateDenseSolverRamGb(femNodeCount) : 0;
   const structuredQualitySummary = meshWorkspace?.mesh_quality_summary ?? null;
   const pipelinePhases = useMemo(
     () =>
@@ -430,13 +438,13 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
         : buildMeshPipelinePhases({
             engineLog,
             meshSource: meshSource ?? null,
-            nodeCount: effectiveFemMesh?.nodes.length ?? 0,
-            elementCount: effectiveFemMesh?.elements.length ?? 0,
+            nodeCount: femNodeCount,
+            elementCount: femElementCount,
             meshOptions: ctx.meshOptions,
             meshQualityData,
             workspaceStatus,
           }),
-    [ctx.meshOptions, effectiveFemMesh?.elements.length, effectiveFemMesh?.nodes.length, engineLog, meshQualityData, meshSource, meshWorkspace?.mesh_pipeline_status, workspaceStatus],
+    [ctx.meshOptions, femElementCount, femNodeCount, engineLog, meshQualityData, meshSource, meshWorkspace?.mesh_pipeline_status, workspaceStatus],
   );
 
   const boundsSummary = useMemo(() => {
@@ -490,7 +498,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     return (
       <div className="flex flex-col gap-0 border-t border-border/20">
         <SidebarSection title="Object Mesh Override" defaultOpen={true}>
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
             Select an object mesh node to edit its local override or inspect how it inherits the shared object defaults.
           </div>
         </SidebarSection>
@@ -503,20 +511,20 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     <div className="flex flex-col pt-4 px-2">
       <SidebarSection title="Object Mesh Override" defaultOpen={true}>
         <div className="flex flex-col gap-5">
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2.5">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2.5">
             <div className="text-[0.62rem] font-bold uppercase tracking-widest text-muted-foreground">
               Local Object Override
             </div>
             <div className="mt-1 flex items-center justify-between gap-3">
               <span className="font-mono text-xs text-foreground">{geo.name}</span>
-              <span className="rounded-md border border-border/40 bg-background/40 px-2 py-0.5 text-[0.65rem] font-mono text-muted-foreground">
+              <span className="rounded-md border border-border/10 bg-card/40 px-2 py-0.5 text-[0.65rem] font-mono text-muted-foreground">
                 {geo.geometry_kind}
               </span>
             </div>
           </div>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col gap-3">
-            <TabsList className="grid h-auto grid-cols-5 gap-1 rounded-xl bg-background/45 p-1">
+            <TabsList className="grid h-auto grid-cols-5 gap-1 rounded-xl bg-card/40 p-1">
               <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="override">Override</TabsTrigger>
               <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="effective">Effective</TabsTrigger>
               <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="view">View</TabsTrigger>
@@ -579,7 +587,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                 />
 
                 {mesh.mode === "inherit" && (
-                  <div className="rounded-lg border border-border/40 bg-card/30 px-3 py-2 text-xs text-muted-foreground">
+                  <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
                     This object currently inherits the shared object defaults for the study-domain rebuild.
                     Switch to custom mode to edit a local override for the next domain rebuild.
                   </div>
@@ -656,7 +664,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   }
                   quality={meshQualityData}
                   generating={ctx.meshGenerating}
-                  nodeCount={effectiveFemMesh?.nodes.length}
+                  nodeCount={effectiveFemMesh ? femNodeCount : undefined}
                   disabled={mesh.mode !== "custom" || ctx.meshGenerating}
                   waitMode={ctx.isWaitingForCompute}
                   showAdaptiveSection={false}
@@ -667,7 +675,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
                     Boundary Layers
                   </div>
-                  <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[0.72rem] text-muted-foreground">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] text-muted-foreground">
                     Prismatic near-wall extrusion (Gmsh BoundaryLayer field). Leave blank to
                     disable.
                   </div>
@@ -738,7 +746,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
                     Swept / Through-Thickness
                   </div>
-                  <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[0.72rem] text-muted-foreground">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] text-muted-foreground">
                     Experimental, fallback-aware extruded mesh intent for thin-film geometries.
                     The backend build report shows whether swept/prism meshing was actually
                     applied or fell back to free tetrahedral.
@@ -829,10 +837,10 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
 
             <TabsContent value="effective" className="mt-0">
               <div className="flex flex-col gap-3">
-                <div className="overflow-x-auto rounded-lg border border-border/40">
+                <div className="overflow-x-auto rounded-lg border border-border/10">
                   <table className="w-full text-[0.72rem]">
                     <thead>
-                      <tr className="border-b border-border/30 bg-muted/20">
+                      <tr className="border-b border-border/10 bg-card/40">
                         <th className="px-2 py-1.5 text-left font-semibold text-muted-foreground uppercase tracking-widest text-[0.6rem]">Parameter</th>
                         <th className="px-2 py-1.5 text-right font-semibold text-muted-foreground uppercase tracking-widest text-[0.6rem]">Object defaults</th>
                         <th className="px-2 py-1.5 text-right font-semibold text-muted-foreground uppercase tracking-widest text-[0.6rem]">Object override</th>
@@ -904,7 +912,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   <MetricField label="Mode" value={mesh.mode === "custom" ? "Local Override" : "Inherited Defaults"} />
                   <MetricField label="Build Target" value={sharedDomainMesh ? "Study Domain Mesh" : "Object Mesh"} />
                 </div>
-                <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+                <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                   Effective values merge the shared object defaults with this object&apos;s local override. If the mode is <code className="font-mono text-foreground/80">inherit</code>, every field above comes from the shared defaults rather than a separate third mesh.
                 </div>
               </div>
@@ -924,7 +932,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     <button
                       key={mode}
                       type="button"
-                      className="appearance-none rounded-md border border-border/40 bg-background/50 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                      className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-card/60 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                       data-active={effectiveViewMode === mode}
                       onClick={() => handleViewModeChange(mode)}
                     >
@@ -937,7 +945,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     <button
                       key={option.value}
                       type="button"
-                      className="appearance-none rounded-md border border-border/40 bg-background/50 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                      className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-card/60 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                       data-active={meshRenderMode === option.value}
                       onClick={() => {
                         void viewport.patchDisplay(visualizationPatchForRenderMode(option.value as RenderMode));
@@ -949,7 +957,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                 </div>
 
                 <div className="mt-3 grid gap-3 @[900px]:grid-cols-2">
-                  <div className="grid gap-2 rounded-lg border border-border/30 bg-background/50 p-2.5">
+                  <div className="grid gap-2 rounded-lg border border-border/10 bg-card/40 p-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground flex items-center gap-1">
                         Clip Plane
@@ -957,7 +965,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       </span>
                       <button
                         type="button"
-                        className="rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                        className="rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-card/60 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                         data-active={meshClipEnabled}
                         onClick={() => {
                           void viewport.patchDisplay(visualizationPatchForClip({ enabled: !meshClipEnabled }));
@@ -971,7 +979,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         <button
                           key={axis}
                           type="button"
-                          className="appearance-none rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                          className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-card/60 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                           data-active={meshClipAxis === axis}
                           disabled={!meshClipEnabled}
                           onClick={() => {
@@ -1000,7 +1008,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     </label>
                   </div>
 
-                  <div className="grid gap-2 rounded-lg border border-border/30 bg-background/50 p-2.5">
+                  <div className="grid gap-2 rounded-lg border border-border/10 bg-card/40 p-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground flex items-center gap-1">
                         Display
@@ -1008,7 +1016,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       </span>
                       <button
                         type="button"
-                        className="flex items-center gap-1.5 rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                        className="flex items-center gap-1.5 rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-card/60 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                         data-active={meshShowArrows}
                         onClick={() => {
                           void viewport.patchDisplay({
@@ -1045,42 +1053,42 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
             <TabsContent value="diagnostics" className="mt-0">
               <SidebarSection title="Topology & Spatial" defaultOpen={true}>
                 <div className="grid grid-cols-2 gap-2">
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <GitCommitHorizontal size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Nodes</span>
             </div>
-            <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.nodes.length.toLocaleString() ?? "0"}</span>
+            <span className="font-mono text-xs font-semibold text-foreground/90">{femNodeCount.toLocaleString()}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Triangle size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Elements</span>
             </div>
-            <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.elements.length.toLocaleString() ?? "0"}</span>
+            <span className="font-mono text-xs font-semibold text-foreground/90">{femElementCount.toLocaleString()}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Layers size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Faces</span>
             </div>
-            <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.boundary_faces.length.toLocaleString() ?? "0"}</span>
+            <span className="font-mono text-xs font-semibold text-foreground/90">{femBoundaryFaceCount.toLocaleString()}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <SplitSquareHorizontal size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">FE Order</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{meshFeOrder != null ? `P${meshFeOrder}` : "—"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Ruler size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Maximum Element Size</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{meshHmax != null ? fmtSI(meshHmax, "m") : "—"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <MemoryStick size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Dense RAM</span>
@@ -1088,9 +1096,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
             <span
               className={cn(
                 "font-mono text-xs",
-                (effectiveFemMesh?.nodes.length ?? 0) > 50_000
+                femNodeCount > 50_000
                   ? "text-error"
-                  : (effectiveFemMesh?.nodes.length ?? 0) > 10_000
+                  : femNodeCount > 10_000
                     ? "text-warning"
                     : "text-success",
               )}
@@ -1100,7 +1108,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
           </div>
         </div>
         {boundsSummary && (
-          <div className="mt-3 grid gap-1.5 rounded-lg border border-border/30 bg-background/50 p-2.5 text-xs text-foreground">
+          <div className="mt-3 grid gap-1.5 rounded-lg border border-border/10 bg-card/40 p-2.5 text-xs text-foreground">
             <div className="grid grid-cols-[80px_1fr] gap-2">
               <span className="text-[0.65rem] font-bold uppercase text-muted-foreground">Object</span>
               <span className="font-mono text-foreground">{geo.name}</span>
@@ -1129,63 +1137,63 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
         </div>
         {meshQualityData ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN p5</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.sicnP5.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.sicnMean.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Gamma Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.gammaMin.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Elements</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.nElements.toLocaleString()}</span>
             </div>
           </div>
         ) : structuredQualitySummary ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN p5</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.sicn_p5.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.sicn_mean.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Gamma Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.gamma_min.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Avg Quality</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.avg_quality.toFixed(3)}</span>
             </div>
           </div>
         ) : meshQualitySummary ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">AR Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualitySummary.min.toFixed(2)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">AR Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualitySummary.mean.toFixed(2)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-success/10 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-success/10 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-success/80">Good Faces</span>
               <span className="font-mono text-xs font-semibold text-success">{meshQualitySummary.good.toLocaleString()}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-warning/10 backdrop-blur-sm px-2.5 py-2">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-warning/10 backdrop-blur-sm px-2.5 py-2">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-warning/80">Poor Faces</span>
               <span className="font-mono text-xs font-semibold text-warning">{meshQualitySummary.poor.toLocaleString()}</span>
             </div>
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.75rem] text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2 text-[0.75rem] text-muted-foreground">
             Backend quality metrics are not loaded for this artifact. Open Mesh Statistics for topology fallback diagnostics, then rebuild the solver mesh to persist Gmsh quality metrics.
           </div>
         )}
@@ -1204,7 +1212,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       const label = part?.object_id ?? part?.geometry_id ?? `Domain ${marker}`;
                       const sicnOk = q.sicn_p5 >= 0.1;
                       return (
-                        <div key={markerStr} className="rounded-lg border border-border/35 bg-background/50 p-2.5">
+                        <div key={markerStr} className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                           <div className="mb-1.5 flex items-center justify-between gap-2">
                             <span className="text-[0.72rem] font-semibold text-foreground/90">{label}</span>
                             <span className={cn(
@@ -1241,7 +1249,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
             <TabsContent value="build" className="mt-0">
               <SidebarSection title="Build" defaultOpen={true}>
                 <div className="flex flex-col gap-3">
-                  <div className="rounded-lg border border-border/35 bg-background/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                     {sharedDomainMesh
                       ? "Use Build Selected in the Mesh ribbon to sync this override, rebuild the study-domain mesh and open the build modal."
                       : "Use Build Selected in the Mesh ribbon to rebuild the active FEM mesh workflow from this object context."}
@@ -1252,13 +1260,13 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg border border-border/30 bg-card/30 px-3 py-2">
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                       <div className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Effective max size
                       </div>
                       <div className="mt-1 font-mono text-xs text-foreground">{effectiveHmaxDisplay}</div>
                     </div>
-                    <div className="rounded-lg border border-border/30 bg-card/30 px-3 py-2">
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                       <div className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Effective min size
                       </div>
@@ -1266,7 +1274,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
-                    <div className="rounded-lg border border-border/30 bg-card/30 px-3 py-2">
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                       <div className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Last build nodes
                       </div>
@@ -1274,7 +1282,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         {meshWorkspace?.mesh_summary?.node_count?.toLocaleString() ?? "—"}
                       </div>
                     </div>
-                    <div className="rounded-lg border border-border/30 bg-card/30 px-3 py-2">
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                       <div className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Elements
                       </div>
@@ -1282,7 +1290,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         {meshWorkspace?.mesh_summary?.element_count?.toLocaleString() ?? "—"}
                       </div>
                     </div>
-                    <div className="rounded-lg border border-border/30 bg-card/30 px-3 py-2">
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                       <div className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Boundary faces
                       </div>
@@ -1291,7 +1299,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       </div>
                     </div>
                   </div>
-                  <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                     {ctx.meshGenerating || ctx.scriptSyncBusy
                       ? "Mesh build is currently active in the ribbon modal. You can keep editing overrides here or send the build to background from the dialog."
                       : (ctx.scriptSyncMessage
@@ -1327,7 +1335,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
           })}
         </div>
         {meshHighlights.length > 0 && (
-          <div className="mt-2 grid gap-1 rounded-lg border border-border/30 bg-background/50 p-2.5">
+          <div className="mt-2 grid gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Recent Mesh Log</span>
             <div className="grid gap-1">
               {meshHighlights.slice(0, 6).map((entry) => (

@@ -345,7 +345,7 @@ export default function UniversePanel() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col gap-3 pt-4 px-2">
-      <TabsList className="grid h-auto grid-cols-5 gap-1 rounded-xl bg-background/45 p-1">
+      <TabsList className="grid h-auto grid-cols-5 gap-1 rounded-xl bg-card/40 p-1">
         <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="general">General</TabsTrigger>
         <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="airbox" disabled={!femDiscretization}>Airbox</TabsTrigger>
         <TabsTrigger className="min-h-[36px] text-[0.7rem] font-semibold normal-case tracking-normal" value="view" disabled={!femDiscretization}>View</TabsTrigger>
@@ -368,7 +368,7 @@ export default function UniversePanel() {
                 tooltip="Determines how the simulation bounds are established. Auto-fit tightly envelops all defined geometry objects. Manual requires explicit size definitions."
               />
             ) : (
-              <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                 {sourceSummary}
               </div>
             )}
@@ -410,7 +410,7 @@ export default function UniversePanel() {
               />
             </div>
           ) : (
-            <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
               Universe extent is read-only in this context.
             </div>
           )}
@@ -418,7 +418,7 @@ export default function UniversePanel() {
 
         {femDiscretization ? (
           <InspectorSection title="Domain Mesh" defaultOpen={true}>
-            <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
               The shared-domain FEM path now treats Universe mesh controls as domain-level diagnostics.
               Tune air-region density in the <span className="font-medium text-foreground">Airbox</span> tab
               and per-object sizing in each object&apos;s <span className="font-medium text-foreground">Mesh</span> panel.
@@ -531,7 +531,7 @@ export default function UniversePanel() {
                   ]}
                 />
               ) : null}
-              <div className="rounded-lg border border-border/35 bg-background/35 p-3">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-3">
                 <div className="mb-2 text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
                   Shared-Domain Mesher Policy
                 </div>
@@ -560,7 +560,7 @@ export default function UniversePanel() {
         {femDiscretization ? (
           <>
             <InspectorSection title="View" defaultOpen={true}>
-              <div className="rounded-lg border border-border/35 bg-background/35 p-3">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-3">
                 <div className="mb-2 text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
                   Viewport
                 </div>
@@ -591,7 +591,7 @@ export default function UniversePanel() {
             {showMeshPartsPanel ? (
               <InspectorSection title="Mesh Parts" defaultOpen={true}>
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between rounded-lg border border-border/30 bg-card/20 p-2.5">
+                  <div className="flex items-center justify-between rounded-lg border border-border/10 bg-card/40 p-2.5">
                     <div className="text-[0.68rem] leading-relaxed text-muted-foreground">
                       Shared-domain viewport renders canonical mesh parts directly from the realized FEM mesh.
                     </div>
@@ -612,7 +612,7 @@ export default function UniversePanel() {
                     return (
                       <div
                         key={part.id}
-                        className="rounded-lg border border-border/35 bg-background/35 p-3"
+                        className="rounded-lg border border-border/10 bg-card/40 p-3"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -715,7 +715,7 @@ export default function UniversePanel() {
                 value={outerBoundaryPolicy === "auto" ? "Planner-managed" : "Explicit authoring"}
               />
               <MetricField label="Effective" value={outerBoundaryLabel} />
-              <div className="rounded-lg border border-border/30 bg-card/30 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
                 `Dirichlet` and `Robin` keep the solve on the shared airbox FEM path.
                 FEM `transfer_grid` has been removed; use a shared-domain mesh with air.
               </div>
@@ -729,7 +729,7 @@ export default function UniversePanel() {
           <InspectorSection title="Build & Log" defaultOpen={true}>
             <div className="flex flex-col gap-3">
               <div className="grid grid-cols-2 gap-2">
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2 transition-colors hover:bg-background/60">
+                <div className="grid gap-1 rounded border border-border/10 bg-card/40 px-2.5 py-2 transition-colors hover:bg-card/60">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <GitCommitHorizontal size={11} />
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider">Solver Nodes</span>
@@ -738,7 +738,7 @@ export default function UniversePanel() {
                     {meshSummary?.node_count.toLocaleString() ?? "—"}
                   </span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2 transition-colors hover:bg-background/60">
+                <div className="grid gap-1 rounded border border-border/10 bg-card/40 px-2.5 py-2 transition-colors hover:bg-card/60">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Triangle size={11} />
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider">Tetrahedra</span>
@@ -747,7 +747,7 @@ export default function UniversePanel() {
                     {meshSummary?.element_count.toLocaleString() ?? "—"}
                   </span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2 transition-colors hover:bg-background/60">
+                <div className="grid gap-1 rounded border border-border/10 bg-card/40 px-2.5 py-2 transition-colors hover:bg-card/60">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Layers size={11} />
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider">Boundary Faces</span>
@@ -756,7 +756,7 @@ export default function UniversePanel() {
                     {meshSummary?.boundary_face_count.toLocaleString() ?? "—"}
                   </span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2 transition-colors hover:bg-background/60">
+                <div className="grid gap-1 rounded border border-border/10 bg-card/40 px-2.5 py-2 transition-colors hover:bg-card/60">
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <MemoryStick size={11} />
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider">Payload RAM</span>
@@ -766,16 +766,16 @@ export default function UniversePanel() {
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col gap-3 rounded-lg border border-border/40 bg-card/20 p-3 shadow-sm transition-all duration-300">
-                <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2.5 text-[0.72rem] leading-relaxed text-info/90">
+              <div className="flex flex-col gap-3 rounded border border-border/10 bg-card/40 p-3 shadow-sm transition-all duration-300">
+                <div className="rounded border border-info/20 bg-info/10 px-3 py-2.5 text-[0.72rem] leading-relaxed text-info/90">
                   Use the Mesh ribbon to launch `Build Selected` for the airbox or `Build All` for the full study-domain mesh. The build modal now owns progress, logs and pipeline feedback.
                 </div>
                 {ctx.meshConfigDirty && (
-                  <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2.5 text-[0.72rem] leading-relaxed text-warning/90">
+                  <div className="rounded border border-warning/25 bg-warning/10 px-3 py-2.5 text-[0.72rem] leading-relaxed text-warning/90">
                     Airbox or mesh settings changed after the last build. The 3D viewport still shows the last built mesh until you rebuild.
                   </div>
                 )}
-                <div className="rounded-md border border-border/30 bg-background/35 px-2.5 py-2 text-[0.68rem] leading-relaxed text-muted-foreground">
+                <div className="rounded-md border border-border/10 bg-card/40 px-2.5 py-2 text-[0.68rem] leading-relaxed text-muted-foreground">
                   {ctx.commandMessage
                     ?? ctx.meshWorkspace?.last_build_error
                     ?? "Change airbox sizing here, then use the Mesh ribbon to sync the script, queue a study-domain remesh and follow the build in the modal."}

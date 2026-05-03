@@ -305,18 +305,18 @@ export default function MeshSettingsPanel({
     <div className="flex flex-col gap-3 p-3">
       {/* ── Basic / Advanced Toggle ── */}
       {showAllSections ? (
-      <div className="flex items-center justify-between gap-3 rounded-2xl border border-border/25 bg-background/25 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3 px-1 border-b border-border/15 pb-3 mb-2">
         <div>
-          <div className="text-[0.62rem] font-semibold tracking-[0.12em] text-muted-foreground">
+          <div className="text-[0.62rem] font-bold tracking-[0.12em] uppercase text-muted-foreground/80 mb-0.5">
             Mesh settings
           </div>
-          <div className="text-[0.78rem] font-medium text-foreground">
+          <div className="text-[0.72rem] text-muted-foreground">
             Adjust inputs first, then rebuild to update the realized mesh.
           </div>
         </div>
         <button
           type="button"
-          className="rounded-lg border border-border/25 px-2.5 py-1.5 text-[0.68rem] font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+          className="rounded-md border border-border/20 px-2.5 py-1.5 text-[0.68rem] font-semibold text-muted-foreground transition-all hover:bg-muted/40 hover:text-foreground"
           onClick={() => setShowAdvanced((v) => !v)}
         >
           {showAdvanced ? "Basic view" : "Advanced view"}
@@ -687,7 +687,7 @@ export default function MeshSettingsPanel({
         title="Quality analysis"
         eyebrow="Diagnostics"
         meta={qualityRating ? (
-          <span className={cn("rounded-md px-2 py-1 text-[0.62rem] font-semibold text-white", qualityRating.cls === "good" ? "bg-emerald-600" : qualityRating.cls === "fair" ? "bg-amber-600" : "bg-destructive")}>
+          <span className={cn("rounded-md px-1.5 py-0.5 text-[0.6rem] font-bold uppercase tracking-wider text-white shadow-sm", qualityRating.cls === "good" ? "bg-emerald-600/80" : qualityRating.cls === "fair" ? "bg-amber-600/80" : "bg-destructive/80")}>
             {qualityRating.label}
           </span>
         ) : undefined}
@@ -731,7 +731,7 @@ export default function MeshSettingsPanel({
               </div>
 
               {/* SICN Histogram */}
-              <canvas ref={sicnCanvasRef} className="w-full h-16 mt-3 bg-card/30 rounded border border-border/30" />
+              <canvas ref={sicnCanvasRef} className="w-full h-16 mt-3 bg-card/20 rounded-md border border-border/15" />
               <div className="flex items-center justify-center gap-3 mt-1.5 text-[0.6rem] text-muted-foreground">
                 <span><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 bg-destructive" />SICN &lt; 0 (inverted)</span>
                 <span><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 bg-amber-500" />0–0.5 (fair)</span>
@@ -739,7 +739,7 @@ export default function MeshSettingsPanel({
               </div>
 
               {/* Gamma Histogram */}
-              <canvas ref={gammaCanvasRef} className="w-full h-16 mt-3 bg-card/30 rounded border border-border/30" />
+              <canvas ref={gammaCanvasRef} className="w-full h-16 mt-3 bg-card/20 rounded-md border border-border/15" />
               <div className="flex items-center justify-center gap-3 mt-1.5 text-[0.6rem] text-muted-foreground">
                 <span><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 bg-destructive" />γ &lt; 0.3 (poor)</span>
                 <span><span className="inline-block w-1.5 h-1.5 rounded-full mr-1 bg-amber-500" />0.3–0.6 (fair)</span>

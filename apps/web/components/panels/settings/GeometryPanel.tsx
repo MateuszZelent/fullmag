@@ -33,6 +33,7 @@ import {
   InfoRow,
   ToggleRow,
   CompactInputGrid,
+  InspectorStatTile,
 } from "./primitives";
 import { GEOMETRY_PRESET_CATALOG, evaluateGeometryPreset, type GeometryPresetKind } from "../../../lib/geometryPresetCatalog";
 import GeometryPresetLibraryPanel from "../GeometryPresetLibraryPanel";
@@ -703,7 +704,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
           </div>
 
           {geometryPresetLibraryOpen && (
-            <div className="mb-3 rounded-lg border border-border/40 bg-card/20 p-2">
+            <div className="mb-3 rounded-lg border border-border/10 bg-card/40 p-2">
               <GeometryPresetLibraryPanel
                 selectedKind={sceneObject.geometry.preset_kind as GeometryPresetKind | null}
                 onSelectKind={(kind) => assignGeometryPreset(kind)}
@@ -839,7 +840,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
             </div>
           )}
               {csgSummary && (
-                <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
                   {csgSummary}
                 </div>
               )}
@@ -866,19 +867,10 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
       <SidebarSection title="Physics Settings" icon="🧲" defaultOpen={true}>
         <div className="flex flex-col gap-2">
           <PropertyRow label="Material" value={material?.name ?? "Default"} />
-          <div className="grid grid-cols-3 gap-2">
-            <div className="flex flex-col gap-1 rounded-lg border border-border/25 bg-gradient-to-b from-card/35 to-card/10 px-3 py-2 backdrop-blur-sm">
-              <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground/60">Ms</span>
-              <span className="font-mono text-xs text-foreground">{material?.properties.Ms != null ? fmtSI(material.properties.Ms, "A/m") : "—"}</span>
-            </div>
-            <div className="flex flex-col gap-1 rounded-lg border border-border/25 bg-gradient-to-b from-card/35 to-card/10 px-3 py-2 backdrop-blur-sm">
-              <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground/60">Aex</span>
-              <span className="font-mono text-xs text-foreground">{material?.properties.Aex != null ? fmtSI(material.properties.Aex, "J/m") : "—"}</span>
-            </div>
-            <div className="flex flex-col gap-1 rounded-lg border border-border/25 bg-gradient-to-b from-card/35 to-card/10 px-3 py-2 backdrop-blur-sm">
-              <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground/60">α</span>
-              <span className="font-mono text-xs text-foreground">{material?.properties.alpha?.toPrecision(3) ?? "—"}</span>
-            </div>
+          <div className="grid grid-cols-3 gap-x-3 gap-y-2 py-1">
+            <InspectorStatTile label="Ms" value={material?.properties.Ms != null ? fmtSI(material.properties.Ms, "A/m") : "—"} />
+            <InspectorStatTile label="Aex" value={material?.properties.Aex != null ? fmtSI(material.properties.Aex, "J/m") : "—"} />
+            <InspectorStatTile label="α" value={material?.properties.alpha?.toPrecision(3) ?? "—"} />
           </div>
         </div>
       </SidebarSection>
@@ -915,15 +907,9 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
       {/* ── Card 5: Spatial Summary ── */}
       <SidebarSection title="Spatial Summary" icon="📍" defaultOpen={false}>
-        <div className="grid grid-cols-1 gap-2">
-          <div className="flex flex-col gap-1 rounded-lg border border-border/25 bg-gradient-to-b from-card/35 to-card/10 px-3 py-2 backdrop-blur-sm">
-            <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground/60">Bounds</span>
-            <span className="font-mono text-xs tracking-tight text-foreground">{formatBounds(liveBounds?.boundsMin, liveBounds?.boundsMax)}</span>
-          </div>
-          <div className="flex flex-col gap-1 rounded-lg border border-border/25 bg-gradient-to-b from-card/35 to-card/10 px-3 py-2 backdrop-blur-sm">
-            <span className="text-[0.5rem] font-semibold uppercase tracking-widest text-muted-foreground/60">Extent</span>
-            <span className="font-mono text-xs tracking-tight text-foreground">{formatExtent(liveBounds?.boundsMin, liveBounds?.boundsMax)}</span>
-          </div>
+        <div className="grid grid-cols-1 gap-1 py-1">
+          <InspectorStatTile label="Bounds" value={formatBounds(liveBounds?.boundsMin, liveBounds?.boundsMax)} />
+          <InspectorStatTile label="Extent" value={formatExtent(liveBounds?.boundsMin, liveBounds?.boundsMax)} />
         </div>
       </SidebarSection>
     </>

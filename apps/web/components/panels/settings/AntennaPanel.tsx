@@ -11,7 +11,7 @@ import { fmtSI, resolveAntennaNodeName } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
 import { Button } from "../../ui/button";
-import { SidebarSection } from "./primitives";
+import { SidebarSection, InspectorStatTile } from "./primitives";
 import { cn } from "@/lib/utils";
 
 const DEFAULT_SOLVER = "mqs_2p5d_az";
@@ -299,30 +299,16 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
             {physicsBadges.map((badge) => (
               <span
                 key={badge}
-                className="inline-flex w-fit rounded-md border border-border/40 bg-card/40 px-2 py-1 text-[0.58rem] font-bold uppercase tracking-[0.12em] text-muted-foreground"
+                className="inline-flex w-fit rounded-md border border-border/10 bg-card/40 px-2 py-1 text-[0.58rem] font-bold uppercase tracking-[0.12em] text-muted-foreground"
               >
                 {badge}
               </span>
             ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
-              <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">
-                RF Sources
-              </span>
-              <span className="font-mono text-xs text-foreground">
-                {modules.length > 0 ? modules.length : "none"}
-              </span>
-            </div>
-            <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
-              <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">
-                Mesh Top
-              </span>
-              <span className="font-mono text-xs text-foreground">
-                {model.meshBoundsMax?.[2] != null ? fmtSI(model.meshBoundsMax[2], "m") : "waiting"}
-              </span>
-            </div>
+          <div className="grid grid-cols-2 gap-3 py-1">
+            <InspectorStatTile label="RF Sources" value={modules.length > 0 ? modules.length : "none"} />
+            <InspectorStatTile label="Mesh Top" value={model.meshBoundsMax?.[2] != null ? fmtSI(model.meshBoundsMax[2], "m") : "waiting"} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -335,7 +321,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
           </div>
 
           {modules.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/50 bg-card/20 p-4 text-[0.72rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-lg border border-dashed border-border/10 bg-card/40 p-4 text-[0.72rem] leading-relaxed text-muted-foreground">
               Add a Microstrip or CPW antenna to configure RF synthesis. 3D previews will appear automatically after meshing.
             </div>
           ) : (
@@ -345,10 +331,10 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
                   key={module.name}
                   type="button"
                   className={cn(
-                    "flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors",
+                    "flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
                     activeModule?.name === module.name
                       ? "border-primary/40 bg-primary/10"
-                      : "border-border/40 bg-card/25 hover:bg-card/40",
+                      : "border-border/10 bg-card/40 hover:bg-card/60",
                   )}
                   onClick={() => selectModule(module.name)}
                 >
@@ -511,7 +497,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
                 tooltip="Horizontal Y-offset from the simulation origin."
               />
             </div>
-            <div className="mt-3 rounded-lg border border-border/30 bg-card/20 p-3 text-[0.68rem] leading-relaxed text-muted-foreground">
+            <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.68rem] leading-relaxed text-muted-foreground">
               Position is calculated relative to the center of the magnetic scene. The 3D view shows an 
               extrusion along the <span className="font-mono text-foreground">y</span> axis, per the 
               2.5D solver's assumption.
@@ -586,7 +572,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
       <SidebarSection title="Excitation Analysis" defaultOpen={true}>
         {!analysis ? (
           <div className="grid gap-3">
-            <div className="rounded-lg border border-dashed border-border/50 bg-card/20 p-3 text-[0.68rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-lg border border-dashed border-border/10 bg-card/40 p-3 text-[0.68rem] leading-relaxed text-muted-foreground">
               Analysis config is optional. Turn it on to store source-profile settings for the
               currently selected antenna.
             </div>

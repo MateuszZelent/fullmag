@@ -1172,12 +1172,12 @@ export default function MaterialPanel({
 
       <SidebarSection title="Magnetic Interactions" defaultOpen={true}>
         <div className="flex flex-col gap-3">
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-[0.72rem] text-muted-foreground">
             Exchange i demag są zawsze aktywne dla ferromagnetyka. Interakcje opcjonalne możesz dodawać i konfigurować poniżej.
           </div>
           <div className="grid gap-2">
             {physicsStack.map((interaction) => (
-              <div key={interaction.kind} className="rounded-lg border border-border/35 bg-background/35 px-3 py-2">
+              <div key={interaction.kind} className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <div className="text-xs font-semibold text-foreground">
                     {magneticInteractionLabel(interaction.kind)}
@@ -1288,13 +1288,13 @@ export default function MaterialPanel({
       {showMagneticTexturePanel ? (
       <SidebarSection title="Magnetic Texture (m0)" defaultOpen={true}>
         <div className="flex flex-col gap-4">
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
             This editor updates the magnetic texture asset referenced by the selected object.
           </div>
 
           {showMagnetizationOverview ? (
             <div className="flex flex-col gap-3">
-              <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-medium text-foreground">Magnetic Texture Overview</div>
@@ -1353,7 +1353,7 @@ export default function MaterialPanel({
                   </Button>
                 </div>
                 {!transformAvailable ? (
-                  <div className="mt-3 rounded-lg border border-border/25 bg-background/30 px-3 py-2 text-[0.72rem] text-muted-foreground">
+                  <div className="mt-3 rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-[0.72rem] text-muted-foreground">
                     Transform magnetic texture jest osobnym modułem względem transformacji geometrii i uaktywnia się dopiero dla `Preset Texture`.
                   </div>
                 ) : null}
@@ -1362,7 +1362,7 @@ export default function MaterialPanel({
           ) : null}
 
           {(showTextureEditor || showAnyTransformEditor) && transformAvailable && presetTextureSync.status !== "idle" ? (
-            <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+            <div className="rounded-lg border border-border/10 bg-card/40 p-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-medium text-foreground">
                   {presetTextureSync.status === "syncing"
@@ -1405,14 +1405,14 @@ export default function MaterialPanel({
 
           {showTextureEditor ? (
             <div className="flex flex-col gap-4">
-              <div className="rounded-xl border border-border/30 bg-card/15 p-2">
+              <div className="rounded-lg border border-border/10 bg-card/40 p-2">
                 <MagneticTextureLibraryPanel
                   selectedKind={mag.kind === "preset_texture" ? selectedPresetKind : null}
                   onCreatePreset={handlePresetCardSelect}
                   onSelectKind={handlePresetCardSelect}
                 />
               </div>
-              <div className="rounded-lg border border-border/30 bg-background/35 px-3 py-2 text-[0.72rem] text-muted-foreground">
+              <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-[0.72rem] text-muted-foreground">
                 Biblioteka presetów i edytor poniżej operują na tym samym assetcie. Transform tekstury ma osobny widok, więc tutaj edytujesz tylko typ i parametry magnetic texture.
               </div>
               <SelectField
@@ -1494,7 +1494,7 @@ export default function MaterialPanel({
                       Scale
                     </Button>
                   </div>
-                  <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-3">
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div>
                         <div className="text-sm font-medium text-foreground">
@@ -1596,7 +1596,7 @@ export default function MaterialPanel({
           {showAnyTransformEditor ? (
             transformAvailable ? (
               <div className="@container grid grid-cols-1 gap-4">
-                <div className="rounded-xl border border-border/30 bg-card/15 p-3">
+                <div className="rounded-lg border border-border/10 bg-card/40 p-3">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-medium text-foreground">Texture Transform</div>
@@ -1686,7 +1686,7 @@ export default function MaterialPanel({
 
                 {showTransformOverview ? (
                   <div className="grid grid-cols-1 gap-3">
-                    <div className="grid grid-cols-1 gap-2 rounded-lg border border-border/25 bg-background/30 p-2.5">
+                    <div className="grid grid-cols-1 gap-2 rounded-lg border border-border/10 bg-card/40 p-2.5">
                       <div className="text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Mapping
                       </div>
@@ -1748,14 +1748,14 @@ export default function MaterialPanel({
                         />
                       </div>
                     </div>
-                    <div className="rounded-lg border border-border/25 bg-background/30 p-3 text-[0.72rem] text-muted-foreground">
+                    <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] text-muted-foreground">
                       Wybierz `Translate`, `Rotate` albo `Scale`, żeby edytować dokładne wartości. Ten widok ogólny pełni rolę toolbaru i ustawień mapowania, podobnie do zaawansowanych CAD/CAE inspectorów.
                     </div>
                   </div>
                 ) : null}
 
                 {showTransformTranslate ? (
-                  <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                     <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                       Translate
                     </div>
@@ -1773,7 +1773,7 @@ export default function MaterialPanel({
                         />
                       ))}
                     </div>
-                    <div className="mt-3 rounded-lg border border-border/20 bg-background/20 px-3 py-2 text-[0.72rem] text-muted-foreground">
+                    <div className="mt-3 rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-[0.72rem] text-muted-foreground">
                       `Translate` przesuwa magnetic texture względem obiektu. Nie zmienia geometrii obiektu ani jego placementu w scenie.
                     </div>
                   </div>
@@ -1781,7 +1781,7 @@ export default function MaterialPanel({
 
                 {showTransformRotate ? (
                   <div className="grid grid-cols-1 gap-3">
-                    <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                    <div className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                       <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Rotation (Quaternion)
                       </div>
@@ -1797,7 +1797,7 @@ export default function MaterialPanel({
                         ))}
                       </div>
                     </div>
-                    <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                    <div className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                       <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                         Pivot
                       </div>
@@ -1821,7 +1821,7 @@ export default function MaterialPanel({
                 ) : null}
 
                 {showTransformScale ? (
-                  <div className="rounded-lg border border-border/25 bg-background/30 p-2.5">
+                  <div className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                     <div className="mb-2 text-[0.65rem] font-semibold uppercase tracking-widest text-muted-foreground">
                       Scale
                     </div>
@@ -1855,7 +1855,7 @@ export default function MaterialPanel({
             )
           ) : null}
 
-          <div className="sticky bottom-0 z-20 rounded-xl border border-border/30 bg-background/90 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+          <div className="sticky bottom-0 z-20 rounded-lg border border-border/10 bg-card/60 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-card/40">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="text-[0.72rem] text-muted-foreground">{magnetizationApplyState.hint}</div>
@@ -1924,7 +1924,7 @@ export default function MaterialPanel({
       {showMagneticTexturePanel && mag.kind === "preset_texture" && presetTextureModalOpen && typeof document !== "undefined"
         ? createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-2xl border border-border/40 bg-background/95 p-4 shadow-[0_20px_90px_rgba(0,0,0,0.55)]">
+          <div className="w-full max-w-lg rounded-2xl border border-border/10 bg-card/95 p-4 shadow-[0_20px_90px_rgba(0,0,0,0.55)]">
             <div className="mb-2 text-[0.72rem] font-semibold uppercase tracking-[0.14em] text-primary/90">
               Magnetic Texture Apply
             </div>

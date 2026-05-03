@@ -451,12 +451,12 @@ function nodeStatusTone(status: NodeStatus | undefined, isActive: boolean): stri
     return "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20";
   }
   if (status === "skipped") {
-    return "bg-muted/30 text-muted-foreground border border-border/40";
+    return "bg-card/40 text-muted-foreground border border-border/10";
   }
   if (status === "active") {
     return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
   }
-  return "hover:bg-muted/30 text-foreground/85 hover:text-foreground border border-transparent hover:border-border/50";
+  return "hover:bg-card/40 text-foreground/85 hover:text-foreground border border-transparent hover:border-border/10";
 }
 
 function StatusIcon({ status }: { status: NodeStatus }) {
@@ -654,7 +654,7 @@ function TreeNode({
               "ml-1 shrink-0 rounded px-1.5 py-[1px] text-[0.55rem] font-medium font-mono opacity-80",
               isActive
                 ? "bg-primary/10 text-primary border border-primary/10"
-                : "bg-background/45 text-muted-foreground/70 border border-border/10"
+                : "bg-card/40 text-muted-foreground/70 border border-border/10"
             )}>
               {node.badge}
             </span>
@@ -777,7 +777,7 @@ export default function ModelTree({
           ref={menuRef}
           className="fixed z-[200] min-w-[160px] p-1 rounded-md bg-popover border border-border shadow-md animate-in fade-in zoom-in-95 duration-100"
         >
-          <div className="px-2 py-1 text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground border-b border-border/50 mb-1">
+          <div className="px-2 py-1 text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground border-b border-border/10 mb-1">
             {ctxMenu.label}
           </div>
           <button className="w-full text-left px-2 py-1.5 text-xs font-medium rounded-sm hover:bg-muted text-popover-foreground transition-colors" onClick={() => handleAction("select")}>Select</button>

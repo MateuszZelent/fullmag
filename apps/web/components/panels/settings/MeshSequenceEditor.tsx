@@ -78,7 +78,7 @@ export default function MeshSequenceEditor({
   return (
     <div className="flex flex-col gap-2">
       {operations.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2.5 text-[0.73rem] text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2.5 text-[0.73rem] text-muted-foreground">
           No operations. The mesher will run the default free-tetrahedral pass
           with the parameters set above.
         </div>
@@ -88,7 +88,7 @@ export default function MeshSequenceEditor({
             <div
               key={i}
               className={cn(
-                "flex items-center gap-2 rounded-lg border border-border/40 bg-background/50 px-2.5 py-2",
+                "flex items-center gap-2 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2",
                 disabled && "opacity-60",
               )}
             >

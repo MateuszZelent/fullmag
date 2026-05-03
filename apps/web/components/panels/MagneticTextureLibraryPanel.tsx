@@ -26,8 +26,8 @@ export default function MagneticTextureLibraryPanel({
   }, []);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/30 bg-background/70">
-      <div className="border-b border-border/25 px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border/10 bg-card/60">
+      <div className="border-b border-border/10 px-4 py-3">
         <div className="text-[0.7rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
           Magnetic texture library
         </div>
@@ -60,7 +60,7 @@ export default function MagneticTextureLibraryPanel({
                       "relative rounded-xl border px-3 py-3 text-left transition-colors",
                       active
                         ? "border-cyan-300/55 bg-cyan-400/12 shadow-[0_0_0_1px_rgba(103,232,249,0.35)]"
-                        : "border-border/20 bg-background/35 hover:bg-background/50",
+                        : "border-border/10 bg-card/40 hover:bg-card/60",
                     )}
                     onClick={handleAssign}
                     aria-pressed={active}

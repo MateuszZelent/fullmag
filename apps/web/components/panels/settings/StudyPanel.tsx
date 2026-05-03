@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { fmtExp } from "@/lib/format";
+import { getFemElementCount, getFemNodeCount } from "@/lib/session/femTopology";
 import {
   parseStudyNodeContext,
   type StudyNodeContext,
@@ -132,7 +133,7 @@ function StageSectionNote({
 }) {
   return (
     <SidebarSection title={title} defaultOpen={true}>
-      <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+      <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
         {body}
       </div>
     </SidebarSection>
@@ -143,7 +144,7 @@ function StageMaterializedPreview({ stages }: { stages: ScriptBuilderStageState[
   return (
     <SidebarSection title="Materialized Preview" icon="🧱" defaultOpen={true}>
       {stages.length === 0 ? (
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] text-muted-foreground">
           This node does not currently materialize to backend execution steps.
         </div>
       ) : (
@@ -151,7 +152,7 @@ function StageMaterializedPreview({ stages }: { stages: ScriptBuilderStageState[
           {stages.map((stage, index) => (
             <div
               key={`${stage.kind}-${stage.entrypoint_kind}-${index}`}
-              className="rounded-lg border border-border/35 bg-background/35 p-3"
+              className="rounded-lg border border-border/10 bg-card/40 p-3"
             >
               <div className="text-[0.66rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 Step {index + 1}
@@ -202,8 +203,10 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   );
   const solverPlan = ctx.solverPlan;
   const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
+  const femNodeCount = ctx.femMesh ? getFemNodeCount(ctx.femMesh) : 0;
+  const femElementCount = ctx.femMesh ? getFemElementCount(ctx.femMesh) : 0;
   const workloadLabel = femDiscretization && ctx.femMesh
-    ? `${ctx.femMesh.nodes.length.toLocaleString()} nodes · ${ctx.femMesh.elements.length.toLocaleString()} tets`
+    ? `${femNodeCount.toLocaleString()} nodes · ${femElementCount.toLocaleString()} tets`
     : ctx.totalCells && ctx.totalCells > 0
       ? `${ctx.totalCells.toLocaleString()} cells`
       : "—";
@@ -281,7 +284,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         badge={`${authoringDocument.nodes.length} stages`}
         defaultOpen={true}
       >
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
           Study focuses on stage authoring, stage materialization and stage outputs. Physics and runtime defaults are configured outside this branch to avoid semantic duplication.
         </div>
         <div className="mt-3 grid gap-1">
@@ -317,7 +320,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         badge="authoring"
         defaultOpen={true}
       >
-        <div className="mb-3 rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] text-muted-foreground">
+        <div className="mb-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] text-muted-foreground">
           This is the COMSOL-like stage authoring surface. Add, reorder and configure user-facing stages here. Backend `flat stages` are materialized artifacts derived from this sequence, not the primary editing surface.
         </div>
         <StudyBuilderWorkspace
@@ -670,7 +673,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   return (
     <>
       <SidebarSection title="Study" icon="🧭" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
           Study routing could not resolve this node precisely, so the panel fell back to the stage authoring root.
         </div>
       </SidebarSection>

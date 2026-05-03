@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import { getFemElementCount, getFemNodeCount } from "@/lib/session/femTopology";
 
 import { useCommand, useModel, useViewport } from "../../runs/control-room/context-hooks";
 import { extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
@@ -35,9 +36,11 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
     [cmd.engineLog],
   );
   const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
+  const femNodeCount = model.femMesh ? getFemNodeCount(model.femMesh) : 0;
+  const femElementCount = model.femMesh ? getFemElementCount(model.femMesh) : 0;
 
   const workloadLabel = femDiscretization && model.femMesh
-    ? `${model.femMesh.nodes.length.toLocaleString()} nodes · ${model.femMesh.elements.length.toLocaleString()} tets`
+    ? `${femNodeCount.toLocaleString()} nodes · ${femElementCount.toLocaleString()} tets`
     : viewport.totalCells && viewport.totalCells > 0
       ? `${viewport.totalCells.toLocaleString()} cells`
       : "—";
@@ -49,7 +52,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
       </SidebarSection>
 
       <SidebarSection title="CPU Threads" icon="🧵" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.74rem] leading-relaxed text-muted-foreground">
           CPU thread request is applied on the next compute start. Mid-run edits do not mutate the current active runtime.
         </div>
         <div className="mt-3 grid gap-3">

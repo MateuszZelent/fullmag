@@ -540,7 +540,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
               value={solverPlan?.demagSolver?.printLevel != null ? `${solverPlan.demagSolver.printLevel}` : "—"}
             />
           </div>
-          <div className="mt-3 rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
             <div className="font-semibold text-foreground">Method guidance</div>
             <div className="mt-1">
               <span className="font-mono text-foreground">CG</span>: fastest default for symmetric positive-definite systems, especially with AMG.
@@ -681,7 +681,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                   .join(" · ") || "planner only"}
               />
             </div>
-            <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
               <div className="font-semibold text-foreground">Selected policy</div>
               <div className="mt-1">{selectedBoundaryPolicy.summary}</div>
               <div className="mt-1">{selectedBoundaryPolicy.whenToUse}</div>
@@ -769,7 +769,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
 
     return (
       <SidebarSection title="Module Details" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
           {entry.authorableInObjectPanel
             ? "This interaction is object-scoped. Use the Object -> Material -> Magnetic Interactions editor to author parameters."
             : "No dedicated authoring surface is available yet."}
@@ -792,7 +792,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     if (entry.id === "demag" || entry.id === "exchange") {
       return (
         <SidebarSection title="Object Authoring" defaultOpen={true}>
-          <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
             `{entry.label}` is mandatory in current object authoring semantics and stays enabled by contract.
           </div>
         </SidebarSection>
@@ -1052,7 +1052,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     return (
       <>
         <SidebarSection title={selectedModule.label} defaultOpen={true}>
-          <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
             {selectedModule.description}
           </div>
           <div className="mt-3 grid gap-1">
@@ -1126,7 +1126,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       </SidebarSection>
 
       <SidebarSection title="Capability Matrix" defaultOpen={true}>
-        <div className="rounded-lg border border-border/35 bg-background/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
           Explorer tree for Physics is generated dynamically from backend capabilities and authored model state.
           Modules without first-class editors are displayed as read-only with explicit rationale.
         </div>
@@ -1137,7 +1137,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
               <button
                 key={entry.id}
                 type="button"
-                className="rounded-lg border border-border/35 bg-background/35 px-3 py-2 text-left transition-colors hover:bg-background/55"
+                className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-left transition-colors hover:bg-card/60"
                 onClick={() => model.setSelectedSidebarNodeId(`physics-module-${entry.id}`)}
               >
                 <div className="flex items-start gap-2">

@@ -17,7 +17,7 @@ import { Button } from "../../ui/button";
 function nodeTone(active: boolean): string {
   return active
     ? "border-primary bg-primary/10 text-foreground"
-    : "border-border/30 hover:bg-accent/40 text-muted-foreground";
+    : "border-border/10 bg-card/40 hover:bg-card/60 text-muted-foreground";
 }
 
 function nodeButton(

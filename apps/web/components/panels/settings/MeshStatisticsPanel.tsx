@@ -709,7 +709,7 @@ function HistogramBars({ bins, metric }: { bins: number[]; metric: QualityMetric
   const range = metric === "gamma" ? "0..1" : "-1..1";
   return (
     <div className="grid gap-1">
-      <div className="flex h-20 items-end gap-0.5 rounded-lg border border-border/30 bg-background/45 px-2 py-2">
+      <div className="flex h-20 items-end gap-0.5 rounded-lg border border-border/10 bg-card/40 px-2 py-2">
         {bins.length > 0 ? bins.map((count, index) => (
           <div
             key={`${index}:${count}`}
@@ -1075,7 +1075,7 @@ export default function MeshStatisticsPanel() {
         defaultOpen={true}
       >
         <div className="grid gap-3">
-          <div className="flex items-start justify-between gap-3 rounded-lg border border-border/35 bg-background/45 p-3">
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border/10 bg-card/40 p-3">
             <div className="grid gap-1">
               <div className="flex items-center gap-2 text-[0.78rem] font-semibold text-foreground">
                 <BarChart3 size={14} className="text-primary" />
@@ -1100,7 +1100,7 @@ export default function MeshStatisticsPanel() {
             </button>
             <button
               type="button"
-              className="rounded-lg border border-border/35 bg-background/60 px-2.5 py-1.5 text-[0.68rem] font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+              className="rounded-lg border border-border/10 bg-card/60 px-2.5 py-1.5 text-[0.68rem] font-semibold text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
               onClick={handleExportStatistics}
             >
               Export Stats JSON
@@ -1123,7 +1123,7 @@ export default function MeshStatisticsPanel() {
             <StatTile label="Avg quality" value={formatQuality(statisticsGlobalQuality?.avg_quality ?? globalQuality?.avg_quality ?? computedQualityFallback?.globalQuality.avg_quality ?? finiteNumber(structuredSummary?.avg_quality))} />
             <StatTile label="Volume ratio" value={formatRatio(volumeRatioValue)} />
           </div>
-          <div className="rounded-lg border border-border/35 bg-background/45 p-3">
+          <div className="rounded-lg border border-border/10 bg-card/40 p-3">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div>
                 <div className="text-[0.72rem] font-semibold text-foreground/90">Quality Verdict</div>
@@ -1158,8 +1158,8 @@ export default function MeshStatisticsPanel() {
 
       <SidebarSection title="Global / Airbox / Objects" defaultOpen={true}>
         {perDomainRows.length > 0 ? (
-          <div className="overflow-hidden rounded-lg border border-border/35">
-            <div className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
+          <div className="overflow-hidden rounded-lg border border-border/10 bg-card/40">
+            <div className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/10 bg-card/40 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
               <span>Scope</span>
               <span>Elems</span>
               <span>Gamma min</span>
@@ -1168,7 +1168,7 @@ export default function MeshStatisticsPanel() {
               <span>Status</span>
             </div>
             {perDomainRows.map((row) => (
-              <div key={row.id} className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/20 px-2.5 py-2.5 last:border-b-0">
+              <div key={row.id} className="grid grid-cols-[1.2fr_0.55fr_0.55fr_0.55fr_0.55fr_0.55fr] gap-2 border-b border-border/10 px-2.5 py-2.5 last:border-b-0">
                 <div className="min-w-0">
                   <div className="truncate text-[0.72rem] font-semibold text-foreground/90" title={row.label}>{row.label}</div>
                   <div className="font-mono text-[0.6rem] text-muted-foreground">
@@ -1192,15 +1192,15 @@ export default function MeshStatisticsPanel() {
 
       <SidebarSection title="Worst Elements" defaultOpen={worstElements.length > 0}>
         {worstElements.length > 0 ? (
-          <div className="overflow-hidden rounded-lg border border-border/35">
-            <div className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/30 bg-muted/20 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
+          <div className="overflow-hidden rounded-lg border border-border/10 bg-card/40">
+            <div className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/10 bg-card/40 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
               <span>Element</span>
               <span>Scope</span>
               <span>Gamma</span>
               <span>Volume</span>
             </div>
             {worstElements.map((element) => (
-              <div key={element.id} className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/20 px-2.5 py-2 last:border-b-0">
+              <div key={element.id} className="grid grid-cols-[0.8fr_0.55fr_0.65fr_0.65fr] gap-2 border-b border-border/10 px-2.5 py-2 last:border-b-0">
                 <div className="min-w-0">
                   <div className="font-mono text-[0.68rem] font-semibold text-foreground/90">
                     #{element.elementIndex}
@@ -1228,7 +1228,7 @@ export default function MeshStatisticsPanel() {
             {operationStatuses.length > 0 ? (
               <div className="grid gap-2">
                 {operationStatuses.map((operation, index) => (
-                  <div key={`${operation.kind}:${operation.scope}:${index}`} className="rounded-lg border border-border/35 bg-background/45 px-3 py-2">
+                  <div key={`${operation.kind}:${operation.scope}:${index}`} className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-[0.72rem] font-semibold text-foreground/90">
@@ -1252,7 +1252,7 @@ export default function MeshStatisticsPanel() {
             {thinFilmDiagnostics.length > 0 ? (
               <div className="grid gap-2">
                 {thinFilmDiagnostics.map((diagnostic) => (
-                  <div key={diagnostic.geometryName} className="rounded-lg border border-border/35 bg-background/45 px-3 py-2">
+                  <div key={diagnostic.geometryName} className="rounded-lg border border-border/10 bg-card/40 px-3 py-2">
                     <div className="flex items-center justify-between gap-3">
                       <div className="truncate text-[0.72rem] font-semibold text-foreground/90">
                         Thin-film · {diagnostic.geometryName}
@@ -1332,7 +1332,7 @@ export default function MeshStatisticsPanel() {
 
       {globalQuality || meshStatisticsGlobal ? (
         <SidebarSection title="Volume Statistics" defaultOpen={false}>
-          <div className="grid gap-1.5 rounded-lg border border-border/30 bg-background/45 p-2.5 text-xs">
+          <div className="grid gap-1.5 rounded-lg border border-border/10 bg-card/40 p-2.5 text-xs">
             <InfoLine label="Volume min" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "min") ?? globalQuality?.volume_min ?? 0, "m^3")} />
             <InfoLine label="Volume max" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "max") ?? globalQuality?.volume_max ?? 0, "m^3")} />
             <InfoLine label="Volume mean" value={fmtSI(statisticVolumeValue(meshStatisticsGlobal, "mean") ?? globalQuality?.volume_mean ?? 0, "m^3")} />
@@ -1346,7 +1346,7 @@ export default function MeshStatisticsPanel() {
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="grid gap-1 rounded-lg border border-border/35 bg-background/45 px-2.5 py-2">
+    <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
       <span className="text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
       <span className="font-mono text-xs font-semibold text-foreground/90">{value}</span>
     </div>
@@ -1368,7 +1368,7 @@ function InfoLine({ label, value }: { label: string; value: string }) {
 
 function EmptyStats({ message }: { message: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.74rem] leading-relaxed text-muted-foreground">
+    <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2 text-[0.74rem] leading-relaxed text-muted-foreground">
       {message}
     </div>
   );

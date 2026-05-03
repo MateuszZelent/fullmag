@@ -47,7 +47,7 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
     return (
       <div className="flex flex-col gap-0 border-t border-border/20">
         <SidebarSection title="Regions" defaultOpen={true}>
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
             Select a region node to inspect its identity and current implementation status.
           </div>
         </SidebarSection>
@@ -93,13 +93,13 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
     <div className="flex flex-col px-2 pt-4">
       <SidebarSection title="Region Identity" defaultOpen={true}>
         <div className="flex flex-col gap-4">
-          <div className="rounded-lg border border-border/40 bg-card/20 px-3 py-2.5">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2.5">
             <div className="text-[0.62rem] font-bold uppercase tracking-widest text-muted-foreground">
               Active Region
             </div>
             <div className="mt-1 flex items-center justify-between gap-3">
               <span className="font-mono text-xs text-foreground">{regionName}</span>
-              <span className="rounded-md border border-border/40 bg-background/40 px-2 py-0.5 text-[0.65rem] font-mono text-muted-foreground">
+              <span className="rounded-md border border-border/10 bg-card/40 px-2 py-0.5 text-[0.65rem] font-mono text-muted-foreground">
                 object: {sceneObject.name}
               </span>
             </div>
@@ -122,7 +122,7 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
 
       <SidebarSection title="Region Authoring Status" defaultOpen={true}>
         <div className="flex flex-col gap-3">
-          <div className="rounded-lg border border-border/30 bg-card/20 px-3 py-2 text-[0.72rem] leading-relaxed text-muted-foreground">
+          <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-[0.72rem] leading-relaxed text-muted-foreground">
             <div className="flex items-center justify-between gap-3">
               <span>Source</span>
               <span className="font-mono text-foreground">{regionResource?.source ?? "object"}</span>

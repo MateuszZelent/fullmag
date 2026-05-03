@@ -20,7 +20,7 @@ export default function MeshManifestSection({
   if (!manifest) {
     return (
       <SidebarSection title="Mesh Manifest" icon="▦" badge="missing" defaultOpen={false}>
-        <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.74rem] leading-relaxed text-muted-foreground">
+        <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2 text-[0.74rem] leading-relaxed text-muted-foreground">
           No shared-domain mesh manifest is available yet. Build the mesh/grid to materialize
           scene-revision provenance and region mappings.
         </div>
@@ -77,14 +77,14 @@ export default function MeshManifestSection({
           regions.map((region) => (
             <div
               key={region.region_id}
-              className="grid gap-1.5 rounded-xl border border-border/35 bg-background/45 px-3 py-2.5"
+              className="grid gap-1.5 rounded-lg border border-border/10 bg-card/40 px-3 py-2.5"
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <Layers size={13} className="shrink-0 text-primary/75" />
                   <span className="truncate font-mono text-xs text-foreground">{region.name}</span>
                 </div>
-                <span className="shrink-0 rounded-md border border-border/35 bg-muted/30 px-1.5 py-0.5 font-mono text-[0.58rem] text-muted-foreground">
+                <span className="shrink-0 rounded-md border border-border/10 bg-card/40 px-1.5 py-0.5 font-mono text-[0.58rem] text-muted-foreground">
                   {region.region_id}
                 </span>
               </div>
@@ -107,7 +107,7 @@ export default function MeshManifestSection({
             </div>
           ))
         ) : (
-          <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.74rem] text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2 text-[0.74rem] text-muted-foreground">
             {objectId
               ? "No manifest region is mapped to this object."
               : "No mesh regions are reported by the current manifest."}
@@ -120,7 +120,7 @@ export default function MeshManifestSection({
 
 function ManifestTile({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="grid gap-1 rounded-lg border border-border/30 bg-background/45 px-2.5 py-2">
+    <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
       <span className="text-[0.6rem] font-semibold uppercase tracking-widest text-muted-foreground">
         {label}
       </span>

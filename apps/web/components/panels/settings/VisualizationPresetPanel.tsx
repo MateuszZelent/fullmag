@@ -39,7 +39,7 @@ function samePresetRef(left: VisualizationPresetRef | null, right: Visualization
 
 function PresetSourceBadge({ source }: { source: VisualizationPresetSource }) {
   return (
-    <span className="rounded border border-border/40 bg-muted/30 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
+    <span className="rounded border border-border/10 bg-card/40 px-2 py-0.5 text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
       {source}
     </span>
   );
@@ -96,7 +96,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
               New Local Preset
             </Button>
           </div>
-          <div className="rounded border border-border/35 bg-background/35 p-2 text-[0.68rem] leading-relaxed">
+          <div className="rounded border border-border/10 bg-card/40 p-2 text-[0.68rem] leading-relaxed">
             <div>Project presets: {ctx.visualizationProjectPresets.length}</div>
             <div>Local presets: {ctx.visualizationLocalPresets.length}</div>
           </div>
@@ -114,7 +114,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
       <SidebarSection title={`${sectionSource === "project" ? "Project" : "Local"} Presets`} icon="📚" defaultOpen={true}>
         <div className="space-y-2 text-[0.72rem] text-muted-foreground">
           <p>Manage presets stored in the {sectionSource} scope.</p>
-          <div className="rounded border border-border/35 bg-background/35 p-2 text-[0.68rem]">
+          <div className="rounded border border-border/10 bg-card/40 p-2 text-[0.68rem]">
             {count} preset{count === 1 ? "" : "s"} in this section.
           </div>
           <Button size="sm" variant="default" onClick={() => createPreset(sectionSource)}>
@@ -269,7 +269,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
             <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
               Render
               <select
-                className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+                className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
                 value={preset.fem.render_mode}
                 onChange={(event) => updateFem({ render_mode: event.target.value as (typeof FEM_RENDER_OPTIONS)[number] })}
               >
@@ -283,7 +283,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
             <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
               View
               <select
-                className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+                className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
                 value={preset.fem.object_view_mode}
                 onChange={(event) => updateFem({ object_view_mode: event.target.value as "context" | "isolate" })}
               >
@@ -294,7 +294,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
             <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
               Vector Domain
               <select
-                className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+                className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
                 value={preset.fem.vector_domain_filter}
                 onChange={(event) =>
                   updateFem({
@@ -315,7 +315,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
             <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
               Ferro in Airbox
               <select
-                className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+                className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
                 value={preset.fem.ferromagnet_visibility_mode}
                 onChange={(event) =>
                   updateFem({
@@ -354,7 +354,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
           <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Arrow Coloring
             <select
-              className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
               value={preset.fem.arrow_color_mode}
               onChange={(event) =>
                 updateFem({
@@ -378,7 +378,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
                   type="color"
                   value={preset.fem.arrow_mono_color}
                   onChange={(event) => updateFem({ arrow_mono_color: event.target.value })}
-                  className="h-7 w-10 cursor-pointer rounded border border-border/40 bg-transparent p-0"
+                  className="h-7 w-10 cursor-pointer rounded border border-border/10 bg-transparent p-0"
                 />
                 <span className="font-mono text-[0.68rem]">{preset.fem.arrow_mono_color}</span>
               </div>
@@ -431,7 +431,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
           <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Render
             <select
-              className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
               value={preset.fdm.render_mode}
               onChange={(event) => updateFdm({ render_mode: event.target.value as "glyph" | "voxel" })}
             >
@@ -442,7 +442,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
           <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Quality
             <select
-              className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
               value={preset.fdm.quality}
               onChange={(event) => updateFdm({ quality: event.target.value as "low" | "high" | "ultra" })}
             >
@@ -471,7 +471,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
           <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Component
             <select
-              className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
               value={preset.two_d.component}
               onChange={(event) =>
                 updateTwoD({ component: event.target.value as "x" | "y" | "z" | "magnitude" })
@@ -486,7 +486,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
           <label className="text-[0.62rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Plane
             <select
-              className="mt-1 w-full rounded border border-border/40 bg-background px-2 py-1 text-xs"
+              className="mt-1 w-full rounded border border-border/10 bg-background px-2 py-1 text-xs"
               value={preset.two_d.plane}
               onChange={(event) =>
                 updateTwoD({ plane: event.target.value as "xy" | "xz" | "yz" })
@@ -497,7 +497,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
               <option value="yz">yz</option>
             </select>
           </label>
-          <div className="rounded border border-border/35 bg-background/30 p-2 text-[0.68rem] text-muted-foreground">
+          <div className="rounded border border-border/10 bg-card/40 p-2 text-[0.68rem] text-muted-foreground">
             Unsupported in current viewport mode controls are preserved and applied when mode/data are available.
           </div>
         </div>

@@ -160,19 +160,19 @@ export default function MeshPanel() {
 
       <SidebarSection title="Environment Overview" defaultOpen={true}>
         <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
+          <div className="flex flex-col gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <span className="text-[0.65rem] font-medium tracking-wide text-muted-foreground">Backend</span>
             <span className="font-mono text-xs text-foreground">{mesherBackend ?? "—"}</span>
           </div>
-          <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
+          <div className="flex flex-col gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <span className="text-[0.65rem] font-medium tracking-wide text-muted-foreground">Source</span>
             <span className="font-mono text-xs text-foreground">{mesherSourceKind ?? meshSource ?? "—"}</span>
           </div>
-          <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
+          <div className="flex flex-col gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <span className="text-[0.65rem] font-medium tracking-wide text-muted-foreground">Workspace</span>
             <span className="font-mono text-xs text-foreground">{presetLabel}</span>
           </div>
-          <div className="flex flex-col gap-1 rounded-lg border border-border/30 bg-card/30 p-2.5">
+          <div className="flex flex-col gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <span className="text-[0.65rem] font-medium tracking-wide text-muted-foreground">Status</span>
             <span className="font-mono text-xs text-foreground">{workspaceStatus.replaceAll("_", " ")}</span>
           </div>
@@ -201,7 +201,7 @@ export default function MeshPanel() {
                   "flex flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-all",
                   active
                     ? "border-primary/40 bg-primary/10 shadow-[0_0_0_1px_rgba(59,130,246,0.1)]"
-                    : "border-border/40 bg-background/50 hover:bg-muted/50 hover:border-border/80",
+                    : "border-border/10 bg-card/40 hover:bg-card/60",
                   disabled && "cursor-not-allowed opacity-40 grayscale-[0.8]",
                 )}
                 disabled={disabled}
@@ -230,7 +230,7 @@ export default function MeshPanel() {
             <button
               key={mode}
               type="button"
-              className="appearance-none rounded-md border border-border/40 bg-background/50 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+              className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
               data-active={effectiveViewMode === mode}
               onClick={() => handleViewModeChange(mode)}
             >
@@ -243,7 +243,7 @@ export default function MeshPanel() {
             <button
               key={option.value}
               type="button"
-              className="appearance-none rounded-md border border-border/40 bg-background/50 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+              className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1.5 text-xs font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
               data-active={meshRenderMode === option.value}
               onClick={() => {
                 void viewport.patchDisplay(visualizationPatchForRenderMode(option.value as RenderMode));
@@ -254,12 +254,12 @@ export default function MeshPanel() {
           ))}
         </div>
         <div className="grid gap-3 @[900px]:grid-cols-2">
-          <div className="grid gap-2 rounded-lg border border-border/30 bg-background/50 p-2.5">
+          <div className="grid gap-2 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground">Clip Plane</span>
               <button
                 type="button"
-                className="rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                className="rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                 data-active={meshClipEnabled}
                 onClick={() => {
                   void viewport.patchDisplay(visualizationPatchForClip({ enabled: !meshClipEnabled }));
@@ -273,7 +273,7 @@ export default function MeshPanel() {
                 <button
                   key={axis}
                   type="button"
-                  className="appearance-none rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                  className="appearance-none rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                   data-active={meshClipAxis === axis}
                   disabled={!meshClipEnabled}
                   onClick={() => {
@@ -302,12 +302,12 @@ export default function MeshPanel() {
             </label>
           </div>
 
-          <div className="grid gap-2 rounded-lg border border-border/30 bg-background/50 p-2.5">
+          <div className="grid gap-2 rounded-lg border border-border/10 bg-card/40 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground">Display</span>
               <button
                 type="button"
-                className="flex items-center gap-1.5 rounded-md border border-border/40 bg-background/70 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
+                className="flex items-center gap-1.5 rounded-md border border-border/10 bg-card/40 px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-muted-foreground transition-colors hover:bg-muted/50 data-[active=true]:border-primary/50 data-[active=true]:bg-primary/20 data-[active=true]:text-primary"
                 data-active={meshShowArrows}
                 onClick={() => {
                   void viewport.patchDisplay({
@@ -350,42 +350,42 @@ export default function MeshPanel() {
           </span>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <GitCommitHorizontal size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Nodes</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.nodes.length.toLocaleString() ?? "0"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Triangle size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Elements</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.elements.length.toLocaleString() ?? "0"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Layers size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Boundary Faces</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{effectiveFemMesh?.boundary_faces.length.toLocaleString() ?? "0"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <SplitSquareHorizontal size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">FE Order</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{meshFeOrder != null ? `P${meshFeOrder}` : "—"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <Ruler size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Maximum Element Size</span>
             </div>
             <span className="font-mono text-xs font-semibold text-foreground/90">{meshHmax != null ? fmtSI(meshHmax, "m") : "—"}</span>
           </div>
-          <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+          <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
             <div className="flex items-center gap-1.5 text-muted-foreground">
               <MemoryStick size={11} />
               <span className="text-[0.6rem] font-medium uppercase tracking-wider">Dense RAM</span>
@@ -405,7 +405,7 @@ export default function MeshPanel() {
           </div>
         </div>
         {(boundsSummary || meshExtent || worldExtent) && (
-          <div className="mt-3 grid gap-1.5 rounded-lg border border-border/30 bg-background/50 p-2.5 text-xs text-foreground">
+          <div className="mt-3 grid gap-1.5 rounded-lg border border-border/10 bg-card/40 p-2.5 text-xs text-foreground">
             <div className="grid grid-cols-[96px_1fr] gap-2">
               <span className="text-[0.65rem] font-bold uppercase text-muted-foreground">Extent</span>
               <span className="font-mono">
@@ -442,63 +442,63 @@ export default function MeshPanel() {
         </div>
         {meshQualityData ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN p5</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.sicnP5.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.sicnMean.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Gamma Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.gammaMin.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Elements</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualityData.nElements.toLocaleString()}</span>
             </div>
           </div>
         ) : structuredQualitySummary ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN p5</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.sicn_p5.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">SICN Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.sicn_mean.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Gamma Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.gamma_min.toFixed(3)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Avg Quality</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{structuredQualitySummary.avg_quality.toFixed(3)}</span>
             </div>
           </div>
         ) : meshQualitySummary ? (
           <div className="grid grid-cols-2 gap-2">
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">AR Min</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualitySummary.min.toFixed(2)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-background/60">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-card/60">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">AR Mean</span>
               <span className="font-mono text-xs font-semibold text-foreground/90">{meshQualitySummary.mean.toFixed(2)}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-success/10 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-success/15">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-success/10 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-success/15">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-success/80">Good Faces</span>
               <span className="font-mono text-xs font-semibold text-success">{meshQualitySummary.good.toLocaleString()}</span>
             </div>
-            <div className="grid gap-1 rounded-xl border border-border/35 bg-warning/10 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-warning/15">
+            <div className="grid gap-1 rounded-lg border border-border/10 bg-warning/10 backdrop-blur-sm px-2.5 py-2 transition-colors hover:bg-warning/15">
               <span className="text-[0.6rem] font-medium uppercase tracking-wider text-warning/80">Poor Faces</span>
               <span className="font-mono text-xs font-semibold text-warning">{meshQualitySummary.poor.toLocaleString()}</span>
             </div>
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border/40 bg-background/30 px-3 py-2 text-[0.75rem] text-muted-foreground">
+          <div className="rounded-lg border border-dashed border-border/10 bg-card/40 px-3 py-2 text-[0.75rem] text-muted-foreground">
             Backend quality metrics are not loaded for this artifact. Open Mesh Statistics for topology fallback diagnostics, then rebuild the solver mesh to persist Gmsh quality metrics.
           </div>
         )}
@@ -530,7 +530,7 @@ export default function MeshPanel() {
             );
           })}
         </div>
-        <div className="mt-2 grid gap-1 rounded-lg border border-border/30 bg-background/50 p-2.5">
+        <div className="mt-2 grid gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5">
           <span className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">Recent Mesh Log</span>
           {meshHighlights.length > 0 ? (
             <div className="grid gap-1">
@@ -558,7 +558,7 @@ export default function MeshPanel() {
             {meshWorkspace.mesh_history.slice().reverse().slice(0, 4).map((entry, index) => (
               <div
                 key={`${entry.mesh_name}-${entry.node_count}-${index}`}
-                className="grid gap-1 rounded-lg border border-border/30 bg-background/50 p-2.5 text-[0.7rem]"
+                className="grid gap-1 rounded-lg border border-border/10 bg-card/40 p-2.5 text-[0.7rem]"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold text-foreground">{entry.mesh_name || "mesh"}</span>
@@ -585,48 +585,48 @@ export default function MeshPanel() {
           {meshAdaptivity ? (
             <div className="grid gap-2">
               <div className="grid grid-cols-2 gap-2">
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2">
+                <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
                   <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Adaptive Mesh</span>
                   <span className="font-mono text-xs font-semibold text-foreground/90">
                     {meshAdaptivity.enabled ? "enabled" : "disabled"}
                   </span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2">
+                <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
                   <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Policy</span>
                   <span className="font-mono text-xs font-semibold text-foreground/90">{meshAdaptivity.policy}</span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2">
+                <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
                   <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Pass Count</span>
                   <span className="font-mono text-xs font-semibold text-foreground/90">
                     {meshAdaptivity.pass_count} / {meshAdaptivity.max_passes}
                   </span>
                 </div>
-                <div className="grid gap-1 rounded-xl border border-border/35 bg-background/40 px-2.5 py-2">
+                <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2.5 py-2">
                   <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Convergence</span>
                   <span className="font-mono text-xs font-semibold text-foreground/90">{meshAdaptivity.convergence_status}</span>
                 </div>
               </div>
               {adaptiveTargetSummary ? (
                 <div className="grid grid-cols-2 gap-2 rounded-xl border border-primary/15 bg-primary/5 px-2.5 py-2.5">
-                  <div className="grid gap-1 rounded-lg border border-border/30 bg-background/40 px-2 py-1.5">
+                  <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2 py-1.5">
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Target h min</span>
                     <span className="font-mono text-xs font-semibold text-foreground/90">
                       {adaptiveMetric("h_target_min") != null ? fmtSI(adaptiveMetric("h_target_min")!, "m") : "—"}
                     </span>
                   </div>
-                  <div className="grid gap-1 rounded-lg border border-border/30 bg-background/40 px-2 py-1.5">
+                  <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2 py-1.5">
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Target h mean</span>
                     <span className="font-mono text-xs font-semibold text-foreground/90">
                       {adaptiveMetric("h_target_mean") != null ? fmtSI(adaptiveMetric("h_target_mean")!, "m") : "—"}
                     </span>
                   </div>
-                  <div className="grid gap-1 rounded-lg border border-border/30 bg-background/40 px-2 py-1.5">
+                  <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2 py-1.5">
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Target h max</span>
                     <span className="font-mono text-xs font-semibold text-foreground/90">
                       {adaptiveMetric("h_target_max") != null ? fmtSI(adaptiveMetric("h_target_max")!, "m") : "—"}
                     </span>
                   </div>
-                  <div className="grid gap-1 rounded-lg border border-border/30 bg-background/40 px-2 py-1.5">
+                  <div className="grid gap-1 rounded-lg border border-border/10 bg-card/40 px-2 py-1.5">
                     <span className="text-[0.6rem] font-medium uppercase tracking-wider text-muted-foreground">Recommended</span>
                     <span className="font-mono text-xs font-semibold text-foreground/90">{adaptiveAction ?? "—"}</span>
                   </div>
@@ -677,7 +677,7 @@ export default function MeshPanel() {
               const label = segment?.object_id ?? part?.object_id ?? `Domain ${marker}`;
               const sicnOk = q.sicn_p5 >= 0.1;
               return (
-                <div key={markerStr} className="rounded-lg border border-border/35 bg-background/50 p-2.5">
+                <div key={markerStr} className="rounded-lg border border-border/10 bg-card/40 p-2.5">
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <span className="text-[0.72rem] font-semibold text-foreground/90">{label}</span>
                     <span className={cn(
@@ -719,7 +719,7 @@ export default function MeshPanel() {
               {meshSelection.selectedFaceIndices.length} face{meshSelection.selectedFaceIndices.length === 1 ? "" : "s"}
             </span>
           </div>
-          <div className="grid gap-1.5 rounded border border-border/30 bg-background/50 p-2 text-xs text-foreground">
+          <div className="grid gap-1.5 rounded border border-border/10 bg-card/40 p-2 text-xs text-foreground">
             <div className="grid grid-cols-[92px_1fr] gap-2"><span className="text-[0.65rem] font-bold uppercase text-muted-foreground">Face</span><span className="font-mono">#{meshFaceDetail.faceIndex}</span></div>
             <div className="grid grid-cols-[92px_1fr] gap-2"><span className="text-[0.65rem] font-bold uppercase text-muted-foreground">Nodes</span><span className="font-mono truncate" title={meshFaceDetail.nodeIndices.join(", ")}>{meshFaceDetail.nodeIndices.join(", ")}</span></div>
             <div className="grid grid-cols-[92px_1fr] gap-2"><span className="text-[0.65rem] font-bold uppercase text-muted-foreground">Area</span><span className="font-mono">{fmtExp(meshFaceDetail.area)} m²</span></div>
