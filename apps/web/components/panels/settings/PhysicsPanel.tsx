@@ -96,12 +96,15 @@ function catalogIdToObjectInteractionKind(
   if (moduleId === "exchange") return "exchange";
   if (moduleId === "demag") return "demag";
   if (moduleId === "interfacial_dmi") return "interfacial_dmi";
+  if (moduleId === "bulk_dmi") return "bulk_dmi";
   if (moduleId === "uniaxial_anisotropy") return "uniaxial_anisotropy";
+  if (moduleId === "cubic_anisotropy") return "cubic_anisotropy";
   return null;
 }
 
 function interactionAxis(params: Record<string, unknown> | null | undefined): [number, number, number] {
-  const raw = params?.axis;
+  // Try axis, then axis1, then axis2 (for cubic anisotropy)
+  const raw = params?.axis ?? params?.axis1 ?? params?.axis2;
   if (!Array.isArray(raw) || raw.length < 3) return [0, 0, 1];
   return [
     Number(raw[0] ?? 0),
@@ -1623,6 +1626,30 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
               }}
               mono
             />
+            <TextField
+              label="Ku2 [J/m^3]"
+              value={String(Number(moduleParams.ku2 ?? 0))}
+              onchange={(event) => {
+                const next = parseOptionalNumber(event.target.value);
+                if (next == null) return;
+                setTargetObjectPhysicsStack((stack) =>
+                  upsertObjectInteraction(stack, "uniaxial_anisotropy", {
+                    params: {
+                      ...(moduleEntry.params ?? {}),
+                      ku2: next,
+                    },
+                  }),
+                );
+                patchTargetObjectInteraction("uniaxial_anisotropy", {
+                  present: true,
+                  params: {
+                    ...(moduleEntry.params ?? {}),
+                    ku2: next,
+                  },
+                });
+              }}
+              mono
+            />
             <div className="grid grid-cols-3 gap-2">
               {([0, 1, 2] as const).map((component) => (
                 <TextField
@@ -1653,6 +1680,119 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                   mono
                 />
               ))}
+            </div>
+          </div>
+        ) : null}
+        {entry.id === "bulk_dmi" && moduleEntry ? (
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <TextField
+              label="D [J/m^2]"
+              value={String(Number(moduleParams.d ?? 1e-3))}
+              onchange={(event) => {
+                const next = parseOptionalNumber(event.target.value);
+                if (next == null) return;
+                setTargetObjectPhysicsStack((stack) =>
+                  upsertObjectInteraction(stack, "bulk_dmi", {
+                    params: { ...(moduleEntry.params ?? {}), d: next },
+                  }),
+                );
+                patchTargetObjectInteraction("bulk_dmi", {
+                  present: true,
+                  params: { ...(moduleEntry.params ?? {}), d: next },
+                });
+              }}
+              mono
+            />
+          </div>
+        ) : null}
+        {entry.id === "cubic_anisotropy" && moduleEntry ? (
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <div className="grid grid-cols-3 gap-2">
+              {(["kc1", "kc2", "kc3"] as const).map((key) => (
+                <TextField
+                  key={key}
+                  label={`${key.toUpperCase()} [J/m³]`}
+                  value={String(Number(moduleParams[key] ?? 0))}
+                  onchange={(event) => {
+                    const next = parseOptionalNumber(event.target.value);
+                    if (next == null) return;
+                    setTargetObjectPhysicsStack((stack) =>
+                      upsertObjectInteraction(stack, "cubic_anisotropy", {
+                        params: { ...(moduleEntry.params ?? {}), [key]: next },
+                      }),
+                    );
+                    patchTargetObjectInteraction("cubic_anisotropy", {
+                      present: true,
+                      params: { ...(moduleEntry.params ?? {}), [key]: next },
+                    });
+                  }}
+                  mono
+                />
+              ))}
+            </div>
+            <div className="text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+              Crystal Axis 1
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {([0, 1, 2] as const).map((component) => {
+                const axis1 = interactionAxis({ axis1: moduleParams.axis1 ?? [1, 0, 0] } as Record<string, unknown>);
+                return (
+                  <TextField
+                    key={`a1-${component}`}
+                    label={component === 0 ? "x" : component === 1 ? "y" : "z"}
+                    value={String(axis1[component])}
+                    onchange={(event) => {
+                      const next = parseOptionalNumber(event.target.value);
+                      if (next == null) return;
+                      const currentAxis1 = interactionAxis({ axis1: moduleParams.axis1 ?? [1, 0, 0] } as Record<string, unknown>);
+                      const nextAxis: [number, number, number] = [...currentAxis1];
+                      nextAxis[component] = next;
+                      setTargetObjectPhysicsStack((stack) =>
+                        upsertObjectInteraction(stack, "cubic_anisotropy", {
+                          params: { ...(moduleEntry.params ?? {}), axis1: nextAxis },
+                        }),
+                      );
+                      patchTargetObjectInteraction("cubic_anisotropy", {
+                        present: true,
+                        params: { ...(moduleEntry.params ?? {}), axis1: nextAxis },
+                      });
+                    }}
+                    mono
+                  />
+                );
+              })}
+            </div>
+            <div className="text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+              Crystal Axis 2
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {([0, 1, 2] as const).map((component) => {
+                const axis2 = interactionAxis({ axis2: moduleParams.axis2 ?? [0, 1, 0] } as Record<string, unknown>);
+                return (
+                  <TextField
+                    key={`a2-${component}`}
+                    label={component === 0 ? "x" : component === 1 ? "y" : "z"}
+                    value={String(axis2[component])}
+                    onchange={(event) => {
+                      const next = parseOptionalNumber(event.target.value);
+                      if (next == null) return;
+                      const currentAxis2 = interactionAxis({ axis2: moduleParams.axis2 ?? [0, 1, 0] } as Record<string, unknown>);
+                      const nextAxis: [number, number, number] = [...currentAxis2];
+                      nextAxis[component] = next;
+                      setTargetObjectPhysicsStack((stack) =>
+                        upsertObjectInteraction(stack, "cubic_anisotropy", {
+                          params: { ...(moduleEntry.params ?? {}), axis2: nextAxis },
+                        }),
+                      );
+                      patchTargetObjectInteraction("cubic_anisotropy", {
+                        present: true,
+                        params: { ...(moduleEntry.params ?? {}), axis2: nextAxis },
+                      });
+                    }}
+                    mono
+                  />
+                );
+              })}
             </div>
           </div>
         ) : null}

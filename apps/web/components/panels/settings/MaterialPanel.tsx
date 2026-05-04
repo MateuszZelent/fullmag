@@ -1145,6 +1145,8 @@ export default function MaterialPanel({
   };
   const hasDmi = hasObjectInteraction(physicsStack, "interfacial_dmi");
   const hasUniaxial = hasObjectInteraction(physicsStack, "uniaxial_anisotropy");
+  const hasBulkDmi = hasObjectInteraction(physicsStack, "bulk_dmi");
+  const hasCubic = hasObjectInteraction(physicsStack, "cubic_anisotropy");
   const uniaxial = physicsStack.find((entry) => entry.kind === "uniaxial_anisotropy");
   const uniaxialAxisRaw = Array.isArray(uniaxial?.params?.axis) ? uniaxial?.params?.axis : [0, 0, 1];
   const uniaxialAxis = [
@@ -1251,6 +1253,57 @@ export default function MaterialPanel({
                     </div>
                   </div>
                 ) : null}
+                {interaction.kind === "bulk_dmi" ? (
+                  <div className="mt-2 grid grid-cols-1 gap-3">
+                    <TextField
+                      label="D"
+                      defaultValue={Number(interaction.params?.d ?? 1e-3)}
+                      onBlur={(event) => {
+                        const parsed = Number.parseFloat(event.target.value);
+                        if (!Number.isFinite(parsed)) return;
+                        updateObjectPhysicsStack((stack) =>
+                          upsertObjectInteraction(stack, "bulk_dmi", {
+                            params: { ...(interaction.params ?? {}), d: parsed },
+                          }),
+                        );
+                        patchObjectInteraction("bulk_dmi", {
+                          present: true,
+                          params: { ...(interaction.params ?? {}), d: parsed },
+                        });
+                      }}
+                      unit="J/m²"
+                      mono
+                    />
+                  </div>
+                ) : null}
+                {interaction.kind === "cubic_anisotropy" ? (
+                  <div className="mt-2 grid grid-cols-1 gap-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["kc1", "kc2", "kc3"] as const).map((key) => (
+                        <TextField
+                          key={key}
+                          label={key.toUpperCase()}
+                          defaultValue={Number(interaction.params?.[key] ?? 0)}
+                          onBlur={(event) => {
+                            const parsed = Number.parseFloat(event.target.value);
+                            if (!Number.isFinite(parsed)) return;
+                            updateObjectPhysicsStack((stack) =>
+                              upsertObjectInteraction(stack, "cubic_anisotropy", {
+                                params: { ...(interaction.params ?? {}), [key]: parsed },
+                              }),
+                            );
+                            patchObjectInteraction("cubic_anisotropy", {
+                              present: true,
+                              params: { ...(interaction.params ?? {}), [key]: parsed },
+                            });
+                          }}
+                          unit="J/m³"
+                          mono
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
@@ -1268,10 +1321,28 @@ export default function MaterialPanel({
               size="sm"
               variant="outline"
               type="button"
+              disabled={hasBulkDmi}
+              onClick={() => addInteraction("bulk_dmi")}
+            >
+              Add Bulk DMI
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
               disabled={hasUniaxial}
               onClick={() => addInteraction("uniaxial_anisotropy")}
             >
               Add Uniaxial Ku
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={hasCubic}
+              onClick={() => addInteraction("cubic_anisotropy")}
+            >
+              Add Cubic Kc
             </Button>
           </div>
           {backendOnlyTerms.length > 0 ? (
