@@ -1030,6 +1030,30 @@ export interface ThermalNoiseState {
   seed: number | null;
 }
 
+export interface SpinOrbitTorqueState {
+  enabled: boolean;
+  /** Charge current density |Je| [A/m²] in the HM layer. */
+  current_density: number;
+  /** Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH). */
+  xi_dl: number;
+  /** Field-like efficiency ξ_FL (Rashba term, often ~0). */
+  xi_fl: number;
+  /** Spin polarisation direction σ̂ (unit vector). */
+  sigma: [number, number, number];
+  /** FM layer thickness t_F [m]. */
+  thickness: number;
+}
+
+export interface MagnetoelasticState {
+  enabled: boolean;
+  /** First magnetoelastic coupling constant B₁ [Pa]. */
+  b1: number;
+  /** Second magnetoelastic coupling constant B₂ [Pa]. */
+  b2: number;
+  /** Reference magnet name. */
+  magnet: string;
+}
+
 export interface SceneStudyState {
   backend: string | null;
   requested_backend: string;
@@ -1053,6 +1077,10 @@ export interface SceneStudyState {
   oersted: OerstedFieldState | null;
   /** Thermal noise (stochastic LLG). */
   thermal_noise: ThermalNoiseState | null;
+  /** Spin-orbit torque (damping-like + field-like). */
+  spin_orbit_torque: SpinOrbitTorqueState | null;
+  /** Magnetoelastic coupling (prescribed strain). */
+  magnetoelastic: MagnetoelasticState | null;
 }
 
 export interface SceneOutputsState {

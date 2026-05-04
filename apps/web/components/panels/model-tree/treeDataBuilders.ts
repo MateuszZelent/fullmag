@@ -96,7 +96,13 @@ function enrichPhysicsCapabilityEntries(
       active = opts.metadata?.stt_active === true
         || (Array.isArray(sttFromScene) && sttFromScene.length > 0);
     } else if (entry.id === "spin_orbit_torque") {
-      active = opts.metadata?.sot_active === true;
+      const sotFromScene = opts.sceneDocument?.study.spin_orbit_torque;
+      active = opts.metadata?.sot_active === true
+        || (sotFromScene?.enabled === true);
+    } else if (entry.id === "magnetoelastic") {
+      const melFromScene = opts.sceneDocument?.study.magnetoelastic;
+      active = opts.metadata?.magnetoelastic_active === true
+        || (melFromScene?.enabled === true);
     } else if (entry.id === "oersted") {
       const oerstedFromScene = opts.sceneDocument?.study.oersted;
       active = opts.metadata?.oersted_active === true

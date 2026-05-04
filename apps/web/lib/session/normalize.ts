@@ -23,6 +23,8 @@ import type {
   ScriptBuilderState,
   SessionState,
   SpinTorqueModuleState,
+  SpinOrbitTorqueState,
+  MagnetoelasticState,
   ThermalNoiseState,
 } from "./types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
@@ -1418,6 +1420,32 @@ function normalizeThermalNoise(raw: unknown): ThermalNoiseState | null {
   };
 }
 
+function normalizeSpinOrbitTorque(raw: unknown): SpinOrbitTorqueState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!r.enabled) return null;
+  return {
+    enabled: true,
+    current_density: Number(r.current_density ?? 1e10),
+    xi_dl: Number(r.xi_dl ?? r.damping_like_efficiency ?? 0.1),
+    xi_fl: Number(r.xi_fl ?? r.field_like_efficiency ?? 0),
+    sigma: normalizeVec3(r.sigma ?? r.spin_polarization) ?? [0, 1, 0],
+    thickness: Number(r.thickness ?? r.ferromagnet_thickness_m ?? 1e-9),
+  };
+}
+
+function normalizeMagnetoelastic(raw: unknown): MagnetoelasticState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!r.enabled) return null;
+  return {
+    enabled: true,
+    b1: Number(r.b1 ?? 0),
+    b2: Number(r.b2 ?? 0),
+    magnet: String(r.magnet ?? ""),
+  };
+}
+
 function normalizeSceneStudy(raw: any) {
   const defaults = emptyScriptBuilderState();
   const normalized = normalizeScriptBuilder({
@@ -1491,6 +1519,8 @@ function normalizeSceneStudy(raw: any) {
     spin_torque_modules: normalizeSpinTorqueModules(raw?.spin_torque_modules),
     oersted: normalizeOerstedField(raw?.oersted),
     thermal_noise: normalizeThermalNoise(raw?.thermal_noise),
+    spin_orbit_torque: normalizeSpinOrbitTorque(raw?.spin_orbit_torque),
+    magnetoelastic: normalizeMagnetoelastic(raw?.magnetoelastic),
   };
 }
 

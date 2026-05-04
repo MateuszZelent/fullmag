@@ -333,7 +333,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
         active = metadata?.stt_active === true
           || (Array.isArray(sttFromScene) && sttFromScene.length > 0);
       } else if (entry.id === "spin_orbit_torque") {
-        active = metadata?.sot_active === true;
+        const sotFromScene = model.sceneDocument?.study.spin_orbit_torque;
+        active = metadata?.sot_active === true
+          || (sotFromScene?.enabled === true);
+      } else if (entry.id === "magnetoelastic") {
+        const melFromScene = model.sceneDocument?.study.magnetoelastic;
+        active = metadata?.magnetoelastic_active === true
+          || (melFromScene?.enabled === true);
       } else if (entry.id === "oersted") {
         const oerstedFromScene = model.sceneDocument?.study.oersted;
         active = metadata?.oersted_active === true
@@ -1176,6 +1182,217 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
             Brown thermal fluctuations via stochastic LLG. Set seed for reproducible runs.
             Executable on FDM CPU/GPU. FEM support: semantic only.
+          </div>
+        </SidebarSection>
+      );
+    }
+
+    if (entry.id === "spin_orbit_torque") {
+      const sotState = model.sceneDocument?.study.spin_orbit_torque ?? null;
+      const sotEnabled = sotState?.enabled === true;
+
+      const setSotEnabled = (enabled: boolean) => {
+        if (!enabled) {
+          model.setSceneDocument((prev) =>
+            prev ? { ...prev, study: { ...prev.study, spin_orbit_torque: null } } : prev,
+          );
+          patchStudyScene({ spin_orbit_torque: null });
+          return;
+        }
+        const defaultSot = {
+          enabled: true,
+          current_density: 1e10,
+          xi_dl: 0.1,
+          xi_fl: 0,
+          sigma: [0, 1, 0] as [number, number, number],
+          thickness: 1e-9,
+        };
+        model.setSceneDocument((prev) =>
+          prev ? { ...prev, study: { ...prev.study, spin_orbit_torque: defaultSot } } : prev,
+        );
+        patchStudyScene({ spin_orbit_torque: defaultSot });
+      };
+
+      const patchSot = (patch: Record<string, unknown>) => {
+        model.setSceneDocument((prev) => {
+          if (!prev || !prev.study.spin_orbit_torque) return prev;
+          const updated = { ...prev.study.spin_orbit_torque, ...patch };
+          patchStudyScene({ spin_orbit_torque: updated });
+          return { ...prev, study: { ...prev.study, spin_orbit_torque: updated } };
+        });
+      };
+
+      return (
+        <SidebarSection title="Spin-Orbit Torque" defaultOpen={true}>
+          <div className="flex items-center justify-between">
+            <span className="text-[0.72rem] text-muted-foreground">Enable SOT</span>
+            <Button
+              variant={sotEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-3 text-[0.68rem]"
+              onClick={() => setSotEnabled(!sotEnabled)}
+            >
+              {sotEnabled ? "Active" : "Disabled"}
+            </Button>
+          </div>
+
+          {sotState && (
+            <>
+              <div className="mt-4 grid gap-3">
+                <TextField
+                  label="Current density |Je| [A/m²]"
+                  value={String(sotState.current_density)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null) patchSot({ current_density: v });
+                  }}
+                  placeholder="1e10"
+                  mono
+                />
+                <TextField
+                  label="ξ_DL (damping-like)"
+                  value={String(sotState.xi_dl)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null) patchSot({ xi_dl: v });
+                  }}
+                  placeholder="0.1"
+                  mono
+                />
+                <TextField
+                  label="ξ_FL (field-like)"
+                  value={String(sotState.xi_fl)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null) patchSot({ xi_fl: v });
+                  }}
+                  placeholder="0"
+                  mono
+                />
+                <TextField
+                  label="FM thickness t_F [m]"
+                  value={String(sotState.thickness)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null && v > 0) patchSot({ thickness: v });
+                  }}
+                  placeholder="1e-9"
+                  mono
+                />
+              </div>
+              <div className="mt-4 text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                Spin polarization σ̂
+              </div>
+              <div className="mt-1.5 grid grid-cols-3 gap-3">
+                {(["x", "y", "z"] as const).map((label, idx) => (
+                  <TextField
+                    key={label}
+                    label={label}
+                    value={String(sotState.sigma[idx])}
+                    onchange={(e) => {
+                      const v = parseOptionalNumber(e.target.value);
+                      if (v == null) return;
+                      const newSigma = [...sotState.sigma] as [number, number, number];
+                      newSigma[idx as 0 | 1 | 2] = v;
+                      patchSot({ sigma: newSigma });
+                    }}
+                    placeholder={idx === 1 ? "1" : "0"}
+                    mono
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            Spin Hall Effect torque on FM layer from adjacent HM layer.
+            Damping-like and field-like components. Rust FDM engine has full implementation.
+          </div>
+        </SidebarSection>
+      );
+    }
+
+    if (entry.id === "magnetoelastic") {
+      const melState = model.sceneDocument?.study.magnetoelastic ?? null;
+      const melEnabled = melState?.enabled === true;
+
+      const setMelEnabled = (enabled: boolean) => {
+        if (!enabled) {
+          model.setSceneDocument((prev) =>
+            prev ? { ...prev, study: { ...prev.study, magnetoelastic: null } } : prev,
+          );
+          patchStudyScene({ magnetoelastic: null });
+          return;
+        }
+        const defaultMel = {
+          enabled: true,
+          b1: -3.43e6,
+          b2: -3.43e6,
+          magnet: "",
+        };
+        model.setSceneDocument((prev) =>
+          prev ? { ...prev, study: { ...prev.study, magnetoelastic: defaultMel } } : prev,
+        );
+        patchStudyScene({ magnetoelastic: defaultMel });
+      };
+
+      const patchMel = (patch: Record<string, unknown>) => {
+        model.setSceneDocument((prev) => {
+          if (!prev || !prev.study.magnetoelastic) return prev;
+          const updated = { ...prev.study.magnetoelastic, ...patch };
+          patchStudyScene({ magnetoelastic: updated });
+          return { ...prev, study: { ...prev.study, magnetoelastic: updated } };
+        });
+      };
+
+      return (
+        <SidebarSection title="Magnetoelastic Coupling" defaultOpen={true}>
+          <div className="flex items-center justify-between">
+            <span className="text-[0.72rem] text-muted-foreground">Enable Magnetoelastic</span>
+            <Button
+              variant={melEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-3 text-[0.68rem]"
+              onClick={() => setMelEnabled(!melEnabled)}
+            >
+              {melEnabled ? "Active" : "Disabled"}
+            </Button>
+          </div>
+
+          {melState && (
+            <div className="mt-4 grid gap-3">
+              <TextField
+                label="B₁ [Pa]"
+                value={String(melState.b1)}
+                onchange={(e) => {
+                  const v = parseOptionalNumber(e.target.value);
+                  if (v != null) patchMel({ b1: v });
+                }}
+                placeholder="-3.43e6"
+                mono
+              />
+              <TextField
+                label="B₂ [Pa]"
+                value={String(melState.b2)}
+                onchange={(e) => {
+                  const v = parseOptionalNumber(e.target.value);
+                  if (v != null) patchMel({ b2: v });
+                }}
+                placeholder="-3.43e6"
+                mono
+              />
+              <TextField
+                label="Magnet reference"
+                value={melState.magnet}
+                onchange={(e) => patchMel({ magnet: e.target.value })}
+                placeholder="ferromagnet name"
+              />
+            </div>
+          )}
+
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            Prescribed-strain magnetoelastic coupling (B₁/B₂ cubic).
+            FDM CPU/GPU executable. FEM: semantic only.
           </div>
         </SidebarSection>
       );

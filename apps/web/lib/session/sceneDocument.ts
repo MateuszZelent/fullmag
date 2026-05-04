@@ -174,6 +174,8 @@ export function buildSceneDocumentFromScriptBuilder(
       spin_torque_modules: null,
       oersted: null,
       thermal_noise: null,
+      spin_orbit_torque: null,
+      magnetoelastic: null,
     },
     outputs: { items: [] },
     editor: {
