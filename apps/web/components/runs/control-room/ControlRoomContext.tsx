@@ -9,18 +9,18 @@ import {
   useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import type { GpuTelemetryResponse, VisualizationStateResource } from "@/src/api/types";
+import type { VisualizationStateResource } from "@/src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
-import { decodeFieldVector } from "@/src/api/codecs/fieldVectorCodec";
-import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import { useSceneDocument } from "@/src/hooks/resources/useSceneDocument";
 import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelection";
 import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
-import { buildFemMeshFromDecodedTopology } from "@/src/hooks/resources/meshFemResource";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
+import { useVisualizationStore } from "../../../features/visualization/store/useVisualizationStore";
+import { useSelectionStore } from "../../../features/selection/store/useSelectionStore";
+import { useMeshConfigStore } from "../../../features/mesh-config/store/useMeshConfigStore";
 import {
   DEFAULT_FEM_VIEWPORT_LAYER_STATE,
   type FemViewportLayerState,
@@ -33,7 +33,6 @@ import { useMeshCommandPipeline } from "./hooks/useMeshCommandPipeline";
 import { useViewportVisualizationState } from "./hooks/useViewportVisualizationState";
 import { useVisualizationPresets } from "./hooks/useVisualizationPresets";
 import { useWorkspaceActions } from "./hooks/useWorkspaceActions";
-import { buildAuthoredMagnetizationPreview } from "./authoredMagnetizationPreview";
 import {
   DEFAULT_AIR_MESH_OPACITY,
   DEFAULT_FDM_VISUALIZATION_SETTINGS,
@@ -41,18 +40,12 @@ import {
   EMPTY_ENGINE_LOG,
   EMPTY_QUANTITIES,
   EMPTY_SCALAR_ROWS,
-  GPU_TELEMETRY_POLL_MS,
   loadLocalActiveVisualizationRef,
   loadLocalVisualizationPresets,
   normalizePersistedMeshEntityViewState,
   normalizePersistedObjectViewMode,
   normalizeVisualizationPresetRef,
-  resultWorkspaceIcon,
   sameMeshEntityViewStateMap,
-  samePersistedMeshEntityViewState,
-  sameVisualizationPresetRef,
-  sameVisualizationPresets,
-  serializeMeshEntityViewStateForScene,
 } from "./controlRoomUtils";
 import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import type {
@@ -90,8 +83,6 @@ import {
   buildScriptBuilderFromSceneDocument,
 } from "../../../lib/session/sceneDocument";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
-import { getFrontendPerfSamples, recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
-import { updateFrontendResourceBucket } from "@/lib/debug/frontendResourceManager";
 import {
   isFemDiscretization,
 } from "@/src/domain/capabilities";
@@ -113,21 +104,15 @@ import {
   type VectorComponent,
   type ViewportScope,
   type ViewportMode,
-  PREVIEW_EVERY_N_DEFAULT,
-  PREVIEW_EVERY_N_PRESETS,
-  PREVIEW_MAX_POINTS_DEFAULT,
-  PREVIEW_MAX_POINTS_PRESETS,
   resolveSelectedObjectId,
   resolveViewportScope,
 } from "./shared";
 import {
-  buildRequestedDisplaySelection,
   buildScriptBuilderSignature,
   buildScriptBuilderUpdatePayload,
   extractSolverPlan,
   meshOptionsFromBuilder,
   meshOptionsToBuilder,
-  previewComponentFromDisplaySelection,
   solverSettingsFromBuilder,
   solverSettingsToBuilder,
 } from "./helpers";
@@ -138,26 +123,13 @@ import {
   resolveViewportSelectionScope,
 } from "../../../features/viewport-fem/model/femViewportSelection";
 import {
-  buildDenseFemVectorField,
-  deriveFemVectorScopes,
-  type FemVectorScope,
-  type ScopedFemVectorFrame,
-} from "./femVectorScopes";
-import {
   buildViewportDisplayReset,
   visualizationPatchForViewportDisplayDefaults,
   type ViewportDisplayDefaults,
 } from "../../../features/viewport-fem/model/femResetCommand";
 
 import {
-  LOCAL_ACTIVE_VISUALIZATION_PRESET_STORAGE_KEY,
-  LOCAL_VISUALIZATION_PRESETS_STORAGE_KEY,
-} from "./visualizationPresets";
-import {
   DEFAULT_ANALYZE_SELECTION,
-  nextAnalyzeRefresh,
-  type AnalyzeSelectionState,
-  type AnalyzeTab,
 } from "./analyzeSelection";
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import { resetSceneEditorToCameraFirst } from "./workspaceViewportGuards";
@@ -167,11 +139,17 @@ import {
   type ViewportVisualizationState,
 } from "./visualizationStateSync";
 import {
-  resolveFailedWorkspaceSelectionPersistence,
   resolvePersistedWorkspaceSelection,
   resolveRemoteWorkspaceSelectionHydration,
   workspaceSelectionIdentity,
 } from "./workspaceSelectionGuards";
+import { ControlRoomContextProviders } from "./ControlRoomContextProviders";
+import { ControlRoomConnectingState } from "./ControlRoomConnectingState";
+import {
+  fieldFrameIdentity,
+  isQuantitySelectable,
+  vectorHead,
+} from "./controlRoomContextHelpers";
 
 /* Context interfaces, hooks, and React context objects are in context-hooks.tsx */
 export {
@@ -196,17 +174,20 @@ export type {
   QuantityDataStatus,
 } from "./context-hooks";
 import { useModelBuilderActions } from "./hooks/useModelBuilderActions";
+import { useAnalyzeWorkspaceState } from "./hooks/useAnalyzeWorkspaceState";
+import { useAutoResultWorkspaceEntries } from "./hooks/useAutoResultWorkspaceEntries";
+import { useEffectiveLiveTelemetry } from "./hooks/useEffectiveLiveTelemetry";
+import { useFemMeshTopologyHydration } from "./hooks/useFemMeshTopologyHydration";
+import { useGpuTelemetry } from "./hooks/useGpuTelemetry";
+import { usePreviewSelectionState } from "./hooks/usePreviewSelectionState";
+import { useQuantityPresentationState } from "./hooks/useQuantityPresentationState";
+import { useSceneEditorDraftSync } from "./hooks/useSceneEditorDraftSync";
+import { useVisualizationPresetPersistence } from "./hooks/useVisualizationPresetPersistence";
+import { useViewportFieldData } from "./hooks/useViewportFieldData";
+import { useWorkspaceSelectionPersistence } from "./hooks/useWorkspaceSelectionPersistence";
 import {
   resolveViewportSelectedObjectId,
-  selectViewportVectorField,
 } from "./viewportSelection";
-import {
-  TransportCtx,
-  ViewportCtx,
-  CommandCtx,
-  ModelCtx,
-  type QuantityDataStatus,
-} from "./context-hooks";
 import type {
   TransportContextValue,
   ViewportContextValue,
@@ -214,171 +195,15 @@ import type {
   ModelContextValue,
   WorkspaceStage,
   WorkspaceMode,
-  ResultWorkspaceEntry,
-  ResultWorkspaceKind,
 } from "./context-hooks";
 
-const FIELD_FRAME_ID_CACHE = new WeakMap<object, number>();
-let NEXT_FIELD_FRAME_ID = 1;
 const ENABLE_VIEWPORT_DATA_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production";
 
-function formatQuantityOptionLabel(quantity: {
-  label: string;
-  unit: string | null | undefined;
-}): string {
-  return quantity.unit && quantity.unit !== "dimensionless"
-    ? `${quantity.label} (${quantity.unit})`
-    : quantity.label;
-}
-
-function isQuantitySelectable(quantity: {
-  interactive_preview: boolean;
-  supports_preview_2d: boolean;
-  supports_preview_3d: boolean;
-}): boolean {
-  return Boolean(
-    quantity.interactive_preview &&
-      (quantity.supports_preview_2d || quantity.supports_preview_3d),
-  );
-}
-
-function fieldFrameIdentity(value: object | null | undefined): string {
-  if (!value) {
-    return "none";
-  }
-  let id = FIELD_FRAME_ID_CACHE.get(value);
-  if (!id) {
-    id = NEXT_FIELD_FRAME_ID++;
-    FIELD_FRAME_ID_CACHE.set(value, id);
-  }
-  return String(id);
-}
-
-function vectorHead(values: Float64Array | null | undefined): [number, number, number] | null {
-  if (!values || values.length < 3) {
-    return null;
-  }
-  return [values[0] ?? 0, values[1] ?? 0, values[2] ?? 0];
-}
-
-type BinaryFieldFrame = {
-  key: string;
-  quantityId: string;
-  values: Float64Array;
-  nComp: number;
-  grid: [number, number, number];
-};
-
-type ScopedBinaryFieldFrame = {
-  key: string;
-  quantityId: string;
-  values: Float64Array;
-  nComp: number;
-  grid: [number, number, number];
-  activeMask: boolean[] | null;
-  scopes: FemVectorScope[];
-};
-
-const BINARY_FIELD_CACHE_MAX_ENTRIES = 4;
-const BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
-const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 const AIRBOX_DISABLED_BY_DEFAULT =
   FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;
-
-function estimateBinaryFieldFrameBytes(frame: BinaryFieldFrame): number {
-  return frame.values.byteLength + frame.key.length * 2 + frame.quantityId.length * 2 + 128;
-}
-
-function estimateScopedBinaryFieldFrameBytes(frame: ScopedBinaryFieldFrame): number {
-  const maskBytes = frame.activeMask ? frame.activeMask.length : 0;
-  const scopeBytes = frame.scopes.reduce(
-    (total, scope) => total + scope.kind.length * 2 + (scope.id?.length ?? 0) * 2 + 32,
-    0,
-  );
-  return frame.values.byteLength + maskBytes + scopeBytes + frame.key.length * 2 + frame.quantityId.length * 2 + 160;
-}
-
-function estimateBinaryFieldCacheBytes(cache: Map<string, BinaryFieldFrame>): number {
-  let bytes = 0;
-  for (const frame of cache.values()) {
-    bytes += estimateBinaryFieldFrameBytes(frame);
-  }
-  return bytes;
-}
-
-function estimateScopedBinaryFieldCacheBytes(cache: Map<string, ScopedBinaryFieldFrame>): number {
-  let bytes = 0;
-  for (const frame of cache.values()) {
-    bytes += estimateScopedBinaryFieldFrameBytes(frame);
-  }
-  return bytes;
-}
-
-function pruneBinaryFieldCache<T>(
-  cache: Map<string, T>,
-  estimateFrameBytes: (frame: T) => number,
-  maxBytes: number,
-): number {
-  let estimatedBytes = Array.from(cache.values()).reduce(
-    (total, frame) => total + estimateFrameBytes(frame),
-    0,
-  );
-  while (
-    cache.size > 0 &&
-    (cache.size > BINARY_FIELD_CACHE_MAX_ENTRIES || estimatedBytes > maxBytes)
-  ) {
-    const firstKey = cache.keys().next().value;
-    if (!firstKey) {
-      break;
-    }
-    const evicted = cache.get(firstKey);
-    cache.delete(firstKey);
-    estimatedBytes -= evicted ? estimateFrameBytes(evicted) : 0;
-  }
-  return Math.max(0, estimatedBytes);
-}
-
-function femVectorScopeKey(scopes: FemVectorScope[]): string {
-  return scopes
-    .map((scope) => `${scope.kind}:${scope.id ?? "none"}`)
-    .join(",");
-}
-
-function femMeshTransportKey(mesh: FemLiveMesh | null): string | null {
-  if (!mesh) {
-    return null;
-  }
-  if (mesh.generation_id && mesh.generation_id.length > 0) {
-    return `gen:${mesh.generation_id}`;
-  }
-  if (mesh.mesh_id && mesh.mesh_id.length > 0) {
-    return `mesh:${mesh.mesh_id}`;
-  }
-  return [
-    "counts",
-    mesh.node_count ?? mesh.nodes.length,
-    mesh.element_count ?? mesh.elements.length,
-    mesh.boundary_face_count ?? mesh.boundary_faces.length,
-  ].join(":");
-}
-
-function analyzeSelectionEquals(
-  a: AnalyzeSelectionState,
-  b: AnalyzeSelectionState,
-): boolean {
-  return (
-    a.domain === b.domain &&
-    a.tab === b.tab &&
-    a.selectedModeIndex === b.selectedModeIndex &&
-    a.sampleIndex === b.sampleIndex &&
-    a.branchId === b.branchId &&
-    a.selectedChannel === b.selectedChannel &&
-    a.refreshNonce === b.refreshNonce
-  );
-}
 
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
@@ -454,7 +279,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [femDockTab, setFemDockTab] = useState<FemDockTab>("mesh");
-  const [femTextureDownsampleCells, setFemTextureDownsampleCells] = useState(65_536);
+  // ── Viewport chrome: owned by useVisualizationStore (Phase 5.1) ──
+  const femTextureDownsampleCells = useVisualizationStore((s) => s.femTextureDownsampleCells);
+  const setFemTextureDownsampleCells: Dispatch<SetStateAction<number>> = useCallback(
+    (action) => {
+      const store = useVisualizationStore.getState();
+      const next = typeof action === "function" ? action(store.femTextureDownsampleCells) : action;
+      store.setFemTextureDownsampleCells(next);
+    }, [],
+  );
   const [
     viewportVisualizationState,
     setViewportVisualizationState,
@@ -498,17 +331,56 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     airMeshVisible,
     airMeshOpacity,
   } = viewportVisualizationState;
-  const [viewportLegendVisible, setViewportLegendVisible] = useState(false);
-  const [viewportAxesScope, setViewportAxesScope] = useState<"universe" | "object">("universe");
-  const [universeWireframeVisible, setUniverseWireframeVisible] = useState(true);
-  const [fdmVisualizationSettings, setFdmVisualizationSettings] =
-    useState<VisualizationPresetFdmState>(DEFAULT_FDM_VISUALIZATION_SETTINGS);
+  // ── Viewport chrome: owned by useVisualizationStore (Phase 5.1) ──
+  const viewportLegendVisible = useVisualizationStore((s) => s.viewportLegendVisible);
+  const setViewportLegendVisible: Dispatch<SetStateAction<boolean>> = useCallback(
+    (action) => {
+      const store = useVisualizationStore.getState();
+      const next = typeof action === "function" ? action(store.viewportLegendVisible) : action;
+      store.setViewportLegendVisible(next);
+    }, [],
+  );
+  const viewportAxesScope = useVisualizationStore((s) => s.viewportAxesScope);
+  const setViewportAxesScope: Dispatch<SetStateAction<"universe" | "object">> = useCallback(
+    (action) => {
+      const store = useVisualizationStore.getState();
+      const next = typeof action === "function" ? action(store.viewportAxesScope) : action;
+      store.setViewportAxesScope(next);
+    }, [],
+  );
+  const universeWireframeVisible = useVisualizationStore((s) => s.universeWireframeVisible);
+  const setUniverseWireframeVisible: Dispatch<SetStateAction<boolean>> = useCallback(
+    (action) => {
+      const store = useVisualizationStore.getState();
+      const next = typeof action === "function" ? action(store.universeWireframeVisible) : action;
+      store.setUniverseWireframeVisible(next);
+    }, [],
+  );
+  const fdmVisualizationSettings = useVisualizationStore((s) => s.fdmVisualizationSettings);
+  const setFdmVisualizationSettings: Dispatch<SetStateAction<VisualizationPresetFdmState>> = useCallback(
+    (action) => {
+      const store = useVisualizationStore.getState();
+      const next = typeof action === "function" ? action(store.fdmVisualizationSettings) : action;
+      store.setFdmVisualizationSettings(next);
+    }, [],
+  );
   const [runUntilInput, setRunUntilInput] = useState("1e-12");
   const [selectedSidebarNodeId, setSelectedSidebarNodeId] = useState<string | null>(null);
-  const [analyzeSelection, setAnalyzeSelection] =
-    useState<AnalyzeSelectionState>(DEFAULT_ANALYZE_SELECTION);
-  const [resultWorkspaceEntries, setResultWorkspaceEntries] = useState<ResultWorkspaceEntry[]>([]);
-  const [activeResultWorkspaceId, setActiveResultWorkspaceId] = useState<string | null>(null);
+  const {
+    activeResultWorkspaceId,
+    addResultWorkspaceEntry,
+    analyzeSelection,
+    openAnalyze,
+    refreshAnalyze,
+    resultWorkspaceEntries,
+    selectAnalyzeMode,
+    selectAnalyzeTab,
+    setActiveResultWorkspaceId,
+    setAnalyzeSelection,
+    setResultWorkspaceEntries,
+  } = useAnalyzeWorkspaceState({
+    activateAnalyzeView: () => setViewMode("Analyze"),
+  });
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [viewportScope, setViewportScope] = useState<ViewportScope>("universe");
   const [focusObjectRequest, setFocusObjectRequest] = useState<FocusObjectRequest | null>(null);
@@ -593,6 +465,42 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     ),
     [resolvedRenderPlan, viewportVisualizationState],
   );
+
+  /* ── Sync bridge → useVisualizationStore (Phase 2.1 — core viz fields only) ── */
+  const vizStoreSetCore = useVisualizationStore.getState().setCore;
+  useEffect(() => {
+    vizStoreSetCore(effectiveViewportVisualizationState);
+  }, [effectiveViewportVisualizationState, vizStoreSetCore]);
+  // Note: viewportLegendVisible, viewportAxesScope, universeWireframeVisible,
+  // fdmVisualizationSettings, femTextureDownsampleCells are now directly owned
+  // by useVisualizationStore (Phase 5.1) — no sync bridge needed for those.
+
+  /* ── Sync bridge → useSelectionStore (Phase 2.2 migration) ── */
+  const selectionSync = useSelectionStore.getState().syncFromContext;
+  useEffect(() => {
+    selectionSync({
+      selectedSidebarNodeId,
+      selectedObjectId,
+      selectedEntityId,
+      focusedEntityId,
+      viewportScope,
+      focusObjectRequest,
+    });
+  }, [
+    selectedSidebarNodeId, selectedObjectId, selectedEntityId,
+    focusedEntityId, viewportScope, focusObjectRequest, selectionSync,
+  ]);
+
+  /* ── Sync bridge → useMeshConfigStore (Phase 2.3 migration) ── */
+  const meshConfigSync = useMeshConfigStore.getState().syncFromContext;
+  useEffect(() => {
+    meshConfigSync({
+      meshOptionsState,
+      meshGenerating,
+      lastBuiltMeshConfigSignature,
+      meshSelection,
+    });
+  }, [meshOptionsState, meshGenerating, lastBuiltMeshConfigSignature, meshSelection, meshConfigSync]);
 
   useEffect(() => {
     if (!visualizationStateResource) {
@@ -682,73 +590,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const workspaceHydrationKey = session
     ? `${session.started_at_unix_ms}:${session.run_id}:${session.script_path}:${sourceHash ?? "no-source-hash"}`
     : null;
-  const openAnalyze = useCallback((next?: Partial<AnalyzeSelectionState>) => {
-    startTransition(() => {
-      setViewMode("Analyze");
-    });
-    setAnalyzeSelection((prev) => {
-      const resolved = { ...prev, ...next };
-      return analyzeSelectionEquals(prev, resolved) ? prev : resolved;
-    });
-  }, []);
-  const selectAnalyzeTab = useCallback((tab: AnalyzeTab) => {
-    setAnalyzeSelection((prev) => {
-      if (prev.tab === tab) {
-        return prev;
-      }
-      return { ...prev, tab };
-    });
-  }, []);
-  const selectAnalyzeMode = useCallback((index: number | null) => {
-    setAnalyzeSelection((prev) => {
-      if (prev.tab === "modes" && prev.selectedModeIndex === index) {
-        return prev;
-      }
-      return { ...prev, tab: "modes", selectedModeIndex: index };
-    });
-  }, []);
-  const refreshAnalyze = useCallback(() => {
-    setAnalyzeSelection((prev) => nextAnalyzeRefresh(prev));
-  }, []);
-  const addResultWorkspaceEntry = useCallback(
-    (entry: {
-      key?: string | null;
-      kind: ResultWorkspaceKind;
-      label: string;
-      quantityId?: string | null;
-      icon?: string;
-      badge?: string | null;
-      pinned?: boolean;
-      openAfterCreate?: boolean;
-    }) => {
-      const key = entry.key?.trim().length ? entry.key.trim() : `${entry.kind}:${entry.label}`;
-      const existing = resultWorkspaceEntries.find((candidate) => candidate.key === key);
-      if (existing) {
-        if (entry.openAfterCreate) {
-          setActiveResultWorkspaceId(existing.id);
-        }
-        return existing.id;
-      }
-      const now = Date.now();
-      const created: ResultWorkspaceEntry = {
-        id: `${entry.kind}-${now}-${Math.floor(Math.random() * 10000)}`,
-        key,
-        kind: entry.kind,
-        label: entry.label,
-        quantityId: entry.quantityId ?? null,
-        icon: entry.icon ?? resultWorkspaceIcon(entry.kind),
-        badge: entry.badge ?? null,
-        pinned: entry.pinned ?? !key.startsWith("auto:"),
-        createdAtUnixMs: now,
-      };
-      setResultWorkspaceEntries((prev) => [...prev, created]);
-      if (entry.openAfterCreate) {
-        setActiveResultWorkspaceId(created.id);
-      }
-      return created.id;
-    },
-    [resultWorkspaceEntries],
-  );
   const markPendingWorkspaceSelection = useCallback(
     (nextNodeId: string | null) => {
       const source = sceneDocumentDraft ?? modelBuilderGraph;
@@ -789,79 +630,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
   const globalScalarPreview = preview?.kind === "global_scalar" ? preview : null;
   const streamFemMesh = runtimeFemMesh ?? liveState?.fem_mesh ?? null;
-  const binaryFemTopologyTransportEnabled =
-    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport;
-  const femMeshTopologyCacheRef = useRef<Map<string, FemLiveMesh>>(new Map());
-  const [hydratedFemMesh, setHydratedFemMesh] = useState<FemLiveMesh | null>(null);
-  const streamFemMeshKey = useMemo(() => femMeshTransportKey(streamFemMesh), [streamFemMesh]);
-  const needsBinaryFemTopologyHydration =
-    binaryFemTopologyTransportEnabled &&
-    streamFemMesh?.topology_transport === "binary" &&
-    !streamFemMesh.topology_buffers;
-
-  useEffect(() => {
-    if (!needsBinaryFemTopologyHydration || !streamFemMesh || !streamFemMeshKey) {
-      setHydratedFemMesh(null);
-      return;
-    }
-    const cached = femMeshTopologyCacheRef.current.get(streamFemMeshKey) ?? null;
-    if (cached) {
-      setHydratedFemMesh(cached);
-      return;
-    }
-    setHydratedFemMesh(null);
-    const controller = new AbortController();
-    void liveApi
-      .getFemMeshTopologyBinary(streamFemMesh.generation_id ?? null, {
-        signal: controller.signal,
-      })
-      .then((buffer) => {
-        const topo = decodeTopology(buffer);
-        const decodedMesh = buildFemMeshFromDecodedTopology(topo, null, {
-          legacyArrays: "lazy",
-        });
-        const nextMesh: FemLiveMesh = {
-          ...streamFemMesh,
-          ...decodedMesh,
-          mesh_name: streamFemMesh.mesh_name ?? decodedMesh.mesh_name,
-          mesh_id: streamFemMesh.mesh_id ?? decodedMesh.mesh_id,
-          generation_id: streamFemMesh.generation_id ?? decodedMesh.generation_id,
-          object_segments: streamFemMesh.object_segments ?? decodedMesh.object_segments,
-          mesh_parts: streamFemMesh.mesh_parts ?? decodedMesh.mesh_parts,
-          domain_mesh_mode: streamFemMesh.domain_mesh_mode ?? decodedMesh.domain_mesh_mode ?? null,
-          domain_frame: streamFemMesh.domain_frame ?? decodedMesh.domain_frame ?? null,
-        };
-        const cache = femMeshTopologyCacheRef.current;
-        cache.set(streamFemMeshKey, nextMesh);
-        while (cache.size > 2) {
-          const oldestKey = cache.keys().next().value;
-          if (!oldestKey) {
-            break;
-          }
-          cache.delete(oldestKey);
-        }
-        if (!controller.signal.aborted) {
-          startTransition(() => setHydratedFemMesh(nextMesh));
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setHydratedFemMesh(null);
-        }
-      });
-    return () => controller.abort();
-  }, [
-    binaryFemTopologyTransportEnabled,
+  const femMesh = useFemMeshTopologyHydration({
+    enabled: FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport,
     liveApi,
-    needsBinaryFemTopologyHydration,
     streamFemMesh,
-    streamFemMeshKey,
-  ]);
-
-  const femMesh =
-    hydratedFemMesh && streamFemMeshKey && femMeshTransportKey(hydratedFemMesh) === streamFemMeshKey
-      ? hydratedFemMesh
-      : streamFemMesh;
+  });
   const remoteSceneDocument = resourceSceneDocument;
   const meshConfigSignature = useMemo(
     () => buildMeshConfigurationSignature(sceneDocumentDraft ?? remoteSceneDocument),
@@ -946,11 +719,11 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     typeof runtimeEngine?.accelerator === "string" ? runtimeEngine.accelerator : null;
   const runtimeEngineDeviceName =
     typeof runtimeEngine?.device_name === "string" ? runtimeEngine.device_name : null;
-  const [gpuTelemetry, setGpuTelemetry] = useState<GpuTelemetryResponse | null>(null);
   const latestEngineMessage = engineLog.length > 0 ? engineLog[engineLog.length - 1]?.message ?? null : null;
   const workspaceStatus =
     runtimeStatus?.code ?? liveState?.status ?? session?.status ?? run?.status ?? "idle";
   const runtimeUsesGpu = runtimeEngineAccelerator === "gpu" || /gpu|cuda/i.test(runtimeEngineLabel ?? "");
+  const gpuTelemetry = useGpuTelemetry({ liveApi, runtimeUsesGpu });
 
   useEffect(() => {
     syncWorkspaceTabsFromArtifacts(
@@ -959,40 +732,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     );
   }, [artifactsArr, syncWorkspaceTabsFromArtifacts]);
 
-  useEffect(() => {
-    if (!runtimeUsesGpu) {
-      setGpuTelemetry(null);
-      return;
-    }
-
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const poll = async () => {
-      try {
-        const next = await liveApi.fetchGpuTelemetry();
-        if (!cancelled) {
-          setGpuTelemetry(next);
-        }
-      } catch {
-        if (!cancelled) {
-          setGpuTelemetry(null);
-        }
-      } finally {
-        if (!cancelled) {
-          timer = setTimeout(poll, GPU_TELEMETRY_POLL_MS);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer !== null) {
-        clearTimeout(timer);
-      }
-    };
-  }, [liveApi, runtimeUsesGpu]);
   const modelBuilderDefaults = useMemo(
     () => ({
       revision:
@@ -1156,36 +895,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const isWaitingForCompute = workspaceStatus === "waiting_for_compute";
 
   /* Effective solver values (fallback to run manifest when live is stale) */
-  const liveIsStale = (liveState?.step ?? 0) === 0 && (run?.total_steps ?? 0) > 0;
-  const effectiveStep = liveIsStale ? (run?.total_steps ?? 0) : (liveState?.step ?? run?.total_steps ?? 0);
-  const effectiveTime = liveIsStale ? (run?.final_time ?? 0) : (liveState?.time ?? run?.final_time ?? 0);
-  const effectiveDt = liveIsStale ? 0 : (liveState?.dt ?? 0);
-  const effectiveEEx = liveIsStale ? (run?.final_e_ex ?? 0) : (liveState?.e_ex ?? run?.final_e_ex ?? 0);
-  const effectiveEDemag = liveIsStale ? (run?.final_e_demag ?? 0) : (liveState?.e_demag ?? run?.final_e_demag ?? 0);
-  const effectiveEExt = liveIsStale ? (run?.final_e_ext ?? 0) : (liveState?.e_ext ?? run?.final_e_ext ?? 0);
-  const effectiveEAni = liveIsStale ? (run?.final_e_ani ?? 0) : (liveState?.e_ani ?? run?.final_e_ani ?? 0);
-  const effectiveEDmi = liveIsStale ? (run?.final_e_dmi ?? 0) : (liveState?.e_dmi ?? run?.final_e_dmi ?? 0);
-  const effectiveETotal = liveIsStale ? (run?.final_e_total ?? 0) : (liveState?.e_total ?? run?.final_e_total ?? 0);
-  const effectiveDmDt = liveIsStale ? 0 : (liveState?.max_dm_dt ?? 0);
-  const latestScalarTorqueT = scalarRows.length > 0 ? (scalarRows[scalarRows.length - 1]?.max_torque_T ?? 0) : 0;
-  const effectiveTorqueT = liveIsStale
-    ? latestScalarTorqueT
-    : (liveState?.max_torque_T ?? latestScalarTorqueT);
-  const effectiveHEff = liveIsStale ? 0 : (liveState?.max_h_eff ?? 0);
-  const effectiveHDemag = liveIsStale ? 0 : (liveState?.max_h_demag ?? 0);
-
-  const effectiveLiveState = useMemo(() => {
-    if (!liveState) return null;
-    if (!liveIsStale) return liveState;
-    return {
-      ...liveState,
-      step: effectiveStep, time: effectiveTime, dt: effectiveDt,
-      e_ex: effectiveEEx, e_demag: effectiveEDemag, e_ext: effectiveEExt, e_ani: effectiveEAni, e_dmi: effectiveEDmi, e_total: effectiveETotal,
-      max_dm_dt: effectiveDmDt, max_torque_T: effectiveTorqueT, max_h_eff: effectiveHEff, max_h_demag: effectiveHDemag,
-    };
-  }, [liveState, liveIsStale, effectiveStep, effectiveTime, effectiveDt,
-      effectiveEEx, effectiveEDemag, effectiveEExt, effectiveEAni, effectiveEDmi, effectiveETotal,
-      effectiveDmDt, effectiveTorqueT, effectiveHEff, effectiveHDemag]);
+  const {
+    effectiveDmDt,
+    effectiveDt,
+    effectiveEAni,
+    effectiveEDemag,
+    effectiveEDmi,
+    effectiveEEx,
+    effectiveEExt,
+    effectiveETotal,
+    effectiveHDemag,
+    effectiveHEff,
+    effectiveLiveState,
+    effectiveStep,
+    effectiveTime,
+    effectiveTorqueT,
+  } = useEffectiveLiveTelemetry({
+    liveState,
+    run,
+    scalarRows,
+  });
 
   /* Status bar — expose stable timestamps instead of Date.now() so that
    * transportValue is not recreated on every render while the session runs.
@@ -1510,133 +1239,30 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     workspaceHydrationKey,
   ]);
 
-  useEffect(() => {
-    if (!sceneResourceSessionKey || workspaceSelectionLoading || workspaceSelectionHydratingRef.current) {
-      return;
-    }
-    const nextIdentity = workspaceSelectionIdentity({
-      selected_node_id: selectedSidebarNodeId,
-      selected_object_id: selectedObjectId,
-      selected_entity_id: selectedEntityId,
-    });
-    if (lastPersistedWorkspaceSelectionRef.current === nextIdentity) {
-      return;
-    }
-    lastPersistedWorkspaceSelectionRef.current = nextIdentity;
-    pendingWorkspaceSelectionIdentityRef.current = nextIdentity;
-    void replaceWorkspaceSelection({
-      selected_node_id: selectedSidebarNodeId,
-      selected_object_id: selectedObjectId,
-      selected_entity_id: selectedEntityId,
-    }).then((persisted) => {
-      if (persisted) {
-        const persistedIdentity = workspaceSelectionIdentity(persisted);
-        const decision = resolvePersistedWorkspaceSelection({
-          persistedIdentity,
-          pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
-        });
-        if (decision.accepted) {
-          lastPersistedWorkspaceSelectionRef.current = persistedIdentity;
-          if (decision.clearPending) {
-            pendingWorkspaceSelectionIdentityRef.current = null;
-          }
-          return;
-        }
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[ControlRoomContext] Ignoring stale workspace selection persistence response", {
-            pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
-            persistedIdentity,
-          });
-        }
-        return;
-      }
-      if (lastPersistedWorkspaceSelectionRef.current === nextIdentity) {
-        lastPersistedWorkspaceSelectionRef.current = resolveFailedWorkspaceSelectionPersistence({
-          attemptedIdentity: nextIdentity,
-          lastPersistedIdentity: lastPersistedWorkspaceSelectionRef.current,
-        });
-      }
-    });
-  }, [
+  useWorkspaceSelectionPersistence({
+    lastPersistedWorkspaceSelectionRef,
+    pendingWorkspaceSelectionIdentityRef,
     replaceWorkspaceSelection,
     sceneResourceSessionKey,
     selectedEntityId,
     selectedObjectId,
     selectedSidebarNodeId,
+    workspaceSelectionHydratingRef,
     workspaceSelectionLoading,
-  ]);
+  });
 
-  useEffect(() => {
-    const persistedMeshEntityViewState = serializeMeshEntityViewStateForScene(meshEntityViewState);
-    const normalizedActivePresetRef = normalizeVisualizationPresetRef(
-      activeVisualizationPresetRef,
-    );
-    setSceneDocumentDraft((previousScene) => {
-      if (!previousScene) {
-        return previousScene;
-      }
-      const previousEditor = previousScene.editor;
-      const nextAirMeshOpacity = Number.isFinite(effectiveViewportVisualizationState.airMeshOpacity)
-        ? effectiveViewportVisualizationState.airMeshOpacity
-        : DEFAULT_AIR_MESH_OPACITY;
-      if (
-        previousEditor.selected_object_id === selectedObjectId &&
-        previousEditor.selected_entity_id === selectedEntityId &&
-        previousEditor.focused_entity_id === focusedEntityId &&
-        previousEditor.object_view_mode === objectViewMode &&
-        previousEditor.vector_domain_filter === effectiveViewportVisualizationState.femVectorDomainFilter &&
-        previousEditor.ferromagnet_visibility_mode === effectiveViewportVisualizationState.femFerromagnetVisibilityMode &&
-        previousEditor.active_transform_scope === activeTransformScope &&
-        previousEditor.air_mesh_visible === effectiveViewportVisualizationState.airMeshVisible &&
-        previousEditor.air_mesh_opacity === nextAirMeshOpacity &&
-        sameVisualizationPresets(
-          previousEditor.visualization_presets,
-          projectVisualizationPresets,
-        ) &&
-        sameVisualizationPresetRef(
-          previousEditor.active_visualization_preset_ref,
-          normalizedActivePresetRef,
-        ) &&
-        samePersistedMeshEntityViewState(
-          previousEditor.mesh_entity_view_state,
-          persistedMeshEntityViewState,
-        )
-      ) {
-        return previousScene;
-      }
-      return {
-        ...previousScene,
-        editor: {
-          ...previousEditor,
-          selected_object_id: selectedObjectId,
-          selected_entity_id: selectedEntityId,
-          focused_entity_id: focusedEntityId,
-          object_view_mode: objectViewMode,
-          vector_domain_filter: effectiveViewportVisualizationState.femVectorDomainFilter,
-          ferromagnet_visibility_mode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
-          active_transform_scope: activeTransformScope,
-          air_mesh_visible: effectiveViewportVisualizationState.airMeshVisible,
-          air_mesh_opacity: nextAirMeshOpacity,
-          mesh_entity_view_state: persistedMeshEntityViewState,
-          visualization_presets: projectVisualizationPresets,
-          active_visualization_preset_ref: normalizedActivePresetRef,
-        },
-      };
-    });
-  }, [
-    effectiveViewportVisualizationState.airMeshOpacity,
-    effectiveViewportVisualizationState.airMeshVisible,
-    effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
-    effectiveViewportVisualizationState.femVectorDomainFilter,
+  useSceneEditorDraftSync({
+    activeTransformScope,
     activeVisualizationPresetRef,
+    effectiveViewportVisualizationState,
     focusedEntityId,
     meshEntityViewState,
     objectViewMode,
     projectVisualizationPresets,
-    activeTransformScope,
     selectedEntityId,
     selectedObjectId,
-  ]);
+    setSceneDocumentDraft,
+  });
 
   useEffect(() => {
     if (!workspaceHydrationKey || !modelBuilderGraph) {
@@ -1720,37 +1346,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   /* Scene draft sync is explicit (manual/script sync) — no hidden auto-push effect. */
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      window.localStorage.setItem(
-        LOCAL_VISUALIZATION_PRESETS_STORAGE_KEY,
-        JSON.stringify(localVisualizationPresets),
-      );
-    } catch {
-      // Ignore storage failures (private mode / quota).
-    }
-  }, [localVisualizationPresets]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      if (activeVisualizationPresetRef) {
-        window.localStorage.setItem(
-          LOCAL_ACTIVE_VISUALIZATION_PRESET_STORAGE_KEY,
-          JSON.stringify(activeVisualizationPresetRef),
-        );
-      } else {
-        window.localStorage.removeItem(LOCAL_ACTIVE_VISUALIZATION_PRESET_STORAGE_KEY);
-      }
-    } catch {
-      // Ignore storage failures (private mode / quota).
-    }
-  }, [activeVisualizationPresetRef]);
+  useVisualizationPresetPersistence({
+    activeVisualizationPresetRef,
+    localVisualizationPresets,
+  });
 
   const {
     currentStage,
@@ -1814,70 +1413,47 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     isWaitingForCompute,
   });
 
-  /* Preview derived — keep the user's explicit viewport mode stable.
-   * A transient preview payload should not silently downgrade 3D to 2D. */
-  const effectiveViewMode = viewMode;
-  const requestedDisplaySelection = useMemo<DisplaySelection>(() => {
-    return buildRequestedDisplaySelection({
-      optimisticDisplaySelection,
-      displaySelection,
-      previewConfig,
-      preview,
-      spatialPreview,
-      kindForQuantity,
-    });
-  }, [displaySelection, kindForQuantity, optimisticDisplaySelection, preview, previewConfig, spatialPreview]);
-  const currentPreviewRevision = displaySelection?.revision ?? previewConfig?.revision ?? null;
-  const previewControlsActive = Boolean(displaySelection ?? previewConfig ?? preview);
-  const requestedPreviewQuantity = requestedDisplaySelection.quantity;
-  const requestedPreviewComponent =
-    previewComponentFromDisplaySelection(requestedDisplaySelection);
-  const requestedPreviewLayer = requestedDisplaySelection.layer;
-  const requestedPreviewAllLayers = requestedDisplaySelection.all_layers;
-  const requestedPreviewEveryN = requestedDisplaySelection.every_n;
-  const requestedPreviewXChosenSize = requestedDisplaySelection.x_chosen_size;
-  const requestedPreviewYChosenSize = requestedDisplaySelection.y_chosen_size;
-  const requestedPreviewAutoScale = requestedDisplaySelection.auto_scale_enabled;
-  const requestedPreviewMaxPoints = requestedDisplaySelection.max_points;
-
-  const previewEveryNOptions = useMemo(
-    () => Array.from(new Set([...PREVIEW_EVERY_N_PRESETS, requestedPreviewEveryN])).sort((a, b) => a - b),
-    [requestedPreviewEveryN],
-  );
-  const previewMaxPointOptions = useMemo(() => {
-    const values = new Set<number>([...PREVIEW_MAX_POINTS_PRESETS, requestedPreviewMaxPoints]);
-    return Array.from(values).sort((a, b) => { if (a === 0) return 1; if (b === 0) return -1; return a - b; });
-  }, [requestedPreviewMaxPoints]);
-
-  const isGlobalScalarQuantity = useCallback(
-    (quantity: string | null | undefined) =>
-      Boolean(quantity && quantityDescriptorById.get(quantity)?.kind === "global_scalar"),
-    [quantityDescriptorById],
-  );
-  const previewIsStale = Boolean(
-    preview &&
-    currentPreviewRevision != null &&
-    preview.config_revision !== currentPreviewRevision,
-  );
-  const previewIsInitialSampleStale = Boolean(
-    previewControlsActive && preview && effectiveStep > 0 && preview.source_step === 0,
-  );
-  const displaySelectionPending = optimisticDisplaySelection != null;
-  const previewBusy = previewPostInFlight || displaySelectionPending;
-  const renderPreview = spatialPreview;
-  // `activeQuantityId` is the single source of truth for "what quantity does
-  // the user want to see right now".  It is always derived from local
-  // `selectedQuantity` state — never from `preview?.quantity`.  The old path
-  // read from the backend preview response which introduced coupling between
-  // the data-plane (what to render) and the control-plane (what the backend
-  // last computed for the preview widget).
-  const activeQuantityId = selectedQuantity;
-  const isMeshPreview = renderPreview?.spatial_kind === "mesh";
-  const previewVectorComponent: VectorComponent =
-    renderPreview?.component && renderPreview.component !== "3D"
-      ? (renderPreview.component as VectorComponent)
-      : "magnitude";
-  const effectiveVectorComponent = isMeshPreview ? previewVectorComponent : component;
+  const {
+    activeFemGenerationSignature,
+    activeQuantityId,
+    cachedFieldQuantities,
+    effectiveVectorComponent,
+    effectiveViewMode,
+    isGlobalScalarQuantity,
+    isMeshPreview,
+    previewBusy,
+    previewControlsActive,
+    previewEveryNOptions,
+    previewIsInitialSampleStale,
+    previewIsStale,
+    previewMaxPointOptions,
+    requestedDisplaySelection,
+    requestedPreviewAllLayers,
+    requestedPreviewAutoScale,
+    requestedPreviewComponent,
+    requestedPreviewEveryN,
+    requestedPreviewLayer,
+    requestedPreviewMaxPoints,
+    requestedPreviewQuantity,
+    requestedPreviewXChosenSize,
+    requestedPreviewYChosenSize,
+    renderPreview,
+  } = usePreviewSelectionState({
+    component,
+    displaySelection,
+    effectiveStep,
+    optimisticDisplaySelection,
+    preview,
+    previewConfig,
+    previewPostInFlight,
+    quantityDescriptorById,
+    runtimeFemMesh,
+    runtimeLatestFieldFrames,
+    selectedQuantity,
+    spatialPreview,
+    viewMode,
+    kindForQuantity,
+  });
 
   const {
     appendFrontendTrace,
@@ -1920,33 +1496,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setScriptSyncMessage,
     applyVisualizationStateResource,
   });
-
-  // Set of quantity IDs whose field buffers are already cached locally.
-  // Used by requestDisplayQuantity and applyVisualizationPreset to skip
-  // the control-plane POST when the field is already in memory.
-  const activeFemGenerationSignature = useMemo(() => {
-    if (!runtimeFemMesh?.generation_id || runtimeFemMesh.generation_id.length === 0) {
-      return null;
-    }
-    return `gen:${runtimeFemMesh.generation_id}`;
-  }, [runtimeFemMesh?.generation_id]);
-  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
-    const frames = runtimeLatestFieldFrames;
-    if (!frames) return new Set<string>();
-    const next = new Set<string>();
-    for (const [quantityId, frame] of Object.entries(frames)) {
-      if (
-        activeFemGenerationSignature &&
-        frame.topology_signature &&
-        frame.topology_signature.startsWith("gen:") &&
-        frame.topology_signature !== activeFemGenerationSignature
-      ) {
-        continue;
-      }
-      next.add(quantityId);
-    }
-    return next;
-  }, [activeFemGenerationSignature, runtimeLatestFieldFrames]);
 
   const {
     handleCompute,
@@ -2095,70 +1644,23 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     patchDisplay,
   });
 
-  /* Sparklines */
-  const eTotalSpark = useMemo(() => scalarRows.slice(-40).map((r) => r.e_total ?? 0), [scalarRows]);
-  const dmDtSpark = useMemo(() => scalarRows.slice(-40).map((r) => Math.log10(Math.max(r.max_dm_dt ?? 1e-15, 1e-15))), [scalarRows]);
-  const dtSpark = useMemo(() => scalarRows.slice(-40).map((r) => r.solver_dt ?? 0), [scalarRows]);
-
-  /* Quantity options */
-  const quantityDataStatusById = useMemo(() => {
-    const previewHasData = Boolean(
-      renderPreview?.vector_field_values && renderPreview.vector_field_values.length > 0,
-    );
-    const previewQuantity =
-      previewHasData && renderPreview?.quantity && renderPreview.quantity.length > 0
-        ? renderPreview.quantity
-        : previewHasData
-          ? requestedPreviewQuantity
-          : null;
-
-    return new Map(
-      quantities.map((quantity) => {
-        let status: QuantityDataStatus = "pending";
-        if (!isQuantitySelectable(quantity)) {
-          status = "unsupported";
-        } else if (quantity.data_available || cachedFieldQuantities.has(quantity.id)) {
-          status = "ready";
-        } else if (previewQuantity === quantity.id) {
-          status = "preview";
-        }
-        return [quantity.id, status] as const;
-      }),
-    );
-  }, [
+  const {
+    dmDtSpark,
+    dtSpark,
+    eTotalSpark,
+    previewQuantityOptions,
+    quantityDataStatusById,
+    quantityOptions,
+    requestedPreviewQuantityDataStatus,
+  } = useQuantityPresentationState({
     cachedFieldQuantities,
     quantities,
-    renderPreview?.quantity,
-    renderPreview?.vector_field_values,
+    renderPreview,
     requestedPreviewQuantity,
-  ]);
-  const requestedPreviewQuantityDataStatus =
-    quantityDataStatusById.get(requestedPreviewQuantity) ?? "pending";
-  const quantityOptions = useMemo(
-    () => (quantities).map((q) => ({
-      value: q.id,
-      label: formatQuantityOptionLabel(q),
-      disabled: !isQuantitySelectable(q),
-    })),
-    [quantities],
-  );
-  const previewQuantityOptions = useMemo(
-    () => (quantities).filter((q) => q.interactive_preview && q.supports_preview_3d).map((q) => ({
-      value: q.id,
-      label: formatQuantityOptionLabel(q),
-      disabled: !isQuantitySelectable(q),
-    })),
-    [quantities],
-  );
-
-  useEffect(() => {
-    const options = quantityOptions;
-    if (!options.length) return;
-    if (!options.some((opt) => opt.value === selectedQuantity)) {
-      const fallback = options.find((opt) => !opt.disabled) ?? options[0];
-      setSelectedQuantity(fallback.value);
-    }
-  }, [quantityOptions, selectedQuantity]);
+    scalarRows,
+    selectedQuantity,
+    setSelectedQuantity,
+  });
 
   useEffect(() => {
     if (requestedPreviewQuantity) setSelectedQuantity(requestedPreviewQuantity);
@@ -2182,517 +1684,43 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedQuantity,
   ]);
 
-  const latestFieldFrames = runtimeLatestFieldFrames;
-  const binaryFieldTransportEnabled =
-    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport;
-  const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
-  const scopedBinaryFieldCacheRef = useRef<Map<string, ScopedBinaryFieldFrame>>(new Map());
-  const [selectedBinaryFieldFrame, setSelectedBinaryFieldFrame] =
-    useState<BinaryFieldFrame | null>(null);
-  const [selectedScopedBinaryFieldFrame, setSelectedScopedBinaryFieldFrame] =
-    useState<ScopedBinaryFieldFrame | null>(null);
-  const fieldMap = useMemo<Record<string, Float64Array | null>>(
-    () =>
-      Object.fromEntries(
-        Object.entries(latestFieldFrames).map(([quantityId, frame]) => [
-          quantityId,
-          frame.values,
-        ]),
-      ) as Record<string, Float64Array | null>,
-    [latestFieldFrames],
-  );
-  const selectedFieldFrame = activeQuantityId ? latestFieldFrames[activeQuantityId] ?? null : null;
-  const selectedFieldNComp =
-    selectedFieldFrame?.n_comp
-    ?? (activeQuantityId ? quantityDescriptorById.get(activeQuantityId)?.n_comp ?? 3 : 3);
-  const selectedFieldCatalogDomain =
-    activeQuantityId
-      ? (quantityDescriptorById.get(activeQuantityId)?.domain ?? null)
-      : null;
-  const liveFieldSourceStep =
-    selectedFieldFrame?.source_step
-    ?? selectedFieldFrame?.field_revision
-    ?? null;
-  const previewSourceStep = renderPreview?.source_step ?? null;
-  const selectedFieldDomain =
-    (selectedFieldFrame?.domain as "magnetic_only" | "full_domain" | "surface_only" | null | undefined)
-    ?? selectedFieldCatalogDomain
-    ?? null;
-	  const authoredMagnetizationPreview = useMemo(
-	    () => activeQuantityId === "m" && workspaceStatus !== "running"
-	      ? buildAuthoredMagnetizationPreview({
-	          scene: sceneDocumentDraft ?? remoteSceneDocument,
-	          mesh: femMesh,
-	          selectedSidebarNodeId,
-	          selectedObjectId,
-	          activeTransformScope,
-	          includeAllObjects: isFemBackend && isWaitingForCompute,
-	        })
-	      : null,
-	    [
-	      activeQuantityId,
-	      activeTransformScope,
-	      femMesh,
-	      isFemBackend,
-	      isWaitingForCompute,
-	      remoteSceneDocument,
-	      sceneDocumentDraft,
-	      selectedObjectId,
-      selectedSidebarNodeId,
-      workspaceStatus,
-    ],
-  );
-  const selectedFieldTransportKey = useMemo(() => {
-    if (!binaryFieldTransportEnabled || !activeQuantityId || !selectedFieldFrame) {
-      return null;
-    }
-    const revision =
-      selectedFieldFrame.field_revision
-      ?? selectedFieldFrame.source_step
-      ?? selectedFieldFrame.source_time
-      ?? "none";
-    return [
-      activeQuantityId,
-      revision,
-      selectedFieldFrame.n_comp,
-      selectedFieldFrame.grid.join("x"),
-    ].join(":");
-  }, [activeQuantityId, binaryFieldTransportEnabled, selectedFieldFrame]);
-  const scopedFemVectorScopes = useMemo(
-    () =>
-      deriveFemVectorScopes({
-        meshParts: femMesh?.mesh_parts ?? [],
-        meshEntityViewState,
-        airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
-        vectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
-        selectedFieldDomain,
-      }),
-    [
-      effectiveViewportVisualizationState.airMeshVisible,
-      effectiveViewportVisualizationState.femVectorDomainFilter,
-      femMesh?.mesh_parts,
-      meshEntityViewState,
-      selectedFieldDomain,
-    ],
-  );
-  const scopedFieldTransportKey = useMemo(() => {
-    if (
-      !binaryFieldTransportEnabled ||
-      !isFemBackend ||
-      effectiveViewMode !== "3D" ||
-      (
-        !effectiveViewportVisualizationState.meshShowArrows &&
-        !effectiveViewportVisualizationState.femViewportLayers.showQuantity &&
-        !(effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture && activeQuantityId === "m")
-      ) ||
-      !activeQuantityId ||
-      !selectedFieldFrame ||
-      scopedFemVectorScopes.length === 0 ||
-      scopedFemVectorScopes.some((scope) => scope.kind === "full")
-    ) {
-      return null;
-    }
-    const revision =
-      selectedFieldFrame.field_revision ??
-      selectedFieldFrame.source_step ??
-      selectedFieldFrame.source_time ??
-      "none";
-    return [
-      activeQuantityId,
-      revision,
-      selectedFieldFrame.n_comp,
-      femMesh?.generation_id ?? femMesh?.mesh_id ?? "no-mesh",
-      femMesh?.node_count ?? 0,
-      femVectorScopeKey(scopedFemVectorScopes),
-    ].join(":");
-  }, [
-    activeQuantityId,
-    binaryFieldTransportEnabled,
-    effectiveViewMode,
-    femMesh?.generation_id,
-    femMesh?.mesh_id,
-    femMesh?.node_count,
-    effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture,
-    effectiveViewportVisualizationState.femViewportLayers.showQuantity,
-    isFemBackend,
-    effectiveViewportVisualizationState.meshShowArrows,
-    scopedFemVectorScopes,
-    selectedFieldFrame,
-  ]);
-  const selectedFieldTopologyMismatch = useMemo(() => {
-    if (!isFemBackend) {
-      return false;
-    }
-    if (!activeFemGenerationSignature || !selectedFieldFrame?.topology_signature) {
-      return false;
-    }
-    if (!selectedFieldFrame.topology_signature.startsWith("gen:")) {
-      return false;
-    }
-    return selectedFieldFrame.topology_signature !== activeFemGenerationSignature;
-  }, [activeFemGenerationSignature, isFemBackend, selectedFieldFrame?.topology_signature]);
-
-  useEffect(() => {
-    if (
-      !binaryFieldTransportEnabled ||
-      !activeQuantityId ||
-      !selectedFieldFrame ||
-      scopedFieldTransportKey != null ||
-      selectedFieldFrame.values.length > 0
-    ) {
-      setSelectedBinaryFieldFrame(null);
-      updateFrontendResourceBucket({
-        id: "binary-field-cache",
-        label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
-      });
-      return;
-    }
-    if (!selectedFieldTransportKey) {
-      setSelectedBinaryFieldFrame(null);
-      updateFrontendResourceBucket({
-        id: "binary-field-cache",
-        label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
-      });
-      return;
-    }
-    const cached = binaryFieldCacheRef.current.get(selectedFieldTransportKey) ?? null;
-    if (cached) {
-      setSelectedBinaryFieldFrame(cached);
-      updateFrontendResourceBucket({
-        id: "binary-field-cache",
-        label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
-      });
-      return;
-    }
-    const controller = new AbortController();
-    void liveApi
-      .getFieldVectorBinary(activeQuantityId, { signal: controller.signal })
-      .then((buffer) => {
-        const decoded = decodeFieldVector(buffer);
-        const resolvedQuantityId =
-          decoded.quantityId.trim().length > 0 ? decoded.quantityId : activeQuantityId;
-        const nextFrame: BinaryFieldFrame = {
-          key: selectedFieldTransportKey,
-          quantityId: resolvedQuantityId,
-          values: decoded.values,
-          nComp: decoded.nComp,
-          grid: decoded.grid,
-        };
-        const cache = binaryFieldCacheRef.current;
-        cache.set(selectedFieldTransportKey, nextFrame);
-        const estimatedBytes = pruneBinaryFieldCache(
-          cache,
-          estimateBinaryFieldFrameBytes,
-          BINARY_FIELD_CACHE_MAX_BYTES,
-        );
-        updateFrontendResourceBucket({
-          id: "binary-field-cache",
-          label: "Binary field cache",
-          entries: cache.size,
-          estimatedBytes,
-          capacity: BINARY_FIELD_CACHE_MAX_BYTES,
-        });
-        if (!controller.signal.aborted) {
-          setSelectedBinaryFieldFrame(nextFrame);
-        }
-      })
-      .catch(() => {
-        // Keep the last valid frame visible while a replacement binary frame is unavailable.
-      });
-    return () => controller.abort();
-  }, [
-    activeQuantityId,
-    binaryFieldTransportEnabled,
-    liveApi,
-    scopedFieldTransportKey,
-    selectedFieldFrame,
-    selectedFieldTransportKey,
-  ]);
-
-  useEffect(() => {
-    if (
-      !scopedFieldTransportKey ||
-      !activeQuantityId ||
-      !femMesh ||
-      !selectedFieldFrame
-    ) {
-      setSelectedScopedBinaryFieldFrame(null);
-      return;
-    }
-    const meshParts = femMesh.mesh_parts ?? [];
-    const nNodes = femMesh.node_count ?? 0;
-    if (meshParts.length === 0 || nNodes <= 0) {
-      setSelectedScopedBinaryFieldFrame(null);
-      return;
-    }
-    const cached = scopedBinaryFieldCacheRef.current.get(scopedFieldTransportKey) ?? null;
-    if (cached) {
-      setSelectedScopedBinaryFieldFrame(cached);
-      return;
-    }
-    const controller = new AbortController();
-    void Promise.all(
-      scopedFemVectorScopes.map(async (scope): Promise<ScopedFemVectorFrame> => {
-        const buffer = await liveApi.getScopedFieldVectorBinary(activeQuantityId, scope, {
-          signal: controller.signal,
-        });
-        return {
-          scope,
-          field: decodeFieldVector(buffer),
-        };
-      }),
-    )
-      .then((frames) => {
-        const dense = buildDenseFemVectorField({
-          nNodes,
-          meshParts,
-          frames,
-        });
-        if (!dense) {
-          return null;
-        }
-        const nextFrame: ScopedBinaryFieldFrame = {
-          key: scopedFieldTransportKey,
-          quantityId: activeQuantityId,
-          values: dense.values,
-          nComp: dense.nComp,
-          grid: dense.grid,
-          activeMask: dense.activeMask,
-          scopes: scopedFemVectorScopes,
-        };
-        const cache = scopedBinaryFieldCacheRef.current;
-        cache.set(scopedFieldTransportKey, nextFrame);
-        const estimatedBytes = pruneBinaryFieldCache(
-          cache,
-          estimateScopedBinaryFieldFrameBytes,
-          SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
-        );
-        updateFrontendResourceBucket({
-          id: "scoped-binary-field-cache",
-          label: "Scoped binary field cache",
-          entries: cache.size,
-          estimatedBytes,
-          capacity: SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
-        });
-        return nextFrame;
-      })
-      .then((nextFrame) => {
-        if (!controller.signal.aborted) {
-          setSelectedScopedBinaryFieldFrame(nextFrame);
-        }
-      })
-      .catch(() => {
-        // Keep the last valid scoped frame visible while a replacement frame is unavailable.
-      });
-    return () => controller.abort();
-  }, [
-    activeQuantityId,
-    femMesh,
-    liveApi,
-    scopedFemVectorScopes,
-    scopedFieldTransportKey,
-    selectedFieldFrame,
-  ]);
-
-  const authoredField = authoredMagnetizationPreview?.vectors ?? null;
-  const selectedLiveField =
-    selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
-      ? selectedScopedBinaryFieldFrame.values
-      : selectedFieldTopologyMismatch
-      ? null
-      : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
-      ? selectedBinaryFieldFrame.values
-      : activeQuantityId
-        ? ((fieldMap[activeQuantityId]?.length ?? 0) > 0
-            ? fieldMap[activeQuantityId]!
-            : (selectedBinaryFieldFrame?.values ?? null))
-      : null;
-  const selectedVectorSource = useMemo(() => {
-    return selectViewportVectorField({
-      activeQuantityId,
-      requestedPreviewQuantity,
-      previewControlsActive,
-      renderPreview,
-      authoredField,
-      liveField: selectedLiveField,
-      liveFieldSourceStep,
-      previewSourceStep,
-      isGlobalScalarQuantity,
-      skipPreviewFallback: effectiveIsFemBackend && effectiveViewMode === "3D" && Boolean(selectedLiveField),
-    });
-  }, [
-    activeQuantityId,
-    authoredField,
-    isGlobalScalarQuantity,
+  const {
+    fieldDataRevision,
+    fieldDataTimestamp,
     liveFieldSourceStep,
-    previewControlsActive,
     previewSourceStep,
+    scopedActiveMask,
+    selectedFieldDomain,
+    selectedFieldNComp,
+    selectedVectors,
+    selectedVectorSource,
+  } = useViewportFieldData({
+    activeFemGenerationSignature,
+    activeQuantityId,
+    activeTransformScope,
+    binaryFieldTransportEnabled: FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFieldTransport,
+    debugLogsEnabled: ENABLE_VIEWPORT_DATA_DEBUG_LOGS,
+    effectiveIsFemBackend,
+    effectiveStep,
+    effectiveViewMode,
+    effectiveViewportVisualizationState,
+    femMesh,
+    isFemBackend,
+    isGlobalScalarQuantity,
+    isWaitingForCompute,
+    latestFieldFrames: runtimeLatestFieldFrames,
+    liveApi,
+    meshEntityViewState,
+    quantityDescriptorById,
+    remoteSceneDocument,
     renderPreview,
     requestedPreviewQuantity,
-    selectedLiveField,
-  ]);
-  const selectedVectors = selectedVectorSource.vectors;
-  const fieldDataRevision = useMemo(() => {
-    if (authoredMagnetizationPreview?.vectors && selectedVectors === authoredMagnetizationPreview.vectors) {
-      return authoredMagnetizationPreview.revision;
-    }
-    if (!selectedFieldFrame || !selectedVectors?.length) {
-      if (
-        selectedVectorSource.source === "preview" &&
-        renderPreview?.source_step != null
-      ) {
-        return [
-          "preview",
-          activeQuantityId,
-          renderPreview.config_revision,
-          renderPreview.source_step,
-          renderPreview.source_time,
-          renderPreview.vector_field_values ? fieldFrameIdentity(renderPreview.vector_field_values) : "none",
-        ].join(":");
-      }
-      return null;
-    }
-    const canonicalFieldRevision =
-      selectedFieldFrame.field_revision
-      ?? selectedFieldFrame.source_step
-      ?? null;
-    return [
-      "frame",
-      selectedFieldFrame.quantity_id,
-      selectedFieldFrame.n_comp,
-      selectedVectors.length,
-      canonicalFieldRevision ?? "none",
-      selectedFieldFrame.source_time ?? "none",
-      fieldFrameIdentity(selectedVectors),
-    ].join(":");
-  }, [
-    activeQuantityId,
-    renderPreview?.config_revision,
-    renderPreview?.source_step,
-    renderPreview?.source_time,
-    renderPreview?.vector_field_values,
-    selectedVectorSource.source,
-    authoredMagnetizationPreview,
-    selectedFieldFrame,
-    selectedVectors,
-  ]);
-  if (fieldDataRevision && fieldDataRevision !== lastFieldDataRevisionRef.current) {
-    lastFieldDataRevisionRef.current = fieldDataRevision;
-    fieldDataTimestampRef.current = Date.now();
-  }
-  const fieldDataTimestamp = fieldDataTimestampRef.current;
-
-  const lastQuantitySwitchTraceKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!activeQuantityId || !fieldDataRevision) {
-      return;
-    }
-    const traceKey = `${activeQuantityId}|${fieldDataRevision}|${selectedVectorSource.source}`;
-    if (lastQuantitySwitchTraceKeyRef.current === traceKey) {
-      return;
-    }
-    lastQuantitySwitchTraceKeyRef.current = traceKey;
-    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const latestRequest = [...getFrontendPerfSamples()]
-      .reverse()
-      .find(
-        (sample) =>
-          sample.scope === "QuantitySwitch" &&
-          sample.phase === "request" &&
-          sample.meta?.quantity === activeQuantityId,
-      );
-    const fromRequestMs =
-      latestRequest && Number.isFinite(latestRequest.timestampMs)
-        ? Math.max(0, now - latestRequest.timestampMs)
-        : 0;
-    const cacheState =
-      selectedFieldTopologyMismatch
-        ? "topology-mismatch"
-        : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
-          ? "binary-hit"
-          : selectedFieldFrame
-            ? "field-map-hit"
-            : selectedVectorSource.source === "preview"
-              ? "preview-recompute"
-              : "none";
-    recordFrontendPerfSample({
-      scope: "QuantitySwitch",
-      phase: "field-selected",
-      durationMs: fromRequestMs,
-      timestampMs: now,
-      meta: {
-        quantity: activeQuantityId,
-        source: selectedVectorSource.source,
-        cacheState,
-        vectorLength: selectedVectors?.length ?? 0,
-      },
-    });
-    const raf = window.requestAnimationFrame(() => {
-      const renderedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-      recordFrontendPerfSample({
-        scope: "QuantitySwitch",
-        phase: "frame-rendered",
-        durationMs:
-          latestRequest && Number.isFinite(latestRequest.timestampMs)
-            ? Math.max(0, renderedAt - latestRequest.timestampMs)
-            : 0,
-        timestampMs: renderedAt,
-        meta: {
-          quantity: activeQuantityId,
-          source: selectedVectorSource.source,
-          cacheState,
-        },
-      });
-    });
-    return () => window.cancelAnimationFrame(raf);
-  }, [
-    activeQuantityId,
-    fieldDataRevision,
-    selectedBinaryFieldFrame?.key,
-    selectedFieldFrame,
-    selectedFieldTopologyMismatch,
-    selectedFieldTransportKey,
-    selectedVectorSource.source,
-    selectedVectors,
-  ]);
-
-  useEffect(() => {
-    if (!ENABLE_VIEWPORT_DATA_DEBUG_LOGS) {
-      return;
-    }
-    if (!fieldDataRevision || !selectedVectors?.length) {
-      return;
-    }
-    console.info("[fullmag-debug][viewport-data] vector payload selected", {
-      source: selectedVectorSource.source,
-      quantity: activeQuantityId,
-      effectiveStep,
-      liveFieldSourceStep,
-      previewSourceStep,
-      vectorLength: selectedVectors.length,
-      vectorIdentity: fieldFrameIdentity(selectedVectors),
-      vectorHead: vectorHead(selectedVectors),
-      previewGrid: renderPreview?.preview_grid ?? null,
-    });
-  }, [
-    activeQuantityId,
-    effectiveStep,
-    fieldDataRevision,
-    liveFieldSourceStep,
-    previewSourceStep,
-    renderPreview?.preview_grid,
-    selectedVectorSource.source,
-    selectedVectors,
-  ]);
+    previewControlsActive,
+    sceneDocumentDraft,
+    selectedObjectId,
+    selectedSidebarNodeId,
+    workspaceStatus,
+  });
 
   const quantityDescriptor = useMemo(
     () => (activeQuantityId ? quantityDescriptorById.get(activeQuantityId) ?? null : null),
@@ -2720,98 +1748,18 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   }, [globalScalarPreview]);
   const selectedQuantityLabel = quantityDescriptor?.label ?? requestedPreviewQuantity;
   const selectedQuantityUnit = quantityDescriptor?.unit ?? null;
-  const activeQuantityEntryId = useMemo(() => {
-    if (!requestedPreviewQuantity) {
-      return null;
-    }
-    return (
-      resultWorkspaceEntries.find(
-        (entry) => entry.kind === "quantity" && entry.quantityId === requestedPreviewQuantity,
-      )?.id ?? null
-    );
-  }, [requestedPreviewQuantity, resultWorkspaceEntries]);
-
-  useEffect(() => {
-    if (!requestedPreviewQuantity) {
-      return;
-    }
-    const badge = selectedQuantityUnit ?? null;
-    addResultWorkspaceEntry({
-      key: `auto:quantity:${requestedPreviewQuantity}`,
-      kind: "quantity",
-      label: selectedQuantityLabel,
-      quantityId: requestedPreviewQuantity,
-      badge,
-      openAfterCreate: false,
-    });
-  }, [
-    addResultWorkspaceEntry,
-    requestedPreviewQuantity,
-    selectedQuantityLabel,
-    selectedQuantityUnit,
-  ]);
-
-  useEffect(() => {
-    if (!requestedPreviewQuantity || activeResultWorkspaceId != null) {
-      return;
-    }
-    if (activeQuantityEntryId && activeResultWorkspaceId !== activeQuantityEntryId) {
-      setActiveResultWorkspaceId(activeQuantityEntryId);
-    }
-  }, [activeQuantityEntryId, activeResultWorkspaceId, requestedPreviewQuantity]);
-
-  useEffect(() => {
-    const hasSpectrumArtifact = artifactsArr.some(
-      (artifact) =>
-        artifact.path === "eigen/spectrum.json" ||
-        artifact.path === "eigen/metadata/eigen_summary.json",
-    );
-    if (!hasSpectrumArtifact) {
-      return;
-    }
-    addResultWorkspaceEntry({
-      key: "auto:eigen:spectrum",
-      kind: "spectrum",
-      label: "Eigen Spectrum",
-      badge: "auto",
-      openAfterCreate: false,
-    });
-  }, [addResultWorkspaceEntry, artifactsArr]);
-
-  useEffect(() => {
-    if (viewMode !== "Analyze") {
-      return;
-    }
-    const descriptor =
-      analyzeSelection.domain === "vortex"
-        ? (analyzeSelection.tab === "time-traces"
-            ? { key: "auto:vortex:time-traces", kind: "time-traces", label: "Vortex Time Traces" }
-            : analyzeSelection.tab === "vortex-frequency"
-              ? { key: "auto:vortex:frequency", kind: "vortex-frequency", label: "Vortex FFT / PSD" }
-              : analyzeSelection.tab === "vortex-orbit"
-                ? { key: "auto:vortex:orbit", kind: "vortex-orbit", label: "Vortex Orbit Amplitude" }
-                : { key: "auto:vortex:trajectory", kind: "vortex-trajectory", label: "Vortex Trajectory" })
-        : (analyzeSelection.tab === "dispersion"
-            ? { key: "auto:eigen:dispersion", kind: "dispersion", label: "Eigen Dispersion" }
-            : analyzeSelection.tab === "modes"
-              ? { key: "auto:eigen:modes", kind: "modes", label: "Mode Inspector" }
-              : { key: "auto:eigen:spectrum", kind: "spectrum", label: "Eigen Spectrum" });
-    const id = addResultWorkspaceEntry({
-      key: descriptor.key,
-      kind: descriptor.kind as ResultWorkspaceKind,
-      label: descriptor.label,
-      openAfterCreate: false,
-    });
-    if (activeResultWorkspaceId !== id) {
-      setActiveResultWorkspaceId(id);
-    }
-  }, [
+  useAutoResultWorkspaceEntries({
     activeResultWorkspaceId,
     addResultWorkspaceEntry,
-    analyzeSelection.domain,
-    analyzeSelection.tab,
+    analyzeSelection,
+    artifacts: artifactsArr,
+    requestedPreviewQuantity,
+    resultWorkspaceEntries,
+    selectedQuantityLabel,
+    selectedQuantityUnit,
+    setActiveResultWorkspaceId,
     viewMode,
-  ]);
+  });
 
   /* FEM mesh data — extracted to useFemMeshDerived hook */
   const {
@@ -2834,7 +1782,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     selectedFieldNComp,
     selectedFieldDomain,
     fieldDataRevision,
-    activeMask: selectedScopedBinaryFieldFrame?.activeMask ?? activeMask,
+    activeMask: scopedActiveMask ?? activeMask,
     spatialPreview,
     meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
     effectiveViewMode,
@@ -3146,25 +2094,17 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     (session != null || remoteSceneDocument != null || error != null);
 
   if (!controlRoomReady) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full w-full">
-        <div className="flex flex-col items-center gap-3 text-muted-foreground animate-pulse">
-          <div className="w-8 h-8 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm font-medium tracking-wide">Connecting to live workspace…</span>
-        </div>
-      </div>
-    );
+    return <ControlRoomConnectingState />;
   }
 
   return (
-    <TransportCtx.Provider value={transportValue}>
-      <ViewportCtx.Provider value={viewportValue}>
-        <CommandCtx.Provider value={commandValue}>
-          <ModelCtx.Provider value={modelValue}>
-            {children}
-          </ModelCtx.Provider>
-        </CommandCtx.Provider>
-      </ViewportCtx.Provider>
-    </TransportCtx.Provider>
+    <ControlRoomContextProviders
+      transportValue={transportValue}
+      viewportValue={viewportValue}
+      commandValue={commandValue}
+      modelValue={modelValue}
+    >
+      {children}
+    </ControlRoomContextProviders>
   );
 }

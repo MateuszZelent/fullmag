@@ -171,6 +171,9 @@ export function buildSceneDocumentFromScriptBuilder(
       stages: builder.stages,
       study_pipeline: builder.study_pipeline ?? null,
       initial_state: builder.initial_state,
+      spin_torque_modules: null,
+      oersted: null,
+      thermal_noise: null,
     },
     outputs: { items: [] },
     editor: {

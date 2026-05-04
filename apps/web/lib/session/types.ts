@@ -675,7 +675,9 @@ export type ScriptBuilderMagneticInteractionKind =
   | "exchange"
   | "demag"
   | "interfacial_dmi"
-  | "uniaxial_anisotropy";
+  | "bulk_dmi"
+  | "uniaxial_anisotropy"
+  | "cubic_anisotropy";
 
 export interface ScriptBuilderMagneticInteractionEntry {
   kind: ScriptBuilderMagneticInteractionKind;
@@ -979,6 +981,55 @@ export interface SceneCurrentModulesState {
   excitation_analysis: ScriptBuilderExcitationAnalysisEntry | null;
 }
 
+/* ── Spin-Torque Module Types (canonical — maps to ProblemIR spin_torque_modules) ── */
+
+export interface SlonczewskiModuleState {
+  kind: "slonczewski";
+  /** Current density vector [A/m²]. For CPP, typically (0, 0, Jz). */
+  current_density: [number, number, number];
+  /** Fixed-layer spin-polarization direction (unit vector). */
+  spin_polarization: [number, number, number];
+  /** Spin polarization efficiency P ∈ (0, 1]. */
+  degree: number;
+  /** Slonczewski asymmetry parameter Λ ≥ 1. */
+  lambda_asymmetry: number;
+  /** Secondary (field-like) spin-transfer coefficient ε' ≥ 0. */
+  epsilon_prime: number;
+}
+
+export interface ZhangLiModuleState {
+  kind: "zhang_li";
+  /** Current density vector [A/m²]. */
+  current_density: [number, number, number];
+  /** Spin polarization efficiency P ∈ (0, 1]. */
+  degree: number;
+  /** Non-adiabaticity parameter β ≥ 0. */
+  beta: number;
+}
+
+export type SpinTorqueModuleState = SlonczewskiModuleState | ZhangLiModuleState;
+
+export interface OerstedFieldState {
+  enabled: boolean;
+  model: "cylinder";
+  /** DC current [A]. */
+  current: number;
+  /** Pillar radius [m]. */
+  radius: number;
+  /** Center position [m]. */
+  center: [number, number, number];
+  /** Cylinder axis (unit vector). */
+  axis: [number, number, number];
+}
+
+export interface ThermalNoiseState {
+  enabled: boolean;
+  /** Temperature [K]. */
+  temperature_k: number;
+  /** Optional RNG seed for reproducibility. */
+  seed: number | null;
+}
+
 export interface SceneStudyState {
   backend: string | null;
   requested_backend: string;
@@ -996,6 +1047,12 @@ export interface SceneStudyState {
   stages: ScriptBuilderStageState[];
   study_pipeline: StudyPipelineDocumentState | null;
   initial_state: ScriptBuilderInitialState | null;
+  /** Canonical spin-torque module authoring — maps to ProblemIR spin_torque_modules. */
+  spin_torque_modules: SpinTorqueModuleState[] | null;
+  /** Oersted field configuration (analytical cylinder model). */
+  oersted: OerstedFieldState | null;
+  /** Thermal noise (stochastic LLG). */
+  thermal_noise: ThermalNoiseState | null;
 }
 
 export interface SceneOutputsState {

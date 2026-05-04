@@ -11,6 +11,7 @@ import type {
   LatestFields,
   LiveState,
   MeshCommandTarget,
+  OerstedFieldState,
   SceneEditorMeshEntityViewState,
   ModelBuilderGraphV2,
   MeshWorkspaceState,
@@ -21,6 +22,8 @@ import type {
   SceneDocument,
   ScriptBuilderState,
   SessionState,
+  SpinTorqueModuleState,
+  ThermalNoiseState,
 } from "./types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
 import { createModelBuilderGraphV2 } from "./modelBuilderGraph";
@@ -1358,6 +1361,63 @@ function normalizeSceneCurrentModules(raw: any) {
   };
 }
 
+function normalizeSpinTorqueModules(raw: unknown): SpinTorqueModuleState[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const modules: SpinTorqueModuleState[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const kind = (entry as Record<string, unknown>).kind;
+    if (kind === "slonczewski") {
+      const e = entry as Record<string, unknown>;
+      const cd = normalizeVec3(e.current_density);
+      const sp = normalizeVec3(e.spin_polarization);
+      modules.push({
+        kind: "slonczewski",
+        current_density: cd ?? [0, 0, 5e10],
+        spin_polarization: sp ?? [0, 0, 1],
+        degree: Number(e.degree ?? 0.4),
+        lambda_asymmetry: Number(e.lambda_asymmetry ?? 1.0),
+        epsilon_prime: Number(e.epsilon_prime ?? 0.0),
+      });
+    } else if (kind === "zhang_li") {
+      const e = entry as Record<string, unknown>;
+      const cd = normalizeVec3(e.current_density);
+      modules.push({
+        kind: "zhang_li",
+        current_density: cd ?? [1e11, 0, 0],
+        degree: Number(e.degree ?? 0.4),
+        beta: Number(e.beta ?? 0.0),
+      });
+    }
+  }
+  return modules.length > 0 ? modules : null;
+}
+
+function normalizeOerstedField(raw: unknown): OerstedFieldState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!r.enabled) return null;
+  return {
+    enabled: true,
+    model: "cylinder",
+    current: Number(r.current ?? 5e-3),
+    radius: Number(r.radius ?? 50e-9),
+    center: normalizeVec3(r.center) ?? [0, 0, 0],
+    axis: normalizeVec3(r.axis) ?? [0, 0, 1],
+  };
+}
+
+function normalizeThermalNoise(raw: unknown): ThermalNoiseState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!r.enabled) return null;
+  return {
+    enabled: true,
+    temperature_k: Number(r.temperature_k ?? r.temperature ?? 300),
+    seed: r.seed != null ? Number(r.seed) : null,
+  };
+}
+
 function normalizeSceneStudy(raw: any) {
   const defaults = emptyScriptBuilderState();
   const normalized = normalizeScriptBuilder({
@@ -1428,6 +1488,9 @@ function normalizeSceneStudy(raw: any) {
     stages: normalized?.stages ?? [],
     study_pipeline: normalized?.study_pipeline ?? null,
     initial_state: normalized?.initial_state ?? null,
+    spin_torque_modules: normalizeSpinTorqueModules(raw?.spin_torque_modules),
+    oersted: normalizeOerstedField(raw?.oersted),
+    thermal_noise: normalizeThermalNoise(raw?.thermal_noise),
   };
 }
 

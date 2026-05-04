@@ -70,7 +70,7 @@ export default function SolverTelemetryPanel() {
             tooltip="Current integration step number"
             value={fmtStepValue(ctx.effectiveStep, ctx.hasSolverTelemetry)}
             sparkData={sparkSeries.step}
-            sparkColor="var(--ide-text-2)"
+            sparkColor="hsl(var(--muted-foreground))"
           />
           <MetricField
             label="Time"

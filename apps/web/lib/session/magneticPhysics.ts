@@ -7,7 +7,9 @@ const INTERACTION_ORDER: ScriptBuilderMagneticInteractionKind[] = [
   "exchange",
   "demag",
   "interfacial_dmi",
+  "bulk_dmi",
   "uniaxial_anisotropy",
+  "cubic_anisotropy",
 ];
 
 function defaultParamsForKind(
@@ -18,7 +20,13 @@ function defaultParamsForKind(
     return { dind: materialDind ?? 1e-3 };
   }
   if (kind === "uniaxial_anisotropy") {
-    return { ku1: 0, axis: [0, 0, 1] };
+    return { ku1: 0, ku2: 0, axis: [0, 0, 1] };
+  }
+  if (kind === "bulk_dmi") {
+    return { d: 1e-3 };
+  }
+  if (kind === "cubic_anisotropy") {
+    return { kc1: 0, kc2: 0, kc3: 0, axis1: [1, 0, 0], axis2: [0, 1, 0] };
   }
   return null;
 }
@@ -49,7 +57,9 @@ function normalizeEntry(
     kind !== "exchange"
     && kind !== "demag"
     && kind !== "interfacial_dmi"
+    && kind !== "bulk_dmi"
     && kind !== "uniaxial_anisotropy"
+    && kind !== "cubic_anisotropy"
   ) {
     return null;
   }
@@ -67,7 +77,24 @@ function normalizeEntry(
     params = {
       ...(params ?? {}),
       ku1: Number((params ?? {}).ku1 ?? 0),
+      ku2: Number((params ?? {}).ku2 ?? 0),
       axis: normalizeAxis((params ?? {}).axis),
+    };
+  }
+  if (kind === "bulk_dmi") {
+    params = {
+      ...(params ?? {}),
+      d: Number((params ?? {}).d ?? 1e-3),
+    };
+  }
+  if (kind === "cubic_anisotropy") {
+    params = {
+      ...(params ?? {}),
+      kc1: Number((params ?? {}).kc1 ?? 0),
+      kc2: Number((params ?? {}).kc2 ?? 0),
+      kc3: Number((params ?? {}).kc3 ?? 0),
+      axis1: normalizeAxis((params ?? {}).axis1),
+      axis2: normalizeAxis((params ?? {}).axis2),
     };
   }
   return {
@@ -158,5 +185,8 @@ export function magneticInteractionLabel(kind: ScriptBuilderMagneticInteractionK
   if (kind === "exchange") return "Exchange";
   if (kind === "demag") return "Demag";
   if (kind === "interfacial_dmi") return "Interfacial DMI";
-  return "Uniaxial Ku";
+  if (kind === "bulk_dmi") return "Bulk DMI";
+  if (kind === "uniaxial_anisotropy") return "Uniaxial Ku";
+  if (kind === "cubic_anisotropy") return "Cubic Kc";
+  return kind;
 }

@@ -72,7 +72,7 @@ import {
 } from "@/components/runs/control-room/resolvedRenderPlanView";
 import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
-import type { ViewportCameraState } from "@/features/workspace-graph";
+import type { ViewportCameraState, ViewportDocumentState } from "@/features/workspace-graph";
 
 /* ── Debug flag ───────────────────────────────────────────────────── */
 const DEBUG_GIZMO_SYNC =
@@ -148,6 +148,38 @@ function viewportCameraStatesEqual(
     a.projection === b.projection &&
     a.navigation === b.navigation &&
     a.lastFocusedObjectId === b.lastFocusedObjectId
+  );
+}
+
+/**
+ * P-26: Structural equality for ViewportDocumentState to prevent Zustand
+ * selectors from returning a new reference every time the workspace graph
+ * snapshot changes for unrelated reasons (e.g., new scalar row during
+ * solver relaxation). Camera values are compared with epsilon tolerance
+ * via `viewportCameraStatesEqual` so that floating-point round-trip
+ * noise is tolerated.
+ */
+function viewportDocumentShallowEqual(
+  a: ViewportDocumentState | null,
+  b: ViewportDocumentState | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.id === b.id &&
+    a.workspaceMode === b.workspaceMode &&
+    a.tabId === b.tabId &&
+    a.viewMode === b.viewMode &&
+    a.quantityId === b.quantityId &&
+    a.component === b.component &&
+    a.plane === b.plane &&
+    a.sliceIndex === b.sliceIndex &&
+    a.selectedDatasetId === b.selectedDatasetId &&
+    a.selectedResultNodeId === b.selectedResultNodeId &&
+    a.renderMode === b.renderMode &&
+    viewportCameraStatesEqual(a.camera, b.camera) &&
+    a.overlayToggles.telemetryHudVisible === b.overlayToggles.telemetryHudVisible &&
+    a.overlayToggles.previewNoticesVisible === b.overlayToggles.previewNoticesVisible
   );
 }
 
@@ -408,10 +440,20 @@ export function useViewportDataBridge() {
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
 
   /* ── Graph workspace ── */
-  const graphActiveViewportDocument = useWorkspaceGraphStore((state) => {
+  // P-26: Stabilize viewport document reference to prevent camera restore
+  // effects from firing when only non-viewport fields (e.g., scalar rows)
+  // change in the workspace graph snapshot. We read the raw document from
+  // the store and apply structural equality via a ref to avoid returning a
+  // new reference identity on every snapshot update.
+  const graphActiveViewportDocumentRaw = useWorkspaceGraphStore((state) => {
     const id = state.snapshot.selection.activeViewportDocumentId;
     return id ? state.snapshot.viewportDocuments[id] ?? null : null;
   });
+  const graphActiveViewportDocumentRef = useRef(graphActiveViewportDocumentRaw);
+  if (!viewportDocumentShallowEqual(graphActiveViewportDocumentRef.current, graphActiveViewportDocumentRaw)) {
+    graphActiveViewportDocumentRef.current = graphActiveViewportDocumentRaw;
+  }
+  const graphActiveViewportDocument = graphActiveViewportDocumentRef.current;
   const upsertViewportDocument = useWorkspaceGraphStore((state) => state.upsertViewportDocument);
   const graphActiveResultNodeId = useWorkspaceGraphStore((state) =>
     state.snapshot.selection.activeResultNodeId,

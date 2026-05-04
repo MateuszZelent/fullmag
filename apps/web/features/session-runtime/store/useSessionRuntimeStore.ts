@@ -132,8 +132,37 @@ export const useSessionRuntimeStore = create<SessionRuntimeStoreState>((set) => 
         sessionChanged ||
         versionChanged ||
         (previous.lastUpdateTimestamp == null && normalized.session != null);
+
+      /* ── Structural sharing: only replace fields whose reference actually changed ── */
+      const next: Partial<SessionRuntimeStoreState> = {};
+      let anyFieldChanged = false;
+
+      const SHARING_KEYS = [
+        "stateVersion", "session", "run", "metadata", "liveState",
+        "scalarRows", "engineLog", "quantities", "artifacts", "femMesh",
+        "preview", "scriptBuilder", "runtimeStatus", "commandStatus",
+        "meshWorkspace", "stepUpdateV2", "workspaceStatus", "isFemBackend",
+        "domainCapabilities", "resourceRevisions", "displaySelection",
+        "previewConfig", "latestFieldFrames", "latestFieldGrid",
+        "fieldFrameEnvelope",
+      ] as const;
+
+      for (const key of SHARING_KEYS) {
+        const prev = previous[key];
+        const curr = (normalized as unknown as Record<string, unknown>)[key];
+        if (!Object.is(prev, curr)) {
+          (next as Record<string, unknown>)[key] = curr;
+          anyFieldChanged = true;
+        }
+      }
+
+      if (!anyFieldChanged && !shouldStampUpdate) {
+        return previous; // no-op — Zustand skips re-render
+      }
+
       return {
-        ...normalized,
+        ...previous,
+        ...next,
         lastUpdateTimestamp: shouldStampUpdate
           ? Date.now()
           : previous.lastUpdateTimestamp,

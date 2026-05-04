@@ -69,11 +69,18 @@ export default function AnalyzeViewport() {
     airPart,
     interfaceParts,
   } = model;
-  const graphSelection = useWorkspaceGraphStore((state) => state.snapshot.selection);
+  // P-26: Narrow selectors to primitive fields to avoid reference-identity
+  // churn from workspace graph snapshot rebuilds during solver relaxation.
+  const graphActiveNodeId = useWorkspaceGraphStore(
+    (state) => state.snapshot.selection.activeNodeId,
+  );
+  const graphActiveResultNodeId = useWorkspaceGraphStore(
+    (state) => state.snapshot.selection.activeResultNodeId,
+  );
   const graphResultsWorkspace = useWorkspaceGraphStore((state) => state.snapshot.resultsWorkspace);
-  const graphActiveViewportDocument = useWorkspaceGraphStore((state) => {
+  const graphActiveViewportDatasetId = useWorkspaceGraphStore((state) => {
     const id = state.snapshot.selection.activeViewportDocumentId;
-    return id ? state.snapshot.viewportDocuments[id] ?? null : null;
+    return id ? state.snapshot.viewportDocuments[id]?.selectedDatasetId ?? null : null;
   });
 
   /* ── Vortex time-domain samples from scalar rows ── */
@@ -90,7 +97,7 @@ export default function AnalyzeViewport() {
   const hasVortexData = vortexSamples.length > 4;
   const analyzeDomain = analyzeSelection.domain ?? "eigenmodes";
   const activeDatasetLabel = useMemo(() => {
-    const datasetId = graphActiveViewportDocument?.selectedDatasetId;
+    const datasetId = graphActiveViewportDatasetId;
     if (!datasetId) {
       return null;
     }
@@ -98,10 +105,10 @@ export default function AnalyzeViewport() {
       graphResultsWorkspace.datasets.find((dataset) => dataset.id === datasetId)?.label
       ?? datasetId
     );
-  }, [graphActiveViewportDocument?.selectedDatasetId, graphResultsWorkspace.datasets]);
+  }, [graphActiveViewportDatasetId, graphResultsWorkspace.datasets]);
 
   useEffect(() => {
-    const treeSelection = parseAnalyzeTreeNode(graphSelection.activeNodeId ?? "");
+    const treeSelection = parseAnalyzeTreeNode(graphActiveNodeId ?? "");
     if (treeSelection) {
       const nextDomain = treeSelection.domain ?? analyzeSelection.domain;
       const nextTab = treeSelection.tab ?? analyzeSelection.tab;
@@ -115,8 +122,8 @@ export default function AnalyzeViewport() {
       }
       return;
     }
-    const activeResultNode = graphSelection.activeResultNodeId
-      ? findResultNode(graphResultsWorkspace, graphSelection.activeResultNodeId)
+    const activeResultNode = graphActiveResultNodeId
+      ? findResultNode(graphResultsWorkspace, graphActiveResultNodeId)
       : null;
     if (!activeResultNode) {
       return;
@@ -151,8 +158,8 @@ export default function AnalyzeViewport() {
     analyzeSelection.selectedModeIndex,
     analyzeSelection.tab,
     graphResultsWorkspace,
-    graphSelection.activeNodeId,
-    graphSelection.activeResultNodeId,
+    graphActiveNodeId,
+    graphActiveResultNodeId,
     openAnalyze,
   ]);
 

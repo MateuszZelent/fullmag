@@ -55,7 +55,7 @@ describe("physicsCatalog", () => {
     expect(entries.find((entry) => entry.id === "bulk_dmi")).toMatchObject({
       available: true,
       active: false,
-      authorableInObjectPanel: false,
+      authorableInObjectPanel: true,
     });
 
     expect(entries.find((entry) => entry.id === "spin_orbit_torque")).toMatchObject({

@@ -3,6 +3,12 @@
 import { useCallback, useMemo } from "react";
 import { useModel } from "../../runs/control-room/context-hooks";
 import {
+  useVisualizationStore,
+  selectVisualizationProjectPresets,
+  selectVisualizationLocalPresets,
+  selectActiveVisualizationPresetRef,
+} from "@/features/visualization";
+import {
   buildVisualizationPresetNodeId,
   parseVisualizationPresetNodeId,
   VISUALIZATION_LOCAL_SECTION_NODE_ID,
@@ -47,6 +53,9 @@ function PresetSourceBadge({ source }: { source: VisualizationPresetSource }) {
 
 export default function VisualizationPresetPanel({ nodeId }: VisualizationPresetPanelProps) {
   const ctx = useModel();
+  const visualizationProjectPresets = useVisualizationStore(selectVisualizationProjectPresets);
+  const visualizationLocalPresets = useVisualizationStore(selectVisualizationLocalPresets);
+  const activeVisualizationPresetRef = useVisualizationStore(selectActiveVisualizationPresetRef);
   const parsedNode = useMemo(() => parseVisualizationPresetNodeId(nodeId), [nodeId]);
 
   const createPreset = useCallback(
@@ -69,9 +78,9 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
       : null;
   const presetsForNode =
     parsedNode?.source === "project"
-      ? ctx.visualizationProjectPresets
+      ? visualizationProjectPresets
       : parsedNode?.source === "local"
-        ? ctx.visualizationLocalPresets
+        ? visualizationLocalPresets
         : [];
   const preset =
     parsedNode ? presetsForNode.find((entry) => entry.id === parsedNode.presetId) ?? null : null;
@@ -97,8 +106,8 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
             </Button>
           </div>
           <div className="rounded border border-border/10 bg-card/40 p-2 text-[0.68rem] leading-relaxed">
-            <div>Project presets: {ctx.visualizationProjectPresets.length}</div>
-            <div>Local presets: {ctx.visualizationLocalPresets.length}</div>
+            <div>Project presets: {visualizationProjectPresets.length}</div>
+            <div>Local presets: {visualizationLocalPresets.length}</div>
           </div>
         </div>
       </SidebarSection>
@@ -108,8 +117,8 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
   if (sectionSource) {
     const count =
       sectionSource === "project"
-        ? ctx.visualizationProjectPresets.length
-        : ctx.visualizationLocalPresets.length;
+        ? visualizationProjectPresets.length
+        : visualizationLocalPresets.length;
     return (
       <SidebarSection title={`${sectionSource === "project" ? "Project" : "Local"} Presets`} icon="📚" defaultOpen={true}>
         <div className="space-y-2 text-[0.72rem] text-muted-foreground">
@@ -142,7 +151,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
   if (!presetRef) {
     return null;
   }
-  const isActive = samePresetRef(ctx.activeVisualizationPresetRef, presetRef);
+  const isActive = samePresetRef(activeVisualizationPresetRef, presetRef);
 
   const renameIfNeeded = (nextName: string) => {
     const trimmed = nextName.trim();

@@ -325,13 +325,19 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       } else if (entry.id === "interfacial_dmi") {
         active = active || physicsSignals.hasInterfacialDmiFromMaterial;
       } else if (entry.id === "thermal_noise") {
-        active = metadata?.thermal_active === true;
+        const thermalFromScene = model.sceneDocument?.study.thermal_noise;
+        active = metadata?.thermal_active === true
+          || (thermalFromScene?.enabled === true);
       } else if (entry.id === "spin_transfer_torque") {
-        active = metadata?.stt_active === true;
+        const sttFromScene = model.sceneDocument?.study.spin_torque_modules;
+        active = metadata?.stt_active === true
+          || (Array.isArray(sttFromScene) && sttFromScene.length > 0);
       } else if (entry.id === "spin_orbit_torque") {
         active = metadata?.sot_active === true;
       } else if (entry.id === "oersted") {
-        active = metadata?.oersted_active === true;
+        const oerstedFromScene = model.sceneDocument?.study.oersted;
+        active = metadata?.oersted_active === true
+          || (oerstedFromScene?.enabled === true);
       } else if (entry.id === "demag") {
         active = solverPlan?.demagEnabled ?? active;
         if (solverPlan?.demagEnabled === true) {
@@ -746,6 +752,430 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                   : "—"
               }
             />
+          </div>
+        </SidebarSection>
+      );
+    }
+
+    if (entry.id === "spin_transfer_torque") {
+      const sttModules = model.sceneDocument?.study.spin_torque_modules ?? null;
+      const firstModule = sttModules?.[0] ?? null;
+      const activeModel: string = firstModule?.kind ?? "none";
+
+      const setSttModel = (nextModel: string) => {
+        if (nextModel === "none") {
+          model.setSceneDocument((previous) =>
+            previous
+              ? {
+                  ...previous,
+                  study: { ...previous.study, spin_torque_modules: null },
+                }
+              : previous,
+          );
+          patchStudyScene({ spin_torque_modules: null });
+          return;
+        }
+        const defaultModule =
+          nextModel === "slonczewski"
+            ? {
+                kind: "slonczewski" as const,
+                current_density: [0, 0, 5e10] as [number, number, number],
+                spin_polarization: [0, 0, 1] as [number, number, number],
+                degree: 0.4,
+                lambda_asymmetry: 1.0,
+                epsilon_prime: 0.0,
+              }
+            : {
+                kind: "zhang_li" as const,
+                current_density: [1e11, 0, 0] as [number, number, number],
+                degree: 0.4,
+                beta: 0.0,
+              };
+        const nextModules = [defaultModule];
+        model.setSceneDocument((previous) =>
+          previous
+            ? {
+                ...previous,
+                study: { ...previous.study, spin_torque_modules: nextModules },
+              }
+            : previous,
+        );
+        patchStudyScene({ spin_torque_modules: nextModules });
+      };
+
+      const patchSttModule = (patch: Record<string, unknown>) => {
+        model.setSceneDocument((previous) => {
+          if (!previous) return previous;
+          const currentModules = previous.study.spin_torque_modules;
+          if (!currentModules || currentModules.length === 0) return previous;
+          const updated = [{ ...currentModules[0], ...patch }];
+          patchStudyScene({ spin_torque_modules: updated });
+          return {
+            ...previous,
+            study: { ...previous.study, spin_torque_modules: updated },
+          };
+        });
+      };
+
+      const setSttVectorComponent = (
+        field: "current_density" | "spin_polarization",
+        axis: 0 | 1 | 2,
+        rawValue: string,
+      ) => {
+        const parsed = parseOptionalNumber(rawValue);
+        if (parsed == null) return;
+        model.setSceneDocument((previous) => {
+          if (!previous) return previous;
+          const currentModules = previous.study.spin_torque_modules;
+          if (!currentModules || currentModules.length === 0) return previous;
+          const mod = currentModules[0];
+          if (!(field in mod)) return previous;
+          const vec = [...((mod as unknown as Record<string, unknown>)[field] as number[])] as [number, number, number];
+          vec[axis] = parsed;
+          const updated = [{ ...mod, [field]: vec }];
+          patchStudyScene({ spin_torque_modules: updated });
+          return {
+            ...previous,
+            study: { ...previous.study, spin_torque_modules: updated },
+          };
+        });
+      };
+
+      return (
+        <SidebarSection title="Spin-Transfer Torque" defaultOpen={true}>
+          <SelectField
+            label="STT Model"
+            value={activeModel}
+            onchange={(value) => setSttModel(value)}
+            options={[
+              { value: "none", label: "Disabled" },
+              { value: "slonczewski", label: "Slonczewski (CPP / MTJ)" },
+              { value: "zhang_li", label: "Zhang-Li (CIP)" },
+            ]}
+          />
+
+          {firstModule && (
+            <>
+              <div className="mt-4 text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                Current Density [A/m²]
+              </div>
+              <div className="mt-1.5 grid grid-cols-3 gap-3">
+                <TextField
+                  label="Jx"
+                  value={String(firstModule.current_density[0])}
+                  onchange={(event) => setSttVectorComponent("current_density", 0, event.target.value)}
+                  placeholder="0"
+                  mono
+                />
+                <TextField
+                  label="Jy"
+                  value={String(firstModule.current_density[1])}
+                  onchange={(event) => setSttVectorComponent("current_density", 1, event.target.value)}
+                  placeholder="0"
+                  mono
+                />
+                <TextField
+                  label="Jz"
+                  value={String(firstModule.current_density[2])}
+                  onchange={(event) => setSttVectorComponent("current_density", 2, event.target.value)}
+                  placeholder="0"
+                  mono
+                />
+              </div>
+
+              <div className="mt-4 grid gap-3">
+                <TextField
+                  label="Degree (P)"
+                  value={String(firstModule.degree)}
+                  onchange={(event) => {
+                    const next = parseOptionalNumber(event.target.value);
+                    if (next != null && next > 0 && next <= 1) patchSttModule({ degree: next });
+                  }}
+                  placeholder="0.4"
+                  mono
+                />
+
+                {firstModule.kind === "slonczewski" && (
+                  <>
+                    <div className="text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                      Spin Polarization Direction
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <TextField
+                        label="px"
+                        value={String(firstModule.spin_polarization[0])}
+                        onchange={(event) => setSttVectorComponent("spin_polarization", 0, event.target.value)}
+                        placeholder="0"
+                        mono
+                      />
+                      <TextField
+                        label="py"
+                        value={String(firstModule.spin_polarization[1])}
+                        onchange={(event) => setSttVectorComponent("spin_polarization", 1, event.target.value)}
+                        placeholder="0"
+                        mono
+                      />
+                      <TextField
+                        label="pz"
+                        value={String(firstModule.spin_polarization[2])}
+                        onchange={(event) => setSttVectorComponent("spin_polarization", 2, event.target.value)}
+                        placeholder="1"
+                        mono
+                      />
+                    </div>
+                    <TextField
+                      label="Asymmetry (Λ)"
+                      value={String(firstModule.lambda_asymmetry)}
+                      onchange={(event) => {
+                        const next = parseOptionalNumber(event.target.value);
+                        if (next != null && next >= 1) patchSttModule({ lambda_asymmetry: next });
+                      }}
+                      placeholder="1.0"
+                      mono
+                    />
+                    <TextField
+                      label="Field-like (ε')"
+                      value={String(firstModule.epsilon_prime)}
+                      onchange={(event) => {
+                        const next = parseOptionalNumber(event.target.value);
+                        if (next != null && next >= 0) patchSttModule({ epsilon_prime: next });
+                      }}
+                      placeholder="0.0"
+                      mono
+                    />
+                  </>
+                )}
+
+                {firstModule.kind === "zhang_li" && (
+                  <TextField
+                    label="Non-adiabaticity (β)"
+                    value={String(firstModule.beta)}
+                    onchange={(event) => {
+                      const next = parseOptionalNumber(event.target.value);
+                      if (next != null && next >= 0) patchSttModule({ beta: next });
+                    }}
+                    placeholder="0.0"
+                    mono
+                  />
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="mt-4 grid gap-1">
+            <InfoRow label="|J|" value={
+              firstModule
+                ? fmtExp(Math.sqrt(
+                    firstModule.current_density[0] ** 2
+                    + firstModule.current_density[1] ** 2
+                    + firstModule.current_density[2] ** 2,
+                  ))
+                : "—"
+            } />
+            <InfoRow label="Model" value={activeModel === "none" ? "Disabled" : activeModel} />
+          </div>
+
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            <div className="font-semibold text-foreground">Model guidance</div>
+            <div className="mt-1">
+              <span className="font-mono text-foreground">Slonczewski</span>: CPP geometry (current perpendicular to plane). Used for MTJ/pillar STNO.
+            </div>
+            <div className="mt-1">
+              <span className="font-mono text-foreground">Zhang-Li</span>: CIP geometry (current in-plane). Used for domain wall motion.
+            </div>
+          </div>
+        </SidebarSection>
+      );
+    }
+
+    if (entry.id === "oersted") {
+      const oerstedState = model.sceneDocument?.study.oersted ?? null;
+      const oerstedEnabled = oerstedState?.enabled === true;
+
+      const setOerstedEnabled = (enabled: boolean) => {
+        if (!enabled) {
+          model.setSceneDocument((prev) =>
+            prev ? { ...prev, study: { ...prev.study, oersted: null } } : prev,
+          );
+          patchStudyScene({ oersted: null });
+          return;
+        }
+        const defaultOersted = {
+          enabled: true,
+          model: "cylinder" as const,
+          current: 5e-3,
+          radius: 50e-9,
+          center: [0, 0, 0] as [number, number, number],
+          axis: [0, 0, 1] as [number, number, number],
+        };
+        model.setSceneDocument((prev) =>
+          prev ? { ...prev, study: { ...prev.study, oersted: defaultOersted } } : prev,
+        );
+        patchStudyScene({ oersted: defaultOersted });
+      };
+
+      const patchOersted = (patch: Record<string, unknown>) => {
+        model.setSceneDocument((prev) => {
+          if (!prev || !prev.study.oersted) return prev;
+          const updated = { ...prev.study.oersted, ...patch };
+          patchStudyScene({ oersted: updated });
+          return { ...prev, study: { ...prev.study, oersted: updated } };
+        });
+      };
+
+      return (
+        <SidebarSection title="Oersted Field" defaultOpen={true}>
+          <div className="flex items-center justify-between">
+            <span className="text-[0.72rem] text-muted-foreground">Enable Oersted</span>
+            <Button
+              variant={oerstedEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-3 text-[0.68rem]"
+              onClick={() => setOerstedEnabled(!oerstedEnabled)}
+            >
+              {oerstedEnabled ? "Active" : "Disabled"}
+            </Button>
+          </div>
+
+          {oerstedState && (
+            <>
+              <div className="mt-4 grid gap-3">
+                <TextField
+                  label="Current [A]"
+                  value={String(oerstedState.current)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null) patchOersted({ current: v });
+                  }}
+                  placeholder="5e-3"
+                  mono
+                />
+                <TextField
+                  label="Cylinder Radius [m]"
+                  value={String(oerstedState.radius)}
+                  onchange={(e) => {
+                    const v = parseOptionalNumber(e.target.value);
+                    if (v != null && v > 0) patchOersted({ radius: v });
+                  }}
+                  placeholder="50e-9"
+                  mono
+                />
+              </div>
+              <div className="mt-4 text-[0.68rem] font-semibold uppercase tracking-widest text-muted-foreground">
+                Cylinder Axis
+              </div>
+              <div className="mt-1.5 grid grid-cols-3 gap-3">
+                {(["x", "y", "z"] as const).map((label, idx) => (
+                  <TextField
+                    key={label}
+                    label={label}
+                    value={String(oerstedState.axis[idx])}
+                    onchange={(e) => {
+                      const v = parseOptionalNumber(e.target.value);
+                      if (v == null) return;
+                      const newAxis = [...oerstedState.axis] as [number, number, number];
+                      newAxis[idx as 0 | 1 | 2] = v;
+                      patchOersted({ axis: newAxis });
+                    }}
+                    placeholder={idx === 2 ? "1" : "0"}
+                    mono
+                  />
+                ))}
+              </div>
+              <div className="mt-4 grid gap-1">
+                <InfoRow label="|I|" value={fmtSI(Math.abs(oerstedState.current), "A")} />
+                <InfoRow label="R" value={fmtSI(oerstedState.radius, "m")} />
+              </div>
+            </>
+          )}
+
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            Analytical infinite-cylinder Oersted field. Supports constant, sinusoidal, and pulse current envelopes.
+            Executable on FDM CPU/GPU and native FEM CPU/GPU.
+          </div>
+        </SidebarSection>
+      );
+    }
+
+    if (entry.id === "thermal_noise") {
+      const thermalState = model.sceneDocument?.study.thermal_noise ?? null;
+      const thermalEnabled = thermalState?.enabled === true;
+
+      const setThermalEnabled = (enabled: boolean) => {
+        if (!enabled) {
+          model.setSceneDocument((prev) =>
+            prev ? { ...prev, study: { ...prev.study, thermal_noise: null } } : prev,
+          );
+          patchStudyScene({ thermal_noise: null });
+          return;
+        }
+        const defaultThermal = {
+          enabled: true,
+          temperature_k: 300,
+          seed: null as number | null,
+        };
+        model.setSceneDocument((prev) =>
+          prev ? { ...prev, study: { ...prev.study, thermal_noise: defaultThermal } } : prev,
+        );
+        patchStudyScene({ thermal_noise: defaultThermal });
+      };
+
+      const patchThermal = (patch: Record<string, unknown>) => {
+        model.setSceneDocument((prev) => {
+          if (!prev || !prev.study.thermal_noise) return prev;
+          const updated = { ...prev.study.thermal_noise, ...patch };
+          patchStudyScene({ thermal_noise: updated });
+          return { ...prev, study: { ...prev.study, thermal_noise: updated } };
+        });
+      };
+
+      return (
+        <SidebarSection title="Thermal Noise" defaultOpen={true}>
+          <div className="flex items-center justify-between">
+            <span className="text-[0.72rem] text-muted-foreground">Enable Thermal Fluctuations</span>
+            <Button
+              variant={thermalEnabled ? "default" : "outline"}
+              size="sm"
+              className="h-6 px-3 text-[0.68rem]"
+              onClick={() => setThermalEnabled(!thermalEnabled)}
+            >
+              {thermalEnabled ? "Active" : "Disabled"}
+            </Button>
+          </div>
+
+          {thermalState && (
+            <div className="mt-4 grid gap-3">
+              <TextField
+                label="Temperature [K]"
+                value={String(thermalState.temperature_k)}
+                onchange={(e) => {
+                  const v = parseOptionalNumber(e.target.value);
+                  if (v != null && v >= 0) patchThermal({ temperature_k: v });
+                }}
+                placeholder="300"
+                mono
+              />
+              <TextField
+                label="RNG Seed (optional)"
+                value={thermalState.seed != null ? String(thermalState.seed) : ""}
+                onchange={(e) => {
+                  const raw = e.target.value.trim();
+                  if (!raw) {
+                    patchThermal({ seed: null });
+                    return;
+                  }
+                  const v = parseOptionalNumber(raw);
+                  if (v != null && v >= 0 && Number.isInteger(v)) patchThermal({ seed: v });
+                }}
+                placeholder="auto"
+                mono
+              />
+            </div>
+          )}
+
+          <div className="mt-3 rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            Brown thermal fluctuations via stochastic LLG. Set seed for reproducible runs.
+            Executable on FDM CPU/GPU. FEM support: semantic only.
           </div>
         </SidebarSection>
       );

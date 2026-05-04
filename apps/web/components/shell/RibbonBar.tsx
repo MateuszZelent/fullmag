@@ -5,29 +5,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { WorkspaceMode } from "../runs/control-room/context-hooks";
 import { RibbonTabStrip, type ContextualRibbonTab } from "./ribbon/RibbonTabStrip";
 import { RibbonGroupsRow } from "./ribbon/RibbonGroupsRow";
+import { useRibbonGroups } from "./ribbon/useRibbonGroups";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
-import {
-  parseStudyNodeContext,
-} from "@/lib/study-builder/node-context";
-import {
-  canExecuteRibbonCommand,
-  executeRibbonCommand,
-  type AirboxDisplayScope,
-  type AirboxDisplayPatch,
-  type RibbonCommand,
-  type ViewportMeshRenderMode,
-} from "./ribbon/command-registry";
-import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
-import type { ScriptBuilderMagneticInteractionKind } from "@/lib/session/types";
-import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
-import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type {
-  CapabilityMap,
-  GeometryCapabilitiesResource,
-  VisualizationStatePatch,
-} from "@/src/api/types";
-import { resolveFemDiscretization } from "@/src/domain/capabilities";
+  AirboxDisplayScope,
+  RibbonCommandContext,
+  ViewportMeshRenderMode,
+} from "./ribbon/command-registry";
 import { useGeometryCapabilities } from "@/src/hooks/resources/useSceneDocument";
 import { useWorkspaceRibbon } from "@/src/hooks/resources/useWorkspaceRibbon";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
@@ -41,10 +26,7 @@ import {
 
 // ── Registry imports ──
 import {
-  resolveRibbonGroups,
   type RibbonTabId,
-  type ContextualTabId,
-  type RibbonBuildContext,
 } from "@/features/shell/registry/ribbonRegistry";
 // Side-effect: registers all contributions
 import "@/features/shell/contributions";
@@ -63,39 +45,16 @@ type RibbonTab =
   | "Results"
   | "Automation";
 
-interface RibbonBarProps {
-  viewMode?: string;
+export interface RibbonBarProps extends RibbonCommandContext {
   femDiscretization?: boolean;
-  domainCapabilities?: CapabilityMap | null;
   solverRunning?: boolean;
   sidebarVisible?: boolean;
   selectedNodeId?: string | null;
-  canRun?: boolean;
-  canRelax?: boolean;
-  canPause?: boolean;
-  canStop?: boolean;
-  canSkip?: boolean;
-  runDisabledReason?: string | null;
-  pauseDisabledReason?: string | null;
-  stopDisabledReason?: string | null;
-  skipDisabledReason?: string | null;
-  runAction?: string;
+  meshConfigDirty?: boolean;
   runLabel?: string;
   viewport3DStatus?: "active" | "inactive" | "warning";
   viewport3DStatusReason?: string | null;
   viewport3DStatusDetail?: string | null;
-  onViewChange?: (mode: string) => void;
-  onSidebarToggle?: () => void;
-  onCreateVisualizationPreset?: () => void;
-  airboxVisible?: boolean;
-  viewportAxesScope?: "universe" | "object";
-  universeWireframeVisible?: boolean;
-  viewportLegendVisible?: boolean;
-  onToggleAirbox?: () => void;
-  onSetViewportAxesScope?: (scope: "universe" | "object") => void;
-  onToggleUniverseWireframe?: () => void;
-  onToggleViewportLegend?: () => void;
-  onSimAction?: (action: string) => void;
   quickPreviewTargets?: Array<{
     id: string;
     shortLabel: string;
@@ -106,30 +65,13 @@ interface RibbonBarProps {
   requestedPreviewEveryN?: number | null;
   requestedPreviewAutoScale?: boolean | null;
   requestedPreviewQuantityDataStatus?: string | null;
-  primitiveVisible?: boolean;
   magneticTextureVisible?: boolean;
   magneticTextureDensity?: number | null;
   quantityShaderVisible?: boolean;
-  femVectorGlyphBudget?: number | null;
   requestedPreviewMaxPoints?: number | null;
-  meshRenderMode?: string | null;
-  meshOpacity?: number | null;
   selectedObjectTextureVisible?: boolean | null;
   selectedObjectOpacity?: number | null;
   selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
-  meshClipEnabled?: boolean | null;
-  meshClipAxis?: "x" | "y" | "z" | null;
-  meshClipPos?: number | null;
-  meshClipFlip?: boolean | null;
-  meshShowArrows?: boolean | null;
-  femArrowColorMode?: string | null;
-  femArrowMonoColor?: string | null;
-  femArrowAlpha?: number | null;
-  femArrowLengthScale?: number | null;
-  femArrowThickness?: number | null;
-  femVectorDomainFilter?: string | null;
-  femFerromagnetVisibilityMode?: string | null;
-  airMeshOpacity?: number | null;
   airMeshRenderMode?: ViewportMeshRenderMode | null;
   airMeshGeometryVisible?: boolean | null;
   airMeshSurfaceVisible?: boolean | null;
@@ -142,136 +84,17 @@ interface RibbonBarProps {
   slice2DToolbar?: Slice2DToolbarState | null;
   slice2DDiagnostics?: Slice2DDiagnostics | null;
   previewPending?: boolean;
-  onQuickPreviewSelect?: (quantityId: string) => void;
-  onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
-  onSetPreviewEveryN?: (everyN: number) => void;
-  onSetPreviewMaxPoints?: (maxPoints: number) => void;
-  onSetFemVectorGlyphBudget?: (glyphBudget: number) => void;
-  onSetPreviewColormap?: (colormap: string) => void;
-  onSetPreviewAutoScale?: (enabled: boolean) => void;
-  onPatchVisualizationState?: (patch: VisualizationStatePatch) => void;
-  onSetPrimitiveVisible?: (visible: boolean) => void;
-  onSetMagneticTextureVisible?: (visible: boolean) => void;
-  onSetMagneticTextureDensity?: (density: number) => void;
-  onSetQuantityShaderVisible?: (visible: boolean) => void;
-  onExport?: () => void;
-  onCapture?: () => void;
-  onStateExport?: () => void;
   antennaSources?: Array<{
     name: string;
     kind: string;
     currentA: number;
   }>;
   selectedAntennaName?: string | null;
-  onAddAntenna?: (kind: "MicrostripAntenna" | "CPWAntenna") => void;
-  onSelectModelNode?: (nodeId: string) => void;
-  meshGenerating?: boolean;
-  meshConfigDirty?: boolean;
   meshTargetLabel?: string | null;
-  onBuildMeshSelected?: () => void;
-  onBuildMeshAll?: () => void;
-  onOpenMeshInspector?: () => void;
-  onOpenMeshStatistics?: () => void;
-  onOpenMeshQuality?: () => void;
-  onOpenMeshSizeSettings?: () => void;
-  onOpenMeshTransitionSettings?: () => void;
-  onOpenMeshMethodSettings?: () => void;
-  onOpenMeshOptimizationSettings?: () => void;
-  onOpenMeshPipeline?: () => void;
-  selectedObjectId?: string | null;
-  objectViewMode?: "context" | "isolate";
   sceneObjectCount?: number;
-  onRequestObjectFocus?: (objectId: string) => void;
-  onSetObjectViewMode?: (mode: "context" | "isolate") => void;
   hasSharedAirboxDomain?: boolean;
-  canSyncScriptBuilder?: boolean;
-  scriptSyncBusy?: boolean;
-  onSyncScriptBuilder?: () => void;
   workspaceMode?: WorkspaceMode;
-  onStudyAddPrimitive?: (
-    kind: StudyPrimitiveStageKind,
-    placement: "append" | "before" | "after",
-  ) => void;
-  onStudyAddMacro?: (
-    kind:
-      | "hysteresis_loop"
-      | "field_sweep_relax"
-      | "field_sweep_relax_snapshot"
-      | "relax_run"
-      | "relax_eigenmodes"
-      | "parameter_sweep"
-      | "current_sweep_run"
-      | "dc_bias_plus_rf_probe",
-    placement: "append" | "before" | "after",
-  ) => void;
-  onStudyDuplicateSelected?: () => void;
-  onStudyToggleSelectedEnabled?: () => void;
-  onAddResultAnalysis?: (
-    kind:
-      | "spectrum"
-      | "dispersion"
-      | "modes"
-      | "time-traces"
-      | "vortex-frequency"
-      | "vortex-trajectory"
-      | "vortex-orbit"
-      | "quantity"
-      | "table",
-  ) => void;
-  onObjectAddInteraction?: (
-    objectId: string,
-    kind: ScriptBuilderMagneticInteractionKind,
-  ) => void;
-  onAssignMagnetizationPreset?: (
-    objectId: string,
-    kind: MagneticPresetKind,
-  ) => void;
-  activeTransformScope?: "object" | "texture" | null;
-  onSetTransformScope?: (
-    scope: "camera" | "object" | "texture",
-  ) => void;
-  onSetMeshRenderMode?: (mode: ViewportMeshRenderMode) => void;
-  onSetMeshOpacity?: (opacity: number) => void;
-  onSetSelectedObjectTextureVisible?: (visible: boolean) => void;
-  onSetSelectedObjectOpacity?: (opacity: number) => void;
-  onSetSelectedObjectRenderMode?: (mode: ViewportMeshRenderMode | "inherit") => void;
-  onClearSelectedDisplayOverrides?: () => void;
-  onSetMeshClipEnabled?: (enabled: boolean) => void;
-  onSetMeshClipAxis?: (axis: "x" | "y" | "z") => void;
-  onSetMeshClipPos?: (position: number) => void;
-  onSetMeshClipFlip?: (flipped: boolean) => void;
-  onSetMeshShowArrows?: (visible: boolean) => void;
-  onSetFemArrowStyle?: (patch: Partial<{
-    colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
-    monoColor: string;
-    alpha: number;
-    lengthScale: number;
-    thickness: number;
-    domain: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
-    ferromagnetVisibility: "hide" | "ghost";
-  }>) => void;
-  onSetAirboxDisplay?: (patch: AirboxDisplayPatch) => void;
-  onSetSlice2DToolbar?: (patch: Partial<Slice2DToolbarState>) => void;
   onDispatchVisualization?: (action: VisualizationAction) => void;
-  onSetTextureTransformMode?: (
-    objectId: string,
-    mode: "translate" | "rotate" | "scale",
-  ) => void;
-  // Geometry Builder callbacks
-  onBuilderAddPrimitive?: (kind: PrimitiveKind) => void;
-  onBuilderCreateBoolean?: (op: BooleanOp) => void;
-  onBuilderRemovePrimitive?: (id: string) => void;
-  onBuilderDuplicatePrimitive?: (id: string) => void;
-  onBuilderBuildGeometry?: () => void;
-  onBuilderBuildMesh?: () => void;
-  onBuilderBuildAll?: () => void;
-  onBuilderValidateGeometry?: () => void;
-  onBuilderSetViewportMode?: (mode: "camera" | "manipulate") => void;
-  onBuilderSetTransformTool?: (tool: "move" | "rotate" | "scale") => void;
-  onBuilderToggleSnap?: () => void;
-  onBuilderFocusSelected?: () => void;
-  onBuilderFrameAll?: () => void;
-  onBuilderCenterInUniverse?: (id: string) => void;
 }
 
 /* ── Helpers ──────────────────────────────────────── */
@@ -363,127 +186,6 @@ function workspaceRibbonTabIdentity(value: {
     value?.active_core_tab ?? null,
     value?.active_contextual_tab ?? null,
   ]);
-}
-
-/** Build a RibbonBuildContext from the current RibbonBarProps. */
-function buildContext(
-  props: RibbonBarProps,
-  builderState: {
-    builderEnabled: boolean;
-    builderDirtyGeometry: boolean;
-    builderDirtyMesh: boolean;
-    builderHasRealization: boolean;
-    builderSceneObjectCount: number;
-    builderSelectedPrimitiveId: string | null;
-    geometryCapabilities: GeometryCapabilitiesResource | null;
-  },
-): RibbonBuildContext {
-  const run = (command: RibbonCommand) => {
-    executeRibbonCommand(props, command);
-  };
-  const can = (command: RibbonCommand) => canExecuteRibbonCommand(props, command);
-
-  return {
-    isFemBackend: resolveFemDiscretization(
-      props.domainCapabilities,
-      Boolean(props.femDiscretization),
-    ),
-    domainCapabilities: props.domainCapabilities ?? null,
-    canRun: Boolean(props.canRun),
-    canRelax: Boolean(props.canRelax),
-    canPause: Boolean(props.canPause),
-    canStop: Boolean(props.canStop),
-    canSkip: Boolean(props.canSkip),
-    runDisabledReason: props.runDisabledReason ?? null,
-    pauseDisabledReason: props.pauseDisabledReason ?? null,
-    stopDisabledReason: props.stopDisabledReason ?? null,
-    skipDisabledReason: props.skipDisabledReason ?? null,
-    runAction: props.runAction ?? "run",
-    runLabel: props.runLabel ?? "Run",
-
-    meshGenerating: Boolean(props.meshGenerating),
-    meshConfigDirty: Boolean(props.meshConfigDirty),
-    meshTargetLabel: props.meshTargetLabel ?? null,
-
-    selectedObjectId: props.selectedObjectId ?? null,
-    selectedNodeId: props.selectedNodeId ?? null,
-    selectedNodeKind: null, // resolved from handle if needed
-    objectViewMode: props.objectViewMode ?? "context",
-    activeTransformScope: props.activeTransformScope ?? null,
-
-    viewMode: props.viewMode ?? null,
-    sidebarVisible: Boolean(props.sidebarVisible),
-    previewPending: Boolean(props.previewPending),
-    viewport3DStatus: props.viewport3DStatus ?? "active",
-    viewport3DStatusReason: props.viewport3DStatusReason ?? null,
-    viewport3DStatusDetail: props.viewport3DStatusDetail ?? null,
-    airboxVisible: Boolean(props.airboxVisible),
-    magneticTextureVisible: props.magneticTextureVisible ?? true,
-    magneticTextureDensity: props.magneticTextureDensity ?? null,
-    quantityShaderVisible: props.quantityShaderVisible ?? true,
-    femVectorGlyphBudget: props.femVectorGlyphBudget ?? null,
-    viewportAxesScope: props.viewportAxesScope ?? "universe",
-    universeWireframeVisible: props.universeWireframeVisible ?? true,
-    viewportLegendVisible: Boolean(props.viewportLegendVisible),
-
-    studyNodeContext: parseStudyNodeContext(props.selectedNodeId),
-
-    quickPreviewTargets: props.quickPreviewTargets ?? [],
-    selectedQuantity: props.selectedQuantity ?? null,
-    requestedPreviewComponent: props.requestedPreviewComponent ?? null,
-    requestedPreviewEveryN: props.requestedPreviewEveryN ?? null,
-    requestedPreviewMaxPoints: props.requestedPreviewMaxPoints ?? null,
-    requestedPreviewAutoScale: props.requestedPreviewAutoScale ?? null,
-    requestedPreviewQuantityDataStatus: props.requestedPreviewQuantityDataStatus ?? null,
-    primitiveVisible: props.primitiveVisible ?? true,
-    meshRenderMode: props.meshRenderMode ?? null,
-    meshOpacity: props.meshOpacity ?? null,
-    selectedObjectTextureVisible: props.selectedObjectTextureVisible ?? null,
-    selectedObjectOpacity: props.selectedObjectOpacity ?? null,
-    selectedObjectRenderMode: props.selectedObjectRenderMode ?? null,
-    meshClipEnabled: props.meshClipEnabled ?? null,
-    meshClipAxis: props.meshClipAxis ?? null,
-    meshClipPos: props.meshClipPos ?? null,
-    meshClipFlip: props.meshClipFlip ?? null,
-    meshShowArrows: props.meshShowArrows ?? null,
-    femArrowColorMode: props.femArrowColorMode ?? null,
-    femArrowMonoColor: props.femArrowMonoColor ?? null,
-    femArrowAlpha: props.femArrowAlpha ?? null,
-    femArrowLengthScale: props.femArrowLengthScale ?? null,
-    femArrowThickness: props.femArrowThickness ?? null,
-    femVectorDomainFilter: props.femVectorDomainFilter ?? null,
-    femFerromagnetVisibilityMode: props.femFerromagnetVisibilityMode ?? null,
-    airMeshOpacity: props.airMeshOpacity ?? null,
-    airMeshRenderMode: props.airMeshRenderMode ?? null,
-    airMeshGeometryVisible: props.airMeshGeometryVisible ?? null,
-    airMeshSurfaceVisible: props.airMeshSurfaceVisible ?? null,
-    airMeshWireframeVisible: props.airMeshWireframeVisible ?? null,
-    airMeshPointsVisible: props.airMeshPointsVisible ?? null,
-    airMeshWireframeScope: props.airMeshWireframeScope ?? null,
-    airMeshPointsScope: props.airMeshPointsScope ?? null,
-    airMeshVectorsScope: props.airMeshVectorsScope ?? null,
-    slice2DEnabled: Boolean(props.slice2DEnabled),
-    slice2DToolbar: props.slice2DToolbar ?? null,
-    slice2DDiagnostics: props.slice2DDiagnostics ?? null,
-
-    antennaSources: props.antennaSources ?? [],
-    selectedAntennaName: props.selectedAntennaName ?? null,
-
-    canSyncScriptBuilder: Boolean(props.canSyncScriptBuilder),
-    scriptSyncBusy: Boolean(props.scriptSyncBusy),
-
-    builderEnabled: builderState.builderEnabled,
-    builderDirtyGeometry: builderState.builderDirtyGeometry,
-    builderDirtyMesh: builderState.builderDirtyMesh,
-    builderHasRealization: builderState.builderHasRealization,
-    builderSceneObjectCount: builderState.builderSceneObjectCount,
-    builderSelectedPrimitiveId: builderState.builderSelectedPrimitiveId,
-    geometryCapabilities: builderState.geometryCapabilities,
-
-    run,
-    can,
-    dispatchVisualization: props.onDispatchVisualization,
-  };
 }
 
 /** Map workspace mode to its default ribbon tab (when no manual override). */
@@ -697,160 +399,9 @@ export default function RibbonBar(props: RibbonBarProps) {
     },
     [setActiveCoreTab],
   );
-
-  const groups = useMemo(() => {
-    const ctx = buildContext(props, {
-      builderEnabled,
-      builderDirtyGeometry,
-      builderDirtyMesh,
-      builderHasRealization,
-      builderSceneObjectCount,
-      builderSelectedPrimitiveId,
-      geometryCapabilities,
-    });
-    const tabId = RIBBON_TAB_TO_ID[activeTab];
-
-    // Resolve core tab groups from registry
-    const baseGroups = resolveRibbonGroups(tabId, ctx);
-
-    // Resolve active contextual tab groups
-    const ctxTabId = activeContextualTabId as ContextualTabId | null;
-    const contextualGroups = ctxTabId
-      ? resolveRibbonGroups(ctxTabId, ctx)
-      : [];
-
-    const combined = contextualGroups.length > 0
-      ? [...baseGroups, ...contextualGroups]
-      : baseGroups;
-
-    // Deduplicate by group.id — last occurrence wins (contextual overrides base).
-    const seen = new Set<string>();
-    const deduped: typeof combined = [];
-    for (let i = combined.length - 1; i >= 0; i--) {
-      if (!seen.has(combined[i].id)) {
-        seen.add(combined[i].id);
-        deduped.unshift(combined[i]);
-      }
-    }
-    return deduped;
-  }, [
-    activeTab,
+  const groups = useRibbonGroups(props, {
+    activeTabId: RIBBON_TAB_TO_ID[activeTab],
     activeContextualTabId,
-    props.workspaceMode,
-    props.viewMode,
-    props.viewport3DStatus,
-    props.viewport3DStatusReason,
-    props.viewport3DStatusDetail,
-    props.airboxVisible,
-    props.viewportAxesScope,
-    props.universeWireframeVisible,
-    props.viewportLegendVisible,
-    props.femDiscretization,
-    props.solverRunning,
-    props.sidebarVisible,
-    props.selectedNodeId,
-    props.canRun,
-    props.canRelax,
-    props.canPause,
-    props.canStop,
-    props.canSkip,
-    props.runDisabledReason,
-    props.pauseDisabledReason,
-    props.stopDisabledReason,
-    props.skipDisabledReason,
-    props.quickPreviewTargets,
-    props.selectedQuantity,
-    props.requestedPreviewComponent,
-    props.requestedPreviewEveryN,
-    props.requestedPreviewMaxPoints,
-    props.requestedPreviewAutoScale,
-    props.requestedPreviewQuantityDataStatus,
-    props.primitiveVisible,
-    props.magneticTextureVisible,
-    props.magneticTextureDensity,
-    props.quantityShaderVisible,
-    props.femVectorGlyphBudget,
-    props.meshRenderMode,
-    props.meshOpacity,
-    props.selectedObjectTextureVisible,
-    props.selectedObjectOpacity,
-    props.selectedObjectRenderMode,
-    props.meshClipEnabled,
-    props.meshClipAxis,
-    props.meshClipPos,
-    props.meshClipFlip,
-    props.meshShowArrows,
-    props.femArrowColorMode,
-    props.femArrowMonoColor,
-    props.femArrowAlpha,
-    props.femArrowLengthScale,
-    props.femArrowThickness,
-    props.femVectorDomainFilter,
-    props.femFerromagnetVisibilityMode,
-    props.airMeshOpacity,
-    props.airMeshRenderMode,
-    props.airMeshGeometryVisible,
-    props.airMeshSurfaceVisible,
-    props.airMeshWireframeVisible,
-    props.airMeshPointsVisible,
-    props.airMeshWireframeScope,
-    props.airMeshPointsScope,
-    props.airMeshVectorsScope,
-    props.slice2DEnabled,
-    props.slice2DToolbar,
-    props.slice2DDiagnostics,
-    props.antennaSources,
-    props.selectedAntennaName,
-    props.canSyncScriptBuilder,
-    props.scriptSyncBusy,
-    props.selectedObjectId,
-    props.objectViewMode,
-    props.onStudyAddPrimitive,
-    props.onStudyAddMacro,
-    props.onStudyDuplicateSelected,
-    props.onStudyToggleSelectedEnabled,
-    props.onObjectAddInteraction,
-    props.onAssignMagnetizationPreset,
-    props.onSetTextureTransformMode,
-    props.onSetPreviewComponent,
-    props.onSetPreviewEveryN,
-    props.onSetPreviewMaxPoints,
-    props.onSetFemVectorGlyphBudget,
-    props.onSetPreviewColormap,
-    props.onSetPreviewAutoScale,
-    props.onSetPrimitiveVisible,
-    props.onSetMagneticTextureVisible,
-    props.onSetMagneticTextureDensity,
-    props.onSetQuantityShaderVisible,
-    props.onSetMeshRenderMode,
-    props.onSetMeshOpacity,
-    props.onSetSelectedObjectTextureVisible,
-    props.onSetSelectedObjectOpacity,
-    props.onSetSelectedObjectRenderMode,
-    props.onClearSelectedDisplayOverrides,
-    props.onSetMeshClipEnabled,
-    props.onSetMeshClipAxis,
-    props.onSetMeshClipPos,
-    props.onSetMeshClipFlip,
-    props.onSetMeshShowArrows,
-    props.onSetFemArrowStyle,
-    props.onSetAirboxDisplay,
-    props.onSetSlice2DToolbar,
-    props.onSetObjectViewMode,
-    props.onBuilderAddPrimitive,
-    props.onBuilderCreateBoolean,
-    props.onBuilderBuildGeometry,
-    props.onBuilderBuildMesh,
-    props.onToggleAirbox,
-    props.onSetViewportAxesScope,
-    props.onToggleUniverseWireframe,
-    props.onToggleViewportLegend,
-    props.meshGenerating,
-    props.meshConfigDirty,
-    props.meshTargetLabel,
-    props.runAction,
-    props.runLabel,
-    props.previewPending,
     builderEnabled,
     builderDirtyGeometry,
     builderDirtyMesh,
@@ -858,7 +409,7 @@ export default function RibbonBar(props: RibbonBarProps) {
     builderSceneObjectCount,
     builderSelectedPrimitiveId,
     geometryCapabilities,
-  ]);
+  });
 
   return (
     <TooltipProvider delayDuration={200}>

@@ -5,7 +5,7 @@
  * Integrates with the existing ModelTree system.
  */
 
-import type { TreeNodeData, NodeStatus } from "@/components/panels/ModelTree";
+import type { TreeNodeData, NodeStatus } from "@/components/panels/model-tree/types";
 import type {
   GeometryGraphDocument,
   PrimitiveNode,

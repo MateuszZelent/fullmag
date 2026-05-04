@@ -355,6 +355,9 @@ describe("workspace graph store", () => {
     expect(useWorkspaceGraphStore.getState().snapshot).toBe(snapshotRefAfterFirstSet);
 
     useWorkspaceGraphStore.getState().applySnapshot(secondSnapshot, "sig:b");
-    expect(useWorkspaceGraphStore.getState().snapshot).toBe(secondSnapshot);
+    // P-26: structural sharing means the stored snapshot is a merged object,
+    // not the exact secondSnapshot reference, but values must match.
+    expect(useWorkspaceGraphStore.getState().snapshot).toEqual(secondSnapshot);
+    expect(useWorkspaceGraphStore.getState().snapshot).not.toBe(snapshotRefAfterFirstSet);
   });
 });

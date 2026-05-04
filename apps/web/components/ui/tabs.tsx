@@ -98,8 +98,8 @@ const TabsTrigger = React.forwardRef<HTMLButtonElement, TabsTriggerProps>(
         disabled={disabled}
         className={cn(
           "inline-flex items-center justify-center whitespace-nowrap px-3 py-1.5",
-          "text-[length:var(--ide-text-xs)] font-medium tracking-wider transition-all duration-150",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ide-accent)] focus-visible:ring-offset-1",
+          "text-xs font-medium tracking-wider transition-all duration-150",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
           "disabled:pointer-events-none disabled:opacity-50 cursor-pointer",
           variant === "pill" ? cn(
             "rounded-md text-muted-foreground hover:text-foreground",
@@ -152,8 +152,8 @@ const TabsContent = React.forwardRef<HTMLDivElement, TabsContentProps>(
         data-state={active ? "active" : "inactive"}
         hidden={hidden ?? !active}
         className={cn(
-          "mt-2 ring-offset-[var(--ide-bg)]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ide-accent)] focus-visible:ring-offset-2",
+          "mt-2 ring-offset-background",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           !forceMount && "data-[state=inactive]:hidden",
           className,
         )}

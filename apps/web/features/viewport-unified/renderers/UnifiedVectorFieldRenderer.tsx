@@ -1002,6 +1002,11 @@ function UnifiedVectorFieldRendererInner({
     state: ViewportCameraState | null;
   } | null>(null);
   const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
+  // P-26: Track the last persisted camera state we actually applied. Used to detect reference-
+  // identity changes that carry identical values (e.g., when the workspace graph snapshot
+  // rebuilds because a new scalar row arrived during solver relaxation), so we don't
+  // hard-set the camera unnecessarily.
+  const lastAppliedPersistedStateRef = useRef<ViewportCameraState | null>(null);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
     setRotationSnapshots((previous) => {
       const current = previous[key];
@@ -1062,6 +1067,19 @@ function UnifiedVectorFieldRendererInner({
         raf = window.requestAnimationFrame(restore);
         return;
       }
+      // P-26: Skip restore when persistedCameraState changed reference but
+      // values are identical to what we already applied. This prevents a
+      // camera snapback when the parent re-creates the camera object because
+      // an unrelated viewport document field changed (e.g., solver scalar row).
+      if (
+        cameraRestoreReadyRef.current &&
+        persistedCameraState &&
+        lastAppliedPersistedStateRef.current &&
+        viewportCameraStatesEqual(persistedCameraState, lastAppliedPersistedStateRef.current)
+      ) {
+        syncViewportRotationSnapshot();
+        return;
+      }
       const currentState = captureViewportCameraState(bridge, {
         projection: "perspective",
         navigation: "trackball",
@@ -1083,6 +1101,7 @@ function UnifiedVectorFieldRendererInner({
           state: persistedCameraState,
         };
         cameraRestoreReadyRef.current = true;
+        lastAppliedPersistedStateRef.current = persistedCameraState;  // P-26
         syncViewportRotationSnapshot();
         return;
       }
@@ -1110,6 +1129,7 @@ function UnifiedVectorFieldRendererInner({
         state: persistedCameraState ?? null,
       };
       cameraRestoreReadyRef.current = true;
+      lastAppliedPersistedStateRef.current = persistedCameraState;  // P-26
       syncViewportRotationSnapshot();
     };
 

@@ -92,6 +92,7 @@ const CATALOG: PhysicsCatalogEntry[] = [
     detail: "Present in the Python/backend model, but not yet first-class in the scene authoring object panel.",
     scope: "object",
     backendTerms: ["bulk_dmi"],
+    objectInteractionKind: "bulk_dmi",
     parameterHints: ["D [J/m^2]"],
   },
   {
@@ -111,6 +112,7 @@ const CATALOG: PhysicsCatalogEntry[] = [
     detail: "Supported by backend capability profiles, but not yet exposed as a first-class object interaction editor.",
     scope: "object",
     backendTerms: ["cubic_anisotropy"],
+    objectInteractionKind: "cubic_anisotropy",
     parameterHints: ["Kc1/Kc2/Kc3 [J/m^3]", "Axis1 [x, y, z]", "Axis2 [x, y, z]"],
   },
   {
