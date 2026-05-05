@@ -90,7 +90,13 @@ pub fn run_exchange_density_study(
         );
         let fdm_center_field = fdm_field[fdm_center_index];
 
-        let fem_mesh = build_structured_box_tet_mesh(box_size_m, fem_divisions_per_axis);
+        // Use a free-boundary mesh for this study (no periodic node pairs).
+        // The analytic magnetization is not periodic, so applying periodic
+        // constraints would force seam-node values to agree and distort the
+        // exchange field comparison against the FDM free-boundary solution.
+        let mut fem_mesh = build_structured_box_tet_mesh(box_size_m, fem_divisions_per_axis);
+        fem_mesh.periodic_boundary_pairs = vec![];
+        fem_mesh.periodic_node_pairs = vec![];
         let fem_nodes = fem_mesh.nodes.len();
         let fem_elements = fem_mesh.elements.len();
         let fem_center_index = structured_node_index(
