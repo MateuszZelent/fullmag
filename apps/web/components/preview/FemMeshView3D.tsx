@@ -84,6 +84,7 @@ const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
 const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
 const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
 const BLANK_VIEWPORT_RECOVERY_GRACE_MS = 900;
+const CAMERA_PERSIST_IDLE_MS = 240;
 
 export interface Viewport3DHealthReport {
   status: "active" | "inactive" | "warning";
@@ -878,16 +879,65 @@ function FemMeshView3DInner({
     }
     onPersistCameraState(state);
   }, [cameraProjection, navigationMode, onPersistCameraState]);
+  const persistCameraStateRef = useRef(persistCameraState);
+  useEffect(() => {
+    persistCameraStateRef.current = persistCameraState;
+  }, [persistCameraState]);
+  const cameraInteractionActiveRef = useRef(false);
+  const pendingCameraPersistRef = useRef(false);
+  const cameraPersistTimerRef = useRef<number | null>(null);
+  const clearCameraPersistTimer = useCallback(() => {
+    if (cameraPersistTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(cameraPersistTimerRef.current);
+    cameraPersistTimerRef.current = null;
+  }, []);
+  const flushDeferredCameraPersist = useCallback(() => {
+    clearCameraPersistTimer();
+    if (!pendingCameraPersistRef.current) {
+      return;
+    }
+    pendingCameraPersistRef.current = false;
+    persistCameraStateRef.current();
+  }, [clearCameraPersistTimer]);
+  const scheduleDeferredCameraPersist = useCallback(() => {
+    pendingCameraPersistRef.current = true;
+    clearCameraPersistTimer();
+    if (cameraInteractionActiveRef.current) {
+      return;
+    }
+    cameraPersistTimerRef.current = window.setTimeout(
+      flushDeferredCameraPersist,
+      CAMERA_PERSIST_IDLE_MS,
+    );
+  }, [clearCameraPersistTimer, flushDeferredCameraPersist]);
+  const handleCameraInteractionStart = useCallback(() => {
+    cameraInteractionActiveRef.current = true;
+    clearCameraPersistTimer();
+  }, [clearCameraPersistTimer]);
+  const handleCameraInteractionEnd = useCallback(() => {
+    cameraInteractionActiveRef.current = false;
+    flushDeferredCameraPersist();
+  }, [flushDeferredCameraPersist]);
+  useEffect(() => {
+    return () => {
+      flushDeferredCameraPersist();
+    };
+  }, [flushDeferredCameraPersist]);
   const handleSceneCameraChange = useCallback(() => {
     syncViewportRotationSnapshot();
-    persistCameraState();
-  }, [persistCameraState, syncViewportRotationSnapshot]);
+    scheduleDeferredCameraPersist();
+  }, [scheduleDeferredCameraPersist, syncViewportRotationSnapshot]);
   // P-21: Track the last persisted camera state we actually applied. Used to detect reference
   // identity changes that carry identical values (e.g., when graphActiveViewportDocument gets a
   // new object because a non-camera field changed), so we don\u2019t hard-set the camera unnecessarily.
   const lastAppliedCameraStateRef = useRef<ViewportCameraState | null>(null);
 
-  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
+  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange, {
+    onInteractionStart: handleCameraInteractionStart,
+    onInteractionEnd: handleCameraInteractionEnd,
+  });
   useEffect(() => {
     if (
       restoredCameraScopeRef.current === cameraPersistenceScope &&

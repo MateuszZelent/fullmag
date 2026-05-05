@@ -9,6 +9,13 @@ import {
   resolvePersistedWorkspaceSelection,
   workspaceSelectionIdentity,
 } from "../workspaceSelectionGuards";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+
+const ENABLE_WORKSPACE_SELECTION_DEBUG_LOGS =
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production" &&
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace;
 
 export function useWorkspaceSelectionPersistence({
   lastPersistedWorkspaceSelectionRef,
@@ -65,7 +72,7 @@ export function useWorkspaceSelectionPersistence({
           }
           return;
         }
-        if (process.env.NODE_ENV !== "production") {
+        if (ENABLE_WORKSPACE_SELECTION_DEBUG_LOGS) {
           console.debug("[ControlRoomContext] Ignoring stale workspace selection persistence response", {
             pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
             persistedIdentity,

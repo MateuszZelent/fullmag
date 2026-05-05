@@ -136,7 +136,9 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showToolbar: false,
     showWarnings: true,
     showViewCube: true,
-    showOrientationSphere: true,
+    // Extra HSL sphere uses its own R3F Canvas/WebGL context. Keep it opt-in
+    // so the live solver viewport does not spend context budget on decoration.
+    showOrientationSphere: false,
     showFieldLegend: true,
     showSelectionHud: true,
     showPartExplorer: false,
@@ -307,6 +309,12 @@ function normalizeFrontendDiagnosticFlags(
   normalized.femViewport.showToolbar = false;
   normalized.femViewport.showSurfacePass = true;
   normalized.femViewport.showPointsPass = true;
+  if (
+    !normalized.renderDebug.enableRenderLogging ||
+    !normalized.interactions.trace
+  ) {
+    normalized.femViewport.showOrientationSphere = false;
+  }
   return normalized;
 }
 

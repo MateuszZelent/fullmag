@@ -650,7 +650,10 @@ export const FemGeometry = memo(function FemGeometry({
   });
 
   useEffect(() => {
-    if (!FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+    if (
+      !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
+    ) {
       return;
     }
     const positionAttribute = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;

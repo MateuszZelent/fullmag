@@ -3,6 +3,7 @@ import {
   getDefaultFrontendDiagnosticFlags,
   loadFrontendDiagnosticFlagsFromStorage,
 } from "../frontendDiagnosticFlags";
+import { getProfileById } from "@/features/diagnostics/flags/diagnosticProfiles";
 
 class MemoryStorage {
   private data = new Map<string, string>();
@@ -99,5 +100,54 @@ describe("frontendDiagnosticFlags loader", () => {
   it("keeps the VectorSurface 3D canvas enabled in the normal defaults", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     expect(defaults.vectorSurfaceViewport.enableCanvas3D).toBe(true);
+  });
+
+  it("keeps the extra HSL orientation sphere opt-in outside debug viewport profile", () => {
+    const defaults = getDefaultFrontendDiagnosticFlags();
+    const debugViewportProfile = getProfileById("debug-viewport");
+
+    expect(defaults.femViewport.showOrientationSphere).toBe(false);
+    expect(debugViewportProfile?.overrides.femViewport?.showOrientationSphere).toBe(true);
+    expect(debugViewportProfile?.overrides.interactions?.trace).toBe(true);
+  });
+
+  it("normalizes persisted HSL orientation sphere unless trace diagnostics are explicit", () => {
+    memoryStorage.setItem(
+      "fullmag.frontend_diagnostic_flags.v1",
+      JSON.stringify({
+        femViewport: {
+          showOrientationSphere: true,
+        },
+        renderDebug: {
+          enableRenderLogging: true,
+        },
+        interactions: {
+          trace: false,
+        },
+      }),
+    );
+
+    const loaded = loadFrontendDiagnosticFlagsFromStorage();
+    expect(loaded.femViewport.showOrientationSphere).toBe(false);
+  });
+
+  it("preserves persisted HSL orientation sphere when trace diagnostics are explicit", () => {
+    memoryStorage.setItem(
+      "fullmag.frontend_diagnostic_flags.v1",
+      JSON.stringify({
+        femViewport: {
+          showOrientationSphere: true,
+        },
+        renderDebug: {
+          enableRenderLogging: true,
+        },
+        interactions: {
+          trace: true,
+        },
+      }),
+    );
+
+    const loaded = loadFrontendDiagnosticFlagsFromStorage();
+    expect(loaded.femViewport.showOrientationSphere).toBe(true);
   });
 });

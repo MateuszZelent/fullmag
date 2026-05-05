@@ -43,7 +43,8 @@ import { getCachedJsonResource } from "./dataPlaneCache";
 const ENABLE_DEBUG =
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production" &&
-  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging;
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace;
 
 type DataPlaneRequest = {
   key: string;

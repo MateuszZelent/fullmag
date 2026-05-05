@@ -477,9 +477,9 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
                     : `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`
                 : undefined
             }
-            min={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.min}
-            max={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.max}
-            mean={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.mean}
+            min={args.legendField === "none" ? undefined : args.colorLegendStats?.min}
+            max={args.legendField === "none" ? undefined : args.colorLegendStats?.max}
+            mean={args.legendField === "none" ? undefined : args.colorLegendStats?.mean}
             gradient={colorLegendGradient(args.legendField)}
           />
         ),

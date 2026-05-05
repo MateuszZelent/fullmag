@@ -85,6 +85,11 @@ const VIEWPORT_BRIDGE_DEBUG_LOGS =
   process.env.NODE_ENV !== "production";
 const CAMERA_GRAPH_PERSIST_DEBOUNCE_MS = 180;
 
+export type PendingViewportCameraPersist = {
+  documentId: string;
+  cameraState: ViewportCameraState;
+};
+
 function logViewportBridgeDebug(event: string, payload?: Record<string, unknown>): void {
   if (!VIEWPORT_BRIDGE_DEBUG_LOGS) {
     return;
@@ -166,6 +171,27 @@ function viewportCameraStatesEqual(
     a.navigation === b.navigation &&
     a.lastFocusedObjectId === b.lastFocusedObjectId
   );
+}
+
+export function resolveViewportCameraPersistCandidate(args: {
+  documentId: string;
+  currentCamera: ViewportCameraState | null | undefined;
+  pending: PendingViewportCameraPersist | null | undefined;
+  nextCamera: ViewportCameraState | null | undefined;
+}): PendingViewportCameraPersist | null {
+  if (!args.nextCamera || viewportCameraStatesEqual(args.currentCamera, args.nextCamera)) {
+    return null;
+  }
+  if (
+    args.pending?.documentId === args.documentId &&
+    viewportCameraStatesEqual(args.pending.cameraState, args.nextCamera)
+  ) {
+    return null;
+  }
+  return {
+    documentId: args.documentId,
+    cameraState: args.nextCamera,
+  };
 }
 
 /**
@@ -480,26 +506,29 @@ export function useViewportDataBridge() {
   const graphActiveViewportDocumentId = graphActiveViewportDocument?.id ?? null;
   const graphActiveViewportCameraState = graphActiveViewportDocument?.camera ?? null;
   const lastLoggedViewportDocumentIdRef = useRef<string | null>(null);
-  const pendingViewportCameraStateRef = useRef<ViewportCameraState | null>(null);
+  const pendingViewportCameraPersistRef = useRef<PendingViewportCameraPersist | null>(null);
   const pendingViewportCameraTimerRef = useRef<number | null>(null);
   const flushPendingViewportCameraState = useCallback(() => {
-    const cameraState = pendingViewportCameraStateRef.current;
-    pendingViewportCameraStateRef.current = null;
+    const pending = pendingViewportCameraPersistRef.current;
+    pendingViewportCameraPersistRef.current = null;
     pendingViewportCameraTimerRef.current = null;
-    const document = graphActiveViewportDocumentRef.current;
-    if (!document || !cameraState || viewportCameraStatesEqual(document.camera, cameraState)) {
+    if (!pending) {
+      return;
+    }
+    const document = useWorkspaceGraphStore.getState().snapshot.viewportDocuments[pending.documentId];
+    if (!document || viewportCameraStatesEqual(document.camera, pending.cameraState)) {
       return;
     }
     logViewportBridgeDebug("persist camera to workspace graph", {
       viewportDocumentId: document.id,
-      projection: cameraState.projection,
-      navigation: cameraState.navigation,
-      position: cameraState.position,
-      target: cameraState.target,
+      projection: pending.cameraState.projection,
+      navigation: pending.cameraState.navigation,
+      position: pending.cameraState.position,
+      target: pending.cameraState.target,
     });
     upsertViewportDocument({
       ...document,
-      camera: cameraState,
+      camera: pending.cameraState,
     });
   }, [upsertViewportDocument]);
   useEffect(() => {
@@ -508,8 +537,9 @@ export function useViewportDataBridge() {
         window.clearTimeout(pendingViewportCameraTimerRef.current);
         pendingViewportCameraTimerRef.current = null;
       }
+      flushPendingViewportCameraState();
     };
-  }, []);
+  }, [flushPendingViewportCameraState]);
   useEffect(() => {
     if (lastLoggedViewportDocumentIdRef.current === graphActiveViewportDocumentId) {
       return;
@@ -523,16 +553,20 @@ export function useViewportDataBridge() {
   }, [graphActiveViewportCameraState, graphActiveViewportDocumentId]);
   const persistViewportCameraState = useCallback(
     (cameraState: ViewportCameraState | null) => {
-      if (!graphActiveViewportDocument || !cameraState) {
+      const document = graphActiveViewportDocumentRef.current;
+      if (!document || !cameraState) {
         return;
       }
-      if (
-        viewportCameraStatesEqual(graphActiveViewportDocument.camera, cameraState) ||
-        viewportCameraStatesEqual(pendingViewportCameraStateRef.current, cameraState)
-      ) {
+      const nextPersist = resolveViewportCameraPersistCandidate({
+        documentId: document.id,
+        currentCamera: document.camera,
+        pending: pendingViewportCameraPersistRef.current,
+        nextCamera: cameraState,
+      });
+      if (!nextPersist) {
         return;
       }
-      pendingViewportCameraStateRef.current = cameraState;
+      pendingViewportCameraPersistRef.current = nextPersist;
       if (pendingViewportCameraTimerRef.current !== null) {
         window.clearTimeout(pendingViewportCameraTimerRef.current);
       }
@@ -541,7 +575,7 @@ export function useViewportDataBridge() {
         CAMERA_GRAPH_PERSIST_DEBOUNCE_MS,
       );
     },
-    [flushPendingViewportCameraState, graphActiveViewportDocument],
+    [flushPendingViewportCameraState],
   );
 
   /* ── Derived values from ctx ── */

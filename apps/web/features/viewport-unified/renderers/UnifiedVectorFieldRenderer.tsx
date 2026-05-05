@@ -88,6 +88,19 @@ const VECTOR_SURFACE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
+const CAMERA_PERSIST_IDLE_MS = 240;
+
+export function shouldRenderVectorSurfaceCanvas({
+  canvasEnabled,
+  hostReady,
+  viewportVisible,
+}: {
+  canvasEnabled: boolean;
+  hostReady: boolean;
+  viewportVisible: boolean;
+}): boolean {
+  return canvasEnabled && hostReady && viewportVisible;
+}
 
 function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>): void {
   if (!VECTOR_SURFACE_DEBUG_LOGS) {
@@ -1101,11 +1114,60 @@ function UnifiedVectorFieldRendererInner({
       target: state.target,
     });
   }, [cameraPersistenceKey, onPersistCameraState]);
+  const persistCameraStateRef = useRef(persistCameraState);
+  useEffect(() => {
+    persistCameraStateRef.current = persistCameraState;
+  }, [persistCameraState]);
+  const cameraInteractionActiveRef = useRef(false);
+  const pendingCameraPersistRef = useRef(false);
+  const cameraPersistTimerRef = useRef<number | null>(null);
+  const clearCameraPersistTimer = useCallback(() => {
+    if (cameraPersistTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(cameraPersistTimerRef.current);
+    cameraPersistTimerRef.current = null;
+  }, []);
+  const flushDeferredCameraPersist = useCallback(() => {
+    clearCameraPersistTimer();
+    if (!pendingCameraPersistRef.current) {
+      return;
+    }
+    pendingCameraPersistRef.current = false;
+    persistCameraStateRef.current();
+  }, [clearCameraPersistTimer]);
+  const scheduleDeferredCameraPersist = useCallback(() => {
+    pendingCameraPersistRef.current = true;
+    clearCameraPersistTimer();
+    if (cameraInteractionActiveRef.current) {
+      return;
+    }
+    cameraPersistTimerRef.current = window.setTimeout(
+      flushDeferredCameraPersist,
+      CAMERA_PERSIST_IDLE_MS,
+    );
+  }, [clearCameraPersistTimer, flushDeferredCameraPersist]);
+  const handleCameraInteractionStart = useCallback(() => {
+    cameraInteractionActiveRef.current = true;
+    clearCameraPersistTimer();
+  }, [clearCameraPersistTimer]);
+  const handleCameraInteractionEnd = useCallback(() => {
+    cameraInteractionActiveRef.current = false;
+    flushDeferredCameraPersist();
+  }, [flushDeferredCameraPersist]);
+  useEffect(() => {
+    return () => {
+      flushDeferredCameraPersist();
+    };
+  }, [flushDeferredCameraPersist]);
   const handleSceneCameraChange = useCallback(() => {
     syncViewportRotationSnapshot();
-    persistCameraState();
-  }, [persistCameraState, syncViewportRotationSnapshot]);
-  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange);
+    scheduleDeferredCameraPersist();
+  }, [scheduleDeferredCameraPersist, syncViewportRotationSnapshot]);
+  useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange, {
+    onInteractionStart: handleCameraInteractionStart,
+    onInteractionEnd: handleCameraInteractionEnd,
+  });
   useEffect(() => {
     let raf = 0;
     let disposed = false;
@@ -1208,9 +1270,8 @@ function UnifiedVectorFieldRendererInner({
       if (raf) {
         window.cancelAnimationFrame(raf);
       }
-      persistCameraState();
     };
-  }, [cameraPersistenceKey, persistCameraState, persistedCameraState, syncViewportRotationSnapshot]);
+  }, [cameraPersistenceKey, persistedCameraState, syncViewportRotationSnapshot]);
 
   // Snap camera to a direction
   const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
@@ -1882,10 +1943,14 @@ function UnifiedVectorFieldRendererInner({
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[0.72rem] text-muted-foreground">
             VectorSurface canvas disabled (`vectorSurfaceViewport.enableCanvas3D = false`)
           </div>
-        ) : hostNode ? (
+        ) : shouldRenderVectorSurfaceCanvas({
+          canvasEnabled: vectorSurfaceFlags.enableCanvas3D,
+          hostReady: Boolean(hostNode),
+          viewportVisible,
+        }) ? (
           <Canvas
             key={canvasContextGeneration}
-            eventSource={hostNode}
+            eventSource={hostNode ?? undefined}
             frameloop={viewportVisible ? "demand" : "never"}
             className="w-full h-full pointer-events-auto"
             camera={{

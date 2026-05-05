@@ -278,7 +278,8 @@ export function FemArrows({
       visible &&
       count === 0 &&
       effectiveNodeMask &&
-      FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging
+      FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+      FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
     ) {
       console.debug("[FemArrows] zero sampled nodes", {
         boundaryCandidateCount: boundaryCandidateNodes.length,

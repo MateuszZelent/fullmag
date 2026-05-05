@@ -815,7 +815,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (decision.kind === "reject-stale-pending") {
-      if (process.env.NODE_ENV !== "production") {
+      if (ENABLE_VIEWPORT_DATA_DEBUG_LOGS) {
         console.debug("[ControlRoomContext] Ignoring stale workspace selection hydration", {
           currentIdentity,
           pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,

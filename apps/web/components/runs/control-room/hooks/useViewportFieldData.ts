@@ -474,6 +474,15 @@ export function useViewportFieldData({
     selectedBinaryFieldFrame,
     selectedFieldTransportKey,
   });
+  const skipPreviewFallback =
+    effectiveIsFemBackend &&
+    effectiveViewMode === "3D" &&
+    (
+      Boolean(selectedLiveField) ||
+      Boolean(selectedFieldFrame) ||
+      workspaceStatus === "running" ||
+      isWaitingForCompute
+    );
   const selectedVectorSource = useMemo(() => {
     return selectViewportVectorField({
       activeQuantityId,
@@ -485,13 +494,11 @@ export function useViewportFieldData({
       liveFieldSourceStep,
       previewSourceStep,
       isGlobalScalarQuantity,
-      skipPreviewFallback: effectiveIsFemBackend && effectiveViewMode === "3D" && Boolean(selectedLiveField),
+      skipPreviewFallback,
     });
   }, [
     activeQuantityId,
     authoredField,
-    effectiveIsFemBackend,
-    effectiveViewMode,
     isGlobalScalarQuantity,
     liveFieldSourceStep,
     previewControlsActive,
@@ -499,6 +506,7 @@ export function useViewportFieldData({
     renderPreview,
     requestedPreviewQuantity,
     selectedLiveField,
+    skipPreviewFallback,
   ]);
   const selectedVectors = selectedVectorSource.vectors;
   const fieldDataRevision = useMemo(() => {

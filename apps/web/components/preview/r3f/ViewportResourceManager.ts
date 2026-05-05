@@ -17,6 +17,8 @@
  *    (default 3) frames are collected by `disposeStale()`.
  */
 
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 /** Coarse resource category for per-bucket byte tracking. */
@@ -91,6 +93,12 @@ export const DEFAULT_VIEWPORT_BUDGET: ViewportResourceBudget = {
   maxTransientBytes: 64 * MB,
   maxTotalBytes: 768 * MB,
 };
+
+const VIEWPORT_RESOURCE_DEBUG_LOGS =
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production" &&
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace;
 
 // ── Implementation ─────────────────────────────────────────────────────────────
 
@@ -221,8 +229,7 @@ export class ViewportResourceManager {
     let count = 0;
     for (const [key, entry] of this.entries) {
       if (this.frame - entry.lastUsedFrame >= staleFrames) {
-        if (reason) {
-          // eslint-disable-next-line no-console
+        if (reason && VIEWPORT_RESOURCE_DEBUG_LOGS) {
           console.debug(`[ViewportResourceManager] disposeStale(${reason}): ${key}`);
         }
         entry.handle.dispose();
@@ -235,8 +242,7 @@ export class ViewportResourceManager {
 
   /** Dispose all tracked resources immediately. */
   disposeAll(reason?: string): void {
-    if (reason) {
-      // eslint-disable-next-line no-console
+    if (reason && VIEWPORT_RESOURCE_DEBUG_LOGS) {
       console.debug(`[ViewportResourceManager] disposeAll(${reason}): ${this.entries.size} resources`);
     }
     for (const entry of this.entries.values()) {

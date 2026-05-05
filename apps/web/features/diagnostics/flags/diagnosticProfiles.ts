@@ -99,6 +99,12 @@ export const DIAGNOSTIC_PROFILES: readonly DiagnosticProfile[] = [
         enableHoverTooltip: true,
         enableContextMenu: true,
       },
+      femViewport: {
+        showOrientationSphere: true,
+      },
+      interactions: {
+        trace: true,
+      },
       renderDebug: { enableRenderLogging: true },
     },
   },

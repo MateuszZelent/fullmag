@@ -68,6 +68,24 @@ export function resolveContextLossRecovery({
   };
 }
 
+export function shouldRenderViewportWebglCanvas({
+  hidden,
+  hostReady,
+  bareCanvas,
+}: {
+  hidden: boolean;
+  hostReady: boolean;
+  bareCanvas: boolean;
+}): boolean {
+  if (hidden) {
+    return false;
+  }
+  if (bareCanvas) {
+    return true;
+  }
+  return hostReady;
+}
+
 export interface ViewportRenderPolicy {
   mode: "always" | "demand" | "paused";
   hidden: boolean;
@@ -475,6 +493,11 @@ export default function ScientificViewportShell({
     typeof window !== "undefined" ? window.devicePixelRatio : 1,
     profile.dprCap,
   );
+  const shouldRenderCanvas = shouldRenderViewportWebglCanvas({
+    hidden: resolvedHidden,
+    hostReady: Boolean(hostNode),
+    bareCanvas: FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.useBareCanvasShell,
+  });
   const renderShellCanvas = (useHostEventSource: boolean) => (
     <Canvas
       key={canvasContextGeneration}
@@ -489,7 +512,10 @@ export default function ScientificViewportShell({
       onCreated={({ gl, camera }) => {
         canvasContextCleanupRef.current?.();
         const canvas = gl.domElement;
-        if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+        if (
+          FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
+          FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
+        ) {
           console.info("[viewport-webgl] canvas created", {
             telemetryLabel,
             generation: canvasContextGeneration,
@@ -539,7 +565,10 @@ export default function ScientificViewportShell({
         };
         const handleContextRestored = () => {
           setContextLossBlocked(false);
-          if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+          if (
+            FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
+            FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
+          ) {
             console.info("[viewport-webgl] context restored", {
               telemetryLabel,
               generation: canvasContextGeneration,
@@ -620,9 +649,9 @@ export default function ScientificViewportShell({
 
   return (
     <div ref={hostRef} className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden rounded-md bg-background">
-      {FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.useBareCanvasShell
+      {shouldRenderCanvas && FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.useBareCanvasShell
         ? renderShellCanvas(false)
-        : hostNode
+        : shouldRenderCanvas && hostNode
           ? renderShellCanvas(FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.useCanvasHostEventSource)
           : null}
 

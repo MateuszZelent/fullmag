@@ -415,7 +415,10 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   onArrowSampledCount?: (count: number | undefined) => void;
 }) {
   React.useEffect(() => {
-    if (!FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging) {
+    if (
+      !FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
+    ) {
       return;
     }
     console.debug("[fem-viewport-scene]", JSON.stringify({

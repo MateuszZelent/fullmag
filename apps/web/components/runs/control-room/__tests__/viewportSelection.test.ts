@@ -155,6 +155,28 @@ describe("selectViewportVectorField", () => {
     expect(result.vectors).toBe(liveVectors);
   });
 
+  it("suppresses stale preview fallback while FEM 3D live vectors are expected", () => {
+    const previewVectors = new Float64Array([0, 1, 0]);
+    const result = selectViewportVectorField({
+      activeQuantityId: "m",
+      requestedPreviewQuantity: "m",
+      previewControlsActive: true,
+      renderPreview: makePreview({
+        quantity: "m",
+        source_step: 3,
+        vector_field_values: previewVectors,
+      }),
+      liveField: null,
+      liveFieldSourceStep: 4,
+      previewSourceStep: 3,
+      isGlobalScalarQuantity: () => false,
+      skipPreviewFallback: true,
+    });
+
+    expect(result.source).toBe("none");
+    expect(result.vectors).toBeNull();
+  });
+
   it("returns no vectors for global scalar quantities", () => {
     const result = selectViewportVectorField({
       activeQuantityId: "e_total",
