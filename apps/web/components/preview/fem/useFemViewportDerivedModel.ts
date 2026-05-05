@@ -58,6 +58,26 @@ export function shouldWarnMissingMagneticMask({
   return activeMaskLength !== nNodes;
 }
 
+export function shouldFlagMissingExactScopeSegment({
+  selectedObjectId,
+  selectedObjectOverlayFidelity,
+  nElements,
+  hasExactScopeSegment,
+}: {
+  selectedObjectId: string | null | undefined;
+  selectedObjectOverlayFidelity: "mesh-backed" | "bounds-backed" | null;
+  nElements: number;
+  hasExactScopeSegment: boolean;
+}): boolean {
+  if (!selectedObjectId || nElements <= 0) {
+    return false;
+  }
+  if (selectedObjectOverlayFidelity === "bounds-backed") {
+    return false;
+  }
+  return !hasExactScopeSegment;
+}
+
 interface UseFemViewportDerivedModelArgs {
   meshData: FemMeshData;
   objectOverlays: BuilderObjectOverlay[];
@@ -236,14 +256,17 @@ export function useFemViewportDerivedModel({
     field,
     showArrowsRequested,
   });
-  const missingExactScopeSegment =
-    Boolean(selectedObjectId) &&
-    meshData.nElements > 0 &&
-    (hasMeshParts
-      ? !meshParts.some(
-          (part) => part.role === "magnetic_object" && part.object_id === selectedObjectId,
-        )
-      : !magneticSegments.some((segment) => segment.object_id === selectedObjectId));
+  const hasExactScopeSegment = hasMeshParts
+    ? meshParts.some(
+        (part) => part.role === "magnetic_object" && part.object_id === selectedObjectId,
+      )
+    : magneticSegments.some((segment) => segment.object_id === selectedObjectId);
+  const missingExactScopeSegment = shouldFlagMissingExactScopeSegment({
+    selectedObjectId,
+    selectedObjectOverlayFidelity: selectedObjectOverlay?.fidelity ?? null,
+    nElements: meshData.nElements,
+    hasExactScopeSegment,
+  });
 
   const vectorDomain = useFemVectorDomain({
     enableVectorDerivedModel: wrapperFlags.enableVectorDerivedModel,

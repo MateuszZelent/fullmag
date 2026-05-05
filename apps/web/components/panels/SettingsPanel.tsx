@@ -26,6 +26,7 @@ import EnergyPanel from "./settings/EnergyPanel";
 import StateIoPanel from "./settings/StateIoPanel";
 import VisualizationPresetPanel from "./settings/VisualizationPresetPanel";
 import InspectorRegistryHost from "./InspectorRegistryHost";
+import GeometryInspectorRouter from "@/features/geometry-builder/inspector/GeometryInspectorRouter";
 // Legacy imports removed — routing is now handled by inspectorRegistry
 // import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
 // import { isVisualizationTreeNode } from "../runs/control-room/visualizationPresets";
@@ -250,13 +251,10 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               case PanelKey.MESH:            return <MeshPanel />;
               case PanelKey.MESH_STATISTICS: return <MeshStatisticsPanel />;
               case PanelKey.MESH_INFO:       return null;
-              case PanelKey.OBJ_GEO_MESH:
-                return (
-                  <>
-                    <GeometryPanel nodeId={panelProps.nodeId as string} />
-                    <ObjectMeshPanel nodeId={panelProps.meshNodeId as string | undefined} />
-                  </>
-                );
+              case PanelKey.BUILDER_OVERVIEW:
+              case PanelKey.BUILDER_UNIVERSE:
+              case PanelKey.BUILDER_PRIMITIVE:
+                return <GeometryInspectorRouter />;
               case PanelKey.GEOMETRY:
               default:
                 return <GeometryPanel nodeId={panelProps.nodeId as string | undefined} />;

@@ -13,7 +13,7 @@ help:
 ensure-python:
     mkdir -p .fullmag/local
     if [ ! -x "{{repo_python}}" ]; then python3 -m venv .fullmag/local/python; fi
-    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.16'
+    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3'
 
 build target="fullmag" cpu_only="0":
     bash -euo pipefail -c 'target="{{target}}"; cpu_only="{{cpu_only}}"; case "$target" in target=*) target="${target#target=}" ;; --target=*) target="${target#--target=}" ;; esac; case "$cpu_only" in 1|true|TRUE|on|ON|yes|YES|y|Y) cpu_only="1" ;; 0|false|FALSE|off|OFF|no|NO|n|N|"") cpu_only="0" ;; *) cpu_only="0" ;; esac; if [ "$target" = "fullmag" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli; elif [ "$target" = "fullmag-static" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-static; elif [ "$target" = "fullmag-dev" ]; then FULLMAG_BUILD_CPU_ONLY="$cpu_only" make install-cli-dev; elif [ "$target" = "fullmag-host" ]; then make install-cli; elif [ "$target" = "dev-image" ]; then docker compose build dev; elif [ "$target" = "fem-gpu-runtime" ]; then docker compose --profile fem-gpu build fem-gpu; elif [ "$target" = "fem-gpu-runtime-host" ]; then ./scripts/export_fem_gpu_runtime.sh; else echo "unknown build target: $target" >&2; echo "supported targets: fullmag, fullmag-static, fullmag-dev, fullmag-host, dev-image, fem-gpu-runtime, fem-gpu-runtime-host" >&2; exit 1; fi'
@@ -133,15 +133,11 @@ run-nanoflower-interactive:
     just build fullmag-dev
     PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag --dev -i examples/nanoflower_fem.py
 
-run-stno-interactive cpu_only="0":
-    if [ "{{cpu_only}}" = "1" ]; then \
-        echo "run-stno-interactive requires MFEM-native FEM runtime; cpu_only=1 is incompatible." >&2; \
-        echo "Use: just run-stno-interactive 0" >&2; \
-        exit 2; \
-    fi
-    just ensure-python
-    just build fullmag-dev {{cpu_only}}
-    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu fullmag --dev -i examples/stno_vortex_mtj_workflow.py
+run-stno-interactive fem_execution="cpu":
+    bash -euo pipefail -c 'mode="{{fem_execution}}"; case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; 1|true|TRUE|on|ON|yes|YES|y|Y) echo "run-stno-interactive argument selects FEM execution mode, not build cpu_only; use cpu or gpu." >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; just run-stno-interactive-managed "$mode"'
+
+run-arch-waveguide-interactive fem_execution="cpu":
+    bash -euo pipefail -c 'mode="{{fem_execution}}"; case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; 1|true|TRUE|on|ON|yes|YES|y|Y) echo "run-arch-waveguide-interactive argument selects FEM execution mode, not build cpu_only; use cpu or gpu." >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; just run-arch-waveguide-interactive-managed "$mode"'
 
 
 run-nanoflower-interactive-quadro:
@@ -158,36 +154,62 @@ run-nanoflower-interactive-quadro-gpu:
     just build fullmag-dev
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev -i examples/nanoflower_fem_quadro.py
 
-run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
-    just ensure-python
+ensure-managed-fem-runtime:
     if [ ! -x '{{gpu_runtime_bin}}' ]; then \
-        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
-        echo "Run: just rebuild-fem-runtime" >&2; \
-        exit 2; \
-    fi
-    if [ -x '{{local_bin}}/fullmag-bin' ] && [ '{{local_bin}}/fullmag-bin' -nt '{{gpu_runtime_bin}}' ]; then \
-        echo "Managed FEM runtime bundle is stale: {{gpu_runtime_bin}}" >&2; \
-        echo "The local launcher is newer: {{local_bin}}/fullmag-bin" >&2; \
-        echo "Run: just rebuild-fem-runtime" >&2; \
-        exit 3; \
+        echo "Managed FEM runtime bundle is missing; rebuilding it now." >&2; \
+        just rebuild-fem-runtime; \
     fi
     stale_source="$(find crates/fullmag-cli crates/fullmag-runner crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
     if [ -n "$stale_source" ]; then \
-        echo "Managed FEM runtime bundle is stale: {{gpu_runtime_bin}}" >&2; \
-        echo "Newer runtime source detected: $stale_source" >&2; \
-        echo "Run: just rebuild-fem-runtime" >&2; \
-        exit 3; \
+        echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
+        echo "Rebuilding managed FEM runtime bundle now." >&2; \
+        just rebuild-fem-runtime; \
     fi
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime rebuild did not produce {{gpu_runtime_bin}}" >&2; \
+        exit 2; \
+    fi
+
+run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    just ensure-managed-fem-runtime
     if [ "{{cpu_threads}}" = "auto" ]; then \
         FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     else \
         FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     fi
 
+run-arch-waveguide-interactive-managed fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    if [ "{{cpu_threads}}" = "auto" ]; then \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev -i examples/arch_waveguide_relax_50nm.py; \
+    else \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/arch_waveguide_relax_50nm.py; \
+    fi
+
 run-nanoflower-quadro-gpu-headless:
     just ensure-python
     just build fullmag-dev
     FULLMAG_PYTHON="{{repo_python}}" '{{gpu_runtime_bin}}' --dev examples/nanoflower_fem_quadro.py --headless
+
+run-arch-waveguide-headless:
+    just ensure-python
+    just build fullmag
+    PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="{{repo_python}}" fullmag examples/arch_waveguide_relax_50nm.py --headless --json
+
+run-arch-waveguide-managed-headless fem_execution="gpu" cpu_threads="auto":
+    just ensure-python
+    if [ ! -x '{{gpu_runtime_bin}}' ]; then \
+        echo "Managed FEM runtime bundle is missing (used for both FEM CPU and FEM GPU)." >&2; \
+        echo "Run: just rebuild-fem-runtime" >&2; \
+        exit 2; \
+    fi
+    if [ "{{cpu_threads}}" = "auto" ]; then \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev examples/arch_waveguide_relax_50nm.py --headless --json; \
+    else \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev examples/arch_waveguide_relax_50nm.py --headless --json; \
+    fi
 
 run-pylayer-interactive:
     just ensure-python

@@ -10,11 +10,15 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{
+    compute_torque_field, max_torque_apm_from_torque_t, max_torque_t_from_field,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
+#[cfg(feature = "fem-gpu")]
+use crate::relaxation::approximate_max_torque;
 #[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
@@ -145,6 +149,8 @@ pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Vec<bool>,
     object_weights: Vec<(String, f64)>,
+    damping: f64,
+    gyromagnetic_ratio: f64,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -749,6 +755,8 @@ impl NativeFemBackend {
                     collected
                 }
             },
+            damping: plan.material.damping,
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
         })
     }
 
@@ -813,6 +821,12 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
+        let torque_apm = approximate_max_torque(
+            stats.max_rhs_amplitude,
+            self.gyromagnetic_ratio,
+            self.damping,
+            false,
+        );
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -826,8 +840,8 @@ impl NativeFemBackend {
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
-            max_torque_Apm: stats.max_torque_Apm,
-            max_torque_T: stats.max_torque_Apm * crate::MU0,
+            max_torque_Apm: torque_apm,
+            max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
@@ -959,6 +973,9 @@ impl NativeFemBackend {
         }
 
         let magnetization = self.copy_m(node_count)?;
+        let effective_field = self.copy_h_eff(node_count)?;
+        let torque_t = max_torque_t_from_field(&magnetization, &effective_field, self.damping, true);
+        let torque_apm = max_torque_apm_from_torque_t(torque_t);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -972,8 +989,8 @@ impl NativeFemBackend {
             max_dm_dt: stats.max_rhs_amplitude,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
-            max_torque_Apm: stats.max_torque_Apm,
-            max_torque_T: stats.max_torque_Apm * crate::MU0,
+            max_torque_Apm: torque_apm,
+            max_torque_T: torque_t,
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
@@ -1028,6 +1045,17 @@ impl NativeFemBackend {
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
             node_count,
         )
+    }
+
+    pub fn copy_torque(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        let magnetization = self.copy_m(node_count)?;
+        let effective_field = self.copy_h_eff(node_count)?;
+        Ok(compute_torque_field(
+            &magnetization,
+            &effective_field,
+            self.damping,
+            true,
+        ))
     }
 
     pub fn copy_h_ani(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
@@ -1090,11 +1118,7 @@ impl NativeFemBackend {
             QuantityId::HDemag => self.copy_h_demag(node_count)?,
             QuantityId::HExt => self.copy_h_ext(node_count)?,
             QuantityId::HEff => self.copy_h_eff(node_count)?,
-            QuantityId::Torque => {
-                let magnetization = self.copy_m(node_count)?;
-                let effective_field = self.copy_h_eff(node_count)?;
-                compute_torque_field(&magnetization, &effective_field)
-            }
+            QuantityId::Torque => self.copy_torque(node_count)?,
             QuantityId::HAni => self.copy_h_ani(node_count)?,
             QuantityId::HDmi => self.copy_h_dmi(node_count)?,
             QuantityId::HMel => self.copy_h_mel(node_count)?,

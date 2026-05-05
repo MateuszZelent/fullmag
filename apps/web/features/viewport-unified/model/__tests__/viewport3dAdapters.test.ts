@@ -7,6 +7,7 @@ import {
   buildViewport3DModelFromAdapter,
   mapFdmSettingsToViewport3DState,
   mapViewport3DFdmPatchToLegacySettingsPatch,
+  resolveViewport3DOrientationReferenceVisible,
 } from "../viewport3dAdapters";
 import { resolveViewport3DCapabilities } from "../viewport3dCapabilities";
 import type { UnifiedRenderState } from "../unifiedViewportTypes";
@@ -142,6 +143,69 @@ describe("viewport3d adapters", () => {
     expect(mapped.topography.enabled).toBe(true);
     expect(mapped.topography.component).toBe("y");
     expect(mapped.topography.amplitude).toBe(12);
+  });
+
+  it("shows orientation reference for FDM voxel orientation coloring", () => {
+    const fdm = mapFdmSettingsToViewport3DState(
+      {
+        quality: "high",
+        render_mode: "voxel",
+        voxel_color_mode: "orientation",
+        sampling: 1,
+        brightness: 1.5,
+        voxel_opacity: 0.5,
+        voxel_gap: 0.14,
+        voxel_threshold: 0.08,
+        topo_enabled: false,
+        topo_component: "z",
+        topo_multiplier: 5,
+      },
+      false,
+    );
+
+    expect(resolveViewport3DOrientationReferenceVisible({ fdm, vectorField: null })).toBe(true);
+  });
+
+  it("hides orientation reference for FDM voxel component coloring", () => {
+    const fdm = mapFdmSettingsToViewport3DState(
+      {
+        quality: "high",
+        render_mode: "voxel",
+        voxel_color_mode: "x",
+        sampling: 1,
+        brightness: 1.5,
+        voxel_opacity: 0.5,
+        voxel_gap: 0.14,
+        voxel_threshold: 0.08,
+        topo_enabled: false,
+        topo_component: "z",
+        topo_multiplier: 5,
+      },
+      false,
+    );
+
+    expect(resolveViewport3DOrientationReferenceVisible({ fdm, vectorField: null })).toBe(false);
+  });
+
+  it("shows orientation reference for FDM glyph rendering when vectors are visible", () => {
+    const fdm = mapFdmSettingsToViewport3DState(
+      {
+        quality: "high",
+        render_mode: "glyph",
+        voxel_color_mode: "x",
+        sampling: 1,
+        brightness: 1.5,
+        voxel_opacity: 0.5,
+        voxel_gap: 0.14,
+        voxel_threshold: 0.08,
+        topo_enabled: false,
+        topo_component: "z",
+        topo_multiplier: 5,
+      },
+      true,
+    );
+
+    expect(resolveViewport3DOrientationReferenceVisible({ fdm, vectorField: null })).toBe(true);
   });
 
   it("includes default FDM module state for non-FEM discretization", () => {

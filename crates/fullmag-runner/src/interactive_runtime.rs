@@ -3479,11 +3479,7 @@ fn copy_native_fem_base_field_values(
         "H_demag" => backend.copy_h_demag(node_count),
         "H_ext" => backend.copy_h_ext(node_count),
         "H_eff" => backend.copy_h_eff(node_count),
-        "torque" => {
-            let magnetization = backend.copy_m(node_count)?;
-            let effective_field = backend.copy_h_eff(node_count)?;
-            Ok(crate::derived_fields::compute_torque_field(&magnetization, &effective_field))
-        }
+        "torque" => backend.copy_torque(node_count),
         other => Err(RunError {
             message: format!(
                 "unsupported interactive FEM output field snapshot '{}'",
@@ -3646,11 +3642,7 @@ fn copy_cuda_base_field_values(
         "H_demag" => backend.copy_h_demag(cell_count),
         "H_ext" => backend.copy_h_ext(cell_count),
         "H_eff" => backend.copy_h_eff(cell_count),
-        "torque" => {
-            let magnetization = backend.copy_m(cell_count)?;
-            let effective_field = backend.copy_h_eff(cell_count)?;
-            Ok(crate::derived_fields::compute_torque_field(&magnetization, &effective_field))
-        }
+        "torque" => backend.copy_torque(cell_count),
         other => Err(RunError {
             message: format!(
                 "unsupported interactive CUDA output field snapshot '{}'",

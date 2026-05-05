@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ModelTree, { buildFullmagModelTree } from "../../panels/ModelTree";
 import { useCommand, useModel, useTransport, useViewport } from "./ControlRoomContext";
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
@@ -34,6 +34,10 @@ import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useEigenSpectrumSummary } from "@/src/hooks/resources/useEigenSpectrumSummary";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+import {
+  resolveBuilderSidebarNodeId,
+  resolveBuilderSidebarSelectionSync,
+} from "./builderSelectionSync";
 
 function removeStudyPipelineNode(
   nodes: StudyPipelineDocumentState["nodes"],
@@ -564,16 +568,7 @@ export default function RunSidebar() {
 
   const builderActiveNodeId = useMemo(() => {
     if (!builderEnabled) return null;
-    if (builderSelection.type === "primitive") {
-      return `builder-prim-${builderSelection.id}`;
-    }
-    if (builderSelection.type === "universe") {
-      return "builder-universe";
-    }
-    if (builderSelection.type === "boolean") {
-      return `builder-bool-${builderSelection.id}`;
-    }
-    return null;
+    return resolveBuilderSidebarNodeId(builderSelection);
   }, [builderEnabled, builderSelection]);
 
   const activeNodeId =
@@ -581,6 +576,32 @@ export default function RunSidebar() {
     (graphEnabled ? graphSelection.activeNodeId : null) ??
     model.selectedSidebarNodeId ??
     fallbackNodeId;
+  useEffect(() => {
+    const nextBuilderSidebarNodeId = resolveBuilderSidebarSelectionSync({
+      builderEnabled,
+      builderSelection,
+      currentSidebarNodeId: model.selectedSidebarNodeId,
+    });
+    if (!nextBuilderSidebarNodeId) {
+      return;
+    }
+    if (model.selectedSidebarNodeId !== nextBuilderSidebarNodeId) {
+      model.setSelectedSidebarNodeId(nextBuilderSidebarNodeId);
+    }
+    if (model.selectedObjectId != null) {
+      model.setSelectedObjectId(null);
+    }
+    if (model.selectedEntityId != null) {
+      model.setSelectedEntityId(null);
+    }
+    if (model.focusedEntityId != null) {
+      model.setFocusedEntityId(null);
+    }
+  }, [
+    builderEnabled,
+    builderSelection,
+    model,
+  ]);
   const filteredModelTreeNodes = useMemo(
     () => filterTreeNodes(modelTreeNodes, treeQuery, treeFilterScope),
     [modelTreeNodes, treeFilterScope, treeQuery],
@@ -594,6 +615,9 @@ export default function RunSidebar() {
     setRightInspectorTab("properties");
 
     if (builderEnabled && id.startsWith("builder-")) {
+      model.setSelectedObjectId(null);
+      model.setSelectedEntityId(null);
+      model.setFocusedEntityId(null);
       if (id === "builder-universe") {
         selectBuilderTarget({ type: "universe", id: "universe" });
         model.setSelectedSidebarNodeId(id);

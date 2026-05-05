@@ -72,6 +72,7 @@ export interface Viewport3DQuantityModel {
 export interface Viewport3DOverlayState {
   viewCubeVisible: boolean;
   legendVisible: boolean;
+  orientationReferenceVisible: boolean;
   statusChipsVisible: boolean;
   selectionHudVisible: boolean;
   partExplorerVisible: boolean;

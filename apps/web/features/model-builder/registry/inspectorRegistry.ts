@@ -78,7 +78,6 @@ export const PanelKey = {
   MATERIAL_MAG:        "material-mag",
   OBJECT_MESH:         "object-mesh",
   REGION:              "region",
-  OBJ_GEO_MESH:       "obj-geo-mesh",
   BUILDER_OVERVIEW:    "builder-overview",
   BUILDER_PRIMITIVE:   "builder-primitive",
   BUILDER_UNIVERSE:    "builder-universe",
@@ -345,12 +344,14 @@ const RULES: RegistryRule[] = [
     props: passNodeId,
   },
   {
-    kinds: ["object.root", "object.geometry", "object.regions"],
-    panelKey: PanelKey.OBJ_GEO_MESH,
-    props: (ctx: InspectorContext) => ({
-      nodeId: ctx.selectedObjectNodeId ?? ctx.nodeId,
-      meshNodeId: ctx.selectedObjectMeshNodeId,
-    }),
+    kinds: ["object.regions"],
+    panelKey: PanelKey.REGION,
+    props: passNodeId,
+  },
+  {
+    kinds: ["object.root", "object.geometry"],
+    panelKey: PanelKey.GEOMETRY,
+    props: passNodeId,
   },
 
   // ── Materials ──

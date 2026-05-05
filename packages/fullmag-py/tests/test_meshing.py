@@ -64,6 +64,7 @@ from fullmag.meshing.gmsh_bridge import (
     _normalize_gmsh_log_line,
     _resolve_gmsh_thread_count,
     generate_cylinder_mesh,
+    generate_mesh,
     resolve_mesh_size_controls,
 )
 from fullmag.meshing.remesh_cli import _geometry_from_ir, _mesh_result_payload, _size_field_from_dict
@@ -1111,6 +1112,28 @@ class MeshScaffoldTests(unittest.TestCase):
             float(np.percentile(mean_edge[near_curvature], 75)),
             float(np.percentile(mean_edge[far_airbox], 25)),
         )
+
+    def test_arch_waveguide_generates_fem_mesh(self) -> None:
+        try:
+            mesh = generate_mesh(
+                fm.ArchWaveguide(
+                    length=100e-9,
+                    width=40e-9,
+                    height=5e-9,
+                    arch_height=20e-9,
+                    z0=-10e-9,
+                ),
+                hmax=20e-9,
+                options=MeshOptions(
+                    compute_quality=False,
+                    per_element_quality=False,
+                ),
+            )
+        except ImportError as exc:
+            self.skipTest(f"gmsh not available: {exc}")
+
+        self.assertGreater(mesh.n_nodes, 0)
+        self.assertGreater(mesh.n_elements, 0)
 
     def test_meshdata_to_ir_has_canonical_shape(self) -> None:
         mesh = self._unit_tet_mesh()

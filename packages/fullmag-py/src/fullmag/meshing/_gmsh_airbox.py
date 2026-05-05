@@ -8,6 +8,7 @@ import numpy as np
 
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -19,6 +20,7 @@ from fullmag.model.geometry import (
     Translate,
     Union,
 )
+from ._gmsh_waveguides import add_arch_waveguide_to_occ
 
 from ._gmsh_types import AirboxOptions, MeshData, MeshOptions, MeshQualityReport
 from ._gmsh_infra import _import_gmsh, _configure_gmsh_threads, _GmshProgressLogger
@@ -599,6 +601,8 @@ def _create_occ_geometry(gmsh: Any, geometry: Geometry) -> list[tuple[int, int]]
             1.0,
         )
         return [(3, tag)]
+    if isinstance(geometry, ArchWaveguide):
+        return add_arch_waveguide_to_occ(gmsh, geometry)
     if isinstance(geometry, Difference):
         base_tags = _create_occ_geometry(gmsh, geometry.base)
         tool_tags = _create_occ_geometry(gmsh, geometry.tool)

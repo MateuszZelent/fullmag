@@ -134,9 +134,9 @@ const CATALOG: [QuantitySpec; 33] = [
     QuantitySpec {
         id: QuantityId::Torque,
         label: "Torque",
-        description: "Micromagnetic torque residual m × H_eff",
+        description: "Total Landau-Lifshitz torque divided by gamma0, matching mumax torque",
         shape: QuantityShape::VectorField,
-        unit: "A/m",
+        unit: "T",
         interactive_preview: true,
         cached_preview: true,
         quick_access_label: Some("τ"),

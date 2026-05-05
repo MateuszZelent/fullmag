@@ -70,7 +70,7 @@ pub(crate) fn approximate_max_torque(
         }
         return max_dm_dt * (1.0 + damping * damping) / (gyromagnetic_ratio * damping);
     }
-    max_dm_dt * (1.0 + damping * damping).sqrt() / gyromagnetic_ratio
+    max_dm_dt / gyromagnetic_ratio
 }
 
 /// Return the best available max-torque metric in A/m.

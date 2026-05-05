@@ -15,7 +15,6 @@ import { cn } from "@/lib/utils";
 import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
-import { FemViewportStatusBar } from "./FemViewportStatusBar";
 import { FemViewportToolbar } from "./FemViewportToolbar";
 import { FemRefineToolbar } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
@@ -55,14 +54,48 @@ function colorLegendLengthLabel(args: {
   return `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`;
 }
 
-function colorModeLabel(
-  mode: FemColorField | FemArrowColorMode,
-  fieldLabel?: string,
-): string {
-  if (mode === "monochrome") {
-    return "monochrome";
+export function resolveFemOrientationLegendVisibility(args: {
+  requested: boolean;
+  surfaceColorField: FemColorField;
+  arrowColorMode: FemArrowColorMode;
+  effectiveShowArrows: boolean;
+}): boolean {
+  if (args.requested) {
+    return true;
   }
-  return colorLegendLabel(mode, fieldLabel);
+  if (args.surfaceColorField === "orientation") {
+    return true;
+  }
+  return args.effectiveShowArrows && args.arrowColorMode === "orientation";
+}
+
+export function resolveFemOverlayLegendVisibility(args: {
+  legendOpen: boolean;
+  colorLegendField: FemColorField | null;
+  fieldLegendEnabled: boolean;
+  orientationReferenceEnabled: boolean;
+  requestedOrientationReference: boolean;
+  surfaceColorField: FemColorField;
+  arrowColorMode: FemArrowColorMode;
+  effectiveShowArrows: boolean;
+}): {
+  showColorLegend: boolean;
+  orientationReferenceVisible: boolean;
+} {
+  return {
+    showColorLegend:
+      args.fieldLegendEnabled &&
+      args.legendOpen &&
+      args.colorLegendField != null,
+    orientationReferenceVisible:
+      args.orientationReferenceEnabled &&
+      resolveFemOrientationLegendVisibility({
+        requested: args.requestedOrientationReference,
+        surfaceColorField: args.surfaceColorField,
+        arrowColorMode: args.arrowColorMode,
+        effectiveShowArrows: args.effectiveShowArrows,
+      }),
+  };
 }
 
 export interface UseFemOverlayItemsArgs {
@@ -451,14 +484,18 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         ),
       });
     }
-    const showColorLegend =
-      FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showFieldLegend &&
-      args.legendOpen &&
-      args.colorLegendField != null;
-    const showOrientationLegend =
-      FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere &&
-      args.effectiveShowOrientationLegend;
-    if (showColorLegend || showOrientationLegend) {
+    const { showColorLegend, orientationReferenceVisible } =
+      resolveFemOverlayLegendVisibility({
+        legendOpen: args.legendOpen,
+        colorLegendField: args.colorLegendField,
+        fieldLegendEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showFieldLegend,
+        orientationReferenceEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere,
+        requestedOrientationReference: args.effectiveShowOrientationLegend,
+        surfaceColorField: args.legendField,
+        arrowColorMode: args.arrowColorMode,
+        effectiveShowArrows: args.effectiveShowArrows,
+      });
+    if (showColorLegend) {
       items.push({
         id: "legend-stack",
         anchor: "bottom-left",
@@ -467,7 +504,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
           <FieldLegend
             compact={variant !== "full"}
             className="pointer-events-none z-10"
-            colorLabel={colorLegendLabel(args.legendField, args.fieldLabel)}
+            colorLabel={colorLegendLabel(args.colorLegendField ?? "none", args.fieldLabel)}
             lengthLabel={
               args.effectiveShowArrows
                 ? args.arrowColorMode === "orientation"
@@ -477,17 +514,17 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
                     : `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`
                 : undefined
             }
-            min={args.legendField === "none" ? undefined : args.colorLegendStats?.min}
-            max={args.legendField === "none" ? undefined : args.colorLegendStats?.max}
-            mean={args.legendField === "none" ? undefined : args.colorLegendStats?.mean}
-            gradient={colorLegendGradient(args.legendField)}
+            min={args.colorLegendField == null ? undefined : args.colorLegendStats?.min}
+            max={args.colorLegendField == null ? undefined : args.colorLegendStats?.max}
+            mean={args.colorLegendField == null ? undefined : args.colorLegendStats?.mean}
+            gradient={colorLegendGradient(args.colorLegendField ?? "none")}
           />
         ),
       });
     }
-    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere && args.effectiveShowOrientationLegend) {
+    if (orientationReferenceVisible) {
       items.push({
-        id: "orientation-legend",
+        id: "orientation-reference",
         anchor: "bottom-left",
         priority: 5,
         render: ({ variant }) => (
@@ -499,38 +536,6 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
           />
         ),
       });
-    }
-    {
-      const qSym =
-        (args.prominentQuantityOptions.find((o) => o.id === args.quantityId) ?? null)
-          ?.shortLabel ?? "m";
-      if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showStatusBar) {
-        items.push({
-          id: "status-bar",
-          anchor: "bottom-center",
-          priority: 2,
-          render: () => (
-            <FemViewportStatusBar
-              surfaceLabel={colorModeLabel(args.toolbarColorField, qSym)}
-              arrowLabel={colorModeLabel(args.arrowColorMode, qSym)}
-              arrowDensity={args.baseArrowDensity}
-              effectiveDensity={args.effectiveArrowDensity}
-              renderModeMixed={args.toolbarRenderModeMixed}
-              opacityMixed={args.toolbarOpacityMixed}
-              colorFieldMixed={args.toolbarColorFieldMixed}
-              toolbarScopeLabel={args.toolbarScopeLabel}
-              arrowsRequested={args.showArrows}
-              arrowsVisible={args.effectiveShowArrows}
-              arrowsBlockReason={args.arrowsBlockReason}
-              interactionSimplified={args.interactionActive}
-              hasField={!args.missingMagneticMask}
-              fieldLabel={args.fieldLabel}
-              visiblePartsCount={args.hasMeshParts ? args.visibleLayersCount : undefined}
-              totalPartsCount={args.hasMeshParts ? args.meshParts.length : undefined}
-            />
-          ),
-        });
-      }
     }
     if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHud) {
       items.push({

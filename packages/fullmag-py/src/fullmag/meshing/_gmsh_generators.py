@@ -10,6 +10,7 @@ from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -50,6 +51,7 @@ from ._gmsh_extraction import (
 from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
+from ._gmsh_waveguides import add_arch_waveguide_to_occ
 
 _NO_OP_FIELD_SIZE = 1.0e22
 
@@ -221,7 +223,7 @@ def generate_mesh(
             airbox=resolved_airbox,
             options=opts,
         )
-    if isinstance(geometry, (Difference, Union, Intersection, Translate, Ellipsoid, Ellipse)):
+    if isinstance(geometry, (Difference, Union, Intersection, Translate, Ellipsoid, Ellipse, ArchWaveguide)):
         # A chain of Translate wrapping an ImportedGeometry cannot go through
         # the OCC CSG pipeline (OCC cannot ingest STL/NPZ sources). Detect this
         # pattern, mesh the imported file directly, and apply the accumulated
@@ -556,6 +558,8 @@ def _add_geometry_to_occ(
         fy = (geometry.ry * scale) / rmax
         gmsh.model.occ.dilate([(3, tag)], 0.0, 0.0, 0.0, fx, fy, 1.0)
         return [(3, tag)]
+    if isinstance(geometry, ArchWaveguide):
+        return add_arch_waveguide_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, Difference):
         base_tags = _add_geometry_to_occ(gmsh, geometry.base, scale=scale)
         tool_tags = _add_geometry_to_occ(gmsh, geometry.tool, scale=scale)

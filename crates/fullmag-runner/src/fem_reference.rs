@@ -23,7 +23,7 @@ use crate::antenna_fields::{
     combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, flatten_vectors, mesh_quantity_active_mask,
@@ -1026,7 +1026,13 @@ pub(crate) fn observe_state(
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("FEM engine observables: {}", e),
     })?;
-    let torque_field = compute_torque_field(&observables.magnetization, &observables.effective_field);
+    let torque_field = compute_torque_field(
+        &observables.magnetization,
+        &observables.effective_field,
+        problem.material.damping,
+        problem.dynamics.precession_enabled,
+    );
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1052,7 +1058,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
-        max_torque_Apm: observables.max_torque_Apm,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars: std::collections::HashMap::new(),
     })
 }

@@ -8,7 +8,12 @@ from typing import Any, Sequence
 import h5py
 import numpy as np
 import zarr
-from zarr.storage import DirectoryStore, ZipStore
+from zarr.storage import ZipStore
+
+try:
+    from zarr.storage import DirectoryStore
+except ImportError:
+    DirectoryStore = None  # type: ignore[assignment]
 
 from .magnetization import SampledMagnetization
 
@@ -342,7 +347,11 @@ def _select_state_sample(values: np.ndarray, *, sample: int) -> np.ndarray:
     )
 
 
-def _open_zarr_store(path: Path, *, mode: str) -> DirectoryStore | ZipStore:
+def _open_zarr_store(path: Path, *, mode: str) -> Any:
+    if DirectoryStore is None:
+        raise RuntimeError(
+            f"zarr magnetization state I/O requires zarr>=2.18,<3; found zarr {zarr.__version__}"
+        )
     if path.name.lower().endswith(".zip"):
         return ZipStore(str(path), mode=mode)
     return DirectoryStore(str(path))

@@ -21,7 +21,7 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
 use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
@@ -1319,6 +1319,7 @@ fn observe_multilayer_cuda(
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
     let mut effective_field = Vec::new();
+    let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
     let mut external_energy = 0.0;
@@ -1391,6 +1392,12 @@ fn observe_multilayer_cuda(
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
+        torque_field.extend(compute_torque_field(
+            state.magnetization(),
+            &local_effective,
+            context.problem.material.damping,
+            context.problem.dynamics.precession_enabled,
+        ));
 
         let [mx, my, mz] =
             crate::scalar_metrics::average_magnetization_components(state.magnetization());
@@ -1425,7 +1432,7 @@ fn observe_multilayer_cuda(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let torque_field = compute_torque_field(&magnetization, &effective_field);
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization,
@@ -1451,7 +1458,7 @@ fn observe_multilayer_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: 0.0,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars,
     })
 }
@@ -1628,6 +1635,7 @@ fn observe_multilayer_cuda_single(
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
     let mut effective_field = Vec::new();
+    let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
     let mut external_energy = 0.0;
@@ -1684,6 +1692,12 @@ fn observe_multilayer_cuda_single(
         max_dm_dt = max_dm_dt.max(max_norm_f32(&rhs));
         max_h_eff = max_h_eff.max(max_norm_f32(&local_effective));
         max_h_demag = max_h_demag.max(max_norm_f32(&local_demag));
+        torque_field.extend(compute_torque_field(
+            &to_f64_vectors(&state.magnetization),
+            &to_f64_vectors(&local_effective),
+            context.problem.material.damping,
+            context.problem.dynamics.precession_enabled,
+        ));
 
         let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components(
             &to_f64_vectors(&state.magnetization),
@@ -1719,7 +1733,7 @@ fn observe_multilayer_cuda_single(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let torque_field = compute_torque_field(&magnetization, &effective_field);
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization,
@@ -1745,7 +1759,7 @@ fn observe_multilayer_cuda_single(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: 0.0,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars,
     })
 }
@@ -2041,7 +2055,13 @@ fn observe_native_stacked_cuda(
 
     let magnetization = extract_native_stacked_field(&magnetization_full, native);
     let effective_field = extract_native_stacked_field(&effective_full, native);
-    let torque_field = compute_torque_field(&magnetization, &effective_field);
+    let torque_field = compute_torque_field(
+        &magnetization,
+        &effective_field,
+        native.combined_plan.material.damping,
+        !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
+    );
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization,
@@ -2067,7 +2087,7 @@ fn observe_native_stacked_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: 0.0,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars,
     })
 }

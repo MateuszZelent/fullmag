@@ -50,6 +50,7 @@ import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/text
 import type { TextureGizmoMode } from "@/components/preview/TextureTransformGizmo";
 import type { RenderMode as FemRenderMode } from "@/components/preview/FemMeshView3D";
 import { downsampleVectorFieldSpatialBins } from "@/components/preview/fem/femFieldDownsample";
+import { shouldFlagMissingExactScopeSegment } from "@/components/preview/fem/useFemViewportDerivedModel";
 import { resolveAntennaNodeName } from "@/components/runs/control-room/shared";
 import {
   buildDenseFemVectorField,
@@ -718,19 +719,13 @@ export function useViewportDataBridge() {
 
   /* ── FEM layer state ── */
   const femLayerState = renderPlan?.layers.femLayers ?? ctx.femViewportLayers;
-  const geometryAuthoringShowPrimitives = geometryViewportPresetActive
-    ? true
-    : showGeometryAuthoringViewport
+  const geometryAuthoringShowPrimitives = showGeometryAuthoringViewport
     ? true
     : femLayerState.showPrimitives;
-  const geometryAuthoringShowMesh = geometryViewportPresetActive
-    ? false
-    : showGeometryAuthoringViewport
+  const geometryAuthoringShowMesh = showGeometryAuthoringViewport
     ? false
     : femLayerState.showMesh;
-  const geometryAuthoringShowQuantity = geometryViewportPresetActive
-    ? false
-    : showGeometryAuthoringViewport
+  const geometryAuthoringShowQuantity = showGeometryAuthoringViewport
     ? false
     : femLayerState.showQuantity;
   const geometryModeObjectOverlays = useMemo(
@@ -1076,13 +1071,14 @@ export function useViewportDataBridge() {
     );
   }, [ctx.effectiveFemMesh?.mesh_parts, ctx.effectiveFemMesh?.object_segments, selectedFemObjectId]);
 
-  const missingExactScopeSegment = Boolean(
-    femDiscretization &&
-      ctx.femMeshData &&
-      ctx.femMeshData.nElements > 0 &&
-      selectedFemObjectId &&
-      !hasExactScopeSegment,
-  );
+  const missingExactScopeSegment =
+    Boolean(femDiscretization) &&
+    shouldFlagMissingExactScopeSegment({
+      selectedObjectId: selectedFemObjectId,
+      selectedObjectOverlayFidelity: selectedObjectOverlay?.fidelity ?? null,
+      nElements: ctx.femMeshData?.nElements ?? 0,
+      hasExactScopeSegment,
+    });
 
   /* ── Scale factor ── */
   const originalUnit = ctx.quantityDescriptor?.unit;

@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import ViewCube from "@/components/preview/ViewCube";
 import HslSphere from "@/components/preview/HslSphere";
 import FdmInstances from "@/components/preview/r3f/FdmInstances";
-import { rotateCameraAroundTarget, focusCameraOnBounds } from "@/components/preview/camera/cameraHelpers";
+import { rotateCameraAroundTarget, focusCameraOnBounds, fitCameraToBounds } from "@/components/preview/camera/cameraHelpers";
 import {
   captureOrientationDebugSnapshot,
   type OrientationDebugSnapshot,
@@ -104,6 +104,56 @@ const VECTOR_SURFACE_DEBUG_LOGS =
   process.env.NODE_ENV !== "production";
 
 export { shouldRenderVectorSurfaceCanvas };
+
+export function shouldShowVectorSurfaceOrientationReference(args: {
+  viewportVisible: boolean;
+  geometryMode: boolean;
+  viewport3DModel: Viewport3DModel | null | undefined;
+  orientationReferenceKillSwitch: boolean;
+}): boolean {
+  return Boolean(
+    args.viewportVisible &&
+      !args.geometryMode &&
+      args.orientationReferenceKillSwitch &&
+      args.viewport3DModel?.overlays.orientationReferenceVisible,
+  );
+}
+
+function formatCameraFitNumber(value: number): string {
+  return Number.isFinite(value) ? value.toPrecision(12) : "invalid";
+}
+
+export function buildVectorSurfaceCameraFitSignature(args: {
+  viewportVisible: boolean;
+  sceneMode: ViewportSceneMode;
+  hasRenderableContent: boolean;
+  center: readonly [number, number, number];
+  extent: readonly [number, number, number];
+}): string | null {
+  if (!args.viewportVisible || !args.hasRenderableContent) {
+    return null;
+  }
+  if (!args.extent.every((value) => Number.isFinite(value) && value > 0)) {
+    return null;
+  }
+  const center = args.center.map(formatCameraFitNumber).join(",");
+  const extent = args.extent.map(formatCameraFitNumber).join(",");
+  return `${args.sceneMode}:${center}:${extent}`;
+}
+
+export function shouldApplyVectorSurfaceCameraAutoFit(args: {
+  nextFitSignature: string | null;
+  previousFitSignature: string | null;
+  persistedCameraAvailable: boolean;
+  cameraInteractionActive: boolean;
+}): boolean {
+  return Boolean(
+    args.nextFitSignature &&
+      !args.persistedCameraAvailable &&
+      !args.cameraInteractionActive &&
+      args.nextFitSignature !== args.previousFitSignature,
+  );
+}
 
 function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>): void {
   if (!VECTOR_SURFACE_DEBUG_LOGS) {
@@ -995,9 +1045,21 @@ function UnifiedVectorFieldRendererInner({
   // array references with the same values) does not cause TrackballControls to snap back to
   // center via its reactive `target` useEffect. If the geometry changes substantially the user
   // can use the fit-to-bounds control; no auto-reset on every poll tick.
-  const [stableOrbitTarget] = useState<[number, number, number]>(
+  const [stableOrbitTarget, setStableOrbitTarget] = useState<[number, number, number]>(
     () => [...sceneFrame.center] as [number, number, number],
   );
+  const vectorSurfaceCameraFitSignature = useMemo(
+    () =>
+      buildVectorSurfaceCameraFitSignature({
+        viewportVisible,
+        sceneMode,
+        hasRenderableContent: sceneMode === "grid" ? hasRenderableGrid : Boolean(worldBounds),
+        center: sceneFrame.center,
+        extent: sceneFrame.extent,
+      }),
+    [hasRenderableGrid, sceneFrame.center, sceneFrame.extent, sceneMode, viewportVisible, worldBounds],
+  );
+  const vectorSurfaceCameraFitMaxDim = Math.max(...sceneFrame.extent, 1);
   const cameraPersistenceKey = useMemo(
     () =>
       viewportDocumentId
@@ -1058,6 +1120,7 @@ function UnifiedVectorFieldRendererInner({
     key: string;
     state: ViewportCameraState | null;
   } | null>(null);
+  const lastVectorSurfaceCameraFitSignatureRef = useRef<string | null>(null);
   const lastFocusedObjectIdRef = useRef<string | null>(persistedCameraState?.lastFocusedObjectId ?? null);
   // P-26: Track the last persisted camera state we actually applied. Used to detect reference-
   // identity changes that carry identical values (e.g., when the workspace graph snapshot
@@ -1289,6 +1352,66 @@ function UnifiedVectorFieldRendererInner({
     };
   }, [cameraPersistenceKey, persistedCameraState, syncViewportRotationSnapshot, telemetry]);
 
+  useEffect(() => {
+    if (!vectorSurfaceCameraFitSignature) {
+      return;
+    }
+    if (
+      !shouldApplyVectorSurfaceCameraAutoFit({
+        nextFitSignature: vectorSurfaceCameraFitSignature,
+        previousFitSignature: lastVectorSurfaceCameraFitSignatureRef.current,
+        persistedCameraAvailable: Boolean(persistedCameraState),
+        cameraInteractionActive: cameraInteractionActiveRef.current,
+      })
+    ) {
+      return;
+    }
+
+    let raf = 0;
+    let disposed = false;
+
+    const fit = () => {
+      if (disposed) {
+        return;
+      }
+      const bridge = viewCubeSceneRef.current;
+      if (!bridge?.camera || !bridge?.controls) {
+        raf = window.requestAnimationFrame(fit);
+        return;
+      }
+
+      const target = new THREE.Vector3(cx, cy, cz);
+      fitCameraToBounds(
+        bridge.camera,
+        vectorSurfaceCameraFitMaxDim,
+        target,
+        bridge.controls,
+      );
+      setStableOrbitTarget([target.x, target.y, target.z]);
+      lastVectorSurfaceCameraFitSignatureRef.current = vectorSurfaceCameraFitSignature;
+      telemetry.recordLifecycleEvent("camera_fit");
+      syncViewportRotationSnapshot();
+    };
+
+    fit();
+
+    return () => {
+      disposed = true;
+      if (raf) {
+        window.cancelAnimationFrame(raf);
+      }
+    };
+  }, [
+    cx,
+    cy,
+    cz,
+    persistedCameraState,
+    syncViewportRotationSnapshot,
+    telemetry,
+    vectorSurfaceCameraFitMaxDim,
+    vectorSurfaceCameraFitSignature,
+  ]);
+
   // Snap camera to a direction
   const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
     const bridge = viewCubeSceneRef.current;
@@ -1305,6 +1428,7 @@ function UnifiedVectorFieldRendererInner({
     camera.lookAt(cx, cy, cz);
     controls.target.set(cx, cy, cz);
     controls.update();
+    setStableOrbitTarget([cx, cy, cz]);
   }, [cx, cy, cz, orbitDist]);
 
   const resetCamera = useCallback(
@@ -1338,6 +1462,11 @@ function UnifiedVectorFieldRendererInner({
       { min: mapped.sceneMin, max: mapped.sceneMax },
       { fallbackMinRadius: sceneMode === "world" ? Math.max(orbitDist * 0.1, 1e-6) : 1.5 },
     );
+    setStableOrbitTarget([
+      bridge.controls.target.x,
+      bridge.controls.target.y,
+      bridge.controls.target.z,
+    ]);
   }, [grid, objectOverlays, orbitDist, sceneMode, universeCenter, worldExtent]);
 
   useEffect(() => {
@@ -1463,9 +1592,12 @@ function UnifiedVectorFieldRendererInner({
     showInternalToolbar && vectorSurfaceFlags.showTextureModeToolbar;
   const showViewCube =
     vectorSurfaceFlags.showViewCube && FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube;
-  const showOrientationSphere =
-    vectorSurfaceFlags.showOrientationSphere &&
-    FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere;
+  const showOrientationSphere = shouldShowVectorSurfaceOrientationReference({
+    viewportVisible,
+    geometryMode,
+    viewport3DModel,
+    orientationReferenceKillSwitch: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere,
+  });
   const showRenderModeControls =
     showInternalToolbarControls &&
     vectorSurfaceFlags.enableRenderModeControls &&
@@ -1770,7 +1902,7 @@ function UnifiedVectorFieldRendererInner({
         </ViewportOverlayLayout.TopRight>
 
         <ViewportOverlayLayout.BottomLeft>
-          {showOrientationSphere && viewportVisible ? (
+          {showOrientationSphere ? (
             <HslSphere
               sceneRef={viewCubeSceneRef}
               axisConvention={VECTOR_SURFACE_AXIS_CONVENTION}

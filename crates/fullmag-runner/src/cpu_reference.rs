@@ -15,7 +15,7 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
 use crate::quantities::normalized_quantity_name;
@@ -996,7 +996,13 @@ pub(crate) fn observe_state(
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
 
-    let torque_field = compute_torque_field(&observables.magnetization, &observables.effective_field);
+    let torque_field = compute_torque_field(
+        &observables.magnetization,
+        &observables.effective_field,
+        problem.material.damping,
+        problem.dynamics.precession_enabled,
+    );
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1022,7 +1028,7 @@ pub(crate) fn observe_state(
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
-        max_torque_Apm: observables.max_torque_Apm,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars: std::collections::HashMap::new(),
     })
 }

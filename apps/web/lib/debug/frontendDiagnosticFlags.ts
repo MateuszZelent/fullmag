@@ -136,9 +136,9 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showToolbar: false,
     showWarnings: true,
     showViewCube: true,
-    // Extra HSL sphere uses its own R3F Canvas/WebGL context. Keep it opt-in
-    // so the live solver viewport does not spend context budget on decoration.
-    showOrientationSphere: false,
+    // Orientation reference is shown automatically when orientation coloring is active.
+    // This flag remains only as a diagnostic kill switch.
+    showOrientationSphere: true,
     showFieldLegend: true,
     showSelectionHud: true,
     showPartExplorer: false,
@@ -188,8 +188,8 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableInfoControls: false,
     enableSnapshotControl: false,
     // Overlay gizmos.
-    showViewCube: false,
-    showOrientationSphere: false,
+    showViewCube: true,
+    showOrientationSphere: true,
     showLiveRenderDebugPanel: false,
     showTextureModeToolbar: false,
   },
@@ -309,12 +309,7 @@ function normalizeFrontendDiagnosticFlags(
   normalized.femViewport.showToolbar = false;
   normalized.femViewport.showSurfacePass = true;
   normalized.femViewport.showPointsPass = true;
-  if (
-    !normalized.renderDebug.enableRenderLogging ||
-    !normalized.interactions.trace
-  ) {
-    normalized.femViewport.showOrientationSphere = false;
-  }
+  normalized.vectorSurfaceViewport.showViewCube = true;
   return normalized;
 }
 

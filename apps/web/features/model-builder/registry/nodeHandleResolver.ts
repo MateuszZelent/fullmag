@@ -143,6 +143,30 @@ const STATIC_NODES: Record<string, StaticEntry> = {
     scope: "solver_affecting",
     sourceOfTruth: "scene_document",
   },
+  "builder-root": {
+    nodeKind: "builder.root",
+    domain: "build",
+    scope: "workspace_only",
+    sourceOfTruth: "builder_graph",
+  },
+  "builder-universe": {
+    nodeKind: "builder.universe",
+    domain: "build",
+    scope: "workspace_only",
+    sourceOfTruth: "builder_graph",
+  },
+  "builder-primitives": {
+    nodeKind: "builder.primitives",
+    domain: "build",
+    scope: "workspace_only",
+    sourceOfTruth: "builder_graph",
+  },
+  "builder-lifecycle": {
+    nodeKind: "builder.lifecycle",
+    domain: "build",
+    scope: "workspace_only",
+    sourceOfTruth: "builder_graph",
+  },
   objects: {
     nodeKind: "objects.root",
     domain: "build",
@@ -413,6 +437,14 @@ interface PrefixRule {
 
 const PREFIX_RULES: PrefixRule[] = [
   // Order matters — more specific prefixes first
+  {
+    prefix: "builder-prim-",
+    nodeKind: "builder.primitive",
+    domain: "build",
+    scope: "workspace_only",
+    sourceOfTruth: "builder_graph",
+    entityFromSuffix: true,
+  },
   {
     prefix: "vis-project-",
     nodeKind: "visualization.preset.project",

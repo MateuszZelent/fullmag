@@ -34,6 +34,7 @@ const EMPTY_ENGINE_LOG: never[] = [];
 const EMPTY_QUANTITIES: never[] = [];
 const EMPTY_ARTIFACTS: never[] = [];
 const EMPTY_LATEST_FIELD_FRAMES: Record<string, LatestFieldFrame> = {};
+const MU0 = 4 * Math.PI * 1e-7;
 
 // ── Solver-state → RuntimeStatusKind mapping ────────────────────────
 
@@ -199,7 +200,8 @@ function mapLiveState(status: LiveStatus): LiveState {
     max_dm_dt: 0,
     max_h_eff: 0,
     max_h_demag: 0,
-    max_torque_Apm: status.solver.max_torque ?? 0,
+    max_torque_Apm: status.solver.max_torque != null ? status.solver.max_torque / MU0 : 0,
+    max_torque_T: status.solver.max_torque ?? 0,
     wall_time_ns: m.uptime_seconds * 1e9,
     grid: [0, 0, 0],
     preview_grid: null,

@@ -12,7 +12,9 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{
+    compute_torque_field, max_torque_apm_from_torque_t, max_torque_t_from_field,
+};
 #[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
@@ -20,7 +22,7 @@ use crate::preview::{
 #[cfg(feature = "cuda")]
 use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
-use crate::relaxation::llg_overdamped_uses_pure_damping;
+use crate::relaxation::{approximate_max_torque, llg_overdamped_uses_pure_damping};
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(feature = "cuda")]
@@ -616,6 +618,12 @@ impl NativeFdmBackend {
             return Err(self.last_error_or("step failed"));
         }
 
+        let torque_apm = approximate_max_torque(
+            stats.max_rhs_amplitude,
+            self.gyromagnetic_ratio,
+            self.damping,
+            !self.precession_enabled,
+        );
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -628,8 +636,8 @@ impl NativeFdmBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             max_dm_dt: stats.max_rhs_amplitude,
-            max_torque_Apm: stats.max_torque_Apm,
-            max_torque_T: stats.max_torque_Apm * crate::MU0,
+            max_torque_Apm: torque_apm,
+            max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             dt_suggested: if stats.suggested_next_dt > 0.0 {
                 Some(stats.suggested_next_dt)
@@ -741,6 +749,17 @@ impl NativeFdmBackend {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
             cell_count,
         )
+    }
+
+    pub fn copy_torque(&self, cell_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        let magnetization = self.copy_m(cell_count)?;
+        let effective_field = self.copy_h_eff(cell_count)?;
+        Ok(compute_torque_field(
+            &magnetization,
+            &effective_field,
+            self.damping,
+            self.precession_enabled,
+        ))
     }
 
     #[allow(dead_code)]
@@ -863,7 +882,12 @@ impl NativeFdmBackend {
                 * (original_grid[2] as usize);
             let magnetization = self.copy_m(cell_count)?;
             let effective_field = self.copy_h_eff(cell_count)?;
-            let torque = compute_torque_field(&magnetization, &effective_field);
+            let torque = compute_torque_field(
+                &magnetization,
+                &effective_field,
+                self.damping,
+                self.precession_enabled,
+            );
             let sampled = crate::preview::resample_grid_vectors(&torque, &plan);
             crate::preview::flatten_vectors(&sampled)
         } else {
@@ -992,6 +1016,16 @@ impl NativeFdmBackend {
         let cell_count = (grid[0] as usize) * (grid[1] as usize) * (grid[2] as usize);
         let magnetization = self.copy_m(cell_count)?;
         let effective_field = self.copy_h_eff(cell_count)?;
+        let torque_apm = if stats.max_torque_Apm > 0.0 {
+            stats.max_torque_Apm
+        } else {
+            max_torque_apm_from_torque_t(max_torque_t_from_field(
+                &magnetization,
+                &effective_field,
+                self.damping,
+                self.precession_enabled,
+            ))
+        };
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1011,6 +1045,8 @@ impl NativeFdmBackend {
             ),
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
+            max_torque_Apm: torque_apm,
+            max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             ..StepStats::default()
         };

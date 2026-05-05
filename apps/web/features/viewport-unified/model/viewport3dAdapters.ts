@@ -237,6 +237,20 @@ export function mapViewport3DFdmPatchToLegacySettingsPatch(
   return next;
 }
 
+export function resolveViewport3DOrientationReferenceVisible(args: {
+  fdm: Viewport3DFdmModuleState | null;
+  vectorField: Viewport3DVectorFieldModel | null;
+}): boolean {
+  const fdm = args.fdm;
+  if (fdm == null) {
+    return false;
+  }
+  if (fdm.renderMode === "voxel") {
+    return fdm.voxelColorMode === "orientation";
+  }
+  return fdm.renderMode === "glyph" && fdm.vectorsVisible;
+}
+
 export interface Viewport3DModelAdapterInput {
   discretization: Viewport3DDiscretization;
   renderState: UnifiedRenderState;
@@ -294,6 +308,10 @@ export function buildViewport3DModelFromAdapter({
 }: Viewport3DModelAdapterInput): Viewport3DModel {
   const resolvedFdmSettings =
     fdmSettings ?? (discretization !== "fem" ? DEFAULT_FDM_SETTINGS : null);
+  const fdmState = resolvedFdmSettings
+    ? mapFdmSettingsToViewport3DState(resolvedFdmSettings, fdmVectorsVisible)
+    : null;
+  const resolvedVectorField = vectorField ?? EMPTY_VIEWPORT3D_VECTOR_FIELD;
   return {
     scene: {
       discretization,
@@ -326,6 +344,10 @@ export function buildViewport3DModelFromAdapter({
     overlays: {
       viewCubeVisible: true,
       legendVisible: toolbarState.rowB.legendVisible,
+      orientationReferenceVisible: resolveViewport3DOrientationReferenceVisible({
+        fdm: fdmState,
+        vectorField: resolvedVectorField,
+      }),
       statusChipsVisible: true,
       selectionHudVisible: true,
       partExplorerVisible: toolbarState.rowB.partExplorerVisible,
@@ -363,9 +385,7 @@ export function buildViewport3DModelFromAdapter({
       effectiveStep,
     },
     authoring,
-    fdm: resolvedFdmSettings
-      ? mapFdmSettingsToViewport3DState(resolvedFdmSettings, fdmVectorsVisible)
-      : null,
-    vectorField: vectorField ?? EMPTY_VIEWPORT3D_VECTOR_FIELD,
+    fdm: fdmState,
+    vectorField: resolvedVectorField,
   };
 }

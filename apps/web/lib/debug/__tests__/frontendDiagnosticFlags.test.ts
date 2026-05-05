@@ -92,6 +92,20 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(loaded.femViewport.showPointsPass).toBe(true);
   });
 
+  it("normalizes VectorSurface ViewCube visibility even when stale persisted flags disable it", () => {
+    memoryStorage.setItem(
+      "fullmag.frontend_diagnostic_flags.v1",
+      JSON.stringify({
+        vectorSurfaceViewport: {
+          showViewCube: false,
+        },
+      }),
+    );
+
+    const loaded = loadFrontendDiagnosticFlagsFromStorage();
+    expect(loaded.vectorSurfaceViewport.showViewCube).toBe(true);
+  });
+
   it("contains workspace graph bridge flag in defaults", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     expect(defaults.workspace.enableWorkspaceGraphBridge).toBe(true);
@@ -102,21 +116,26 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(defaults.vectorSurfaceViewport.enableCanvas3D).toBe(true);
   });
 
-  it("keeps the extra HSL orientation sphere opt-in outside debug viewport profile", () => {
+  it("keeps the VectorSurface ViewCube enabled in the normal defaults", () => {
+    const defaults = getDefaultFrontendDiagnosticFlags();
+    expect(defaults.vectorSurfaceViewport.showViewCube).toBe(true);
+  });
+
+  it("keeps the HSL orientation reference enabled by default", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     const debugViewportProfile = getProfileById("debug-viewport");
 
-    expect(defaults.femViewport.showOrientationSphere).toBe(false);
+    expect(defaults.femViewport.showOrientationSphere).toBe(true);
     expect(debugViewportProfile?.overrides.femViewport?.showOrientationSphere).toBe(true);
     expect(debugViewportProfile?.overrides.interactions?.trace).toBe(true);
   });
 
-  it("normalizes persisted HSL orientation sphere unless trace diagnostics are explicit", () => {
+  it("preserves persisted HSL orientation sphere kill switch", () => {
     memoryStorage.setItem(
       "fullmag.frontend_diagnostic_flags.v1",
       JSON.stringify({
         femViewport: {
-          showOrientationSphere: true,
+          showOrientationSphere: false,
         },
         renderDebug: {
           enableRenderLogging: true,
@@ -131,7 +150,7 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(loaded.femViewport.showOrientationSphere).toBe(false);
   });
 
-  it("preserves persisted HSL orientation sphere when trace diagnostics are explicit", () => {
+  it("preserves persisted HSL orientation sphere when enabled", () => {
     memoryStorage.setItem(
       "fullmag.frontend_diagnostic_flags.v1",
       JSON.stringify({

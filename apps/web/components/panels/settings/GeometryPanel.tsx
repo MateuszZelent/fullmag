@@ -584,6 +584,8 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                 startTransition(() => {
                   model.setSelectedObjectId(duplicateName);
                   model.setSelectedSidebarNodeId(`obj-${duplicateName}`);
+                  model.setSelectedEntityId(null);
+                  model.setFocusedEntityId(null);
                   model.setObjectViewMode("context");
                 });
               }}
@@ -634,6 +636,13 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                       console.error("failed to patch deleted authoring object", error);
                     });
                 }
+                startTransition(() => {
+                  model.setSelectedObjectId(null);
+                  model.setSelectedSidebarNodeId("objects");
+                  model.setSelectedEntityId(null);
+                  model.setFocusedEntityId(null);
+                  model.setObjectViewMode("context");
+                });
               }}
             >
               Delete

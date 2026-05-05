@@ -16,7 +16,7 @@ use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
+use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
@@ -468,7 +468,7 @@ fn observe_multilayer(
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
-    let mut max_torque_apm: f64 = 0.0;
+    let mut torque_field = Vec::new();
     let mut per_object_scalars: std::collections::HashMap<
         String,
         std::collections::HashMap<String, f64>,
@@ -538,19 +538,12 @@ fn observe_multilayer(
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
-        max_torque_apm = max_torque_apm.max(
-            state
-                .magnetization()
-                .iter()
-                .zip(local_effective.iter())
-                .map(|(m, h)| {
-                    let cx = m[1] * h[2] - m[2] * h[1];
-                    let cy = m[2] * h[0] - m[0] * h[2];
-                    let cz = m[0] * h[1] - m[1] * h[0];
-                    (cx * cx + cy * cy + cz * cz).sqrt()
-                })
-                .fold(0.0_f64, f64::max),
-        );
+        torque_field.extend(compute_torque_field(
+            state.magnetization(),
+            &local_effective,
+            context.problem.material.damping,
+            context.problem.dynamics.precession_enabled,
+        ));
 
         let [mx, my, mz] =
             crate::scalar_metrics::average_magnetization_components(state.magnetization());
@@ -585,7 +578,7 @@ fn observe_multilayer(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let torque_field = compute_torque_field(&magnetization, &effective_field);
+    let max_torque_t = max_vector_norm(&torque_field);
 
     Ok(StateObservables {
         magnetization,
@@ -611,7 +604,7 @@ fn observe_multilayer(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: max_torque_apm,
+        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
         per_object_scalars,
     })
 }
