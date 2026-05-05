@@ -396,7 +396,11 @@ export function useFemSceneGeometry({
     // streaming) do NOT re-trigger auto-fit.  Only an explicit viewportFitSeed
     // change (topology revision, manual fit request) should fire a new fit.
     const sig = fitSeed ?? "initial";
-    if (lastFittedGeomRef.current === null && suppressInitialCameraFit) {
+    // User camera persistence must win over automatic fit-seed driven refits.
+    // During live relax updates, resource/mesh metadata can transiently change
+    // `viewportFitSeed`, which used to re-trigger auto-fit and snap the camera
+    // back despite a persisted user camera.
+    if (suppressInitialCameraFit) {
       lastFittedGeomRef.current = sig;
       return;
     }

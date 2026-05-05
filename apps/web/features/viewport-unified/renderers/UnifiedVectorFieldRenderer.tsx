@@ -17,6 +17,7 @@ import FdmLighting from "@/components/preview/r3f/FdmLighting";
 import SceneAxes3D from "@/components/preview/r3f/SceneAxes3D";
 import { useCanvasHost } from "@/components/preview/shared/useCanvasHost";
 import ViewportTelemetryProbe from "@/components/preview/shared/ViewportTelemetryProbe";
+import { resolveContextLossRecovery } from "@/components/preview/shared/ScientificViewportShell";
 import TextureTransformGizmo, {
   type TextureGizmoMode,
   type TexturePreviewProxy,
@@ -83,6 +84,21 @@ import {
 import type { ViewportCameraState } from "@/features/workspace-graph";
 
 const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
+const VECTOR_SURFACE_DEBUG_LOGS =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
+  process.env.NODE_ENV !== "production";
+
+function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>): void {
+  if (!VECTOR_SURFACE_DEBUG_LOGS) {
+    return;
+  }
+  if (payload) {
+    console.info(`[viewport3d:vector-surface] ${event}`, payload);
+    return;
+  }
+  console.info(`[viewport3d:vector-surface] ${event}`);
+}
 
 // ─── Types ──────────────────────────────────────────────────────────
 interface Props {
@@ -845,6 +861,8 @@ function UnifiedVectorFieldRendererInner({
     hidden: !viewportVisible,
   });
   const [openPopover, setOpenPopover] = useState<"color" | "display" | "topo" | "camera" | "info" | "rotation" | null>(null);
+  const renderCountRef = useRef(0);
+  const lastPersistLogAtMsRef = useRef(0);
 
   // ── 3dsmax-style interaction mode (camera / move / rotate / scale) ──
   type InteractionMode = "camera" | "move" | "rotate" | "scale";
@@ -919,6 +937,8 @@ function UnifiedVectorFieldRendererInner({
   const r3fSceneRef = useRef<THREE.Scene | null>(null);
   const r3fCameraRef = useRef<THREE.Camera | null>(null);
   const canvasContextCleanupRef = useRef<(() => void) | null>(null);
+  const contextLossRetryTimestampsRef = useRef<number[]>([]);
+  const contextLossRetryTimerRef = useRef<number | null>(null);
   const [canvasContextGeneration, setCanvasContextGeneration] = useState(0);
   const [rotationSnapshots, setRotationSnapshots] = useState<Record<RotationPanelKey, OrientationDebugSnapshot | null>>({
     viewport: null,
@@ -1007,6 +1027,29 @@ function UnifiedVectorFieldRendererInner({
   // rebuilds because a new scalar row arrived during solver relaxation), so we don't
   // hard-set the camera unnecessarily.
   const lastAppliedPersistedStateRef = useRef<ViewportCameraState | null>(null);
+  renderCountRef.current += 1;
+  if (VECTOR_SURFACE_DEBUG_LOGS) {
+    logVectorSurfaceDebug("render", {
+      renderCount: renderCountRef.current,
+      viewportDocumentId,
+      cameraPersistenceKey,
+      canvasContextGeneration,
+      viewportVisible,
+      hasPersistedCameraState: Boolean(persistedCameraState),
+    });
+  }
+  useEffect(() => {
+    logVectorSurfaceDebug("mount", {
+      viewportDocumentId,
+      cameraPersistenceKey,
+    });
+    return () => {
+      logVectorSurfaceDebug("unmount", {
+        viewportDocumentId,
+        cameraPersistenceKey,
+      });
+    };
+  }, [cameraPersistenceKey, viewportDocumentId]);
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
     setRotationSnapshots((previous) => {
       const current = previous[key];
@@ -1038,6 +1081,15 @@ function UnifiedVectorFieldRendererInner({
     });
     if (!state) {
       return;
+    }
+    const now = Date.now();
+    if (VECTOR_SURFACE_DEBUG_LOGS && now - lastPersistLogAtMsRef.current >= 800) {
+      lastPersistLogAtMsRef.current = now;
+      logVectorSurfaceDebug("camera persist", {
+        key: cameraPersistenceKey,
+        position: state.position,
+        target: state.target,
+      });
     }
     if (onPersistCameraState) {
       onPersistCameraState(state);
@@ -1077,6 +1129,9 @@ function UnifiedVectorFieldRendererInner({
         lastAppliedPersistedStateRef.current &&
         viewportCameraStatesEqual(persistedCameraState, lastAppliedPersistedStateRef.current)
       ) {
+        logVectorSurfaceDebug("camera restore skipped (same persisted state)", {
+          key: cameraPersistenceKey,
+        });
         syncViewportRotationSnapshot();
         return;
       }
@@ -1102,6 +1157,9 @@ function UnifiedVectorFieldRendererInner({
         };
         cameraRestoreReadyRef.current = true;
         lastAppliedPersistedStateRef.current = persistedCameraState;  // P-26
+        logVectorSurfaceDebug("camera already at persisted state", {
+          key: cameraPersistenceKey,
+        });
         syncViewportRotationSnapshot();
         return;
       }
@@ -1123,6 +1181,16 @@ function UnifiedVectorFieldRendererInner({
         })();
       if (restored) {
         lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
+        logVectorSurfaceDebug("camera restored", {
+          key: cameraPersistenceKey,
+          position: persistedCameraState?.position ?? null,
+          target: persistedCameraState?.target ?? null,
+        });
+      } else {
+        logVectorSurfaceDebug("camera restore skipped (missing bridge or state)", {
+          key: cameraPersistenceKey,
+          hasPersistedCameraState: Boolean(persistedCameraState),
+        });
       }
       lastRestoredCameraRef.current = {
         key: cameraPersistenceKey,
@@ -1220,6 +1288,10 @@ function UnifiedVectorFieldRendererInner({
     return () => {
       canvasContextCleanupRef.current?.();
       canvasContextCleanupRef.current = null;
+      if (contextLossRetryTimerRef.current !== null) {
+        window.clearTimeout(contextLossRetryTimerRef.current);
+        contextLossRetryTimerRef.current = null;
+      }
       canvasRef.current = null;
       glRef.current = null;
       r3fSceneRef.current = null;
@@ -1837,29 +1909,55 @@ function UnifiedVectorFieldRendererInner({
               r3fSceneRef.current = scene;
               r3fCameraRef.current = camera;
               const canvas = gl.domElement;
-              let remountTimer: number | null = null;
               const handleContextLost = (event: Event) => {
                 event.preventDefault();
+                if (!viewportVisible) {
+                  return;
+                }
+                logVectorSurfaceDebug("webgl context lost", {
+                  key: cameraPersistenceKey,
+                  generation: canvasContextGeneration,
+                });
+                const decision = resolveContextLossRecovery({
+                  nowMs: Date.now(),
+                  retryTimestamps: contextLossRetryTimestampsRef.current,
+                });
+                contextLossRetryTimestampsRef.current = decision.nextTimestamps;
+                if (!decision.allowed || contextLossRetryTimerRef.current !== null) {
+                  return;
+                }
                 canvasRef.current = null;
                 glRef.current = null;
                 r3fSceneRef.current = null;
                 r3fCameraRef.current = null;
-                remountTimer = window.setTimeout(() => {
+                contextLossRetryTimerRef.current = window.setTimeout(() => {
+                  contextLossRetryTimerRef.current = null;
+                  logVectorSurfaceDebug("webgl remount requested", {
+                    key: cameraPersistenceKey,
+                  });
                   setCanvasContextGeneration((generation) => generation + 1);
-                }, 100);
+                }, decision.retryDelayMs);
               };
               const handleContextRestored = () => {
-                setCanvasContextGeneration((generation) => generation + 1);
+                logVectorSurfaceDebug("webgl context restored", {
+                  key: cameraPersistenceKey,
+                  generation: canvasContextGeneration,
+                });
               };
               canvas.addEventListener("webglcontextlost", handleContextLost, false);
               canvas.addEventListener("webglcontextrestored", handleContextRestored, false);
               canvasContextCleanupRef.current = () => {
-                if (remountTimer != null) {
-                  window.clearTimeout(remountTimer);
+                if (contextLossRetryTimerRef.current !== null) {
+                  window.clearTimeout(contextLossRetryTimerRef.current);
+                  contextLossRetryTimerRef.current = null;
                 }
                 canvas.removeEventListener("webglcontextlost", handleContextLost, false);
                 canvas.removeEventListener("webglcontextrestored", handleContextRestored, false);
               };
+              logVectorSurfaceDebug("canvas created", {
+                key: cameraPersistenceKey,
+                generation: canvasContextGeneration,
+              });
             }}
             dpr={canvasDpr}
             style={{ background: `#${BG_COLOR.toString(16).padStart(6, "0")}` }}

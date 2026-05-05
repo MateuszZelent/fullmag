@@ -19,7 +19,7 @@ export function ArrowLayer({
   const chip = vectorStatusChip(vectorField, visible);
   return (
     <div
-      className="relative h-full min-h-0 w-full"
+      className="relative flex flex-col flex-1 h-full min-h-0 min-w-0 w-full"
       data-viewport-layer="vector-field"
       data-vector-layer-visible={visible ? "true" : "false"}
       data-vector-status={vectorField?.status ?? "idle"}

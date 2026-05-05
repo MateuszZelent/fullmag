@@ -83,6 +83,7 @@ const DIMMED_MIN_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinMagnetic;
 const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
 const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
 const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
+const BLANK_VIEWPORT_RECOVERY_GRACE_MS = 900;
 
 export interface Viewport3DHealthReport {
   status: "active" | "inactive" | "warning";
@@ -360,6 +361,7 @@ function FemMeshView3DInner({
     key: null,
     attempts: 0,
   });
+  const blankViewportInactiveSinceRef = useRef<number | null>(null);
 
   const {
     renderMode,
@@ -784,9 +786,28 @@ function FemMeshView3DInner({
       if (canvasVisualActive === true) {
         blankViewportRecoveryRef.current = { key: null, attempts: 0 };
       }
+      blankViewportInactiveSinceRef.current = null;
+      return;
+    }
+    // User-persisted camera state must win over heuristic blank-canvas recovery.
+    // During live relax updates, visual-activity probing can transiently report
+    // false negatives; forcing CameraAutoFit here causes the observed snapback.
+    if (persistedCameraState) {
+      blankViewportRecoveryRef.current = { key: null, attempts: 0 };
+      blankViewportInactiveSinceRef.current = null;
       return;
     }
     if (!Number.isFinite(dynamicMaxDim) || dynamicMaxDim <= 0) {
+      blankViewportInactiveSinceRef.current = null;
+      return;
+    }
+    const nowMs = Date.now();
+    if (blankViewportInactiveSinceRef.current == null) {
+      blankViewportInactiveSinceRef.current = nowMs;
+      return;
+    }
+    const inactiveDurationMs = nowMs - blankViewportInactiveSinceRef.current;
+    if (inactiveDurationMs < BLANK_VIEWPORT_RECOVERY_GRACE_MS) {
       return;
     }
 
@@ -798,6 +819,8 @@ function FemMeshView3DInner({
     ].join(":");
     if (blankViewportRecoveryRef.current.key !== recoveryKey) {
       blankViewportRecoveryRef.current = { key: recoveryKey, attempts: 0 };
+      blankViewportInactiveSinceRef.current = nowMs;
+      return;
     }
     if (blankViewportRecoveryRef.current.attempts >= 2) {
       return;
@@ -820,6 +843,7 @@ function FemMeshView3DInner({
     renderableGeometryLayerCount,
     topologyKey,
     viewportFitSeed,
+    persistedCameraState,
   ]);
   const updateRotationSnapshot = useCallback((
     key: "viewport" | "viewCube" | "hsl",
@@ -1104,7 +1128,9 @@ function FemMeshView3DInner({
       >
         {!missingExactScopeSegment ? (
           <>
-          {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit && wrapperFlags.enableCameraFitEffect ? (
+          {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit &&
+          wrapperFlags.enableCameraFitEffect &&
+          !persistedCameraState ? (
             <CameraAutoFit
               maxDim={dynamicMaxDim}
               generation={cameraFitGeneration}

@@ -85,7 +85,7 @@ body.m = fm.texture.uniform(0, 0, 1)
 
 
 # External field
-study.b_ext(0, 0, 1.02)
+study.b_ext(0, 1, 0)
 
 # Outer boundary / demag
 study.demag(realization="poisson_robin")

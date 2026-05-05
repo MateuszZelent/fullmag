@@ -46,6 +46,44 @@ type LiveFieldApi = {
   ) => Promise<ArrayBuffer>;
 };
 
+export function resolveSelectedLiveField(args: {
+  activeQuantityId: string | null;
+  fieldMap: Record<string, Float64Array | null>;
+  selectedScopedBinaryFieldFrame: ScopedBinaryFieldFrame | null;
+  scopedFieldTransportKey: string | null;
+  selectedFieldTopologyMismatch: boolean;
+  selectedBinaryFieldFrame: BinaryFieldFrame | null;
+  selectedFieldTransportKey: string | null;
+}): Float64Array | null {
+  const {
+    activeQuantityId,
+    fieldMap,
+    selectedScopedBinaryFieldFrame,
+    scopedFieldTransportKey,
+    selectedFieldTopologyMismatch,
+    selectedBinaryFieldFrame,
+    selectedFieldTransportKey,
+  } = args;
+  if (selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey) {
+    return selectedScopedBinaryFieldFrame.values;
+  }
+  if (selectedFieldTopologyMismatch) {
+    return null;
+  }
+  if (selectedBinaryFieldFrame?.key === selectedFieldTransportKey) {
+    return selectedBinaryFieldFrame.values;
+  }
+  if (!activeQuantityId) {
+    return null;
+  }
+  if ((fieldMap[activeQuantityId]?.length ?? 0) > 0) {
+    return fieldMap[activeQuantityId]!;
+  }
+  return selectedBinaryFieldFrame?.key === selectedFieldTransportKey
+    ? selectedBinaryFieldFrame.values
+    : null;
+}
+
 export function useViewportFieldData({
   activeFemGenerationSignature,
   activeQuantityId,
@@ -427,18 +465,15 @@ export function useViewportFieldData({
   ]);
 
   const authoredField = authoredMagnetizationPreview?.vectors ?? null;
-  const selectedLiveField =
-    selectedScopedBinaryFieldFrame?.key === scopedFieldTransportKey
-      ? selectedScopedBinaryFieldFrame.values
-      : selectedFieldTopologyMismatch
-      ? null
-      : selectedBinaryFieldFrame?.key === selectedFieldTransportKey
-      ? selectedBinaryFieldFrame.values
-      : activeQuantityId
-        ? ((fieldMap[activeQuantityId]?.length ?? 0) > 0
-            ? fieldMap[activeQuantityId]!
-            : (selectedBinaryFieldFrame?.values ?? null))
-      : null;
+  const selectedLiveField = resolveSelectedLiveField({
+    activeQuantityId,
+    fieldMap,
+    selectedScopedBinaryFieldFrame,
+    scopedFieldTransportKey,
+    selectedFieldTopologyMismatch,
+    selectedBinaryFieldFrame,
+    selectedFieldTransportKey,
+  });
   const selectedVectorSource = useMemo(() => {
     return selectViewportVectorField({
       activeQuantityId,

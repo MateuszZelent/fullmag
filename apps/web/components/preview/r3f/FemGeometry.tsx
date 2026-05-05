@@ -877,7 +877,7 @@ export const FemGeometry = memo(function FemGeometry({
             opacity={highlight ? 0.98 : 0.86}
             transparent
             depthWrite={false}
-            depthTest={false}
+            depthTest
             clippingPlanes={clippingPlanes}
           />
         </lineSegments>
@@ -917,7 +917,7 @@ export const FemGeometry = memo(function FemGeometry({
             transparent
             opacity={highlight ? 0.98 : 0.86}
             depthWrite={false}
-            depthTest={false}
+            depthTest
             side={THREE.DoubleSide}
             clippingPlanes={clippingPlanes}
           />
@@ -1040,7 +1040,7 @@ export const FemGeometry = memo(function FemGeometry({
             sizeAttenuation={false}
             transparent={pointPolicy.transparent}
             depthWrite={pointPolicy.depthWrite}
-            depthTest={false}
+            depthTest={pointPolicy.depthTest}
             opacity={Math.max(opacityVal, 0.82)} 
             clippingPlanes={clippingPlanes}
           />

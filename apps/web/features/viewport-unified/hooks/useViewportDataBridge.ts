@@ -77,7 +77,24 @@ import type { ViewportCameraState, ViewportDocumentState } from "@/features/work
 /* ── Debug flag ───────────────────────────────────────────────────── */
 const DEBUG_GIZMO_SYNC =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
+const VIEWPORT_BRIDGE_DEBUG_LOGS =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
+  process.env.NODE_ENV !== "production";
+const CAMERA_GRAPH_PERSIST_DEBOUNCE_MS = 180;
+
+function logViewportBridgeDebug(event: string, payload?: Record<string, unknown>): void {
+  if (!VIEWPORT_BRIDGE_DEBUG_LOGS) {
+    return;
+  }
+  if (payload) {
+    console.info(`[viewport3d:bridge] ${event}`, payload);
+    return;
+  }
+  console.info(`[viewport3d:bridge] ${event}`);
+}
 
 /* ── Pure utility functions ───────────────────────────────────────── */
 
@@ -462,20 +479,69 @@ export function useViewportDataBridge() {
     graphActiveViewportDocument?.selectedResultNodeId ?? graphActiveResultNodeId;
   const graphActiveViewportDocumentId = graphActiveViewportDocument?.id ?? null;
   const graphActiveViewportCameraState = graphActiveViewportDocument?.camera ?? null;
+  const lastLoggedViewportDocumentIdRef = useRef<string | null>(null);
+  const pendingViewportCameraStateRef = useRef<ViewportCameraState | null>(null);
+  const pendingViewportCameraTimerRef = useRef<number | null>(null);
+  const flushPendingViewportCameraState = useCallback(() => {
+    const cameraState = pendingViewportCameraStateRef.current;
+    pendingViewportCameraStateRef.current = null;
+    pendingViewportCameraTimerRef.current = null;
+    const document = graphActiveViewportDocumentRef.current;
+    if (!document || !cameraState || viewportCameraStatesEqual(document.camera, cameraState)) {
+      return;
+    }
+    logViewportBridgeDebug("persist camera to workspace graph", {
+      viewportDocumentId: document.id,
+      projection: cameraState.projection,
+      navigation: cameraState.navigation,
+      position: cameraState.position,
+      target: cameraState.target,
+    });
+    upsertViewportDocument({
+      ...document,
+      camera: cameraState,
+    });
+  }, [upsertViewportDocument]);
+  useEffect(() => {
+    return () => {
+      if (pendingViewportCameraTimerRef.current !== null) {
+        window.clearTimeout(pendingViewportCameraTimerRef.current);
+        pendingViewportCameraTimerRef.current = null;
+      }
+    };
+  }, []);
+  useEffect(() => {
+    if (lastLoggedViewportDocumentIdRef.current === graphActiveViewportDocumentId) {
+      return;
+    }
+    logViewportBridgeDebug("active viewport document changed", {
+      previousId: lastLoggedViewportDocumentIdRef.current,
+      nextId: graphActiveViewportDocumentId,
+      hasCameraState: Boolean(graphActiveViewportCameraState),
+    });
+    lastLoggedViewportDocumentIdRef.current = graphActiveViewportDocumentId;
+  }, [graphActiveViewportCameraState, graphActiveViewportDocumentId]);
   const persistViewportCameraState = useCallback(
     (cameraState: ViewportCameraState | null) => {
       if (!graphActiveViewportDocument || !cameraState) {
         return;
       }
-      if (viewportCameraStatesEqual(graphActiveViewportDocument.camera, cameraState)) {
+      if (
+        viewportCameraStatesEqual(graphActiveViewportDocument.camera, cameraState) ||
+        viewportCameraStatesEqual(pendingViewportCameraStateRef.current, cameraState)
+      ) {
         return;
       }
-      upsertViewportDocument({
-        ...graphActiveViewportDocument,
-        camera: cameraState,
-      });
+      pendingViewportCameraStateRef.current = cameraState;
+      if (pendingViewportCameraTimerRef.current !== null) {
+        window.clearTimeout(pendingViewportCameraTimerRef.current);
+      }
+      pendingViewportCameraTimerRef.current = window.setTimeout(
+        flushPendingViewportCameraState,
+        CAMERA_GRAPH_PERSIST_DEBOUNCE_MS,
+      );
     },
-    [graphActiveViewportDocument, upsertViewportDocument],
+    [flushPendingViewportCameraState, graphActiveViewportDocument],
   );
 
   /* ── Derived values from ctx ── */

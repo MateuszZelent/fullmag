@@ -7,7 +7,8 @@ import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 const ENABLE_VIEWPORT_DEBUG_LOGS =
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production" &&
-  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging;
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace;
 const lastViewportDebugLogAtByLabel = new Map<string, number>();
 
 export default function ViewportTelemetryProbe({

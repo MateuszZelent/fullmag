@@ -25,8 +25,13 @@ import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
+const ENABLE_INFO_CONSOLE_TRACE =
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
+  typeof process !== "undefined" &&
+  process.env.NODE_ENV !== "production";
 
 export interface UseMeshCommandPipelineParams {
   liveApi: ControlRoomApi;
@@ -201,7 +206,7 @@ export function useMeshCommandPipeline({
       console.error(`[control-room] ${message}`);
     } else if (level === "warn") {
       console.warn(`[control-room] ${message}`);
-    } else {
+    } else if (ENABLE_INFO_CONSOLE_TRACE) {
       console.info(`[control-room] ${message}`);
     }
     setFrontendTraceLog((prev) => {
@@ -389,7 +394,12 @@ export function useMeshCommandPipeline({
   ]);
 
   const updatePreview = useCallback(async (path: string, payload: Record<string, unknown> = {}) => {
-    if (typeof process !== "undefined" && process.env.NODE_ENV === "development") {
+    if (
+      FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+      FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
+      typeof process !== "undefined" &&
+      process.env.NODE_ENV === "development"
+    ) {
       console.trace(`[fullmag-diag] updatePreview path=${path}`, payload);
     }
     const nextSelection: DisplaySelection = { ...requestedDisplaySelection };

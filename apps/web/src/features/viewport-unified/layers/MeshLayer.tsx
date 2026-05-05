@@ -10,7 +10,7 @@ export interface MeshLayerProps {
 export function MeshLayer({ visible = true, children = null }: MeshLayerProps) {
   return (
     <div
-      className="h-full min-h-0 w-full"
+      className="flex flex-col flex-1 h-full min-h-0 min-w-0 w-full"
       data-viewport-layer="explicit-topology"
       data-viewport-layer-visible={visible ? "true" : "false"}
     >

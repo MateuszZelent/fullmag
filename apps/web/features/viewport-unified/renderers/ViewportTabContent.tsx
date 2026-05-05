@@ -490,7 +490,7 @@ export function ViewportTabContent({
     return (
       <Viewport3DHost model={bridge.hostedFemViewportModel} mode="3D" discretization="fem">
         <ViewportErrorBoundary label="Hosted Unified 3D Viewport">
-          <div className="relative h-full w-full">
+          <div className="relative flex flex-col flex-1 h-full min-h-0 min-w-0 w-full">
             <FemMeshView3D
               topologyKey={requireFemTopologyKey(bridge.resolvedFemTopologyKey)}
               meshData={bridge.renderFemMeshData!}

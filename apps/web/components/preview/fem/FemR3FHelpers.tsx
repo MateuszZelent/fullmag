@@ -6,6 +6,12 @@ import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { fitCameraToBounds } from "../camera/cameraHelpers";
 import type { ClipAxis } from "./femMeshTypes";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+
+const FEM_R3F_DEBUG_LOGS =
+  FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
+  process.env.NODE_ENV !== "production";
 
 /** Manage WebGL clipping planes for mesh cross-section view. */
 export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; flip?: boolean; geomSize: [number, number, number] }) {
@@ -87,6 +93,15 @@ export function CameraAutoFit({
         targetCenter,
         controlsRef?.current ?? undefined,
       );
+      if (FEM_R3F_DEBUG_LOGS) {
+        console.info("[viewport3d:fem] camera auto-fit applied", {
+          generation,
+          maxDim,
+          targetCenter: targetCenter
+            ? [targetCenter.x, targetCenter.y, targetCenter.z]
+            : null,
+        });
+      }
       invalidate();
 
       if (!controlsRef?.current) {

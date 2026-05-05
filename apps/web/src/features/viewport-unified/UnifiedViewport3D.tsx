@@ -55,7 +55,7 @@ const UnifiedViewport3D = memo(function UnifiedViewport3D({
 
   return (
     <div
-      className={cn("relative h-full w-full", className)}
+      className={cn("relative flex flex-col flex-1 h-full min-h-0 min-w-0 w-full", className)}
       data-viewport3d="unified"
       data-viewport-mode={mode}
       data-discretization={discretization}

@@ -29,6 +29,7 @@ function lastLogTimestamp(entries: EngineLogEntry[]): number {
 
 const ENABLE_LIVE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
+  FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production";
 
