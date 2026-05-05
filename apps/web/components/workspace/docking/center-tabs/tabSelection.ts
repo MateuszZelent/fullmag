@@ -119,20 +119,19 @@ export function applyWorkspaceTabSelection(
 
   if (tab.kind === "viewport-3d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    const viewMode = tab.payload?.viewMode === "3D" ? tab.payload.viewMode : "3D";
-    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
+    // Note: handleViewModeChange is NOT called here because the initiating
+    // transitionToViewMode() already set the view mode + activated the tab.
+    // Calling it again would create a redundant render cycle (RC-6).
     return;
   }
   if (tab.kind === "viewport-2d") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    const viewMode = tab.payload?.viewMode === "2D" ? tab.payload.viewMode : "2D";
-    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
+    // RC-6: skip redundant handleViewModeChange — already set by transitionToViewMode.
     return;
   }
   if (tab.kind === "viewport-mesh") {
     if (api.currentWorkspaceMode !== stage) api.setWorkspaceMode(stage);
-    const viewMode = tab.payload?.viewMode === "Mesh" ? tab.payload.viewMode : "Mesh";
-    if (api.effectiveViewMode !== viewMode) api.handleViewModeChange(viewMode);
+    // RC-6: skip redundant handleViewModeChange — already set by transitionToViewMode.
     return;
   }
   if (tab.kind === "viewport-charts") {

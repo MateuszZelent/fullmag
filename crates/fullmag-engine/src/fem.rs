@@ -1,4 +1,8 @@
 use crate::periodic::constraints::PeriodicDofMap;
+use crate::periodic::reduction::{
+    lift_scalar_by_periodic_classes, project_vector_field_by_periodic_classes,
+    reduce_csr_by_periodic_classes, reduce_rhs_by_periodic_classes,
+};
 use crate::{
     add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, LlgConfig, MaterialParameters,
@@ -547,6 +551,129 @@ impl DemagWorkspace {
         if self.weights.len() < n {
             self.weights.resize(n, 0.0);
         }
+    }
+}
+
+/// Precomputed state for the periodic PBC demag solve.
+///
+/// Built once in `FemLlgProblem` constructors when `periodic_node_pairs` is
+/// non-empty. Caches the reduced Poisson operator `A_red = P^T A_open P`
+/// (excluding Robin on periodic seam faces), its Jacobi preconditioner, the
+/// `full_to_reduced` node map, and a reusable CG workspace.
+struct PeriodicDemagReduced {
+    /// Reduced Poisson CSR: P^T A_open P where A_open excludes Robin on periodic seam faces.
+    reduced_csr: CsrMatrix,
+    /// Jacobi inverse diagonal for the reduced system.
+    reduced_inv_diag: Vec<f64>,
+    /// Map: full_to_reduced[i] = representative class index for full node i.
+    full_to_reduced: Vec<usize>,
+    /// Number of reduced DOFs (= number of periodic equivalence classes).
+    reduced_n: usize,
+    /// Reusable CG + scratch workspace for the reduced solve.
+    ws: Mutex<DemagWorkspace>,
+}
+
+impl std::fmt::Debug for PeriodicDemagReduced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeriodicDemagReduced")
+            .field("reduced_n", &self.reduced_n)
+            .field("full_n", &self.full_to_reduced.len())
+            .finish()
+    }
+}
+
+impl Clone for PeriodicDemagReduced {
+    fn clone(&self) -> Self {
+        Self {
+            reduced_csr: self.reduced_csr.clone(),
+            reduced_inv_diag: self.reduced_inv_diag.clone(),
+            full_to_reduced: self.full_to_reduced.clone(),
+            reduced_n: self.reduced_n,
+            ws: Mutex::new(DemagWorkspace::new(self.reduced_n)),
+        }
+    }
+}
+
+impl PartialEq for PeriodicDemagReduced {
+    fn eq(&self, other: &Self) -> bool {
+        self.reduced_csr == other.reduced_csr
+            && self.full_to_reduced == other.full_to_reduced
+            && self.reduced_n == other.reduced_n
+    }
+}
+
+/// Build the boundary mass matrix restricted to open (non-periodic) faces.
+///
+/// Periodic seam faces — those whose all 3 nodes appear in the periodic node
+/// set — are excluded so that Robin boundary conditions are not applied on
+/// the periodic seam.
+fn build_open_boundary_mass_csr(
+    topology: &MeshTopology,
+    periodic_node_set: &BTreeSet<u32>,
+) -> CsrMatrix {
+    // Filter out faces where all 3 nodes are periodic seam members.
+    let open_faces: Vec<[u32; 3]> = topology
+        .boundary_faces
+        .iter()
+        .copied()
+        .filter(|face| {
+            !face
+                .iter()
+                .all(|node| periodic_node_set.contains(node))
+        })
+        .collect();
+    CsrMatrix::from_boundary_mass_assembly(
+        topology.n_nodes,
+        &open_faces,
+        &topology.coords,
+    )
+}
+
+/// Build the `PeriodicDemagReduced` from a `MeshTopology` and `PeriodicDofMap`.
+///
+/// Constructs `A_open = stiffness + robin_beta * open_boundary_mass` (excluding
+/// Robin on periodic seam faces), then reduces it to the periodic class space.
+fn build_periodic_demag_reduced(
+    topology: &MeshTopology,
+    dof_map: &PeriodicDofMap,
+    dirichlet_boundary: bool,
+    robin_beta_override: Option<f64>,
+) -> PeriodicDemagReduced {
+    // Collect all nodes that appear in any periodic pair.
+    let mut periodic_node_set: BTreeSet<u32> = BTreeSet::new();
+    for &(_, node_a, node_b) in &topology.periodic_node_pairs {
+        periodic_node_set.insert(node_a);
+        periodic_node_set.insert(node_b);
+    }
+
+    // Build open boundary mass (excluding periodic seam faces).
+    let open_boundary_mass = build_open_boundary_mass_csr(topology, &periodic_node_set);
+    let beta = robin_beta_override.unwrap_or(topology.robin_beta);
+
+    // Build A_open: stiffness + robin * open_boundary_mass (or pure stiffness for Dirichlet).
+    let a_open = if dirichlet_boundary || beta <= 0.0 {
+        topology.stiffness_csr.clone()
+    } else {
+        topology.stiffness_csr.add_scaled(&open_boundary_mass, beta)
+    };
+
+    // Build full_to_reduced map.
+    let full_n = dof_map.full_node_count;
+    let full_to_reduced: Vec<usize> = (0..full_n)
+        .map(|i| dof_map.reduced_node(i))
+        .collect();
+    let reduced_n = dof_map.reduced_node_count;
+
+    // Reduce the operator.
+    let reduced_csr = reduce_csr_by_periodic_classes(&a_open, &full_to_reduced, reduced_n);
+    let reduced_inv_diag = compute_jacobi_inv_diag(&reduced_csr);
+
+    PeriodicDemagReduced {
+        reduced_csr,
+        reduced_inv_diag,
+        full_to_reduced,
+        reduced_n,
+        ws: Mutex::new(DemagWorkspace::new(reduced_n)),
     }
 }
 
@@ -1113,6 +1240,9 @@ pub struct FemLlgProblem {
     /// Cached inverse-diagonal (Jacobi preconditioner) for the demag CSR
     /// matrix.  Computed once and reused for every CG solve.
     demag_inv_diag: Vec<f64>,
+    /// Precomputed reduced Poisson operator for periodic demag PBC (PR-3).
+    /// Present when `periodic_node_pairs` is non-empty and demag is enabled.
+    periodic_demag_reduced: Option<PeriodicDemagReduced>,
 }
 
 impl Clone for FemLlgProblem {
@@ -1133,6 +1263,7 @@ impl Clone for FemLlgProblem {
             demag_cache: Mutex::new(None),
             demag_ws: Mutex::new(DemagWorkspace::new(self.topology.n_nodes)),
             demag_inv_diag: self.demag_inv_diag.clone(),
+            periodic_demag_reduced: self.periodic_demag_reduced.clone(),
         }
     }
 }
@@ -1151,6 +1282,7 @@ impl PartialEq for FemLlgProblem {
             && self.operator_mode == other.operator_mode
             && self.demag_csr == other.demag_csr
             && self.demag_dirichlet_boundary == other.demag_dirichlet_boundary
+            && self.periodic_demag_reduced == other.periodic_demag_reduced
     }
 }
 
@@ -1187,6 +1319,9 @@ impl FemLlgProblem {
         let n = topology.n_nodes;
         let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
         let static_periodic_dof_map = static_periodic_dof_map_or_none(&topology);
+        let periodic_demag_reduced = static_periodic_dof_map
+            .as_ref()
+            .map(|dof_map| build_periodic_demag_reduced(&topology, dof_map, false, None));
         Self {
             topology,
             material,
@@ -1203,6 +1338,7 @@ impl FemLlgProblem {
             demag_cache: Mutex::new(None),
             demag_ws: Mutex::new(DemagWorkspace::new(n)),
             demag_inv_diag,
+            periodic_demag_reduced,
         }
     }
 
@@ -1225,6 +1361,16 @@ impl FemLlgProblem {
         let n_nodes = topology.n_nodes;
         let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
         let static_periodic_dof_map = static_periodic_dof_map_or_none(&topology);
+        let periodic_demag_reduced = static_periodic_dof_map
+            .as_ref()
+            .map(|dof_map| {
+                build_periodic_demag_reduced(
+                    &topology,
+                    dof_map,
+                    dirichlet_boundary,
+                    robin_beta_factor.map(|factor| factor * topology.robin_beta),
+                )
+            });
         Self {
             topology,
             material,
@@ -1241,6 +1387,7 @@ impl FemLlgProblem {
             demag_cache: Mutex::new(None),
             demag_ws: Mutex::new(DemagWorkspace::new(n_nodes)),
             demag_inv_diag,
+            periodic_demag_reduced,
         }
     }
 
@@ -2292,9 +2439,7 @@ impl FemLlgProblem {
             )));
         }
         if self.static_periodic_dof_map.is_some()
-            && (self.terms.interfacial_dmi.is_some()
-                || self.terms.bulk_dmi.is_some()
-                || self.terms.per_node_field.is_some()
+            && (self.terms.per_node_field.is_some()
                 || self.terms.magnetoelastic.is_some()
                 || self.terms.zhang_li_stt.is_some()
                 || self.terms.slonczewski_stt.is_some()
@@ -2303,8 +2448,8 @@ impl FemLlgProblem {
         {
             return Err(EngineError::new(format!(
                 "{} periodic node pairs present, but the Rust FEM reference static periodic \
-                 path currently supports only exchange, uniform Zeeman field, and local \
-                 anisotropy terms",
+                 path currently supports only exchange, uniform Zeeman field, local \
+                 anisotropy, and DMI terms",
                 self.topology.periodic_node_pairs.len()
             )));
         }
@@ -2409,8 +2554,13 @@ impl FemLlgProblem {
             } else {
                 0.0
             };
-        let total_energy_joules =
-            exchange_energy_joules + demag_energy_joules + external_energy_joules;
+        let uniaxial_anisotropy_energy_joules = self.uniaxial_anisotropy_energy_from_vectors(magnetization);
+        let cubic_anisotropy_energy_joules = self.cubic_anisotropy_energy_from_vectors(magnetization);
+        let total_energy_joules = exchange_energy_joules
+            + demag_energy_joules
+            + external_energy_joules
+            + uniaxial_anisotropy_energy_joules
+            + cubic_anisotropy_energy_joules;
 
         let max_torque_Apm = max_cross_norm(magnetization, &effective_field);
 
@@ -2471,8 +2621,13 @@ impl FemLlgProblem {
             } else {
                 0.0
             };
-        let total_energy_joules =
-            exchange_energy_joules + demag_energy_joules + external_energy_joules;
+        let uniaxial_anisotropy_energy_joules = self.uniaxial_anisotropy_energy_from_vectors(magnetization);
+        let cubic_anisotropy_energy_joules = self.cubic_anisotropy_energy_from_vectors(magnetization);
+        let total_energy_joules = exchange_energy_joules
+            + demag_energy_joules
+            + external_energy_joules
+            + uniaxial_anisotropy_energy_joules
+            + cubic_anisotropy_energy_joules;
         let max_demag_field_amplitude = max_norm(&demag_field);
         let mut max_effective_field_amplitude = 0.0f64;
         let mut max_rhs_amplitude = 0.0f64;
@@ -2631,6 +2786,65 @@ impl FemLlgProblem {
         field
     }
 
+    /// Compute uniaxial anisotropy energy density integrated over the magnetic mesh.
+    ///
+    /// E_ani = -K_u1 * (m·u)² - K_u2 * (m·u)⁴  (per unit volume, integrated by lumped mass)
+    fn uniaxial_anisotropy_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let Some(ref uni) = self.terms.uniaxial_anisotropy else {
+            return 0.0;
+        };
+        let n_u = norm(uni.axis).max(ZERO_THRESHOLD);
+        let u = scale(uni.axis, 1.0 / n_u);
+        let magnetic_node_volumes = &self.topology.magnetic_node_volumes;
+        magnetization
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let vol = magnetic_node_volumes[i];
+                if vol <= 0.0 {
+                    return 0.0;
+                }
+                let m_dot_u = dot(*m, u);
+                // E = -K_u1*(m·u)^2 - K_u2*(m·u)^4
+                let energy_density = -uni.ku1 * m_dot_u * m_dot_u
+                    - uni.ku2 * m_dot_u * m_dot_u * m_dot_u * m_dot_u;
+                energy_density * vol
+            })
+            .sum()
+    }
+
+    /// Compute cubic anisotropy energy density integrated over the magnetic mesh.
+    ///
+    /// E_cub = K_c1*(m1²m2² + m2²m3² + m3²m1²) + K_c2*(m1²m2²m3²)
+    fn cubic_anisotropy_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let Some(ref cub) = self.terms.cubic_anisotropy else {
+            return 0.0;
+        };
+        let n1 = norm(cub.axis1).max(ZERO_THRESHOLD);
+        let n2 = norm(cub.axis2).max(ZERO_THRESHOLD);
+        let c1 = scale(cub.axis1, 1.0 / n1);
+        let c2 = scale(cub.axis2, 1.0 / n2);
+        let c3 = cross(c1, c2);
+        let magnetic_node_volumes = &self.topology.magnetic_node_volumes;
+        magnetization
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let vol = magnetic_node_volumes[i];
+                if vol <= 0.0 {
+                    return 0.0;
+                }
+                let m1 = dot(*m, c1);
+                let m2 = dot(*m, c2);
+                let m3 = dot(*m, c3);
+                // E = K_c1*(m1²m2² + m2²m3² + m3²m1²) + K_c2*(m1²m2²m3²)
+                let energy_density = cub.kc1 * (m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m3 * m3 * m1 * m1)
+                    + cub.kc2 * m1 * m1 * m2 * m2 * m3 * m3;
+                energy_density * vol
+            })
+            .sum()
+    }
+
     fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
         let projected_magnetization;
         let magnetization = if let Some(dof_map) = &self.static_periodic_dof_map {
@@ -2724,11 +2938,93 @@ impl FemLlgProblem {
         &self,
         magnetization: &[Vector3],
     ) -> Result<(Vec<Vector3>, f64)> {
-        let result = self.robin_demag_observables_from_vectors(magnetization)?;
+        let result = if self.periodic_demag_reduced.is_some() {
+            // PBC demag: use P^T A P reduced Poisson solve.
+            self.periodic_robin_demag_observables_from_vectors(magnetization)?
+        } else {
+            self.robin_demag_observables_from_vectors(magnetization)?
+        };
         // Cache the result so step_report_from_vectors can skip the redundant
         // CG solve / FFT demag after the integrator step.
         *self.demag_cache.lock().unwrap() = Some(result.clone());
         Ok(result)
+    }
+
+    /// Periodic PBC demag: solve in the reduced class space and lift back.
+    ///
+    /// Algorithm (see `docs/physics/0800-fem-static-pbc-demag.md`):
+    ///  1. Assemble full RHS `b(m)` on the full mesh.
+    ///  2. Reduce: `b_red = P^T b`.
+    ///  3. Solve reduced system `A_red q = b_red`.
+    ///  4. Lift: `φ_full = P q`.
+    ///  5. Reconstruct `H_demag = -∇φ_full` by nodal averaging.
+    ///  6. Project `H_demag` onto periodic classes (average over class).
+    fn periodic_robin_demag_observables_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Result<(Vec<Vector3>, f64)> {
+        let pdr = self
+            .periodic_demag_reduced
+            .as_ref()
+            .expect("periodic_demag_reduced must be Some when this function is called");
+
+        let n_full = self.topology.n_nodes;
+        let reduced_n = pdr.reduced_n;
+
+        // --- Step 1: assemble full RHS using the standard demag_rhs path ---
+        let mut full_rhs = vec![0.0f64; n_full];
+        self.demag_rhs_from_vectors_into(magnetization, &mut full_rhs);
+
+        // --- Step 2: reduce RHS to class space ---
+        let reduced_rhs =
+            reduce_rhs_by_periodic_classes(&full_rhs, &pdr.full_to_reduced, reduced_n);
+
+        // --- Step 3: solve reduced system ---
+        let tol = self.sparse_cg_tol.unwrap_or(SPARSE_CG_TOL);
+        let max_iter = self.sparse_cg_max_iter.unwrap_or(SPARSE_CG_MAX_ITER);
+        let mut ws = pdr.ws.lock().unwrap();
+        ws.ensure_size(reduced_n);
+        let DemagWorkspace {
+            cg,
+            rhs: _,
+            field,
+            weights,
+        } = &mut *ws;
+        solve_sparse_cg_cached(
+            &pdr.reduced_csr,
+            &reduced_rhs,
+            tol,
+            max_iter,
+            cg,
+            &pdr.reduced_inv_diag,
+        )?;
+
+        // --- Step 4: lift reduced potential back to full space ---
+        let u_full =
+            lift_scalar_by_periodic_classes(&cg.x[..reduced_n], &pdr.full_to_reduced, n_full);
+
+        // Energy: 0.5 * μ₀ * u^T b (in reduced space, then lifted)
+        let energy = 0.5
+            * MU0
+            * cg.x[..reduced_n]
+                .iter()
+                .zip(reduced_rhs.iter())
+                .map(|(u, b)| u * b)
+                .sum::<f64>();
+
+        // --- Step 5: reconstruct H_demag from full potential ---
+        field.resize(n_full, [0.0, 0.0, 0.0]);
+        weights.resize(n_full, 0.0);
+        self.demag_field_from_potential_into(&u_full, &mut field[..n_full], &mut weights[..n_full]);
+
+        // --- Step 6: project H_demag onto periodic classes ---
+        project_vector_field_by_periodic_classes(
+            &mut field[..n_full],
+            &pdr.full_to_reduced,
+            reduced_n,
+        );
+
+        Ok((field[..n_full].to_vec(), energy))
     }
 
     fn robin_demag_observables_from_vectors(
@@ -2947,6 +3243,19 @@ impl FemLlgProblem {
             n_hat = scale(n_hat, inv_norm);
         }
 
+        // For static periodic PBC, enforce class continuity on the input so
+        // that elements adjacent to periodic seam faces see consistent m values.
+        let m_ref: &[Vector3];
+        let m_projected: Vec<Vector3>;
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            let mut tmp = magnetization.to_vec();
+            apply_static_periodic_constraints_to_vectors(&mut tmp, dof_map);
+            m_projected = tmp;
+            m_ref = &m_projected;
+        } else {
+            m_ref = magnetization;
+        }
+
         let mut interfacial_accum = vec![[0.0, 0.0, 0.0]; n_nodes];
         let mut bulk_accum = vec![[0.0, 0.0, 0.0]; n_nodes];
 
@@ -2960,7 +3269,7 @@ impl FemLlgProblem {
             let mut grad_m = [[0.0f64; 3]; 3];
             for local_index in 0..4 {
                 let node = element[local_index] as usize;
-                let m = magnetization[node];
+                let m = m_ref[node];
                 let g = gradients[local_index];
                 for comp in 0..3 {
                     grad_m[comp][0] += m[comp] * g[0];
@@ -3022,6 +3331,29 @@ impl FemLlgProblem {
                 }
             }
         }
+
+        // Project fields onto periodic equivalence classes so that all nodes
+        // in the same class carry the same (class-averaged) DMI field.
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            let full_to_red: Vec<usize> =
+                (0..dof_map.full_node_count).map(|i| dof_map.reduced_node(i)).collect();
+            let reduced_n = dof_map.reduced_node_count;
+            if interfacial_pf.is_some() {
+                project_vector_field_by_periodic_classes(
+                    &mut interfacial_field,
+                    &full_to_red,
+                    reduced_n,
+                );
+            }
+            if bulk_pf.is_some() {
+                project_vector_field_by_periodic_classes(
+                    &mut bulk_field,
+                    &full_to_red,
+                    reduced_n,
+                );
+            }
+        }
+
         (interfacial_field, bulk_field)
     }
 
@@ -3050,14 +3382,18 @@ impl FemLlgProblem {
             n_hat = scale(n_hat, inv_norm);
         }
 
-        // We accumulate per-node contributions (volume-weighted) and then
-        // divide by lumped mass at the end.  We reuse the existing h_eff
-        // for accumulation by adding the final mass-normalized result.
-        // To avoid a separate accumulator allocation we keep two small
-        // per-node running sums (interfacial, bulk) added one element at
-        // a time.  For truly zero-alloc we'd need scratch buffers in the
-        // workspace; for now we use the same accumulators as the original
-        // function — the cost is small compared to the element loop itself.
+        // For static periodic PBC, project the magnetization input first.
+        let m_ref: &[Vector3];
+        let m_projected: Vec<Vector3>;
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            let mut tmp = magnetization.to_vec();
+            apply_static_periodic_constraints_to_vectors(&mut tmp, dof_map);
+            m_projected = tmp;
+            m_ref = &m_projected;
+        } else {
+            m_ref = magnetization;
+        }
+
         let mut interfacial_accum = vec![[0.0, 0.0, 0.0]; n_nodes];
         let mut bulk_accum = vec![[0.0, 0.0, 0.0]; n_nodes];
 
@@ -3070,7 +3406,7 @@ impl FemLlgProblem {
             let mut grad_m = [[0.0f64; 3]; 3];
             for local_index in 0..4 {
                 let node = element[local_index] as usize;
-                let m = magnetization[node];
+                let m = m_ref[node];
                 let g = gradients[local_index];
                 for comp in 0..3 {
                     grad_m[comp][0] += m[comp] * g[0];
@@ -3118,15 +3454,57 @@ impl FemLlgProblem {
             }
         }
 
-        for node in 0..n_nodes {
-            let lumped_mass = self.topology.magnetic_node_volumes[node];
-            if lumped_mass > ZERO_THRESHOLD {
-                let inv_mass = lumped_mass.recip();
+        // Normalise by lumped mass, project to periodic classes, add to h_eff.
+        let (full_to_red, reduced_n) = if let Some(dof_map) = &self.static_periodic_dof_map {
+            let f2r: Vec<usize> =
+                (0..dof_map.full_node_count).map(|i| dof_map.reduced_node(i)).collect();
+            let rn = dof_map.reduced_node_count;
+            (Some(f2r), rn)
+        } else {
+            (None, 0)
+        };
+
+        if let Some(ref f2r) = full_to_red {
+            // Normalise into temporary buffers, project, then add.
+            let mut interfacial_tmp = vec![[0.0f64; 3]; n_nodes];
+            let mut bulk_tmp = vec![[0.0f64; 3]; n_nodes];
+            for node in 0..n_nodes {
+                let lumped_mass = self.topology.magnetic_node_volumes[node];
+                if lumped_mass > ZERO_THRESHOLD {
+                    let inv_mass = lumped_mass.recip();
+                    if interfacial_pf.is_some() {
+                        interfacial_tmp[node] = scale(interfacial_accum[node], inv_mass);
+                    }
+                    if bulk_pf.is_some() {
+                        bulk_tmp[node] = scale(bulk_accum[node], inv_mass);
+                    }
+                }
+            }
+            if interfacial_pf.is_some() {
+                project_vector_field_by_periodic_classes(&mut interfacial_tmp, f2r, reduced_n);
+            }
+            if bulk_pf.is_some() {
+                project_vector_field_by_periodic_classes(&mut bulk_tmp, f2r, reduced_n);
+            }
+            for node in 0..n_nodes {
                 if interfacial_pf.is_some() {
-                    h_eff[node] = add(h_eff[node], scale(interfacial_accum[node], inv_mass));
+                    h_eff[node] = add(h_eff[node], interfacial_tmp[node]);
                 }
                 if bulk_pf.is_some() {
-                    h_eff[node] = add(h_eff[node], scale(bulk_accum[node], inv_mass));
+                    h_eff[node] = add(h_eff[node], bulk_tmp[node]);
+                }
+            }
+        } else {
+            for node in 0..n_nodes {
+                let lumped_mass = self.topology.magnetic_node_volumes[node];
+                if lumped_mass > ZERO_THRESHOLD {
+                    let inv_mass = lumped_mass.recip();
+                    if interfacial_pf.is_some() {
+                        h_eff[node] = add(h_eff[node], scale(interfacial_accum[node], inv_mass));
+                    }
+                    if bulk_pf.is_some() {
+                        h_eff[node] = add(h_eff[node], scale(bulk_accum[node], inv_mass));
+                    }
                 }
             }
         }
@@ -3992,5 +4370,111 @@ mod tests {
         assert_eq!(problem2.sparse_cg_tol, Some(1e-8));
         assert_eq!(problem2.sparse_cg_max_iter, Some(500));
         assert_eq!(problem2.cell_size_extent_fraction, Some(0.5));
+    }
+
+    // ── PR-5A: DMI PBC tests ──────────────────────────────────────────
+
+    /// Build the unit-tet periodic problem with DMI enabled.
+    fn unit_tet_dmi_periodic_problem(interfacial: bool, bulk: bool) -> FemLlgProblem {
+        let mesh = MeshIR {
+            mesh_name: "unit_tet_dmi_pbc".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0e-9, 0.0, 0.0],
+                [0.0, 1.0e-9, 0.0],
+                [0.0, 0.0, 1.0e-9],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_periodic".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 1,
+                translation: Some([1.0e-9, 0.0, 0.0]),
+                tolerance: Some(1e-20),
+                axis_hint: None,
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_periodic".to_string(),
+                node_a: 0,
+                node_b: 1,
+            }],
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let topology = MeshTopology::from_ir(&mesh).expect("unit tet dmi pbc topology");
+        FemLlgProblem::with_terms(
+            topology,
+            MaterialParameters::new(800e3, 13e-12, 0.5).expect("material"),
+            LlgConfig::new(DEFAULT_GYROMAGNETIC_RATIO, TimeIntegrator::Heun).expect("llg"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                interfacial_dmi: if interfacial { Some(1e-4) } else { None },
+                bulk_dmi: if bulk { Some(1e-3) } else { None },
+                ..Default::default()
+            },
+        )
+    }
+
+    /// PR-5A: validate_reference_semantics must accept DMI + PBC.
+    #[test]
+    fn reference_semantics_accepts_dmi_static_periodic() {
+        let problem = unit_tet_dmi_periodic_problem(true, false);
+        problem
+            .validate_reference_semantics()
+            .expect("interfacial DMI + static periodic PBC should be accepted after PR-5A");
+
+        let problem_bulk = unit_tet_dmi_periodic_problem(false, true);
+        problem_bulk
+            .validate_reference_semantics()
+            .expect("bulk DMI + static periodic PBC should be accepted after PR-5A");
+    }
+
+    /// PR-5A: for a periodic problem with interfacial DMI, periodic pair
+    /// nodes (0 and 1) must report equal DMI field values after class projection.
+    #[test]
+    fn periodic_pair_interfacial_dmi_field_equality() {
+        let problem = unit_tet_dmi_periodic_problem(true, false);
+        // Use distinct initial magnetization — after new_state, pairs are merged.
+        let state = problem
+            .new_state(vec![
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+            ])
+            .expect("periodic state");
+        // After new_state periodic constraint: node 0 and node 1 should be equal.
+        assert_eq!(
+            state.magnetization()[0],
+            state.magnetization()[1],
+            "periodic constraint should merge pair magnetization"
+        );
+        // Compute DMI fields directly.
+        let (interfacial, _bulk) = problem.dmi_fields_from_vectors(state.magnetization());
+        assert_eq!(
+            interfacial[0], interfacial[1],
+            "interfacial DMI field at periodic pair nodes must be equal after class projection"
+        );
+    }
+
+    /// PR-5A: bulk DMI field for uniform magnetization is identically zero
+    /// (divergence of uniform field = 0).
+    #[test]
+    fn bulk_dmi_uniform_magnetization_gives_zero_field() {
+        let problem = unit_tet_dmi_periodic_problem(false, true);
+        let uniform = vec![[0.7071, 0.7071, 0.0]; problem.topology.n_nodes];
+        let (_interfacial, bulk) = problem.dmi_fields_from_vectors(&uniform);
+        let max_bulk = bulk.iter().fold(0.0f64, |acc, v| acc.max(norm(*v)));
+        assert!(
+            max_bulk < 1e-10,
+            "bulk DMI of uniform m must vanish; got max |h_bulk_dmi| = {max_bulk:.3e}"
+        );
     }
 }

@@ -453,43 +453,73 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         anchor: "bottom-left",
         priority: 4,
         render: ({ variant }) => (
-          <div
-            className={cn(
-              "pointer-events-none flex gap-2",
-              showColorLegend && showOrientationLegend && variant !== "icon"
-                ? "flex-row items-end"
-                : "flex-col items-start",
-            )}
-          >
-            {showOrientationLegend ? (
-              <HslSphere
-                sceneRef={args.viewCubeSceneRef}
-                axisConvention="swapYZ"
-                compact={variant !== "full"}
-                onOrientationSnapshot={(snapshot) => args.updateRotationSnapshot("hsl", snapshot)}
-                embedded
-              />
-            ) : null}
-            {showColorLegend && args.colorLegendField ? (
-              <FieldLegend
-                compact={variant !== "full"}
-                className="pointer-events-none z-10"
-                colorLabel={colorLegendLabel(args.colorLegendField, args.fieldLabel)}
-                lengthLabel={colorLegendLengthLabel({
-                  effectiveShowArrows: args.effectiveShowArrows,
-                  arrowColorMode: args.arrowColorMode,
-                  arrowField: args.arrowField,
-                  fieldLabel: args.fieldLabel,
-                })}
-                min={args.colorLegendStats?.min}
-                max={args.colorLegendStats?.max}
-                mean={args.colorLegendStats?.mean}
-                gradient={colorLegendGradient(args.colorLegendField)}
-              />
-            ) : null}
-          </div>
+          <FieldLegend
+            compact={variant !== "full"}
+            className="pointer-events-none z-10"
+            colorLabel={colorLegendLabel(args.legendField, args.fieldLabel)}
+            lengthLabel={
+              args.effectiveShowArrows
+                ? args.arrowColorMode === "orientation"
+                  ? "vector magnitude, arrow color = orientation"
+                  : args.arrowColorMode === "monochrome"
+                    ? "vector magnitude, arrow color = monochrome"
+                    : `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`
+                : undefined
+            }
+            min={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.min}
+            max={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.max}
+            mean={args.legendField === "none" ? undefined : args.fieldMagnitudeStats?.mean}
+            gradient={colorLegendGradient(args.legendField)}
+          />
         ),
       });
+    }
+    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere && args.effectiveShowOrientationLegend) {
+      items.push({
+        id: "orientation-legend",
+        anchor: "bottom-left",
+        priority: 5,
+        render: ({ variant }) => (
+          <HslSphere
+            sceneRef={args.viewCubeSceneRef}
+            axisConvention="identity"
+            compact={variant !== "full"}
+            embedded
+          />
+        ),
+      });
+    }
+    {
+      const qSym =
+        (args.prominentQuantityOptions.find((o) => o.id === args.quantityId) ?? null)
+          ?.shortLabel ?? "m";
+      if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showStatusBar) {
+        items.push({
+          id: "status-bar",
+          anchor: "bottom-center",
+          priority: 2,
+          render: () => (
+            <FemViewportStatusBar
+              surfaceLabel={colorModeLabel(args.toolbarColorField, qSym)}
+              arrowLabel={colorModeLabel(args.arrowColorMode, qSym)}
+              arrowDensity={args.baseArrowDensity}
+              effectiveDensity={args.effectiveArrowDensity}
+              renderModeMixed={args.toolbarRenderModeMixed}
+              opacityMixed={args.toolbarOpacityMixed}
+              colorFieldMixed={args.toolbarColorFieldMixed}
+              toolbarScopeLabel={args.toolbarScopeLabel}
+              arrowsRequested={args.showArrows}
+              arrowsVisible={args.effectiveShowArrows}
+              arrowsBlockReason={args.arrowsBlockReason}
+              interactionSimplified={args.interactionActive}
+              hasField={!args.missingMagneticMask}
+              fieldLabel={args.fieldLabel}
+              visiblePartsCount={args.hasMeshParts ? args.visibleLayersCount : undefined}
+              totalPartsCount={args.hasMeshParts ? args.meshParts.length : undefined}
+            />
+          ),
+        });
+      }
     }
     if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHud) {
       items.push({

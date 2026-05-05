@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace fullmag::fem {
@@ -141,6 +142,16 @@ struct Context {
     std::vector<uint32_t> periodic_reduced_node; // full node -> reduced periodic class
     std::vector<uint32_t> periodic_representative_nodes; // reduced class -> representative node
     uint32_t periodic_reduced_node_count = 0;
+
+    // MFEM boundary attribute markers belonging to periodic seam face pairs.
+    // These faces are excluded from the Robin boundary mass integrator so that
+    // the open-boundary Robin condition does not apply on periodic seams.
+    std::unordered_set<uint32_t> periodic_boundary_marker_set;
+
+    // Returns true when demag PBC via algebraic P^T A P reduction is active.
+    bool demag_periodic_enabled() const {
+        return enable_demag && !periodic_node_pairs.empty();
+    }
 
     std::vector<uint8_t> magnetic_element_mask;
     std::vector<uint8_t> magnetic_node_mask;
@@ -292,6 +303,14 @@ struct Context {
     bool cpu_threads_auto_requested = false;
     int requested_omp_threads = 1;
     int effective_omp_threads = 1;
+
+    // ── Periodic demag: algebraic P^T A P reduced Poisson system ──
+    // Assembled once in context_initialize_poisson when demag_periodic_enabled().
+    // The reduced system has periodic_reduced_node_count DOFs.
+    void *mfem_periodic_poisson_matrix = nullptr;    // mfem::SparseMatrix* (P^T A_open P)
+    void *mfem_periodic_poisson_rhs = nullptr;       // mfem::Vector* (work: b_p)
+    void *mfem_periodic_poisson_solution = nullptr;  // mfem::Vector* (work: x_p)
+    bool poisson_periodic_reduced_ready = false;
 #endif
 
     // ── S12: CUDA stream management ──

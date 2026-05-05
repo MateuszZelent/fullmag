@@ -110,6 +110,10 @@ pub struct fullmag_fem_mesh_desc {
     pub boundary_markers: *const u32,
     pub periodic_node_pairs: *const u32,
     pub n_periodic_node_pairs: u32,
+    /// MFEM boundary attribute markers for periodic seam face pairs:
+    /// flat `[marker_a, marker_b] × count`.  Null/0 when not applicable.
+    pub periodic_boundary_pair_markers: *const u32,
+    pub periodic_boundary_pair_count: u32,
 }
 
 #[repr(C)]
@@ -478,5 +482,14 @@ mod tests {
         let mesh = unsafe { mesh.assume_init() };
         assert!(mesh.periodic_node_pairs.is_null());
         assert_eq!(mesh.n_periodic_node_pairs, 0);
+    }
+
+    /// Verify mesh desc carries periodic boundary pair marker fields for native demag PBC.
+    #[test]
+    fn mesh_desc_has_periodic_boundary_pair_marker_fields() {
+        let mesh = std::mem::MaybeUninit::<fullmag_fem_mesh_desc>::zeroed();
+        let mesh = unsafe { mesh.assume_init() };
+        assert!(mesh.periodic_boundary_pair_markers.is_null());
+        assert_eq!(mesh.periodic_boundary_pair_count, 0);
     }
 }

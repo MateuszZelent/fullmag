@@ -255,6 +255,8 @@ fn parse_fem_surface_preview_mesh(
         element_markers,
         boundary_faces: preview.boundary_faces,
         boundary_markers,
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
         object_segments: Vec::new(),
         mesh_parts: Vec::new(),
         domain_mesh_mode: None,

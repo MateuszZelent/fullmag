@@ -744,19 +744,21 @@ pub(crate) fn plan_fem(
             ],
         });
     }
-    if !mesh.periodic_node_pairs.is_empty()
-        && (enable_demag || interfacial_dmi.is_some() || bulk_dmi.is_some())
-    {
-        return Err(PlanError {
-            reasons: vec![format!(
-                "PBC not supported for the requested FEM terms: mesh '{}' declares {} \
-                 periodic_node_pairs, but static/time-domain FEM currently supports periodic \
-                 constraints only for exchange, uniform Zeeman field, and local anisotropy terms. \
-                 Disable demag/DMI or use the FEM eigen solver with spin_wave_bc='periodic'/'floquet'.",
-                mesh_name,
-                mesh.periodic_node_pairs.len()
-            )],
-        });
+    if !mesh.periodic_node_pairs.is_empty() && enable_demag {
+        if mesh.periodic_boundary_pairs.is_empty() {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM demag PBC requires mesh.periodic_boundary_pairs metadata (needed to \
+                     identify open vs periodic seam faces for Robin boundary assembly); mesh '{}' \
+                     has {} periodic_node_pairs but no periodic_boundary_pairs. Regenerate the \
+                     mesh with periodic boundary pair metadata.",
+                    mesh_name,
+                    mesh.periodic_node_pairs.len()
+                )],
+            });
+        }
+        // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
+        // Fully 3D periodic demag is not supported in v1.
     }
     if shared_domain_mesh_requested(problem, demag_realization)
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir

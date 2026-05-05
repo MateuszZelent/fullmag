@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Layout as FlexLayout,
   Model,
@@ -8,18 +8,14 @@ import {
   type Action,
 } from "flexlayout-react";
 
-import { useCommand, useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
+import { useCommand, useModel, useTransport } from "@/components/runs/control-room/context-hooks";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
 import ChartsDock from "@/components/workspace/docks/ChartsDock";
 import EmptyState from "@/components/ui/EmptyState";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  AnalyzeRightInspector,
-  BuildRightInspector,
-  StudyRightInspector,
-} from "@/components/workspace/modes/WorkspaceModeInspectors";
+import { WorkspaceRightToolbox } from "@/components/workspace/modes/WorkspaceModeInspectors";
 import {
   useWorkspaceStore,
 } from "@/lib/workspace/workspace-store";
@@ -47,13 +43,17 @@ function resolveFiniteMax(values: number[]): number | null {
   return Math.max(...values);
 }
 
-function RightInspectorPanel() {
-  const vp = useViewport();
-  if (vp.effectiveViewMode === "Analyze") return <AnalyzeRightInspector />;
-  if (vp.workspaceStage === "build") return <BuildRightInspector />;
-  if (vp.workspaceStage === "study") return <StudyRightInspector />;
-  return <AnalyzeRightInspector />;
-}
+/**
+ * RC-2 fix: Use a single stable component identity for the right inspector.
+ * Previously three identical wrappers (AnalyzeRightInspector / BuildRightInspector /
+ * StudyRightInspector) were conditionally switched based on effectiveViewMode,
+ * causing React to treat them as different component types and unmount+remount
+ * the entire inspector tree on every tab switch. Since all three rendered the
+ * same <WorkspaceRightToolbox />, we now render it directly with a stable identity.
+ */
+const RightInspectorPanel = memo(function RightInspectorPanel() {
+  return <WorkspaceRightToolbox />;
+});
 
 function BottomDockPanel() {
   const cmd = useCommand();

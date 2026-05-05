@@ -638,8 +638,11 @@ class MeshData:
         }
         periodic_boundary_pairs = self.periodic_boundary_pairs
         periodic_node_pairs = self.periodic_node_pairs
-        if not periodic_boundary_pairs and not periodic_node_pairs:
-            periodic_boundary_pairs, periodic_node_pairs = _infer_axis_aligned_periodic_pairs(self)
+        # FIXME: Disabled automatic PBC inference - it incorrectly detects periodic pairs
+        # for non-periodic geometries like cylinders. Re-enable only when user explicitly
+        # requests PBC via a flag/parameter (e.g., universe.periodic or mesh.periodic).
+        # if not periodic_boundary_pairs and not periodic_node_pairs:
+        #     periodic_boundary_pairs, periodic_node_pairs = _infer_axis_aligned_periodic_pairs(self)
         if periodic_boundary_pairs:
             ir["periodic_boundary_pairs"] = periodic_boundary_pairs
         if periodic_node_pairs:

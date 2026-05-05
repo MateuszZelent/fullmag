@@ -498,6 +498,17 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         if (!build_static_periodic_reduction(ctx, error)) {
             return false;
         }
+        // Populate periodic_boundary_marker_set for Robin BC exclusion.
+        ctx.periodic_boundary_marker_set.clear();
+        if (plan.mesh.periodic_boundary_pair_markers != nullptr &&
+            plan.mesh.periodic_boundary_pair_count > 0) {
+            for (uint32_t i = 0; i < plan.mesh.periodic_boundary_pair_count; ++i) {
+                ctx.periodic_boundary_marker_set.insert(
+                    plan.mesh.periodic_boundary_pair_markers[2u * i]);
+                ctx.periodic_boundary_marker_set.insert(
+                    plan.mesh.periodic_boundary_pair_markers[2u * i + 1u]);
+            }
+        }
     }
     ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;
     ctx.anisotropy_Ku = plan.uniaxial_anisotropy_constant;
@@ -925,32 +936,49 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
                 "native FEM periodic_node_pairs require enable_exchange=true";
             return false;
         }
-        if (ctx.enable_demag || ctx.enable_dmi || ctx.enable_bulk_dmi ||
-            ctx.enable_anisotropy || ctx.enable_cubic_anisotropy ||
+        // Reject terms that require P^T A P operator reduction or that have
+        // no algebraic periodic path.  Local anisotropy and DMI are node-local
+        // operations and are supported after per-class material validation.
+        // Demag PBC is handled by the algebraic P^T A P reduced Poisson system
+        // in context_initialize_poisson (requires FULLMAG_HAS_MFEM_STACK).
+#if !FULLMAG_HAS_MFEM_STACK
+        const bool demag_pbc_supported = false;
+#else
+        const bool demag_pbc_supported = true;
+#endif
+        if ((!demag_pbc_supported && ctx.enable_demag) ||
             ctx.enable_magnetoelastic || ctx.has_oersted_cylinder ||
             ctx.has_oersted_field || ctx.temperature > 0.0 ||
             ctx.has_zhang_li_stt || ctx.has_slonczewski_stt) {
             error =
                 "native FEM time-domain periodic_node_pairs currently support only "
-                "exchange with optional uniform external field; demag, DMI, anisotropy, "
-                "magnetoelastic, thermal noise, Oersted and STT require dedicated "
-                "periodic reduced operators";
+                "exchange, uniform Zeeman field, local anisotropy, DMI, and (MFEM stack) "
+                "demag via algebraic P^T A P; magnetoelastic, thermal noise, "
+                "Oersted and STT require dedicated periodic reduced operators";
             return false;
         }
+        // Validate base material fields per periodic class.
         if (!validate_periodic_scalar_field_classes(ctx, ctx.Ms_field, "Ms_field", error) ||
             !validate_periodic_scalar_field_classes(ctx, ctx.A_field, "A_field", error) ||
             !validate_periodic_scalar_field_classes(ctx, ctx.alpha_field, "alpha_field", error)) {
             return false;
         }
-        if (!ctx.Ku_field.empty() || !ctx.Ku2_field.empty() ||
-            !ctx.Dind_field.empty() || !ctx.Dbulk_field.empty() ||
-            !ctx.Kc1_field.empty() || !ctx.Kc2_field.empty() ||
-            !ctx.Kc3_field.empty()) {
-            error =
-                "native FEM time-domain periodic_node_pairs currently support per-node "
-                "Ms/A/alpha fields only for exchange; anisotropy and DMI material fields "
-                "need dedicated periodic reduced operators";
-            return false;
+        // Validate anisotropy material fields per periodic class (if present).
+        if (ctx.enable_anisotropy || ctx.enable_cubic_anisotropy) {
+            if (!validate_periodic_scalar_field_classes(ctx, ctx.Ku_field, "Ku_field", error) ||
+                !validate_periodic_scalar_field_classes(ctx, ctx.Ku2_field, "Ku2_field", error) ||
+                !validate_periodic_scalar_field_classes(ctx, ctx.Kc1_field, "Kc1_field", error) ||
+                !validate_periodic_scalar_field_classes(ctx, ctx.Kc2_field, "Kc2_field", error) ||
+                !validate_periodic_scalar_field_classes(ctx, ctx.Kc3_field, "Kc3_field", error)) {
+                return false;
+            }
+        }
+        // Validate DMI per-node material fields per periodic class (if present).
+        if (ctx.enable_dmi || ctx.enable_bulk_dmi) {
+            if (!validate_periodic_scalar_field_classes(ctx, ctx.Dind_field, "Dind_field", error) ||
+                !validate_periodic_scalar_field_classes(ctx, ctx.Dbulk_field, "Dbulk_field", error)) {
+                return false;
+            }
         }
     }
 

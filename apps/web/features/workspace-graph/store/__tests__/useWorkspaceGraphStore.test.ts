@@ -306,6 +306,76 @@ describe("workspace graph store", () => {
     expect(rebuilt.selection.activeResultNodeId).toBe("ds-1");
   });
 
+  it("preserves active viewport document id and camera when active tab temporarily resolves to null", () => {
+    const firstSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+
+    const previousSnapshot = {
+      ...firstSnapshot,
+      viewportDocuments: {
+        ...firstSnapshot.viewportDocuments,
+        "viewport:study:core:3d": {
+          ...firstSnapshot.viewportDocuments["viewport:study:core:3d"]!,
+          camera: {
+            position: [4, 3, 2] as [number, number, number],
+            target: [0, 0, 0] as [number, number, number],
+            up: [0, 1, 0] as [number, number, number],
+            projection: "perspective" as const,
+            navigation: "trackball" as const,
+            lastFocusedObjectId: "obj-1",
+          },
+        },
+      },
+      selection: {
+        ...firstSnapshot.selection,
+        activeViewportDocumentId: "viewport:study:core:3d",
+      },
+    };
+
+    const rebuilt = createWorkspaceGraphSnapshot(
+      {
+        projectLabel: "Micromagnetic Workspace",
+        workspaceMode: "study",
+        workspaceTabs: { build: [], study: [], analyze: [] },
+        activeWorkspaceTabByStage: { build: null, study: null, analyze: null },
+        selectedNodeId: "study.root",
+        studyPipeline,
+        resultsWorkspace,
+        quantities,
+        scalarRows: [{ time: 1e-12 }],
+        requestedPreviewQuantity: "m",
+        requestedPreviewComponent: "x",
+        plane: "xy",
+        sliceIndex: 1,
+        viewMode: "3D",
+        renderMode: "surface",
+      },
+      previousSnapshot,
+    );
+
+    expect(rebuilt.selection.activeViewportDocumentId).toBe("viewport:study:core:3d");
+    expect(rebuilt.viewportDocuments["viewport:study:core:3d"]?.camera?.position).toEqual([
+      4,
+      3,
+      2,
+    ]);
+  });
+
   it("maps active datasets from typed result nodes", () => {
     expect(resultNodeToTreeNodeId("plot_group", "pg-1")).toBe("res-plot-group-pg-1");
     expect(activeDatasetIdForResultNode(resultsWorkspace, "dv-1")).toBe("ds-1");

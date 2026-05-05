@@ -200,6 +200,12 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|pair| [pair.node_a, pair.node_b])
             .collect();
+        let periodic_boundary_pair_markers_flat: Vec<u32> = plan
+            .mesh
+            .periodic_boundary_pairs
+            .iter()
+            .flat_map(|p| [p.marker_a, p.marker_b])
+            .collect();
         let m_flat: Vec<f64> = plan
             .initial_magnetization
             .iter()
@@ -217,6 +223,12 @@ impl NativeFemBackend {
             boundary_markers: plan.mesh.boundary_markers.as_ptr(),
             periodic_node_pairs: periodic_pairs_flat.as_ptr(),
             n_periodic_node_pairs: plan.mesh.periodic_node_pairs.len() as u32,
+            periodic_boundary_pair_markers: if periodic_boundary_pair_markers_flat.is_empty() {
+                std::ptr::null()
+            } else {
+                periodic_boundary_pair_markers_flat.as_ptr()
+            },
+            periodic_boundary_pair_count: plan.mesh.periodic_boundary_pairs.len() as u32,
         };
 
         let material = ffi::fullmag_fem_material_desc {

@@ -30,7 +30,7 @@ const ROLE_GROUPS: Array<{ role: FemMeshPart["role"]; label: string }> = [
   { role: "air", label: "Air" },
 ];
 
-function WorkspaceRightToolbox() {
+export function WorkspaceRightToolbox() {
   const transport = useTransport();
   const command = useCommand();
   const model = useModel();

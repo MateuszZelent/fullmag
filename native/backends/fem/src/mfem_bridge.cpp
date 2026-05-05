@@ -2113,6 +2113,11 @@ bool compute_effective_fields_for_magnetization_impl(
             compute_uniaxial_anisotropy_field(
                 ctx, m_xyz, ctx.h_ani_xyz,
                 &anisotropy);
+            // Project anisotropy field onto periodic classes so all nodes in
+            // the same class carry the same value (local term, so this is safe).
+            if (!ctx.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.h_ani_xyz);
+            }
         } else {
             ctx.h_ani_xyz.assign(m_xyz.size(), 0.0);
         }
@@ -2123,6 +2128,10 @@ bool compute_effective_fields_for_magnetization_impl(
                     ctx, m_xyz, ctx.h_dmi_xyz, &dmi, error)) {
                 return false;
             }
+            // Project interfacial DMI field onto periodic classes.
+            if (!ctx.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.h_dmi_xyz);
+            }
         } else {
             ctx.h_dmi_xyz.assign(m_xyz.size(), 0.0);
         }
@@ -2131,6 +2140,10 @@ bool compute_effective_fields_for_magnetization_impl(
         if (ctx.enable_cubic_anisotropy) {
             compute_cubic_anisotropy_field(
                 ctx, m_xyz, ctx.h_cubic_ani_xyz, nullptr);
+            // Same periodic projection for cubic anisotropy.
+            if (!ctx.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.h_cubic_ani_xyz);
+            }
         } else {
             ctx.h_cubic_ani_xyz.assign(m_xyz.size(), 0.0);
         }
@@ -2142,6 +2155,10 @@ bool compute_effective_fields_for_magnetization_impl(
             if (!compute_bulk_dmi_field(
                     ctx, m_xyz, ctx.h_bulk_dmi_xyz, &bulk_dmi, error)) {
                 return false;
+            }
+            // Project bulk DMI field onto periodic classes.
+            if (!ctx.periodic_reduced_node.empty()) {
+                project_static_periodic_aos(ctx, ctx.h_bulk_dmi_xyz);
             }
         } else {
             ctx.h_bulk_dmi_xyz.assign(m_xyz.size(), 0.0);
@@ -2199,6 +2216,12 @@ bool compute_effective_fields_for_magnetization_impl(
             for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
                 h_eff_xyz[i] += ctx.h_mel_xyz[i];
             }
+        }
+        // After all local terms are assembled, project H_eff onto periodic
+        // classes.  This removes floating-point rounding mismatches between
+        // paired nodes that could otherwise accumulate over many steps.
+        if (!ctx.periodic_reduced_node.empty()) {
+            project_static_periodic_aos(ctx, h_eff_xyz);
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;
@@ -3230,6 +3253,62 @@ void context_destroy_mfem(Context &ctx) {
 // Poisson demag initialization / destruction / compute (S02–S05)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Algebraic P^T A P reduction helpers for periodic demag ──────────────────
+// Reduce a full-DOF SparseMatrix A to the periodic class space:
+//   A_p[class(i), class(j)] += A[i, j]
+// All nodes in the same periodic equivalence class map to the same reduced DOF.
+static mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(
+    const mfem::SparseMatrix &A,
+    const Context &ctx)
+{
+    const int nred = static_cast<int>(ctx.periodic_reduced_node_count);
+    auto *R = new mfem::SparseMatrix(nred, nred);
+
+    mfem::Array<int> cols;
+    mfem::Vector vals;
+    for (int i = 0; i < A.Height(); ++i) {
+        const int ri = static_cast<int>(
+            ctx.periodic_reduced_node[static_cast<size_t>(i)]);
+        A.GetRow(i, cols, vals);
+        for (int k = 0; k < cols.Size(); ++k) {
+            const int rj = static_cast<int>(
+                ctx.periodic_reduced_node[static_cast<size_t>(cols[k])]);
+            R->Add(ri, rj, vals[k]);
+        }
+    }
+    R->Finalize();
+    return R;
+}
+
+// Reduce a full-DOF RHS vector b to the periodic class space:
+//   b_p[class(i)] += b[i]
+static void reduce_vector_by_periodic_classes(
+    const Context &ctx,
+    const mfem::Vector &full,
+    mfem::Vector &reduced)
+{
+    reduced.SetSize(static_cast<int>(ctx.periodic_reduced_node_count));
+    reduced = 0.0;
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t r = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        reduced[static_cast<int>(r)] += full[static_cast<int>(node)];
+    }
+}
+
+// Lift a reduced-space solution back to the full DOF space:
+//   full[i] = reduced[class(i)]
+static void lift_vector_by_periodic_classes(
+    const Context &ctx,
+    const mfem::Vector &reduced,
+    mfem::Vector &full)
+{
+    full.SetSize(static_cast<int>(ctx.n_nodes));
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t r = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        full[static_cast<int>(node)] = reduced[static_cast<int>(r)];
+    }
+}
+
 bool context_initialize_poisson(Context &ctx, std::string &error) {
     try {
         debug_checkpoint("context_initialize_poisson:enter");
@@ -3299,6 +3378,14 @@ bool context_initialize_poisson(Context &ctx, std::string &error) {
                 delete gf_potential;
                 return false;
             }
+            // Exclude periodic seam face markers from the Robin boundary mass.
+            // Periodic seam faces are interior (connected to their periodic partner)
+            // and must not receive the open-boundary Robin condition.
+            for (uint32_t pm : ctx.periodic_boundary_marker_set) {
+                if (pm >= 1 && static_cast<int>(pm) <= mesh->bdr_attributes.Max()) {
+                    bdr_marker[static_cast<int>(pm) - 1] = 0;
+                }
+            }
             bdr_mass->AddBoundaryIntegrator(
                 new mfem::MassIntegrator(), bdr_marker);
             bdr_mass->Assemble();
@@ -3362,6 +3449,28 @@ bool context_initialize_poisson(Context &ctx, std::string &error) {
             ctx.mfem_poisson_bc_op = A_bc;
         }
 
+        // ── Periodic demag: build P^T A_open P reduced system ───────────────
+        // When PBC is active, reduce the full Poisson operator to the periodic
+        // equivalence-class space.  The reduced system is solved each step;
+        // the solution is then lifted back to the full DOF space for gradient
+        // recovery.  Robin seam exclusion is handled via periodic_boundary_marker_set
+        // (see bdr_marker filtering above for the Robin path).
+        if (ctx.demag_periodic_enabled() && ctx.periodic_reduced_node_count > 0) {
+            auto *A_full = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+            if (A_full == nullptr) {
+                error = "Poisson BC operator is null when building periodic reduced system";
+                context_destroy_poisson(ctx);
+                return false;
+            }
+            ctx.mfem_periodic_poisson_matrix =
+                reduce_sparse_matrix_by_periodic_classes(*A_full, ctx);
+            ctx.mfem_periodic_poisson_rhs =
+                new mfem::Vector(static_cast<int>(ctx.periodic_reduced_node_count));
+            ctx.mfem_periodic_poisson_solution =
+                new mfem::Vector(static_cast<int>(ctx.periodic_reduced_node_count));
+            ctx.poisson_periodic_reduced_ready = true;
+        }
+
         ctx.poisson_ready = true;
         debug_checkpoint("context_initialize_poisson:done");
         return true;
@@ -3414,6 +3523,14 @@ void context_destroy_poisson(Context &ctx) {
     // Robin boundary mass form (separate allocation)
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_boundary_mass);
     ctx.mfem_boundary_mass = nullptr;
+    // Periodic demag reduced system allocations.
+    delete static_cast<mfem::SparseMatrix *>(ctx.mfem_periodic_poisson_matrix);
+    ctx.mfem_periodic_poisson_matrix = nullptr;
+    delete static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_rhs);
+    ctx.mfem_periodic_poisson_rhs = nullptr;
+    delete static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_solution);
+    ctx.mfem_periodic_poisson_solution = nullptr;
+    ctx.poisson_periodic_reduced_ready = false;
     // Poisson bilinear form owns the SparseMatrix — don't double-free
     delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
     delete static_cast<mfem::BilinearForm *>(ctx.mfem_poisson_bilinear);
@@ -3454,6 +3571,76 @@ bool context_compute_demag_poisson(
     if (allow_interrupt && poll_interrupt(ctx)) {
         return false;
     }
+
+    // ── Periodic demag: solve in reduced class space, then lift ─────────────
+    if (ctx.demag_periodic_enabled() && ctx.poisson_periodic_reduced_ready) {
+        auto *A_p  = static_cast<mfem::SparseMatrix *>(ctx.mfem_periodic_poisson_matrix);
+        auto *rhs_p = static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_rhs);
+        auto *x_p   = static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_solution);
+        if (A_p == nullptr || rhs_p == nullptr || x_p == nullptr) {
+            error = "Periodic Poisson reduced system is not properly initialised";
+            return false;
+        }
+
+        const auto solve_wall_start_pbc = SteadyClock::now();
+        reduce_vector_by_periodic_classes(ctx, rhs, *rhs_p);
+
+        // Serial CG + GS smoother (no MPI required for the reduced system).
+        mfem::GSSmoother prec(*A_p);
+        mfem::CGSolver solver;
+        const double rel_tol = ctx.demag_solver.relative_tolerance > 0.0
+                                   ? ctx.demag_solver.relative_tolerance
+                                   : 1e-10;
+        const int max_iter = ctx.demag_solver.max_iterations > 0
+                                 ? static_cast<int>(ctx.demag_solver.max_iterations)
+                                 : 1000;
+        solver.SetRelTol(rel_tol);
+        solver.SetMaxIter(max_iter);
+        solver.SetPrintLevel(0);
+        solver.SetPreconditioner(prec);
+        solver.SetOperator(*A_p);
+        *x_p = 0.0;
+        solver.Mult(*rhs_p, *x_p);
+
+        mfem::Vector full_solution;
+        lift_vector_by_periodic_classes(ctx, *x_p, full_solution);
+        const uint64_t solve_wall_time_ns_pbc = elapsed_ns(solve_wall_start_pbc);
+
+        debug_checkpoint("context_compute_demag_poisson:solve_done");
+        if (allow_interrupt && poll_interrupt(ctx)) {
+            return false;
+        }
+
+        const auto recover_wall_start_pbc = SteadyClock::now();
+        if (!recover_demag_field(ctx, full_solution, h_demag_xyz, demag_energy, m_xyz, error)) {
+            return false;
+        }
+        const uint64_t recover_wall_time_ns_pbc = elapsed_ns(recover_wall_start_pbc);
+        debug_checkpoint("context_compute_demag_poisson:recover_done");
+
+        // Project h_demag onto periodic equivalence classes so that all nodes
+        // in the same class carry the same (averaged) demagnetization field.
+        project_static_periodic_aos(ctx, h_demag_xyz);
+        if (!ctx.h_demag_visual_xyz.empty()) {
+            ctx.h_demag_visual_xyz = h_demag_xyz;
+        }
+
+        if (allow_interrupt && poll_interrupt(ctx)) {
+            return false;
+        }
+        // Store lifted solution for warm-start in next step.
+        auto *gf_potential_pbc = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+        gf_potential_pbc->SetFromTrueDofs(full_solution);
+
+        log_demag_call_profile(
+            ctx,
+            demag_call_index,
+            assemble_wall_time_ns,
+            solve_wall_time_ns_pbc,
+            recover_wall_time_ns_pbc);
+        return true;
+    }
+    // ── End periodic demag path ──────────────────────────────────────────────
 
     // S04: Solve -∇²u = -∇·M with Dirichlet BCs
     auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);

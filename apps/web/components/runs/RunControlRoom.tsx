@@ -53,11 +53,7 @@ import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 import BackendErrorNotice from "./control-room/BackendErrorNotice";
 import MeshBuildModal from "./control-room/MeshBuildModal";
 import { buildVisualizationPresetNodeId } from "./control-room/visualizationPresets";
-import {
-  BuildRightInspector,
-  StudyRightInspector,
-  AnalyzeRightInspector,
-} from "../workspace/modes/WorkspaceModeInspectors";
+import { WorkspaceRightToolbox } from "../workspace/modes/WorkspaceModeInspectors";
 import { useAnalyzeStore } from "@/features/analyze";
 import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import type { WorkspaceMode } from "./control-room/context-hooks";
@@ -836,15 +832,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             </>
           }
           rightOpen={rightInspectorOpen}
-          rightPanel={
-            _viewport.effectiveViewMode === "Analyze" || activeCoreTab === "Results" ? (
-              <AnalyzeRightInspector />
-            ) : builderModeEnabled || activeCoreTab === "Geometry" ? (
-              <BuildRightInspector />
-            ) : (
-              <StudyRightInspector />
-            )
-          }
+          rightPanel={<WorkspaceRightToolbox />}
           rightDefaultSize={rightInspectorDefaultSize}
           rightMinSize={rightInspectorMinSize}
           rightMaxSize={rightInspectorMaxSize}

@@ -49,7 +49,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     showPreviewNotices: true,
     showBottomDock: true,
     showRightInspector: true,
-    showStatusBar: true,
+    showStatusBar: false,
     showWorkspaceOverlays: true,
     showBackendErrorNotice: true,
     showLayoutDebugHud: false,

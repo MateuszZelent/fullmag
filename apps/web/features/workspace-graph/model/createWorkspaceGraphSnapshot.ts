@@ -70,7 +70,19 @@ export function createWorkspaceGraphSnapshot(
   const studyNodes = input.studyPipeline ? collectStudyNodes(input.studyPipeline.nodes) : [];
   const quantityFrames = buildQuantityFrames(input.quantities);
   const activeTabId = input.activeWorkspaceTabByStage[input.workspaceMode] ?? null;
-  const activeViewportDocumentId = activeTabId ? `viewport:${input.workspaceMode}:${activeTabId}` : null;
+  const explicitViewportDocumentId = activeTabId
+    ? `viewport:${input.workspaceMode}:${activeTabId}`
+    : null;
+  const previousActiveViewportDocumentId =
+    previousSnapshot?.selection.activeViewportDocumentId ?? null;
+  const previousActiveViewportDocument = previousActiveViewportDocumentId
+    ? previousSnapshot?.viewportDocuments[previousActiveViewportDocumentId] ?? null
+    : null;
+  const fallbackViewportDocumentId =
+    previousActiveViewportDocument?.workspaceMode === input.workspaceMode
+      ? previousActiveViewportDocument.id
+      : null;
+  const activeViewportDocumentId = explicitViewportDocumentId ?? fallbackViewportDocumentId;
   const inferredDatasetId = input.resultsWorkspace.datasets[0]?.id ?? "dataset:live";
   const inferredStudyId = firstAvailableStudyNode(input.studyPipeline);
   const requestedQuantityId = input.requestedPreviewQuantity ?? quantityFrames.find((q) => q.available)?.quantityId ?? null;

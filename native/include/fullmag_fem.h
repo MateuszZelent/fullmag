@@ -98,6 +98,13 @@ typedef struct {
        MFEM context creation until periodic constraint assembly is implemented. */
     const uint32_t *periodic_node_pairs;
     uint32_t n_periodic_node_pairs;
+
+    /* MFEM boundary attribute markers for periodic seam face pairs,
+       stored as [marker_a0, marker_b0, marker_a1, marker_b1, ...].
+       Used to exclude periodic seam faces from Robin boundary mass
+       when demag PBC is enabled.  Pass NULL / 0 when not applicable. */
+    const uint32_t *periodic_boundary_pair_markers;
+    uint32_t periodic_boundary_pair_count;
 } fullmag_fem_mesh_desc;
 
 typedef struct {

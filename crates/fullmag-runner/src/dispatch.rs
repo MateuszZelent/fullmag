@@ -1000,9 +1000,7 @@ pub(crate) fn snapshot_fem_preview(
             ),
         });
     }
-    if !plan.mesh.periodic_node_pairs.is_empty()
-        && !fem_static_periodic_native_exchange_supported(plan)
-    {
+    if !fem_static_periodic_decision(plan).is_native() {
         return fem_baseline::snapshot_preview(plan, request);
     }
     match engine {
@@ -1021,9 +1019,7 @@ pub(crate) fn snapshot_fem_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = active_fem_preview_quantities(engine, plan, quantities);
-    if !plan.mesh.periodic_node_pairs.is_empty()
-        && !fem_static_periodic_native_exchange_supported(plan)
-    {
+    if !fem_static_periodic_decision(plan).is_native() {
         return fem_baseline::snapshot_vector_fields(plan, &quantities, request);
     }
     match engine {
@@ -1043,39 +1039,186 @@ fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
     cpu_plan
 }
 
-fn fem_static_periodic_native_exchange_supported(plan: &FemPlanIR) -> bool {
-    if plan.mesh.periodic_node_pairs.is_empty() {
-        return true;
+/// Which execution lane to use for FEM static/time-domain PBC.
+///
+/// Ordered from most capable to least capable. The dispatcher picks the
+/// highest lane that is fully supported by the available runtime and by the
+/// terms present in the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FemStaticPbcLane {
+    /// No periodic node pairs — native path unconditionally.
+    None,
+    /// Exchange + uniform Zeeman only. Native FEM PBC is fully supported.
+    NativeExchangeOnly,
+    /// Exchange + local uniaxial/cubic anisotropy (no demag, no DMI).
+    /// Native FEM PBC is supported after PR-2 guards are in place.
+    NativeAnisotropy,
+    /// Exchange + demag (no DMI) via algebraic P^T A P reduction in the
+    /// MFEM/hypre Poisson solver.  Requires FULLMAG_HAS_MFEM_STACK.
+    /// May also include local anisotropy alongside demag.
+    NativeDemagPoisson,
+    /// DMI is present — uses P^T operator class projection in the
+    /// Rust CPU reference solver (PR-5A).  Demag may also be present here.
+    /// Native DMI PBC (PR-5B) will promote this to NativeDemagPoisson once
+    /// the native guard is lifted.
+    ///
+    /// Note: after PR-5B this variant is no longer reached for DMI-only cases.
+    /// It remains available as a fallback and for future operator types that
+    /// require full algebraic reduction.
+    #[allow(dead_code)]
+    ReferenceReduction,
+    /// Terms that cannot be handled by any available periodic path
+    /// (magnetoelastic, thermal, STT, Oersted, …).
+    Unsupported,
+}
+
+/// Result of the FEM static PBC capability decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FemStaticPbcDecision {
+    pub lane: FemStaticPbcLane,
+    /// Human-readable explanation for the chosen lane (especially for
+    /// fallbacks and unsupported cases).
+    pub reason: Option<String>,
+    /// Interactions that could not be accommodated by the native path.
+    pub unsupported_interactions: Vec<String>,
+}
+
+impl FemStaticPbcDecision {
+    fn native(lane: FemStaticPbcLane) -> Self {
+        Self {
+            lane,
+            reason: None,
+            unsupported_interactions: Vec::new(),
+        }
     }
-    plan.enable_exchange
-        && !plan.enable_demag
-        && plan.interfacial_dmi.is_none()
-        && plan.bulk_dmi.is_none()
-        && plan.dind_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.dbulk_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.uniaxial_anisotropy.is_none()
-        && plan.material.uniaxial_anisotropy_k2.is_none()
-        && plan.material.cubic_anisotropy_kc1.is_none()
-        && plan.material.cubic_anisotropy_kc2.is_none()
-        && plan.material.cubic_anisotropy_kc3.is_none()
-        && plan.material.ms_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.a_field.as_ref().map_or(true, Vec::is_empty)
-        && plan
-            .material
-            .alpha_field
-            .as_ref()
-            .map_or(true, Vec::is_empty)
-        && plan.material.ku_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.ku2_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.kc1_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.kc2_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.material.kc3_field.as_ref().map_or(true, Vec::is_empty)
-        && plan.current_density.is_none()
-        && plan.stt_spin_polarization.is_none()
-        && plan.temperature.unwrap_or(0.0) <= 0.0
-        && !plan.has_oersted_cylinder
-        && plan.oersted_field_xyz.as_ref().map_or(true, Vec::is_empty)
-        && plan.magnetoelastic.is_none()
+
+    #[allow(dead_code)]
+    fn reference_reduction(reason: impl Into<String>) -> Self {
+        Self {
+            lane: FemStaticPbcLane::ReferenceReduction,
+            reason: Some(reason.into()),
+            unsupported_interactions: Vec::new(),
+        }
+    }
+
+    fn unsupported(reason: impl Into<String>, interactions: Vec<String>) -> Self {
+        Self {
+            lane: FemStaticPbcLane::Unsupported,
+            reason: Some(reason.into()),
+            unsupported_interactions: interactions,
+        }
+    }
+
+    /// Returns `true` if the native FEM backend can execute this plan
+    /// without any fallback to the Rust reference solver.
+    pub fn is_native(&self) -> bool {
+        matches!(
+            self.lane,
+            FemStaticPbcLane::None
+                | FemStaticPbcLane::NativeExchangeOnly
+                | FemStaticPbcLane::NativeAnisotropy
+                | FemStaticPbcLane::NativeDemagPoisson
+        )
+    }
+}
+
+/// Decide which execution lane to use for a FEM plan that may carry
+/// static/time-domain periodic node pairs.
+///
+/// This function encodes the capability matrix for FEM static PBC:
+///
+/// | Terms present                        | Lane                     |
+/// |--------------------------------------|--------------------------|
+/// | no periodic pairs                    | None (native)            |
+/// | exchange + Zeeman only               | NativeExchangeOnly       |
+/// | exchange + local anisotropy          | NativeAnisotropy         |
+/// | exchange + DMI (no demag)            | NativeAnisotropy         |
+/// | exchange + demag (no DMI)            | NativeDemagPoisson       |
+/// | exchange + demag + anisotropy        | NativeDemagPoisson       |
+/// | exchange + demag + DMI               | NativeDemagPoisson       |
+/// | thermal / STT / Oersted / MEL        | Unsupported              |
+fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDecision {
+    if plan.mesh.periodic_node_pairs.is_empty() {
+        return FemStaticPbcDecision::native(FemStaticPbcLane::None);
+    }
+
+    // Hard unsupported: terms that have no periodic path at all.
+    let mut unsupported = Vec::new();
+    if plan.temperature.unwrap_or(0.0) > 0.0 {
+        unsupported.push("thermal_noise".to_string());
+    }
+    if plan.current_density.is_some() || plan.stt_spin_polarization.is_some() {
+        unsupported.push("stt".to_string());
+    }
+    if plan.has_oersted_cylinder || plan.oersted_field_xyz.as_ref().map_or(false, |v| !v.is_empty())
+    {
+        unsupported.push("oersted".to_string());
+    }
+    if plan.magnetoelastic.is_some() {
+        unsupported.push("magnetoelastic".to_string());
+    }
+    if !unsupported.is_empty() {
+        return FemStaticPbcDecision::unsupported(
+            format!(
+                "FEM static/time-domain PBC does not support: {}. \
+                 These terms require non-periodic boundary conditions or \
+                 non-local operators that have no algebraic periodic reduction.",
+                unsupported.join(", ")
+            ),
+            unsupported,
+        );
+    }
+
+    // Terms that require Rust reference algebraic reduction (P^T A P).
+    let has_demag = plan.enable_demag;
+    let has_dmi = plan.interfacial_dmi.is_some()
+        || plan.bulk_dmi.is_some()
+        || plan.dind_field.as_ref().map_or(false, |v| !v.is_empty())
+        || plan.dbulk_field.as_ref().map_or(false, |v| !v.is_empty());
+
+    // DMI: native backend now supports PBC via class-projected volume operator (PR-5B).
+    // DMI + demag: uses native Poisson demag (PR-4) + class projection for DMI.
+    // DMI without demag: uses native exchange+DMI path with anisotropy lane.
+    if has_dmi && has_demag {
+        return FemStaticPbcDecision::native(FemStaticPbcLane::NativeDemagPoisson);
+    }
+    if has_dmi {
+        // No demag; route via NativeAnisotropy (native backend, handles DMI projection).
+        return FemStaticPbcDecision::native(FemStaticPbcLane::NativeAnisotropy);
+    }
+
+    // Demag without DMI: native MFEM/hypre P^T A P Poisson path (PR-4).
+    if has_demag {
+        return FemStaticPbcDecision::native(FemStaticPbcLane::NativeDemagPoisson);
+    }
+
+    // Local anisotropy: native backend supports this after PR-2.
+    let has_anisotropy = plan.material.uniaxial_anisotropy.is_some()
+        || plan.material.uniaxial_anisotropy_k2.is_some()
+        || plan.material.cubic_anisotropy_kc1.is_some()
+        || plan.material.cubic_anisotropy_kc2.is_some()
+        || plan.material.cubic_anisotropy_kc3.is_some()
+        || plan.material.ku_field.as_ref().map_or(false, |v| !v.is_empty())
+        || plan.material.ku2_field.as_ref().map_or(false, |v| !v.is_empty())
+        || plan.material.kc1_field.as_ref().map_or(false, |v| !v.is_empty())
+        || plan.material.kc2_field.as_ref().map_or(false, |v| !v.is_empty())
+        || plan.material.kc3_field.as_ref().map_or(false, |v| !v.is_empty());
+
+    if has_anisotropy {
+        // Native FEM supports local anisotropy PBC.
+        // The native guard in context.cpp validates per-class field consistency.
+        return FemStaticPbcDecision::native(FemStaticPbcLane::NativeAnisotropy);
+    }
+
+    // Exchange + Zeeman only: fully supported by native.
+    FemStaticPbcDecision::native(FemStaticPbcLane::NativeExchangeOnly)
+}
+
+/// Legacy helper used at call sites that only need a binary "can the native
+/// backend handle this?" answer.
+#[allow(dead_code)]
+fn fem_static_periodic_native_exchange_supported(plan: &FemPlanIR) -> bool {
+    fem_static_periodic_decision(plan).is_native()
 }
 
 #[cfg(feature = "cuda")]
@@ -1457,21 +1600,40 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
-    if !normalized_plan.mesh.periodic_node_pairs.is_empty()
-        && !fem_static_periodic_native_exchange_supported(&normalized_plan)
-    {
-        eprintln!(
-            "info: FEM static periodic constraints are executed by the Rust FEM reference path \
-             because this run uses terms outside the current native exchange periodic \
-             constraint support."
-        );
-        return fem_baseline::execute_reference_fem(
-            &normalized_plan,
-            until_seconds,
-            outputs,
-            live,
-            artifact_writer,
-        );
+    let pbc_decision = fem_static_periodic_decision(&normalized_plan);
+    match pbc_decision.lane {
+        FemStaticPbcLane::Unsupported => {
+            return Err(RunError {
+                message: format!(
+                    "FEM static/time-domain PBC cannot be executed: {}. \
+                     Unsupported interactions: {}.",
+                    pbc_decision.reason.as_deref().unwrap_or("unknown"),
+                    pbc_decision.unsupported_interactions.join(", ")
+                ),
+            });
+        }
+        FemStaticPbcLane::ReferenceReduction => {
+            runtime_log_once(
+                "info",
+                &format!(
+                    "FEM static periodic constraints are executed by the Rust FEM reference path: {}",
+                    pbc_decision.reason.as_deref().unwrap_or("operator reduction required")
+                ),
+            );
+            return fem_baseline::execute_reference_fem(
+                &normalized_plan,
+                until_seconds,
+                outputs,
+                live,
+                artifact_writer,
+            );
+        }
+        FemStaticPbcLane::None
+        | FemStaticPbcLane::NativeExchangeOnly
+        | FemStaticPbcLane::NativeAnisotropy
+        | FemStaticPbcLane::NativeDemagPoisson => {
+            // Fall through to native execution below.
+        }
     }
     match engine {
         FemEngine::CpuNative => {
@@ -3618,11 +3780,13 @@ mod tests {
     }
 
     #[test]
-    fn execute_fem_routes_unsupported_static_periodic_pairs_to_reference_guardrail() {
+    fn execute_fem_dmi_pbc_routes_to_native_after_pr5b() {
+        // DMI + PBC now routes to NativeAnisotropy (no demag) after PR-5B.
+        // Anisotropy alone is native since PR-2; demag alone is native since PR-4;
+        // DMI alone is native since PR-5B.
         let mut plan = tiny_fem_plan();
         plan.initial_magnetization[1] = [0.0, 1.0, 0.0];
-        plan.material.uniaxial_anisotropy = Some(1.0e4);
-        plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+        plan.interfacial_dmi = Some(1e-4); // DMI is now native via class projection
         plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
             source_marker: None,
@@ -3641,16 +3805,13 @@ mod tests {
             node_b: 1,
         }];
 
-        assert!(!fem_static_periodic_native_exchange_supported(&plan));
+        // DMI (no demag) routes to NativeAnisotropy, which IS native.
+        assert!(fem_static_periodic_native_exchange_supported(&plan));
 
-        let err = execute_fem(FemEngine::CpuNative, &plan, 1e-13, &[], None, None)
-            .expect_err("unsupported static periodic FEM should stop in reference guardrail");
-        assert!(
-            err.message.contains("Internal FEM baseline engine")
-                || err.message.contains("FEM reference runner cannot execute"),
-            "unexpected guardrail error: {}",
-            err.message
-        );
+        // Verify the decision lane is NativeAnisotropy.
+        let plan_ir = plan.clone();
+        let decision = fem_static_periodic_decision(&plan_ir);
+        assert_eq!(decision.lane, FemStaticPbcLane::NativeAnisotropy);
     }
 
     #[test]

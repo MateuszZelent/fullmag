@@ -137,15 +137,18 @@ describe("applyWorkspaceTabSelection", () => {
     expect(api.openAnalyzeSurface).not.toHaveBeenCalled();
   });
 
-  it("selects 3D mode when the 3D viewport tab is activated", () => {
-    const api = makeApi({ effectiveViewMode: "2D" });
+  it("syncs workspace mode for 3D viewport tab without redundant handleViewModeChange (RC-6)", () => {
+    const api = makeApi({ effectiveViewMode: "2D", currentWorkspaceMode: "build" });
     applyWorkspaceTabSelection(stage, makeTab({ kind: "viewport-3d" }), api);
 
-    expect(api.handleViewModeChange).toHaveBeenCalledWith("3D");
+    // handleViewModeChange is NOT called here because transitionToViewMode
+    // already set it. Only workspace mode sync is performed.
+    expect(api.handleViewModeChange).not.toHaveBeenCalled();
+    expect(api.setWorkspaceMode).toHaveBeenCalledWith(stage);
   });
 
-  it("selects 2D mode when the 2D viewport tab is activated", () => {
-    const api = makeApi({ effectiveViewMode: "3D" });
+  it("syncs workspace mode for 2D viewport tab without redundant handleViewModeChange (RC-6)", () => {
+    const api = makeApi({ effectiveViewMode: "3D", currentWorkspaceMode: "build" });
     applyWorkspaceTabSelection(
       stage,
       makeTab({
@@ -158,11 +161,12 @@ describe("applyWorkspaceTabSelection", () => {
       api,
     );
 
-    expect(api.handleViewModeChange).toHaveBeenCalledWith("2D");
+    expect(api.handleViewModeChange).not.toHaveBeenCalled();
+    expect(api.setWorkspaceMode).toHaveBeenCalledWith(stage);
   });
 
-  it("selects Mesh mode when the mesh viewport tab is activated", () => {
-    const api = makeApi({ effectiveViewMode: "3D" });
+  it("syncs workspace mode for mesh viewport tab without redundant handleViewModeChange (RC-6)", () => {
+    const api = makeApi({ effectiveViewMode: "3D", currentWorkspaceMode: "build" });
     applyWorkspaceTabSelection(
       stage,
       makeTab({
@@ -175,6 +179,7 @@ describe("applyWorkspaceTabSelection", () => {
       api,
     );
 
-    expect(api.handleViewModeChange).toHaveBeenCalledWith("Mesh");
+    expect(api.handleViewModeChange).not.toHaveBeenCalled();
+    expect(api.setWorkspaceMode).toHaveBeenCalledWith(stage);
   });
 });
