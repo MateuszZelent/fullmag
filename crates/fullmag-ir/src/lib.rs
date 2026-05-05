@@ -122,6 +122,12 @@ pub struct ProblemIR {
     /// Slonczewski secondary spin-transfer term (epsilon')
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_epsilon_prime: Option<f64>,
+    /// Slonczewski free-layer thickness [m]. When None, engine defaults to cell_dz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_thickness: Option<f64>,
+    /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_fixed_layer_position: Option<String>,
 
     /// Temperature in Kelvin for Brown thermal field (sLLG). None or 0 = no thermal noise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -200,6 +206,10 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             stt_epsilon_prime: Option<f64>,
             #[serde(default)]
+            stt_thickness: Option<f64>,
+            #[serde(default)]
+            stt_fixed_layer_position: Option<String>,
+            #[serde(default)]
             temperature: Option<f64>,
             #[serde(default)]
             elastic_materials: Vec<ElasticMaterialIR>,
@@ -241,6 +251,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             stt_spin_polarization: wire.stt_spin_polarization,
             stt_lambda: wire.stt_lambda,
             stt_epsilon_prime: wire.stt_epsilon_prime,
+            stt_thickness: wire.stt_thickness,
+            stt_fixed_layer_position: wire.stt_fixed_layer_position,
             temperature: wire.temperature,
             elastic_materials: wire.elastic_materials,
             elastic_bodies: wire.elastic_bodies,
@@ -372,6 +384,8 @@ impl ProblemIR {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             temperature: None,
             elastic_materials: vec![],
             elastic_bodies: vec![],

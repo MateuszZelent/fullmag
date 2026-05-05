@@ -1397,7 +1397,7 @@ impl ExchangeLlgProblem {
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = cfg.current_sign * (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
 
         let lam = cfg.lambda;
         let l2 = lam * lam;
@@ -1605,7 +1605,7 @@ impl ExchangeLlgProblem {
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let d = cfg.thickness.max(1e-30);
         let js = cfg.current_density_magnitude;
-        let prefactor = (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let prefactor = cfg.current_sign * (js * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
 
         let lam = cfg.lambda;
         let l2 = lam * lam;

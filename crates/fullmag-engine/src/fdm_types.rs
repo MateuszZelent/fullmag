@@ -333,6 +333,9 @@ pub struct SlonczewskiSttConfig {
     pub degree: f64,
     /// Layer thickness d [m] (used in β_STT prefactor).
     pub thickness: f64,
+    /// Current sign from fixed-layer position: +1.0 for top, -1.0 for bottom.
+    /// Equivalent to amumax `currentSignFromFixedLayerPosition`.
+    pub current_sign: f64,
 }
 
 /// Spin-Orbit Torque (SOT) configuration.

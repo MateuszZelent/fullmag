@@ -955,6 +955,10 @@ def _render_spin_torques(
                 kwargs.append(f"lambda_asymmetry={_py_number(module.lambda_asymmetry)}")
             if module.epsilon_prime != 0.0:
                 kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
+            if module.free_layer_thickness_m is not None:
+                kwargs.append(f"free_layer_thickness_m={_py_number(module.free_layer_thickness_m)}")
+            if module.fixed_layer_position is not None:
+                kwargs.append(f"fixed_layer_position={_py_repr(module.fixed_layer_position)}")
             lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, ZhangLiSTT):

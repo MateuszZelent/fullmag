@@ -1440,6 +1440,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,

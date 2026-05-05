@@ -15,7 +15,9 @@ use crate::geometry::{
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
-use crate::spin_torque::{resolve_legacy_spin_torque, SpinTorqueExecutableLane};
+use crate::spin_torque::{
+    resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
+};
 use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, MU0, PLACEMENT_TOLERANCE};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
@@ -308,27 +310,21 @@ pub(crate) fn plan_fdm(
     }
 
     // ── PBC capability gate ──────────────────────────────────────────────
-    // FDM exchange kernel uses clamped-neighbour Neumann; periodic wrap is
-    // not yet implemented.  FDM FFT demag is open-boundary only (no
-    // TruncatedImages kernel).  Reject early with an explicit message so
-    // the user does not get a silent open-boundary fallback.
+    // CPU FDM supports periodic exchange/DMI stencils and truncated-image demag.
+    // CUDA FDM currently supports periodic exchange wrapping, but native demag
+    // remains open-boundary only.
     if let Some(ref pbc) = problem.pbc {
-        if pbc.has_any_periodic() {
-            if enable_exchange {
-                errors.push(
-                    "PBC not supported: FDM exchange kernel uses clamped-neighbour Neumann BC; \
-                     periodic wrap for exchange is not yet implemented. \
-                     Remove periodic axes or switch to FEM eigen solver."
-                        .to_string(),
-                );
-            }
-            if enable_demag && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages {
-                errors.push(
-                    "PBC not supported: FDM demag only supports open-boundary FFT; \
-                     TruncatedImages periodic demag kernel is not yet implemented."
-                        .to_string(),
-                );
-            }
+        if pbc.has_any_periodic()
+            && runtime_requests_cuda(problem)
+            && enable_demag
+            && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+        {
+            errors.push(
+                "PBC not supported on CUDA FDM demag: TruncatedImages periodic demag \
+                 is implemented in the CPU reference path only. Use demag='open' for \
+                 CUDA or run this periodic-demag case on the CPU FDM backend."
+                    .to_string(),
+            );
         }
     }
 
@@ -340,6 +336,7 @@ pub(crate) fn plan_fdm(
         resolve_current_transports(problem, CurrentTransportExecutableLane::Fdm)?;
     let spin_torque =
         resolve_legacy_spin_torque(problem, SpinTorqueExecutableLane::Fdm, &current_transports)?;
+    let sot = resolve_sot_fields(problem, &current_transports)?;
 
     let magnet = &problem.magnets[0];
     let material = problem
@@ -536,6 +533,8 @@ pub(crate) fn plan_fdm(
         stt_spin_polarization: spin_torque.stt_spin_polarization,
         stt_lambda: spin_torque.stt_lambda,
         stt_epsilon_prime: spin_torque.stt_epsilon_prime,
+        stt_thickness: spin_torque.stt_thickness,
+        stt_fixed_layer_position: spin_torque.stt_fixed_layer_position.clone(),
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,
@@ -555,11 +554,11 @@ pub(crate) fn plan_fdm(
         mel_b1: None,
         mel_b2: None,
         mel_uniform_strain: None,
-        sot_current_density: None,
-        sot_xi_dl: None,
-        sot_xi_fl: None,
-        sot_sigma: None,
-        sot_thickness: None,
+        sot_current_density: sot.current_density,
+        sot_xi_dl: sot.xi_dl,
+        sot_xi_fl: sot.xi_fl,
+        sot_sigma: sot.sigma,
+        sot_thickness: sot.thickness,
     };
 
     for (term_index, term) in problem.energy_terms.iter().enumerate() {
@@ -1206,21 +1205,17 @@ pub(crate) fn plan_fdm_multilayer(
 
     // ── PBC capability gate (multilayer) ─────────────────────────────────
     if let Some(ref pbc) = problem.pbc {
-        if pbc.has_any_periodic() {
-            if enable_exchange {
-                errors.push(
-                    "PBC not supported: FDM multilayer exchange kernel uses clamped-neighbour \
-                     Neumann BC; periodic wrap is not yet implemented."
-                        .to_string(),
-                );
-            }
-            if enable_demag && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages {
-                errors.push(
-                    "PBC not supported: FDM multilayer demag only supports open-boundary FFT; \
-                     TruncatedImages periodic demag kernel is not yet implemented."
-                        .to_string(),
-                );
-            }
+        if pbc.has_any_periodic()
+            && runtime_requests_cuda(problem)
+            && enable_demag
+            && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+        {
+            errors.push(
+                "PBC not supported on CUDA FDM multilayer demag: TruncatedImages periodic \
+                 demag is implemented in the CPU reference path only. Use demag='open' \
+                 for CUDA or run this periodic-demag case on the CPU FDM backend."
+                    .to_string(),
+            );
         }
     }
 

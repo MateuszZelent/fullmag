@@ -897,6 +897,8 @@ pub(crate) fn plan_fem(
         stt_spin_polarization: spin_torque.stt_spin_polarization,
         stt_lambda: spin_torque.stt_lambda,
         stt_epsilon_prime: spin_torque.stt_epsilon_prime,
+        stt_thickness: spin_torque.stt_thickness,
+        stt_fixed_layer_position: spin_torque.stt_fixed_layer_position.clone(),
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

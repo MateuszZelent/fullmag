@@ -45,6 +45,14 @@ fn exchange_only_terms() -> EffectiveFieldTerms {
     }
 }
 
+fn periodic_x_policy() -> FdmBoundaryPolicy {
+    FdmBoundaryPolicy {
+        x: AxisBoundary::Periodic,
+        y: AxisBoundary::Open,
+        z: AxisBoundary::Open,
+    }
+}
+
 fn random_magnetization(n: usize, seed: u64) -> Vec<[f64; 3]> {
     let mut state = seed;
     (0..n)
@@ -96,6 +104,61 @@ fn guardrail_uniform_exchange_field_is_zero() {
         max < 1e-10,
         "exchange field of uniform state must be zero, got max={max}"
     );
+}
+
+#[test]
+fn guardrail_fdm_periodic_exchange_wraps_axis_neighbor() {
+    let mut p = permalloy_problem(3, 1, 1, 1.0, TimeIntegrator::Heun, exchange_only_terms());
+    p.boundary_policy = periodic_x_policy();
+    let state = p
+        .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        .unwrap();
+
+    let h_ex = p.exchange_field(&state).unwrap();
+    let prefactor =
+        2.0 * p.material.exchange_stiffness / (MU0 * p.material.saturation_magnetisation);
+    let expected = [
+        -2.0 * prefactor / (p.cell_size.dx * p.cell_size.dx),
+        1.0 * prefactor / (p.cell_size.dx * p.cell_size.dx),
+        1.0 * prefactor / (p.cell_size.dx * p.cell_size.dx),
+    ];
+
+    for component in 0..3 {
+        let rel =
+            (h_ex[0][component] - expected[component]).abs() / expected[component].abs().max(1.0);
+        assert!(
+            rel < 1e-12,
+            "periodic exchange did not wrap x-neighbor component {component}: got {}, expected {}",
+            h_ex[0][component],
+            expected[component]
+        );
+    }
+}
+
+#[test]
+fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
+    let mut p = permalloy_problem(
+        5,
+        4,
+        3,
+        2.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
+    );
+    p.boundary_policy = periodic_x_policy();
+    p.demag_image_counts = [3, 0, 0];
+
+    let ws = p.create_workspace();
+    assert_eq!(
+        ws.px, p.grid.nx,
+        "periodic x axis should not be zero-padded"
+    );
+    assert_eq!(ws.py, p.grid.ny * 2, "open y axis should keep 2N padding");
+    assert_eq!(ws.pz, p.grid.nz * 2, "open z axis should keep 2N padding");
 }
 
 /// Uniform sphere/ellipsoid average demag field sanity.

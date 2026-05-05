@@ -231,6 +231,7 @@ pub struct fullmag_fem_plan_desc {
     pub stt_spin_polarization: [f64; 3],
     pub stt_lambda: f64,
     pub stt_epsilon_prime: f64,
+    pub stt_free_layer_thickness: f64,
     // Oersted field (cylindrical conductor)
     pub has_oersted_cylinder: i32,
     pub oersted_current: f64,

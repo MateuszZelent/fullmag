@@ -565,12 +565,20 @@ impl NativeFemBackend {
             } else {
                 0
             },
-            stt_current_density_am2: plan.current_density.unwrap_or([0.0, 0.0, 0.0]),
+            stt_current_density_am2: {
+                let current_sign: f64 = match plan.stt_fixed_layer_position.as_deref() {
+                    Some("bottom") => -1.0,
+                    _ => 1.0,
+                };
+                let j = plan.current_density.unwrap_or([0.0, 0.0, 0.0]);
+                [j[0] * current_sign, j[1] * current_sign, j[2] * current_sign]
+            },
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
             stt_spin_polarization: plan.stt_spin_polarization.unwrap_or([0.0, 0.0, 1.0]),
             stt_lambda: plan.stt_lambda.unwrap_or(1.0),
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
+            stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -1407,6 +1415,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -1519,6 +1529,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -1639,7 +1651,11 @@ mod tests {
                         lambda: plan.stt_lambda.expect("stt lambda"),
                         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
                         degree: plan.stt_degree.expect("stt degree"),
-                        thickness: effective_magnetic_thickness(&plan.mesh),
+                        thickness: plan.stt_thickness.unwrap_or_else(|| effective_magnetic_thickness(&plan.mesh)),
+                        current_sign: match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                            "bottom" => -1.0,
+                            _ => 1.0,
+                        },
                     })
                 } else {
                     None

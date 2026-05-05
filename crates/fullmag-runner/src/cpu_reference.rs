@@ -94,13 +94,25 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
     if j_mag == 0.0 {
         return None;
     }
+    // Use explicit thickness if provided, otherwise fall back to cell_dz (like amumax)
+    let thickness = plan.stt_thickness.unwrap_or(cell_dz);
+    // Fixed layer position controls current sign: "top" → +1, "bottom" → -1
+    let current_sign = match plan
+        .stt_fixed_layer_position
+        .as_deref()
+        .unwrap_or("top")
+    {
+        "bottom" => -1.0,
+        _ => 1.0, // "top" or unset
+    };
     Some(SlonczewskiSttConfig {
         current_density_magnitude: j_mag,
         spin_polarization_axis: p_axis,
         lambda: lam,
         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
         degree: plan.stt_degree.unwrap_or(1.0),
-        thickness: cell_dz,
+        thickness,
+        current_sign,
     })
 }
 

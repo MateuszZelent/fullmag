@@ -411,6 +411,7 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     };
     ctx.stt_lambda = plan.stt_lambda;
     ctx.stt_epsilon_prime = plan.stt_epsilon_prime;
+    ctx.stt_free_layer_thickness = plan.stt_free_layer_thickness;
 
     // Copy per-node spatially varying fields
     auto copy_field = [](std::vector<double> &dst, const double *src, uint64_t len) {

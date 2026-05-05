@@ -3924,11 +3924,11 @@ fn fdm_boundary_params_none_when_not_set() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PBC capability gate regression tests
+// FDM PBC planner regression tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn fdm_pbc_with_exchange_is_rejected() {
+fn fdm_pbc_with_exchange_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.pbc = Some(FdmPeriodicityIR {
         axes: [
@@ -3939,22 +3939,19 @@ fn fdm_pbc_with_exchange_is_rejected() {
         demag: FdmDemagPeriodicityIR::Open,
         image_counts: None,
     });
-    let err = plan(&ir).expect_err("FDM + PBC + exchange should be rejected");
-    assert!(
-        err.reasons
-            .iter()
-            .any(|r| r.contains("PBC not supported") && r.contains("exchange")),
-        "error should mention PBC exchange not supported, got: {:?}",
-        err.reasons
-    );
+    let plan = plan(&ir).expect("FDM + PBC + exchange should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => assert_eq!(fdm.periodicity, ir.pbc),
+        _ => panic!("expected FDM plan"),
+    }
 }
 
 #[test]
-fn fdm_pbc_truncated_images_demag_is_rejected() {
+fn fdm_cpu_pbc_truncated_images_demag_plans() {
     let mut ir = ProblemIR::bootstrap_example();
-    ir.energy_terms = vec![EnergyTermIR::Demag {
+    ir.energy_terms.push(EnergyTermIR::Demag {
         realization: fullmag_ir::RequestedFemDemagIR::Auto,
-    }];
+    });
     ir.pbc = Some(FdmPeriodicityIR {
         axes: [
             AxisBoundary::Periodic,
@@ -3964,29 +3961,43 @@ fn fdm_pbc_truncated_images_demag_is_rejected() {
         demag: FdmDemagPeriodicityIR::TruncatedImages,
         image_counts: Some([4, 4, 0]),
     });
-    let err = plan(&ir).expect_err("FDM + PBC TruncatedImages demag should be rejected");
-    assert!(
-        err.reasons
-            .iter()
-            .any(|r| r.contains("PBC not supported") && r.contains("TruncatedImages")),
-        "error should mention TruncatedImages not supported, got: {:?}",
-        err.reasons
-    );
+    let plan = plan(&ir).expect("CPU FDM + PBC TruncatedImages demag should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert_eq!(
+                fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
+                Some([4, 4, 0])
+            );
+        }
+        _ => panic!("expected FDM plan"),
+    }
 }
 
 #[test]
-fn fdm_open_boundary_demag_with_periodic_axes_still_rejects_exchange() {
-    // Even with open-boundary demag, periodic exchange is unsupported.
+fn fdm_cuda_pbc_truncated_images_demag_is_rejected() {
     let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::Demag {
+        realization: fullmag_ir::RequestedFemDemagIR::Auto,
+    });
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
     ir.pbc = Some(FdmPeriodicityIR {
         axes: [
             AxisBoundary::Periodic,
-            AxisBoundary::Open,
+            AxisBoundary::Periodic,
             AxisBoundary::Open,
         ],
-        demag: FdmDemagPeriodicityIR::Open,
-        image_counts: None,
+        demag: FdmDemagPeriodicityIR::TruncatedImages,
+        image_counts: Some([4, 4, 0]),
     });
-    let err = plan(&ir).expect_err("FDM + PBC + exchange should be rejected");
-    assert!(err.reasons.iter().any(|r| r.contains("exchange")));
+    let err = plan(&ir).expect_err("CUDA FDM + PBC TruncatedImages demag should be rejected");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|r| r.contains("CUDA FDM demag") && r.contains("TruncatedImages")),
+        "error should mention CUDA TruncatedImages demag not supported, got: {:?}",
+        err.reasons
+    );
 }

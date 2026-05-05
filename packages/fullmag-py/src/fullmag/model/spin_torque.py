@@ -7,11 +7,11 @@ the canonical ``spin_torques=[...]`` list.
 Current executable subset:
 - ``SlonczewskiSTT`` on FDM CPU/GPU
 - ``ZhangLiSTT`` on FDM CPU/GPU
+- ``SpinOrbitTorque`` on FDM CPU/GPU
 
 Semantic-only placeholders are provided for the next roadmap steps:
 - ``InterfaceCppSTT``
 - ``DriftDiffusionSpinTorque``
-- ``SpinOrbitTorque``
 """
 
 from __future__ import annotations
@@ -80,6 +80,16 @@ def _resolve_scalar_current_binding(
     return float(charge_current_density_a_per_m2), resolved_source
 
 
+FIXED_LAYER_POSITIONS = {"top", "bottom"}
+
+
+def _validated_fixed_layer_position(position: str) -> str:
+    pos = position.lower().strip()
+    if pos not in FIXED_LAYER_POSITIONS:
+        raise ValueError(f"fixed_layer_position must be one of {sorted(FIXED_LAYER_POSITIONS)}, got {position!r}")
+    return pos
+
+
 @dataclass(frozen=True, slots=True)
 class SlonczewskiSTT:
     """Slonczewski spin-transfer torque for CPP / MTJ geometry.
@@ -98,6 +108,16 @@ class SlonczewskiSTT:
         Slonczewski asymmetry parameter Λ (≥ 1). Default: 1.0.
     epsilon_prime : float, optional
         Secondary (field-like) spin-transfer coefficient ε'. Default: 0.0.
+    free_layer_thickness_m : float, optional
+        Free-layer thickness d [m]. Used in the β_STT prefactor
+        ``β = ℏ·J / (2·e·μ₀·Ms·d)``. When ``None`` the engine defaults to
+        the cell size along the current-flow direction (like amumax).
+    fixed_layer_position : str, optional
+        Stack ordering of fixed vs free layer along +z: ``"top"`` or ``"bottom"``.
+        Controls the sign of the torque (current sign convention).
+        ``"top"`` → electrons flow upward into the fixed layer (positive J_z),
+        ``"bottom"`` → electrons flow downward (sign flip, like amumax ``FIXEDLAYER_BOTTOM``).
+        Default: ``"top"``.
     """
 
     current_density: tuple[float, float, float] | None
@@ -106,6 +126,8 @@ class SlonczewskiSTT:
     degree: float = 0.4
     lambda_asymmetry: float = 1.0
     epsilon_prime: float = 0.0
+    free_layer_thickness_m: float | None = None
+    fixed_layer_position: str = "top"
 
     def __init__(
         self,
@@ -114,6 +136,8 @@ class SlonczewskiSTT:
         degree: float = 0.4,
         lambda_asymmetry: float = 1.0,
         epsilon_prime: float = 0.0,
+        free_layer_thickness_m: float | None = None,
+        fixed_layer_position: str = "top",
         *,
         current_source: str | None = None,
     ) -> None:
@@ -131,15 +155,28 @@ class SlonczewskiSTT:
         object.__setattr__(self, "degree", _validated_degree(degree))
         object.__setattr__(self, "lambda_asymmetry", _validated_lambda(lambda_asymmetry))
         object.__setattr__(self, "epsilon_prime", float(epsilon_prime))
+        if free_layer_thickness_m is not None:
+            require_positive(free_layer_thickness_m, "free_layer_thickness_m")
+            object.__setattr__(self, "free_layer_thickness_m", float(free_layer_thickness_m))
+        else:
+            object.__setattr__(self, "free_layer_thickness_m", None)
+        object.__setattr__(
+            self,
+            "fixed_layer_position",
+            _validated_fixed_layer_position(fixed_layer_position),
+        )
 
     def to_ir_module(self) -> dict[str, object]:
-        ir = {
+        ir: dict[str, object] = {
             "kind": "slonczewski",
             "spin_polarization": list(self.spin_polarization),
             "degree": self.degree,
             "lambda_asymmetry": self.lambda_asymmetry,
             "epsilon_prime": self.epsilon_prime,
+            "fixed_layer_position": self.fixed_layer_position,
         }
+        if self.free_layer_thickness_m is not None:
+            ir["free_layer_thickness_m"] = self.free_layer_thickness_m
         if self.current_density is not None:
             ir["current_density"] = list(self.current_density)
         if self.current_source is not None:
@@ -150,18 +187,36 @@ class SlonczewskiSTT:
         """Return the legacy executable STT fields used by the current runner."""
         if self.current_density is None:
             return {}
-        return {
+        fields: dict[str, object] = {
             "current_density": list(self.current_density),
             "stt_degree": self.degree,
             "stt_spin_polarization": list(self.spin_polarization),
             "stt_lambda": self.lambda_asymmetry,
             "stt_epsilon_prime": self.epsilon_prime,
+            "stt_fixed_layer_position": self.fixed_layer_position,
         }
+        if self.free_layer_thickness_m is not None:
+            fields["stt_thickness"] = self.free_layer_thickness_m
+        return fields
 
 
 @dataclass(frozen=True, slots=True)
 class ZhangLiSTT:
-    """Zhang-Li spin-transfer torque for CIP geometry."""
+    """Zhang-Li spin-transfer torque for CIP geometry.
+
+    Parameters
+    ----------
+    current_density : tuple of 3 floats, optional
+        Current density vector [A/m²].
+    degree : float
+        Spin polarization efficiency P (0 < P ≤ 1). Default: 0.4.
+    beta : float
+        Non-adiabatic STT parameter β ≥ 0. Default: 0.0.
+    xi : float, optional
+        Alias for ``beta`` (mumax3/amumax compatibility).  If both ``beta``
+        and ``xi`` are specified with different non-zero values, raises
+        ``ValueError``.
+    """
 
     current_density: tuple[float, float, float] | None
     current_source: str | None
@@ -174,8 +229,18 @@ class ZhangLiSTT:
         degree: float = 0.4,
         beta: float = 0.0,
         *,
+        xi: float | None = None,
         current_source: str | None = None,
     ) -> None:
+        # Resolve xi / beta alias
+        resolved_beta = beta
+        if xi is not None:
+            if beta != 0.0 and xi != beta:
+                raise ValueError(
+                    f"beta={beta} and xi={xi} are both specified with different values; "
+                    "use only one (xi is an alias for beta)"
+                )
+            resolved_beta = xi
         resolved_density, resolved_source = _resolve_current_binding(
             current_density=current_density,
             current_source=current_source,
@@ -183,7 +248,7 @@ class ZhangLiSTT:
         object.__setattr__(self, "current_density", resolved_density)
         object.__setattr__(self, "current_source", resolved_source)
         object.__setattr__(self, "degree", _validated_degree(degree))
-        object.__setattr__(self, "beta", _validated_beta(beta))
+        object.__setattr__(self, "beta", _validated_beta(resolved_beta))
 
     def to_ir_module(self) -> dict[str, object]:
         ir = {
@@ -321,7 +386,12 @@ class DriftDiffusionSpinTorque:
 
 @dataclass(frozen=True, slots=True)
 class SpinOrbitTorque:
-    """Semantic placeholder for damping-like / field-like spin-orbit torque."""
+    """Damping-like / field-like spin-orbit torque (Spin Hall Effect).
+
+    Executable on FDM CPU/GPU.  Models the torque exerted on an FM layer by
+    spin-current injection from an adjacent heavy-metal (HM) layer via the
+    Spin Hall Effect.
+    """
 
     charge_current_density_a_per_m2: float | None
     current_source: str | None

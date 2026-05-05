@@ -117,6 +117,12 @@ pub struct FdmPlanIR {
     /// Slonczewski secondary spin-transfer term (epsilon')
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_epsilon_prime: Option<f64>,
+    /// Slonczewski free-layer thickness [m]. When None, engine defaults to cell_dz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_thickness: Option<f64>,
+    /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_fixed_layer_position: Option<String>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
     /// Charge current density magnitude for SOT |Je| [A/m²]
@@ -531,6 +537,12 @@ pub struct FemPlanIR {
     /// Slonczewski secondary spin-transfer term (epsilon')
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_epsilon_prime: Option<f64>,
+    /// Slonczewski free-layer thickness [m]. When None, engine defaults to cell_dz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_thickness: Option<f64>,
+    /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_fixed_layer_position: Option<String>,
 
     /// Oersted field from cylindrical conductor
     #[serde(default)]

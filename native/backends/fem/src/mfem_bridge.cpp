@@ -914,7 +914,10 @@ void add_slonczewski_stt_rhs_aos(
         return;
     }
     const Vec3 axis = scale3(current_density, 1.0 / j_mag);
-    const double thickness = effective_magnetic_thickness_along_axis(ctx, axis);
+    // Use explicit free layer thickness if provided, otherwise geometry-derived
+    const double thickness = ctx.stt_free_layer_thickness > 0.0
+        ? ctx.stt_free_layer_thickness
+        : effective_magnetic_thickness_along_axis(ctx, axis);
     const double lambda = ctx.stt_lambda;
     const double lambda_sq = lambda * lambda;
     const double degree = ctx.stt_degree > 0.0 ? ctx.stt_degree : 1.0;

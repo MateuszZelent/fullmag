@@ -194,6 +194,7 @@ typedef struct {
     double                     stt_spin_polarization[3];
     double                     stt_lambda;
     double                     stt_epsilon_prime;
+    double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = geometry-derived */
 
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;

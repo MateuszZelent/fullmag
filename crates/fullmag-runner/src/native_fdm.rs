@@ -245,6 +245,12 @@ impl NativeFdmBackend {
             None
         };
 
+        // Apply fixed-layer-position sign convention: "bottom" flips current direction.
+        let current_sign: f64 = match plan.stt_fixed_layer_position.as_deref() {
+            Some("bottom") => -1.0,
+            _ => 1.0,
+        };
+
         let plan_desc = ffi::fullmag_fdm_plan_desc {
             grid,
             material,
@@ -260,9 +266,9 @@ impl NativeFdmBackend {
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
 
-            current_density_x: plan.current_density.map_or(0.0, |j| j[0]),
-            current_density_y: plan.current_density.map_or(0.0, |j| j[1]),
-            current_density_z: plan.current_density.map_or(0.0, |j| j[2]),
+            current_density_x: plan.current_density.map_or(0.0, |j| j[0] * current_sign),
+            current_density_y: plan.current_density.map_or(0.0, |j| j[1] * current_sign),
+            current_density_z: plan.current_density.map_or(0.0, |j| j[2] * current_sign),
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
 
@@ -271,6 +277,7 @@ impl NativeFdmBackend {
             stt_p_z: plan.stt_spin_polarization.map_or(0.0, |p| p[2]),
             stt_lambda: plan.stt_lambda.unwrap_or(0.0),
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
+            stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
 
             has_sot: if plan.sot_current_density.is_some()
                 && plan.sot_sigma.is_some()
@@ -1375,6 +1382,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             sot_current_density: None,
             sot_xi_dl: None,
             sot_xi_fl: None,
@@ -1457,6 +1466,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             sot_current_density: None,
             sot_xi_dl: None,
             sot_xi_fl: None,
@@ -1530,6 +1541,8 @@ mod tests {
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
             sot_current_density: None,
             sot_xi_dl: None,
             sot_xi_fl: None,

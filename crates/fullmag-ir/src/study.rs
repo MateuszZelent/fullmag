@@ -88,6 +88,12 @@ pub enum SpinTorqueModuleIR {
         lambda_asymmetry: f64,
         #[serde(default)]
         epsilon_prime: f64,
+        /// Free-layer thickness [m]. When None, engine defaults to cell_dz.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        free_layer_thickness_m: Option<f64>,
+        /// Fixed-layer position: "top" or "bottom". Controls current sign.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fixed_layer_position: Option<String>,
     },
     ZhangLi {
         #[serde(default, skip_serializing_if = "Option::is_none")]

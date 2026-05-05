@@ -177,6 +177,7 @@ struct Context {
     std::array<double, 3> stt_spin_polarization{0.0, 0.0, 1.0};
     double stt_lambda = 1.0;
     double stt_epsilon_prime = 0.0;
+    double stt_free_layer_thickness = 0.0; // 0 = geometry-derived
 
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;
