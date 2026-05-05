@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::Value;
 
@@ -32,6 +34,23 @@ pub async fn get_spectrum(State(state): State<Arc<AppState>>) -> Result<Json<Val
     Err(ApiError::not_found(
         "no eigen spectrum artifact found in the active workspace",
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/eigen/spectrum.v2",
+    responses(
+        (status = 200, description = "Eigen spectrum artifact v2"),
+        (status = 404, description = "No eigen spectrum v2 artifact"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_spectrum_v2(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    Ok(Json(read_json_artifact_value(
+        &artifact_dir,
+        "eigen/spectrum.v2.json",
+    )?))
 }
 
 #[utoipa::path(
@@ -72,6 +91,34 @@ pub async fn get_mode(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/analysis/eigen/modes/{sample_index}/{mode_index}",
+    params(
+        ("sample_index" = u32, Path, description = "K-path sample index"),
+        ("mode_index" = u32, Path, description = "Raw mode index within the sample"),
+    ),
+    responses(
+        (status = 200, description = "Eigen mode artifact v2"),
+        (status = 404, description = "Mode not found"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_mode_v2(
+    State(state): State<Arc<AppState>>,
+    Path((sample_index, mode_index)): Path<(u32, u32)>,
+) -> Result<Json<Value>, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let relative_path = format!(
+        "eigen/modes/sample_{:04}/mode_{:04}.json",
+        sample_index, mode_index
+    );
+    Ok(Json(read_json_artifact_value(
+        &artifact_dir,
+        &relative_path,
+    )?))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/analysis/eigenmodes/dispersion",
     responses(
         (status = 200, description = "Eigen dispersion data"),
@@ -103,6 +150,21 @@ pub async fn get_dispersion(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/analysis/eigen/dispersion.csv",
+    responses(
+        (status = 200, description = "Eigen dispersion CSV v2"),
+        (status = 404, description = "No dispersion CSV"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_dispersion_csv(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    let csv = read_text_artifact_value(&artifact_dir, "eigen/dispersion.csv")?;
+    Ok(([(header::CONTENT_TYPE, "text/csv; charset=utf-8")], csv).into_response())
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/analysis/eigenmodes/branches",
     responses(
         (status = 200, description = "Tracked branches"),
@@ -121,4 +183,21 @@ pub async fn get_branches(State(state): State<Arc<AppState>>) -> Result<Json<Val
             "no eigen/branches.json artifact found (single-k solve or legacy run)",
         )),
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/eigen/branches.v2",
+    responses(
+        (status = 200, description = "Tracked eigen branches v2"),
+        (status = 404, description = "No branches v2 data"),
+    ),
+    tag = "analysis"
+)]
+pub async fn get_branches_v2(State(state): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let artifact_dir = require_current_live_artifact_dir(&state).await?;
+    Ok(Json(read_json_artifact_value(
+        &artifact_dir,
+        "eigen/branches.v2.json",
+    )?))
 }

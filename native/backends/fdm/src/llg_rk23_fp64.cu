@@ -330,7 +330,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             stats->anisotropy_energy_joules = e_aniso;
     stats->cubic_energy_joules = e_cubic;
     stats->dmi_energy_joules = e_dmi;
-            stats->total_energy_joules = e_ex + e_demag + e_ext + e_aniso;
+            stats->total_energy_joules = e_ex + e_demag + e_ext + e_aniso + e_cubic + e_dmi;
             stats->max_effective_field_amplitude = max_h_eff;
             stats->max_demag_field_amplitude = max_h_demag;
             stats->max_rhs_amplitude = max_dm_dt;

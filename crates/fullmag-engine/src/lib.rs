@@ -14,6 +14,7 @@ pub mod hpc_runtime;
 pub mod magnetoelastic;
 pub mod multilayer;
 pub mod newell;
+pub mod periodic;
 pub mod studies;
 pub mod telemetry;
 pub mod vector;
@@ -41,8 +42,8 @@ pub type Vector3 = [f64; 3];
 pub use fdm_demo::{run_reference_exchange_demo, ReferenceDemoReport};
 
 pub use fdm_fft::{
-    compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d, DemagKernelSpectra,
-    FftWorkspace,
+    compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
+    compute_periodic_newell_kernel_spectra, DemagKernelSpectra, FftWorkspace,
 };
 
 pub use fdm_state::{

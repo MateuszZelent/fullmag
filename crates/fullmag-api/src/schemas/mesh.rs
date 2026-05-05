@@ -161,6 +161,34 @@ pub struct MeshSharedDomainQualityResource {
     pub quality: Option<Value>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshPeriodicPairsResource {
+    pub revision: u64,
+    pub schema_version: String,
+    pub pairs: Vec<MeshPeriodicPairResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshPeriodicPairResource {
+    pub pair_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_marker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination_marker: Option<String>,
+    pub marker_a: u32,
+    pub marker_b: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_translation_m: Option<[f64; 3]>,
+    pub paired_node_count: u32,
+    pub unpaired_source_node_count: u32,
+    pub unpaired_destination_node_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_residual_m: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rms_residual_m: Option<f64>,
+    pub status: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct MeshObjectSegmentResource {
     pub object_id: String,

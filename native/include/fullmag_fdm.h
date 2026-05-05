@@ -192,6 +192,9 @@ typedef struct {
     const double              *demag_kernel_xz_spectrum;
     const double              *demag_kernel_yz_spectrum;
     uint64_t                   demag_kernel_spectrum_len; /* = 2 * fft_cell_count */
+    uint32_t                   demag_fft_nx; /* optional explicit FFT X dimension */
+    uint32_t                   demag_fft_ny; /* optional explicit FFT Y dimension */
+    uint32_t                   demag_fft_nz; /* optional explicit FFT Z dimension */
 
     /* Optional active geometry mask: 1 = active cell, 0 = inactive cell. */
     const uint8_t             *active_mask;

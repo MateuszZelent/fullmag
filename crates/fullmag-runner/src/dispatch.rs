@@ -43,6 +43,8 @@ use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quanti
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::relaxation_converged;
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::relaxation_stop_criteria_satisfied;
 use crate::runtime_registry::RuntimeRegistry;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::scalar_metrics::single_object_scalars;
@@ -165,7 +167,7 @@ fn runtime_log_once(level: &str, message: &str) {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(feature = "cuda")]
 fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
     if stats.per_object_scalars.is_empty() {
         stats.per_object_scalars = single_object_scalars(object_id, stats);
@@ -480,11 +482,6 @@ pub(crate) fn resolve_fdm_engine_with_trail(
         }
     }?;
 
-    // Reject direct-minimization algorithms (BB/NCG) on CUDA — not yet ported
-    if resolution.engine == FdmEngine::CudaFdm {
-        reject_direct_minimization_on_cuda(problem)?;
-    }
-
     Ok(resolution)
 }
 
@@ -495,7 +492,7 @@ pub(crate) fn resolve_fdm_engine(problem: &ProblemIR) -> Result<FdmEngine, RunEr
 fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
-    explicit_selection: bool,
+    _explicit_selection: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let requested_device = requested_registry_device_for_fdm(problem);
@@ -513,39 +510,11 @@ fn resolve_fdm_engine_with_registry(
         ),
     })?;
 
-    let mut engine = match resolved.device.as_str() {
+    let engine = match resolved.device.as_str() {
         "gpu" => FdmEngine::CudaFdm,
         _ => FdmEngine::CpuReference,
     };
-    let mut fallback = resolved.fallback;
-
-    if engine == FdmEngine::CudaFdm {
-        if let Err(error) = reject_direct_minimization_on_cuda(problem) {
-            if explicit_selection {
-                return Err(error);
-            }
-            let cpu_resolved =
-                resolve_registry_runtime_for_backend(registry, "fdm", "cpu", &requested_precision)
-                    .ok_or(error)?;
-            let message = "CUDA FDM does not support direct-minimization relax algorithms; using CPU reference engine".to_string();
-            engine = FdmEngine::CpuReference;
-            fallback = Some(runtime_fallback(
-                fdm_engine_id(FdmEngine::CudaFdm),
-                fdm_engine_id(FdmEngine::CpuReference),
-                "fdm_cuda_direct_minimization_unsupported",
-                message,
-            ));
-            return Ok(DispatchEngineResolution {
-                engine: DispatchEngine::Fdm(engine),
-                fallback,
-                runtime_family: Some(cpu_resolved.runtime_family),
-                worker: Some(cpu_resolved.worker),
-                resolved_backend: "fdm".to_string(),
-                resolved_device: "cpu".to_string(),
-                resolved_precision: requested_precision,
-            });
-        }
-    }
+    let fallback = resolved.fallback;
 
     Ok(DispatchEngineResolution {
         engine: DispatchEngine::Fdm(engine),
@@ -1360,31 +1329,6 @@ fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
     }
 }
 
-/// Reject BB and NCG relaxation algorithms on CUDA — they are only implemented
-/// for the CPU reference engine. Return a clear error instead of silent fallback.
-fn reject_direct_minimization_on_cuda(problem: &ProblemIR) -> Result<(), RunError> {
-    use fullmag_ir::RelaxationAlgorithmIR;
-
-    // Check if the study is a relaxation with a direct-minimization algorithm
-    let algorithm = match &problem.study {
-        fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm,
-        _ => return Ok(()),
-    };
-
-    match algorithm {
-        RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg => {
-            Err(RunError {
-                message: format!(
-                    "relaxation algorithm '{}' is only implemented for the CPU reference engine; \
-                     use algorithm='llg_overdamped' for CUDA execution, or switch to device='cpu'",
-                    algorithm.as_str()
-                ),
-            })
-        }
-        _ => Ok(()),
-    }
-}
-
 /// Execute an FDM plan using the selected engine.
 pub(crate) fn execute_fdm<'a>(
     engine: FdmEngine,
@@ -1672,7 +1616,52 @@ fn execute_fem_eigen_path(
         "schema_version": "2",
         "solver_model": path_result.solver_model.as_str(),
         "sample_count": v2_samples.len(),
-        "samples": v2_samples,
+        "samples": v2_samples.clone(),
+    });
+    let tracking_cfg = plan.mode_tracking.clone().unwrap_or_default();
+    let tracking_method = serde_json::to_value(tracking_cfg.method)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "overlap_hungarian".to_string());
+    let phase_convention = serde_json::to_value(plan.spin_wave_bc.phase_convention())
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "exp_minus_i_k_dot_delta_r".to_string());
+    let overlap_values = path_result
+        .branches
+        .iter()
+        .flat_map(|branch| branch.points.iter().filter_map(|point| point.overlap_prev))
+        .collect::<Vec<_>>();
+    let min_overlap = overlap_values
+        .iter()
+        .copied()
+        .reduce(|lhs, rhs| lhs.min(rhs));
+    let gap_count = path_result
+        .branches
+        .iter()
+        .map(|branch| v2_samples.len().saturating_sub(branch.points.len()))
+        .sum::<usize>();
+    let diagnostics_v2 = serde_json::json!({
+        "schema_version": "eigen_diagnostics.v2",
+        "dispersion": {
+            "sample_count": path_result.samples.len(),
+            "mode_count_requested": plan.count,
+            "branch_count": path_result.branches.len(),
+            "min_overlap": min_overlap,
+            "gap_count": gap_count,
+            "ambiguous_assignment_count": 0,
+        },
+    });
+    let spectrum_v2 = serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "solver_id": path_result.solver_model.as_str(),
+        "phase_convention": phase_convention,
+        "samples": v2_samples.clone(),
+        "diagnostics_summary": diagnostics_v2["dispersion"].clone(),
+    });
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/spectrum.v2.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&spectrum_v2).unwrap_or_default(),
     });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/path.json".to_string(),
@@ -1698,6 +1687,27 @@ fn execute_fem_eigen_path(
             })
         })
         .collect();
+    let branches_v2 = serde_json::json!({
+        "schema_version": "eigen_branches.v2",
+        "tracking_method": tracking_method,
+        "overlap_floor": tracking_cfg.overlap_floor,
+        "frequency_window_hz": tracking_cfg.frequency_window_hz,
+        "branches": v2_branches.clone(),
+        "diagnostics": {
+            "min_overlap": min_overlap,
+            "median_overlap": null,
+            "gap_count": gap_count,
+            "ambiguous_assignment_count": 0,
+        },
+    });
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/branches.v2.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&branches_v2).unwrap_or_default(),
+    });
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/diagnostics.v2.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&diagnostics_v2).unwrap_or_default(),
+    });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/branches.json".to_string(),
         bytes: serde_json::to_vec_pretty(&serde_json::json!({
@@ -1767,6 +1777,56 @@ fn execute_fem_eigen_path(
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion/branch_table.csv".to_string(),
             bytes: csv_lines.join("\n").into_bytes(),
+        });
+
+        let mut dispersion_v2_lines = vec![
+            "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score"
+                .to_string(),
+        ];
+        for sample_result in &path_result.samples {
+            let k = sample_result.sample.k_vector;
+            let label = sample_result.sample.label.clone().unwrap_or_default();
+            for mode in &sample_result.modes {
+                let overlap_score = mode
+                    .branch_id
+                    .and_then(|branch_id| {
+                        path_result
+                            .branches
+                            .iter()
+                            .find(|branch| branch.branch_id == branch_id)
+                            .and_then(|branch| {
+                                branch.points.iter().find(|point| {
+                                    point.sample_index == sample_result.sample.sample_index
+                                        && point.raw_mode_index == mode.raw_mode_index
+                                })
+                            })
+                            .and_then(|point| point.overlap_prev)
+                    })
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
+                dispersion_v2_lines.push(format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                    sample_result.sample.sample_index,
+                    sample_result.sample.path_s,
+                    k[0],
+                    k[1],
+                    k[2],
+                    label,
+                    mode.raw_mode_index,
+                    mode.branch_id
+                        .map(|branch_id| branch_id.to_string())
+                        .unwrap_or_default(),
+                    mode.frequency_real_hz,
+                    mode.angular_frequency_rad_per_s,
+                    "",
+                    "",
+                    overlap_score,
+                ));
+            }
+        }
+        auxiliary_artifacts.push(AuxiliaryArtifact {
+            relative_path: "eigen/dispersion.csv".to_string(),
+            bytes: dispersion_v2_lines.join("\n").into_bytes(),
         });
 
         // Legacy dispersion path metadata
@@ -1868,17 +1928,347 @@ fn execute_cuda_fdm(
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
     ensure_single_object_scalars(&mut current_stats, "free");
-    while current_time < until_seconds {
-        if let Some(live) = live.as_mut() {
-            if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                let preview_due = display_refresh_due(
-                    last_preview_revision,
-                    &display_selection,
-                    current_stats.step,
+
+    let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
+        matches!(
+            control.algorithm,
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+        )
+    });
+
+    if let Some(control) = direct_minimization_relax {
+        latest_stats = Some(current_stats.clone());
+        let mut m = backend.copy_m(cell_count)?;
+        let mut h_eff = backend.copy_h_eff(cell_count)?;
+        let mut g = tangent_gradient_from_field(&m, &h_eff);
+        let mut energy = current_stats.e_total;
+        let mut p: Vec<[f64; 3]> = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
+
+        let mut lambda: f64 = 1e-6;
+        let lambda_min: f64 = 1e-15;
+        let lambda_max: f64 = 1e-3;
+        let c_armijo: f64 = 1e-4;
+        let max_backtrack: u32 = 20;
+        let mut use_bb1 = true;
+        let mut reset_consecutive: u64 = 0;
+        let mut direct_step: u64 = 0;
+
+        while direct_step < control.stop.max_steps.unwrap_or(u64::MAX) {
+            if let Some(live) = live.as_mut() {
+                if let Some(display_selection) = live.display_selection.map(|get| get()) {
+                    let preview_due = display_refresh_due(
+                        last_preview_revision,
+                        &display_selection,
+                        current_stats.step,
+                    );
+                    let preview_targets_global_scalar =
+                        display_is_global_scalar(&display_selection);
+                    let preview_field = if preview_due && !preview_targets_global_scalar {
+                        let request = display_selection.preview_request();
+                        Some(backend.copy_live_preview_field(
+                            &request,
+                            plan.grid.cells,
+                            plan.active_mask.as_deref(),
+                        )?)
+                    } else {
+                        None
+                    };
+                    let action = (live.on_step)(StepUpdate {
+                        stats: current_stats.clone(),
+                        grid: live.grid,
+                        fem_mesh: None,
+                        magnetization: Some(flatten_vectors(&m)),
+                        preview_field,
+                        cached_preview_fields: None,
+                        scalar_row_due: preview_due && preview_targets_global_scalar,
+                        finished: false,
+                    });
+                    if preview_due {
+                        last_preview_revision = Some(display_selection.revision);
+                    }
+                    if action == StepAction::Stop {
+                        cancelled = true;
+                        break;
+                    }
+                }
+            }
+            if cancelled {
+                break;
+            }
+
+            let max_torque = max_torque_from_field(&m, &h_eff);
+            if relaxation_stop_criteria_satisfied(control, None, max_torque) {
+                break;
+            }
+            let g_norm_sq = global_dot_vec3(&g, &g);
+            if g_norm_sq < 1e-30 {
+                break;
+            }
+
+            let mut trial_lambda = lambda;
+            let mut backtracks = 0u32;
+            let mut m_trial = m.clone();
+            let trial_stats = match control.algorithm {
+                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+                    let trial_stats = loop {
+                        for i in 0..m.len() {
+                            m_trial[i] =
+                                normalized_vec3(sub_vec3(m[i], scale_vec3(g[i], trial_lambda)));
+                        }
+                        backend.upload_magnetization(&m_trial)?;
+                        backend.refresh_observables()?;
+                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                        ensure_single_object_scalars(&mut stats, "free");
+                        let e_trial = stats.e_total;
+                        if e_trial <= energy - c_armijo * trial_lambda * g_norm_sq
+                            || backtracks >= max_backtrack
+                        {
+                            break stats;
+                        }
+                        trial_lambda *= 0.5;
+                        backtracks += 1;
+                    };
+
+                    let h_eff_new = backend.copy_h_eff(cell_count)?;
+                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
+
+                    let scale_factor = 1e-6;
+                    let s: Vec<[f64; 3]> = (0..m.len())
+                        .map(|i| scale_vec3(sub_vec3(m_trial[i], m[i]), scale_factor))
+                        .collect();
+                    let y: Vec<[f64; 3]> = (0..m.len())
+                        .map(|i| scale_vec3(sub_vec3(g_new[i], g[i]), scale_factor))
+                        .collect();
+                    let s_dot_s = global_dot_vec3(&s, &s);
+                    let s_dot_y = global_dot_vec3(&s, &y);
+                    let y_dot_y = global_dot_vec3(&y, &y);
+
+                    let bb_ok;
+                    if use_bb1 {
+                        if s_dot_y > 1e-30 {
+                            lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
+                            bb_ok = true;
+                        } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+                            lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
+                            bb_ok = true;
+                        } else {
+                            bb_ok = false;
+                        }
+                    } else if s_dot_y * y_dot_y > 0.0 && y_dot_y.abs() > 1e-30 {
+                        lambda = (s_dot_y / y_dot_y).clamp(lambda_min, lambda_max);
+                        bb_ok = true;
+                    } else if s_dot_y > 1e-30 {
+                        lambda = (s_dot_s / s_dot_y).clamp(lambda_min, lambda_max);
+                        bb_ok = true;
+                    } else {
+                        bb_ok = false;
+                    }
+                    if bb_ok {
+                        reset_consecutive = 0;
+                    } else {
+                        reset_consecutive += 1;
+                        lambda = (reset_consecutive as f64 * lambda_min).min(lambda_max);
+                    }
+                    use_bb1 = !use_bb1;
+
+                    h_eff = h_eff_new;
+                    g = g_new;
+                    trial_stats
+                }
+                fullmag_ir::RelaxationAlgorithmIR::NonlinearCg => {
+                    let mut p_dot_g = global_dot_vec3(&p, &g);
+                    if p_dot_g >= 0.0 {
+                        p = g.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
+                        p_dot_g = global_dot_vec3(&p, &g);
+                    }
+                    let p_norm = global_dot_vec3(&p, &p).sqrt();
+                    trial_lambda = if p_norm > 0.0 {
+                        (1e-6_f64).min(1.0 / p_norm)
+                    } else {
+                        1e-6
+                    };
+                    let max_backtrack_ncg = 30u32;
+
+                    let trial_stats = loop {
+                        for i in 0..m.len() {
+                            m_trial[i] =
+                                normalized_vec3(add_vec3(m[i], scale_vec3(p[i], trial_lambda)));
+                        }
+                        backend.upload_magnetization(&m_trial)?;
+                        backend.refresh_observables()?;
+                        let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                        ensure_single_object_scalars(&mut stats, "free");
+                        let e_trial = stats.e_total;
+                        if e_trial <= energy + c_armijo * trial_lambda * p_dot_g
+                            || backtracks >= max_backtrack_ncg
+                        {
+                            break stats;
+                        }
+                        trial_lambda *= 0.5;
+                        backtracks += 1;
+                    };
+
+                    let h_eff_new = backend.copy_h_eff(cell_count)?;
+                    let g_new = tangent_gradient_from_field(&m_trial, &h_eff_new);
+                    let g_old_transported = project_tangent(&m_trial, &g);
+                    let y_pr: Vec<[f64; 3]> = (0..m.len())
+                        .map(|i| sub_vec3(g_new[i], g_old_transported[i]))
+                        .collect();
+                    let mut beta = if g_norm_sq > 1e-30 {
+                        (global_dot_vec3(&g_new, &y_pr) / g_norm_sq).max(0.0)
+                    } else {
+                        0.0
+                    };
+                    let restart_interval = 50u64;
+                    if (direct_step + 1) % restart_interval == 0 {
+                        beta = 0.0;
+                    }
+                    let p_transported = project_tangent(&m_trial, &p);
+                    let mut p_new: Vec<[f64; 3]> = (0..m.len())
+                        .map(|i| {
+                            add_vec3(
+                                scale_vec3(g_new[i], -1.0),
+                                scale_vec3(p_transported[i], beta),
+                            )
+                        })
+                        .collect();
+                    if global_dot_vec3(&p_new, &g_new) >= 0.0 {
+                        p_new = g_new.iter().map(|gi| scale_vec3(*gi, -1.0)).collect();
+                    }
+
+                    p = p_new;
+                    h_eff = h_eff_new;
+                    g = g_new;
+                    lambda = trial_lambda;
+                    trial_stats
+                }
+                _ => break,
+            };
+
+            let prev_energy = energy;
+            m = m_trial;
+            energy = trial_stats.e_total;
+            direct_step += 1;
+
+            let mut accepted_stats = trial_stats.clone();
+            accepted_stats.step = direct_step;
+            accepted_stats.time = 0.0;
+            accepted_stats.dt = trial_lambda;
+            let torque_apm = max_torque_from_field(&m, &h_eff);
+            accepted_stats.max_dm_dt = 0.0;
+            accepted_stats.max_torque_Apm = torque_apm;
+            accepted_stats.max_torque_T = torque_apm * crate::MU0;
+            accepted_stats.max_h_eff = h_eff
+                .iter()
+                .map(|h| (h[0] * h[0] + h[1] * h[1] + h[2] * h[2]).sqrt())
+                .fold(0.0, f64::max);
+            ensure_single_object_scalars(&mut accepted_stats, "free");
+
+            artifacts.record_scalar(&accepted_stats)?;
+            steps.push(accepted_stats.clone());
+            latest_stats = Some(accepted_stats.clone());
+            current_stats = accepted_stats;
+
+            let energy_delta = (prev_energy - energy).abs();
+            if relaxation_stop_criteria_satisfied(control, Some(energy_delta), torque_apm) {
+                break;
+            }
+        }
+    } else {
+        while current_time < until_seconds {
+            if let Some(live) = live.as_mut() {
+                if let Some(display_selection) = live.display_selection.map(|get| get()) {
+                    let preview_due = display_refresh_due(
+                        last_preview_revision,
+                        &display_selection,
+                        current_stats.step,
+                    );
+                    let preview_targets_global_scalar =
+                        display_is_global_scalar(&display_selection);
+                    let preview_field = if preview_due && !preview_targets_global_scalar {
+                        let request = display_selection.preview_request();
+                        Some(backend.copy_live_preview_field(
+                            &request,
+                            plan.grid.cells,
+                            plan.active_mask.as_deref(),
+                        )?)
+                    } else {
+                        None
+                    };
+                    let action = (live.on_step)(StepUpdate {
+                        stats: current_stats.clone(),
+                        grid: live.grid,
+                        fem_mesh: None,
+                        magnetization: None,
+                        preview_field,
+                        cached_preview_fields: None,
+                        scalar_row_due: preview_due && preview_targets_global_scalar,
+                        finished: false,
+                    });
+                    if preview_due {
+                        last_preview_revision = Some(display_selection.revision);
+                    }
+                    if action == StepAction::Stop {
+                        cancelled = true;
+                        break;
+                    }
+                }
+            }
+
+            let dt_step = dt.min(until_seconds - current_time);
+            let interrupt_requested = live
+                .as_ref()
+                .and_then(|consumer| consumer.interrupt_requested);
+            let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
+                continue;
+            };
+            ensure_single_object_scalars(&mut stats, "free");
+            current_time = stats.time;
+            latest_stats = Some(stats.clone());
+            current_stats = stats.clone();
+            let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
+            let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
+            let mut sampled_stats = stats.clone();
+            let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
+            if due_scalar_row && average_requested {
+                if magnetization_cache.is_none() {
+                    magnetization_cache = Some(backend.copy_m(cell_count)?);
+                }
+                apply_average_m_to_step_stats(
+                    &mut sampled_stats,
+                    magnetization_cache
+                        .as_deref()
+                        .expect("magnetization cache initialized"),
                 );
-                let preview_targets_global_scalar = display_is_global_scalar(&display_selection);
+            }
+            if let Some(live) = live.as_mut() {
+                let heavy_payload_every = live.field_every_n.max(1);
+                let display_selection = live.display_selection.map(|get| get());
+                let preview_due = display_selection
+                    .as_ref()
+                    .map(|selection| {
+                        display_refresh_due(last_preview_revision, selection, stats.step)
+                    })
+                    .unwrap_or(false);
+                let preview_targets_global_scalar = display_selection
+                    .as_ref()
+                    .is_some_and(display_is_global_scalar);
+                let magnetization = if stats.step % heavy_payload_every == 0 {
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    Some(flatten_vectors(
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                    ))
+                } else {
+                    None
+                };
                 let preview_field = if preview_due && !preview_targets_global_scalar {
-                    let request = display_selection.preview_request();
+                    let selection = display_selection.as_ref().expect("checked preview_due");
+                    let request = selection.preview_request();
                     Some(backend.copy_live_preview_field(
                         &request,
                         plan.grid.cells,
@@ -1888,132 +2278,55 @@ fn execute_cuda_fdm(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
-                    stats: current_stats.clone(),
+                    stats: sampled_stats.clone(),
                     grid: live.grid,
                     fem_mesh: None,
-                    magnetization: None,
+                    magnetization,
                     preview_field,
                     cached_preview_fields: None,
-                    scalar_row_due: preview_due && preview_targets_global_scalar,
+                    scalar_row_due: due_scalar_row
+                        || (preview_due && preview_targets_global_scalar),
                     finished: false,
                 });
                 if preview_due {
-                    last_preview_revision = Some(display_selection.revision);
+                    last_preview_revision = Some(
+                        display_selection
+                            .as_ref()
+                            .expect("checked preview_due")
+                            .revision,
+                    );
                 }
                 if action == StepAction::Stop {
                     cancelled = true;
-                    break;
                 }
             }
-        }
-
-        let dt_step = dt.min(until_seconds - current_time);
-        let interrupt_requested = live
-            .as_ref()
-            .and_then(|consumer| consumer.interrupt_requested);
-        let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
-            continue;
-        };
-        ensure_single_object_scalars(&mut stats, "free");
-        current_time = stats.time;
-        latest_stats = Some(stats.clone());
-        current_stats = stats.clone();
-        let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
-        let average_requested = scalar_outputs_request_average_m(&scalar_schedules);
-        let mut sampled_stats = stats.clone();
-        let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
-        if due_scalar_row && average_requested {
-            if magnetization_cache.is_none() {
-                magnetization_cache = Some(backend.copy_m(cell_count)?);
+            if cancelled {
+                break;
             }
-            apply_average_m_to_step_stats(
-                &mut sampled_stats,
-                magnetization_cache
-                    .as_deref()
-                    .expect("magnetization cache initialized"),
-            );
-        }
-        if let Some(live) = live.as_mut() {
-            let heavy_payload_every = live.field_every_n.max(1);
-            let display_selection = live.display_selection.map(|get| get());
-            let preview_due = display_selection
-                .as_ref()
-                .map(|selection| display_refresh_due(last_preview_revision, selection, stats.step))
-                .unwrap_or(false);
-            let preview_targets_global_scalar = display_selection
-                .as_ref()
-                .is_some_and(display_is_global_scalar);
-            let magnetization = if stats.step % heavy_payload_every == 0 {
-                if magnetization_cache.is_none() {
-                    magnetization_cache = Some(backend.copy_m(cell_count)?);
-                }
-                Some(flatten_vectors(
-                    magnetization_cache
-                        .as_deref()
-                        .expect("magnetization cache initialized"),
-                ))
-            } else {
-                None
-            };
-            let preview_field = if preview_due && !preview_targets_global_scalar {
-                let selection = display_selection.as_ref().expect("checked preview_due");
-                let request = selection.preview_request();
-                Some(backend.copy_live_preview_field(
-                    &request,
-                    plan.grid.cells,
-                    plan.active_mask.as_deref(),
-                )?)
-            } else {
-                None
-            };
-            let action = (live.on_step)(StepUpdate {
-                stats: sampled_stats.clone(),
-                grid: live.grid,
-                fem_mesh: None,
-                magnetization,
-                preview_field,
-                cached_preview_fields: None,
-                scalar_row_due: due_scalar_row || (preview_due && preview_targets_global_scalar),
-                finished: false,
+            record_cuda_due_outputs(
+                &backend,
+                cell_count,
+                &sampled_stats,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut artifacts,
+            )?;
+            let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
+                stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
+                    || relaxation_converged(
+                        control,
+                        &stats,
+                        previous_total_energy,
+                        plan.gyromagnetic_ratio,
+                        plan.material.damping,
+                        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+                    )
             });
-            if preview_due {
-                last_preview_revision = Some(
-                    display_selection
-                        .as_ref()
-                        .expect("checked preview_due")
-                        .revision,
-                );
+            previous_total_energy = Some(stats.e_total);
+            if stop_for_relaxation {
+                break;
             }
-            if action == StepAction::Stop {
-                cancelled = true;
-            }
-        }
-        if cancelled {
-            break;
-        }
-        record_cuda_due_outputs(
-            &backend,
-            cell_count,
-            &sampled_stats,
-            &mut scalar_schedules,
-            &mut field_schedules,
-            &mut steps,
-            &mut artifacts,
-        )?;
-        let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
-            stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
-                    control,
-                    &stats,
-                    previous_total_energy,
-                    plan.gyromagnetic_ratio,
-                    plan.material.damping,
-                    llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
-                )
-        });
-        previous_total_energy = Some(stats.e_total);
-        if stop_for_relaxation {
-            break;
         }
     }
 
@@ -2477,17 +2790,10 @@ fn execute_native_fem(
                 break;
             }
 
-            if let Some(etol) = control.stop.energy_tolerance_j {
-                let energy_delta = (prev_energy - energy).abs();
-                let torque = max_torque_from_field(&m, &h_eff);
-                if control
-                    .stop
-                    .torque_tolerance_apm
-                    .is_some_and(|threshold| torque <= threshold)
-                    && energy_delta <= etol
-                {
-                    break;
-                }
+            let energy_delta = (prev_energy - energy).abs();
+            let torque = max_torque_from_field(&m, &h_eff);
+            if relaxation_stop_criteria_satisfied(control, Some(energy_delta), torque) {
+                break;
             }
         }
     } else {
@@ -2851,27 +3157,27 @@ fn flatten_vectors(values: &[[f64; 3]]) -> Vec<f64> {
         .collect()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn dot_vec3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn add_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn sub_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn scale_vec3(a: [f64; 3], s: f64) -> [f64; 3] {
     [a[0] * s, a[1] * s, a[2] * s]
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn normalized_vec3(v: [f64; 3]) -> [f64; 3] {
     let n2 = dot_vec3(v, v);
     if n2 <= 0.0 {
@@ -2882,7 +3188,7 @@ fn normalized_vec3(v: [f64; 3]) -> [f64; 3] {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn tangent_gradient_from_field(magnetization: &[[f64; 3]], h_eff: &[[f64; 3]]) -> Vec<[f64; 3]> {
     magnetization
         .iter()
@@ -2894,7 +3200,7 @@ fn tangent_gradient_from_field(magnetization: &[[f64; 3]], h_eff: &[[f64; 3]]) -
         .collect()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn global_dot_vec3(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
     a.iter()
         .zip(b.iter())
@@ -2902,7 +3208,7 @@ fn global_dot_vec3(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
         .sum()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn project_tangent(m: &[[f64; 3]], v: &[[f64; 3]]) -> Vec<[f64; 3]> {
     m.iter()
         .zip(v.iter())
@@ -2910,7 +3216,7 @@ fn project_tangent(m: &[[f64; 3]], v: &[[f64; 3]]) -> Vec<[f64; 3]> {
         .collect()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 fn max_torque_from_field(magnetization: &[[f64; 3]], h_eff: &[[f64; 3]]) -> f64 {
     magnetization
         .iter()

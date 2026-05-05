@@ -520,6 +520,10 @@ pub struct FemMeshPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boundary_markers: Vec<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_segments: Vec<FemMeshObjectSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartPayload>,
@@ -585,6 +589,8 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             ),
             boundary_faces: plan.mesh.boundary_faces.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
+            periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
+            periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
             object_segments: plan
                 .object_segments
                 .iter()
@@ -628,6 +634,8 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
             element_markers: normalized_payload_element_markers(&plan.mesh.element_markers, None),
             boundary_faces: plan.mesh.boundary_faces.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
+            periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
+            periodic_node_pairs: plan.mesh.periodic_node_pairs.clone(),
             object_segments: plan
                 .object_segments
                 .iter()

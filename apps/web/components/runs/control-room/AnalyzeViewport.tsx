@@ -8,6 +8,10 @@ import EigenAnalyzeWorkbench from "@/components/analyze/EigenAnalyzeWorkbench";
 import EigenModeInspector from "@/components/analyze/EigenModeInspector";
 import EigenSolverSummary from "@/components/analyze/EigenSolverSummary";
 import ModeSpectrumPlot from "@/components/analyze/ModeSpectrumPlot";
+import {
+  isSpectrumV2,
+  normalizeSpectrumArtifact,
+} from "@/components/analyze/eigenTypes";
 import VortexAnalyzeWorkbench from "@/components/analyze/VortexAnalyzeWorkbench";
 import type { VortexTimeSample } from "@/components/analyze/vortexTypes";
 import EmptyState from "@/components/ui/EmptyState";
@@ -182,6 +186,7 @@ export default function AnalyzeViewport() {
     spectrum,
     branches,
     dispersionRows,
+    modeCache,
     hasEigenArtifacts,
     refresh,
     selectedMode,
@@ -203,31 +208,49 @@ export default function AnalyzeViewport() {
     interfaceParts,
     metadata: cmd.metadata,
   });
+  const normalizedSpectrum = useMemo(
+    () => normalizeSpectrumArtifact(spectrum),
+    [spectrum],
+  );
+  const legacySpectrum = spectrum && !isSpectrumV2(spectrum) ? spectrum : null;
+  const spectrumSolverKind = legacySpectrum?.solver_kind ?? normalizedSpectrum?.solver_model;
+  const spectrumBoundaryConfig = legacySpectrum?.boundary_config;
+  const spectrumIncludedTerms = legacySpectrum?.included_terms;
 
   // ← / → keyboard shortcuts to navigate between eigen modes
   useEffect(() => {
-    if (!spectrum || spectrum.modes.length === 0) return;
-    const sortedModes = [...spectrum.modes].sort((a, b) => a.index - b.index);
+    const activeSample = normalizedSpectrum?.samples.find(
+      (sample) => sample.sample_index === (analyzeSelection.sampleIndex ?? 0),
+    ) ?? normalizedSpectrum?.samples[0];
+    if (!activeSample || activeSample.modes.length === 0) return;
+    const sortedModes = [...activeSample.modes].sort(
+      (a, b) => a.raw_mode_index - b.raw_mode_index,
+    );
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
       // Don't steal focus when user is typing in an input
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
-      const currentIndex = analyzeSelection.selectedModeIndex ?? sortedModes[0].index;
-      const pos = sortedModes.findIndex((m) => m.index === currentIndex);
+      const currentIndex = analyzeSelection.selectedModeIndex ?? sortedModes[0].raw_mode_index;
+      const pos = sortedModes.findIndex((m) => m.raw_mode_index === currentIndex);
       if (pos === -1) return;
       const next =
         e.key === "ArrowRight"
           ? sortedModes[Math.min(pos + 1, sortedModes.length - 1)]
           : sortedModes[Math.max(pos - 1, 0)];
-      if (next && next.index !== currentIndex) {
-        selectMode(next.index);
+      if (next && next.raw_mode_index !== currentIndex) {
+        selectMode(next.raw_mode_index);
         e.preventDefault();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [analyzeSelection.selectedModeIndex, selectMode, spectrum]);
+  }, [
+    analyzeSelection.sampleIndex,
+    analyzeSelection.selectedModeIndex,
+    normalizedSpectrum,
+    selectMode,
+  ]);
 
   /* ── Vortex domain ── */
   if (analyzeDomain === "vortex") {
@@ -321,19 +344,19 @@ export default function AnalyzeViewport() {
               dataset: {activeDatasetLabel}
             </span>
           )}
-          {spectrum.solver_kind && (
+          {spectrumSolverKind && (
             <span className="rounded-sm border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-sky-200">
-              {spectrum.solver_kind}
+              {spectrumSolverKind}
             </span>
           )}
-          {spectrum.boundary_config?.kind && (
+          {spectrumBoundaryConfig?.kind && (
             <span className="rounded-sm border border-violet-500/25 bg-violet-500/10 px-1.5 py-0.5 text-[0.62rem] font-bold uppercase tracking-widest text-violet-200">
-              bc: {spectrum.boundary_config.kind}
+              bc: {spectrumBoundaryConfig.kind}
             </span>
           )}
-          {includedTermsLabel(spectrum.included_terms) && (
+          {includedTermsLabel(spectrumIncludedTerms) && (
             <span className="rounded-sm border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 text-[0.62rem] font-bold tracking-widest text-emerald-200">
-              {includedTermsLabel(spectrum.included_terms)}
+              {includedTermsLabel(spectrumIncludedTerms)}
             </span>
           )}
           <div className="flex-1" />
@@ -353,21 +376,22 @@ export default function AnalyzeViewport() {
 
         {selectedModeSummary && (
           <div className="mt-2 text-sm text-foreground/90">
-            Mode {selectedModeSummary.index} · {fmtGHz(selectedModeSummary.frequency_hz)} ·{" "}
+            Mode {selectedModeSummary.raw_mode_index} ·{" "}
+            {fmtGHz(selectedModeSummary.frequency_real_hz)} ·{" "}
             {selectedModeSummary.dominant_polarization}
           </div>
         )}
-        {spectrum.solver_notes && (
-          <div className="mt-1 text-xs text-muted-foreground">{spectrum.solver_notes}</div>
+        {legacySpectrum?.solver_notes && (
+          <div className="mt-1 text-xs text-muted-foreground">{legacySpectrum.solver_notes}</div>
         )}
-        {compactList(spectrum.solver_capabilities) && (
+        {compactList(legacySpectrum?.solver_capabilities) && (
           <div className="mt-1 text-xs text-emerald-300/90">
-            Capabilities: {compactList(spectrum.solver_capabilities)}
+            Capabilities: {compactList(legacySpectrum?.solver_capabilities)}
           </div>
         )}
-        {compactList(spectrum.solver_limitations) && (
+        {compactList(legacySpectrum?.solver_limitations) && (
           <div className="mt-1 text-xs text-amber-300/90">
-            Limitations: {compactList(spectrum.solver_limitations)}
+            Limitations: {compactList(legacySpectrum?.solver_limitations)}
           </div>
         )}
       </div>
@@ -378,6 +402,25 @@ export default function AnalyzeViewport() {
             <EigenAnalyzeWorkbench
               spectrum={spectrum}
               branches={branches}
+              modeLookup={modeCache}
+              selection={
+                analyzeSelection.selectedModeIndex == null
+                  ? null
+                  : {
+                      sampleIndex: analyzeSelection.sampleIndex ?? 0,
+                      rawModeIndex: analyzeSelection.selectedModeIndex,
+                      branchId: analyzeSelection.branchId,
+                    }
+              }
+              onSelectionChange={(next) => {
+                setAnalyzeSelection((prev) => ({
+                  ...prev,
+                  selectedModeIndex: next?.rawModeIndex ?? null,
+                  sampleIndex: next?.sampleIndex ?? null,
+                  branchId: next?.branchId ?? null,
+                  tab: next?.rawModeIndex != null ? "modes" : prev.tab,
+                }));
+              }}
               renderModeInspector={(mode) => (
                 <EigenModeInspector
                   mesh={mesh}
@@ -415,18 +458,36 @@ export default function AnalyzeViewport() {
             </div>
 
             <TabsContent value="summary" className="flex-1 min-h-0 overflow-y-auto p-3">
-              <EigenSolverSummary spectrum={spectrum} />
+                {legacySpectrum ? (
+                  <EigenSolverSummary spectrum={legacySpectrum} />
+                ) : (
+                  <EmptyState
+                    title="V2 spectrum"
+                    description="Use the dispersion workbench to inspect this multi-k spectrum."
+                    tone="info"
+                    compact
+                  />
+                )}
             </TabsContent>
 
             <TabsContent value="spectrum" className="flex-1 min-h-0 p-3">
-              <ModeSpectrumPlot
-                modes={spectrum.modes}
-                selectedMode={selectedMode}
-                onSelectMode={(modeIndex) => {
-                  selectMode(modeIndex);
-                  selectAnalyzeTab("modes");
-                }}
-              />
+                {legacySpectrum ? (
+                  <ModeSpectrumPlot
+                    modes={legacySpectrum.modes}
+                    selectedMode={selectedMode}
+                    onSelectMode={(modeIndex) => {
+                      selectMode(modeIndex);
+                      selectAnalyzeTab("modes");
+                    }}
+                  />
+                ) : (
+                  <EmptyState
+                    title="V2 spectrum"
+                    description="Use the dispersion workbench to inspect branch-tracked modes."
+                    tone="info"
+                    compact
+                  />
+                )}
             </TabsContent>
 
             <TabsContent value="modes" className="flex-1 min-h-0 p-0">

@@ -63,9 +63,10 @@ $$\tilde{N}_{\alpha\beta}(\Delta\mathbf{r}) \approx
 
 #### Bloch/Floquet periodicity (Line B)
 
-For spin-wave calculations at wavevector $\mathbf{k}$:
+For spin-wave calculations at wavevector $\mathbf{k}$ Fullmag uses the
+canonical convention from `0710-periodic-and-floquet-boundary-conditions.md`:
 
-$$\mathbf{m}(\mathbf{r} + n_i L_i \hat{e}_i) = \mathbf{m}(\mathbf{r})\, e^{i \mathbf{k} \cdot (n_i L_i \hat{e}_i)}, \quad \forall\, i \in P$$
+$$\delta\mathbf{m}(\mathbf{r} + n_i L_i \hat{e}_i) = \delta\mathbf{m}(\mathbf{r})\, e^{-i \mathbf{k} \cdot (n_i L_i \hat{e}_i)}, \quad \forall\, i \in P$$
 
 The linearized LLG eigenvalue problem is assembled within one unit cell and
 periodic DOFs are identified via a phase-reduction matrix $\mathbf{P}$:
@@ -73,7 +74,7 @@ periodic DOFs are identified via a phase-reduction matrix $\mathbf{P}$:
 $$A_{\text{red}} = \mathbf{P}^\dagger A\, \mathbf{P}, \qquad
   M_{\text{red}} = \mathbf{P}^\dagger M\, \mathbf{P}$$
 
-where $P_{ij} = \delta_{ij}$ for interior DOFs and $P_{ij} = e^{i\mathbf{k}\cdot\Delta\mathbf{r}_{ij}}$
+where $P_{ij} = \delta_{ij}$ for interior DOFs and $P_{ij} = e^{-i\mathbf{k}\cdot\Delta\mathbf{r}_{ij}}$
 for periodic node pairs $(i,j)$.
 
 Zero-phase periodicity is the special case $\mathbf{k} = \mathbf{0}$,

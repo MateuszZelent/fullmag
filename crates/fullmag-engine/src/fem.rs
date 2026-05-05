@@ -1,3 +1,4 @@
+use crate::periodic::constraints::PeriodicDofMap;
 use crate::{
     add, cross, dot, max_cross_norm, norm, normalized, scale, sub, AbmHistory,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, LlgConfig, MaterialParameters,
@@ -698,6 +699,7 @@ pub struct MeshTopology {
     pub magnetic_element_mask: Vec<bool>,
     pub boundary_faces: Vec<[u32; 3]>,
     pub boundary_nodes: Vec<u32>,
+    pub periodic_boundary_pairs: Vec<(String, Option<[f64; 3]>)>,
     pub periodic_node_pairs: Vec<(String, u32, u32)>,
     pub element_volumes: Vec<f64>,
     pub node_volumes: Vec<f64>,
@@ -720,6 +722,11 @@ pub struct MeshTopology {
 }
 
 impl MeshTopology {
+    pub fn static_periodic_dof_map(&self) -> Result<PeriodicDofMap> {
+        PeriodicDofMap::from_periodic_pair_tuples_static(self.n_nodes, &self.periodic_node_pairs)
+            .map_err(|error| EngineError::new(error.message))
+    }
+
     pub fn from_ir(mesh: &MeshIR) -> Result<Self> {
         mesh.validate()
             .map_err(|errors| EngineError::new(errors.join("; ")))?;
@@ -833,6 +840,11 @@ impl MeshTopology {
             magnetic_element_mask,
             boundary_faces: mesh.boundary_faces.clone(),
             boundary_nodes,
+            periodic_boundary_pairs: mesh
+                .periodic_boundary_pairs
+                .iter()
+                .map(|pair| (pair.pair_id.clone(), pair.translation))
+                .collect(),
             periodic_node_pairs: mesh
                 .periodic_node_pairs
                 .iter()
@@ -2228,16 +2240,13 @@ impl FemLlgProblem {
     }
 
     /// Validate that the problem configuration is physically consistent.
-    /// Logs warnings for known semantic gaps in the reference solver.
-    pub fn validate_reference_semantics(&self) {
-        // C2: Periodic BC — stored but not enforced in exchange/demag.
+    pub fn validate_reference_semantics(&self) -> Result<()> {
         if !self.topology.periodic_node_pairs.is_empty() {
-            eprintln!(
-                "[fullmag::fem::reference] WARNING: {} periodic node pairs present but NOT \
-                 enforced in exchange or demag. Results for periodic geometries are INVALID \
-                 in the Rust FEM reference solver.",
+            return Err(EngineError::new(format!(
+                "{} periodic node pairs present, but the Rust FEM reference solver does not \
+                 enforce periodic constraints in exchange or demag",
                 self.topology.periodic_node_pairs.len()
-            );
+            )));
         }
 
         // C2: DMI requires a well-defined interface normal.
@@ -2248,6 +2257,7 @@ impl FemLlgProblem {
                  normal is zero — DMI contribution will be zero."
             );
         }
+        Ok(())
     }
 
     #[allow(non_snake_case)]
@@ -3462,6 +3472,26 @@ mod tests {
                 value
             );
         }
+    }
+
+    #[test]
+    fn reference_semantics_rejects_unenforced_periodic_pairs() {
+        let mut problem = unit_tet_problem();
+        problem
+            .topology
+            .periodic_node_pairs
+            .push(("x_periodic".to_string(), 0, 1));
+
+        let err = problem
+            .validate_reference_semantics()
+            .expect_err("reference FEM must reject unenforced periodic pairs");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("does not enforce periodic constraints"),
+            "unexpected error: {}",
+            message
+        );
     }
 
     #[test]

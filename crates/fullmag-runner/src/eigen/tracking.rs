@@ -160,3 +160,78 @@ pub fn track_branches(result: &mut PathSolveResult, config: Option<&ModeTracking
 
     result.branches = branches;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eigen::types::{EigenSolverModel, KSampleDescriptor, SingleKSolveResult};
+    use fullmag_ir::{ModeTrackingIR, ModeTrackingMethodIR};
+
+    fn sample(index: usize, modes: Vec<SingleKModeResult>) -> SingleKSolveResult {
+        SingleKSolveResult {
+            sample: KSampleDescriptor {
+                sample_index: index,
+                label: None,
+                segment_index: None,
+                path_s: index as f64,
+                t_in_segment: index as f64,
+                k_vector: [index as f64, 0.0, 0.0],
+            },
+            modes,
+            relaxation_steps: 0,
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            solver_notes: Vec::new(),
+        }
+    }
+
+    fn mode(
+        raw_mode_index: usize,
+        frequency_real_hz: f64,
+        vector: [Complex64; 2],
+    ) -> SingleKModeResult {
+        SingleKModeResult {
+            raw_mode_index,
+            branch_id: None,
+            frequency_real_hz,
+            frequency_imag_hz: 0.0,
+            angular_frequency_rad_per_s: frequency_real_hz * std::f64::consts::TAU,
+            eigenvalue_real: 0.0,
+            eigenvalue_imag: frequency_real_hz * std::f64::consts::TAU,
+            norm: 1.0,
+            max_amplitude: 1.0,
+            dominant_polarization: "test".to_string(),
+            reduced_vector: Some(vector.to_vec()),
+            lifted_real: None,
+            lifted_imag: None,
+            amplitude: None,
+            phase: None,
+        }
+    }
+
+    #[test]
+    fn overlap_tracking_preserves_branches_when_frequency_order_swaps() {
+        let a = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
+        let b = [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)];
+        let mut result = PathSolveResult {
+            samples: vec![
+                sample(0, vec![mode(0, 1.0, a), mode(1, 2.0, b)]),
+                sample(1, vec![mode(0, 2.1, b), mode(1, 1.1, a)]),
+            ],
+            branches: Vec::new(),
+            solver_model: EigenSolverModel::ReferenceScalarTangent,
+            notes: Vec::new(),
+        };
+        let cfg = ModeTrackingIR {
+            method: ModeTrackingMethodIR::OverlapGreedy,
+            frequency_window_hz: None,
+            overlap_floor: 0.8,
+            max_branch_gap: 0,
+        };
+
+        track_branches(&mut result, Some(&cfg));
+
+        assert_eq!(result.samples[1].modes[1].branch_id, Some(0));
+        assert_eq!(result.samples[1].modes[0].branch_id, Some(1));
+        assert_eq!(result.branches.len(), 2);
+    }
+}

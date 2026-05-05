@@ -17,6 +17,7 @@ import type {
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshObjectSizeFieldResource,
+  MeshPeriodicPairsResource,
   MeshSharedDomainConfigReplaceRequest,
   MeshSharedDomainConfigResource,
   MeshSharedDomainManifestResource,
@@ -220,6 +221,22 @@ export class MeshModule {
   ): Promise<BinaryResourceResponse> {
     return this.client.getBinaryResponse(
       sessionApiPaths.meshing.sharedDomainTopology,
+      opts,
+    );
+  }
+
+  async getPeriodicPairs(opts?: RequestOptions): Promise<MeshPeriodicPairsResource> {
+    return this.client.get<MeshPeriodicPairsResource>(
+      sessionApiPaths.meshing.periodicPairs,
+      opts,
+    );
+  }
+
+  async getPeriodicPairsResponse(
+    opts?: RequestOptions,
+  ): Promise<JsonResourceResponse<MeshPeriodicPairsResource>> {
+    return this.client.getJsonResponse<MeshPeriodicPairsResource>(
+      sessionApiPaths.meshing.periodicPairs,
       opts,
     );
   }

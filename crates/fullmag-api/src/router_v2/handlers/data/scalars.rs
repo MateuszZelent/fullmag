@@ -80,7 +80,11 @@ pub async fn get_scalars(
     let mut columns: Vec<&str> = Vec::new();
     columns.push("step");
     if let Some(requested_columns) = query.columns.as_deref() {
-        for column in requested_columns.split(',').map(str::trim).filter(|value| !value.is_empty()) {
+        for column in requested_columns
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if all_columns.contains(&column) && !columns.contains(&column) {
                 columns.push(column);
             }

@@ -1,10 +1,8 @@
+#[allow(unused_imports)]
+use crate::{FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR, MeshQualityIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
-#[allow(unused_imports)]
-use crate::{
-    FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR, MeshQualityIR,
-};
 
 // Private spatial helper functions (only used by types in this module)
 fn vec3_from_value(value: &Value) -> Option<[f64; 3]> {
@@ -59,8 +57,6 @@ fn bounds_center(bounds_min: [f64; 3], bounds_max: [f64; 3]) -> [f64; 3] {
         0.5 * (bounds_min[2] + bounds_max[2]),
     ]
 }
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmGridAssetIR {

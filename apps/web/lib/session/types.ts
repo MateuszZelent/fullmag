@@ -598,11 +598,14 @@ export interface ScriptBuilderStageState {
   entrypoint_kind: string;
   integrator: string;
   fixed_timestep: string;
+  max_error: string;
   until_seconds: string;
   relax_algorithm: string;
   torque_tolerance: string;
   energy_tolerance: string;
   max_steps: string;
+  max_pseudotime_s: string;
+  max_physical_time_s: string;
   /** Eigenmode fields — only meaningful when kind === "eigenmodes" */
   eigen_count: string;
   eigen_target: string;
@@ -612,6 +615,7 @@ export interface ScriptBuilderStageState {
   eigen_target_frequency: string;
   eigen_damping_policy: string;
   eigen_k_vector: string;
+  eigen_k_path: string;
   eigen_spin_wave_bc: string;
   eigen_spin_wave_bc_config: Record<string, unknown> | null;
 }

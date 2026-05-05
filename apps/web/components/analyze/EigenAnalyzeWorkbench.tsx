@@ -22,6 +22,8 @@ export interface EigenAnalyzeWorkbenchProps {
   spectrum: AnySpectrumArtifact | null;
   branches?: EigenBranchesArtifact | null;
   modeLookup?: Record<string, AnyModeArtifact>;
+  selection?: EigenSelection | null;
+  onSelectionChange?: (selection: EigenSelection | null) => void;
   renderModeInspector?: (mode: EigenModeArtifactV2 | null) => React.ReactNode;
 }
 
@@ -92,16 +94,30 @@ export default function EigenAnalyzeWorkbench({
   spectrum,
   branches = null,
   modeLookup = {},
+  selection: controlledSelection,
+  onSelectionChange,
   renderModeInspector,
 }: EigenAnalyzeWorkbenchProps) {
   const normalizedSpectrum = useMemo(() => normalizeSpectrumArtifact(spectrum), [spectrum]);
-  const [selection, setSelection] = useState<EigenSelection | null>(
+  const [internalSelection, setInternalSelection] = useState<EigenSelection | null>(
     defaultSelection(normalizedSpectrum, branches),
   );
+  const selection =
+    controlledSelection === undefined ? internalSelection : controlledSelection;
+
+  const updateSelection = (next: EigenSelection | null) => {
+    setInternalSelection(next);
+    onSelectionChange?.(next);
+  };
 
   useEffect(() => {
-    setSelection(defaultSelection(normalizedSpectrum, branches));
-  }, [normalizedSpectrum, branches]);
+    const nextDefault = defaultSelection(normalizedSpectrum, branches);
+    if (controlledSelection === undefined) {
+      setInternalSelection(nextDefault);
+    } else if (controlledSelection === null && nextDefault) {
+      onSelectionChange?.(nextDefault);
+    }
+  }, [controlledSelection, normalizedSpectrum, branches, onSelectionChange]);
 
   const summaryMode = useMemo(
     () => modeFromSelection(normalizedSpectrum, selection),
@@ -120,6 +136,27 @@ export default function EigenAnalyzeWorkbench({
     () => selectedBranch(branches, selection),
     [branches, selection],
   );
+
+  const sampleByIndex = useMemo(() => {
+    const entries = new Map<
+      number,
+      NonNullable<typeof normalizedSpectrum>["samples"][number]
+    >();
+    for (const sample of normalizedSpectrum?.samples ?? []) {
+      entries.set(sample.sample_index, sample);
+    }
+    return entries;
+  }, [normalizedSpectrum]);
+
+  const pathTickLabels = useMemo(() => {
+    const ticks: { value: number; label: string }[] = [];
+    for (const sample of normalizedSpectrum?.samples ?? []) {
+      if (sample.label) {
+        ticks.push({ value: sample.path_s, label: sample.label });
+      }
+    }
+    return ticks;
+  }, [normalizedSpectrum]);
 
   const spectrumTrace = useMemo(() => {
     const sample = normalizedSpectrum?.samples.find(
@@ -154,24 +191,39 @@ export default function EigenAnalyzeWorkbench({
       return [];
     }
     return branches.branches.map((branch, index) => ({
-      x: branch.points.map((point) => point.sample_index),
+      x: branch.points.map(
+        (point) => sampleByIndex.get(point.sample_index)?.path_s ?? point.sample_index,
+      ),
       y: branch.points.map((point) => ghz(point.frequency_real_hz)),
       type: "scatter" as const,
       mode: branch.points.length > 1 ? ("lines+markers" as const) : ("markers" as const),
-      customdata: branch.points.map((point) => [branch.branch_id, point.sample_index, point.raw_mode_index]),
+      customdata: branch.points.map((point) => [
+        branch.branch_id,
+        point.sample_index,
+        point.raw_mode_index,
+      ]),
       name: branch.label ?? `B${branch.branch_id}`,
       line: {
         width: branch.branch_id === selection?.branchId ? 3 : 1.5,
-        color: branch.branch_id === selection?.branchId ? C.selected : index % 2 === 0 ? C.trace : C.trace2,
+        color:
+          branch.branch_id === selection?.branchId
+            ? C.selected
+            : index % 2 === 0
+              ? C.trace
+              : C.trace2,
       },
       marker: {
         size: branch.points.map((point) =>
-          point.raw_mode_index === selection?.rawModeIndex && point.sample_index === selection?.sampleIndex ? 10 : 6,
+          point.raw_mode_index === selection?.rawModeIndex
+            && point.sample_index === selection?.sampleIndex
+            ? 10
+            : 6,
         ),
       },
-      hovertemplate: "branch %{customdata[0]}<br>sample %{customdata[1]}<br>mode %{customdata[2]}<br>f = %{y:.4f} GHz<extra></extra>",
+      hovertemplate:
+        "branch %{customdata[0]}<br>path_s %{x:.4g}<br>sample %{customdata[1]}<br>mode %{customdata[2]}<br>f = %{y:.4f} GHz<extra></extra>",
     }));
-  }, [branches, selection]);
+  }, [branches, sampleByIndex, selection]);
 
   if (!normalizedSpectrum) {
     return (
@@ -213,14 +265,16 @@ export default function EigenAnalyzeWorkbench({
           onClick={(event: Readonly<PlotMouseEvent>) => {
             const raw = event.points?.[0]?.customdata;
             if (typeof raw === "number") {
-              setSelection((prev) => ({
-                sampleIndex: prev?.sampleIndex ?? 0,
+              const sampleIndex =
+                selection?.sampleIndex ?? normalizedSpectrum.samples[0]?.sample_index ?? 0;
+              updateSelection({
+                sampleIndex,
                 rawModeIndex: raw,
                 branchId:
                   normalizedSpectrum.samples
-                    .find((item) => item.sample_index === (prev?.sampleIndex ?? 0))
+                    .find((item) => item.sample_index === sampleIndex)
                     ?.modes.find((mode) => mode.raw_mode_index === raw)?.branch_id ?? null,
-              }));
+              });
             }
           }}
         />
@@ -235,7 +289,13 @@ export default function EigenAnalyzeWorkbench({
                 plot_bgcolor: C.bg,
                 margin: { l: 56, r: 16, t: 8, b: 44 },
                 font: { color: C.text, size: 11 },
-                xaxis: { title: { text: "sample index" }, gridcolor: C.grid },
+                xaxis: {
+                  title: { text: "path_s" },
+                  gridcolor: C.grid,
+                  tickmode: pathTickLabels.length > 0 ? "array" : "auto",
+                  tickvals: pathTickLabels.map((tick) => tick.value),
+                  ticktext: pathTickLabels.map((tick) => tick.label),
+                },
                 yaxis: { title: { text: "f (GHz)" }, gridcolor: C.grid },
                 hovermode: "closest",
                 legend: { orientation: "h", y: -0.22 },
@@ -245,7 +305,7 @@ export default function EigenAnalyzeWorkbench({
               onClick={(event: Readonly<PlotMouseEvent>) => {
                 const raw = event.points?.[0]?.customdata;
                 if (Array.isArray(raw) && raw.length >= 3) {
-                  setSelection({
+                  updateSelection({
                     branchId: Number(raw[0]),
                     sampleIndex: Number(raw[1]),
                     rawModeIndex: Number(raw[2]),

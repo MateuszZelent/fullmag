@@ -39,7 +39,8 @@ const INTEGRATOR_OPTIONS = Object.entries(INTEGRATOR_PROFILES).map(([value, prof
 
 const RELAX_ALGORITHM_OPTIONS = Object.entries(RELAXATION_PROFILES).map(([value, profile]) => ({
   value,
-  label: profile.label,
+  label: value === "tangent_plane_implicit" ? `${profile.label} (planned)` : profile.label,
+  disabled: value === "tangent_plane_implicit",
 }));
 
 const EIGEN_TARGET_OPTIONS = [
@@ -225,7 +226,7 @@ export default function StageInspector({
               <div className="md:col-span-2">
                 <div className="flex flex-col gap-1.5">
                   <SelectField
-                    label="Integrator"
+                    label={node.stage_kind === "relax" ? "Solver / integrator" : "Integrator"}
                     value={String(node.payload.integrator ?? "rk45")}
                     options={INTEGRATOR_OPTIONS}
                     onchange={(value) => onPatchConfig({ integrator: value })}
@@ -247,6 +248,25 @@ export default function StageInspector({
                   label="Fixed dt [s]"
                   value={String(node.payload.fixed_timestep ?? "")}
                   onchange={(event) => onPatchConfig({ fixed_timestep: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Adaptive max error"
+                  value={String(node.payload.max_error ?? "")}
+                  onchange={(event) => onPatchConfig({ max_error: event.target.value })}
+                  placeholder="RK23/RK45 only"
+                  mono
+                />
+                <TextField
+                  label="Max pseudotime [s]"
+                  value={String(node.payload.max_pseudotime_s ?? "")}
+                  onchange={(event) => onPatchConfig({ max_pseudotime_s: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="Max physical time [s]"
+                  value={String(node.payload.max_physical_time_s ?? "")}
+                  onchange={(event) => onPatchConfig({ max_physical_time_s: event.target.value })}
                   mono
                 />
               </>
@@ -346,6 +366,13 @@ export default function StageInspector({
                   label="k-vector"
                   value={String(node.payload.eigen_k_vector ?? "")}
                   onchange={(event) => onPatchConfig({ eigen_k_vector: event.target.value })}
+                  mono
+                />
+                <TextField
+                  label="k-path"
+                  value={String(node.payload.eigen_k_path ?? "")}
+                  onchange={(event) => onPatchConfig({ eigen_k_path: event.target.value })}
+                  placeholder="Γ:0,0,0; X:3.14e7,0,0 | samples=41"
                   mono
                 />
                 <div className="flex flex-col gap-1.5">

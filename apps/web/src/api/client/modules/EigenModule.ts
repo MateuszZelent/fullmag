@@ -38,4 +38,27 @@ export class EigenModule {
   async getBranches(opts?: RequestOptions): Promise<unknown> {
     return this.client.get(sessionApiPaths.analysis.eigenBranches, opts);
   }
+
+  async getSpectrumV2(opts?: RequestOptions): Promise<unknown> {
+    return this.client.get(sessionApiPaths.analysis.eigenSpectrumV2, opts);
+  }
+
+  async getBranchesV2(opts?: RequestOptions): Promise<unknown> {
+    return this.client.get(sessionApiPaths.analysis.eigenBranchesV2, opts);
+  }
+
+  async getModeV2(
+    sampleIndex: number,
+    modeIndex: number,
+    opts?: RequestOptions,
+  ): Promise<unknown> {
+    return this.client.get(
+      sessionApiPaths.analysis.eigenModeV2(sampleIndex, modeIndex),
+      opts,
+    );
+  }
+
+  async getDispersionCsv(opts?: RequestOptions): Promise<string> {
+    return this.client.getText(sessionApiPaths.analysis.eigenDispersionCsv, opts);
+  }
 }

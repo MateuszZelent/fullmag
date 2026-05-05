@@ -132,6 +132,70 @@ export interface paths {
         patch: operations["sessions_patch_sessions_current"];
         trace?: never;
     };
+    "/v2/sessions/current/analysis/eigen/branches.v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_eigen_branches_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/eigen/dispersion.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_eigen_dispersion_csv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/eigen/modes/{sample_index}/{mode_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_eigen_modes_sample_index_mode_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/eigen/spectrum.v2": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_eigen_spectrum_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/eigenmodes/branches": {
         parameters: {
             query?: never;
@@ -492,6 +556,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["meshing_get_sessions_current_meshing_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2296,6 +2376,33 @@ export interface components {
             role: string;
             surface_faces?: number[][];
         };
+        MeshPeriodicPairResource: {
+            destination_marker?: string | null;
+            expected_translation_m?: number[] | null;
+            /** Format: int32 */
+            marker_a: number;
+            /** Format: int32 */
+            marker_b: number;
+            /** Format: double */
+            max_residual_m?: number | null;
+            pair_id: string;
+            /** Format: int32 */
+            paired_node_count: number;
+            /** Format: double */
+            rms_residual_m?: number | null;
+            source_marker?: string | null;
+            status: string;
+            /** Format: int32 */
+            unpaired_destination_node_count: number;
+            /** Format: int32 */
+            unpaired_source_node_count: number;
+        };
+        MeshPeriodicPairsResource: {
+            pairs: components["schemas"]["MeshPeriodicPairResource"][];
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+        };
         MeshRegionResource: {
             bounds_max?: number[] | null;
             bounds_min?: number[] | null;
@@ -3422,6 +3529,111 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_eigen_branches_v2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tracked eigen branches v2 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No branches v2 data */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_eigen_dispersion_csv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eigen dispersion CSV v2 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No dispersion CSV */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_eigen_modes_sample_index_mode_index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description K-path sample index */
+                sample_index: number;
+                /** @description Raw mode index within the sample */
+                mode_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eigen mode artifact v2 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Mode not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_eigen_spectrum_v2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eigen spectrum artifact v2 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No eigen spectrum v2 artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_eigenmodes_branches: {
         parameters: {
             query?: never;
@@ -4029,6 +4241,8 @@ export interface operations {
                 since_revision?: number;
                 /** @description Max rows to return */
                 limit?: number;
+                /** @description Comma-separated scalar columns to return, e.g. step,time,e_total */
+                columns?: string;
             };
             header?: never;
             path?: never;
@@ -4257,6 +4471,47 @@ export interface operations {
                 };
             };
             /** @description No active workspace or mesh summary */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shared-domain periodic mesh-pair diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshPeriodicPairsResource"];
+                };
+            };
+            /** @description No FEM mesh available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Periodic mesh-pair diagnostics not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;

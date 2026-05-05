@@ -16,6 +16,18 @@ fn default_max_branch_gap() -> u32 {
     1
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseConventionIR {
+    ExpMinusIKDotDeltaR,
+}
+
+impl Default for PhaseConventionIR {
+    fn default() -> Self {
+        Self::ExpMinusIKDotDeltaR
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KPointIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]

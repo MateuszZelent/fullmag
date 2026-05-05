@@ -373,7 +373,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         <SidebarSection title="Stage Solver" icon="⚙" defaultOpen={true}>
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
-              label="Integrator"
+              label={node.stage_kind === "relax" ? "Solver / integrator" : "Integrator"}
               value={String(node.payload.integrator ?? (node.stage_kind === "relax" ? "auto" : "rk45"))}
               onchange={(value) => patchSelectedNode({ integrator: value })}
               options={[
@@ -436,7 +436,8 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
               onchange={(value) => patchSelectedNode({ relax_algorithm: value })}
               options={Object.entries(RELAXATION_PROFILES).map(([value, profile]) => ({
                 value,
-                label: profile.label,
+                label: value === "tangent_plane_implicit" ? `${profile.label} (planned)` : profile.label,
+                disabled: value === "tangent_plane_implicit",
               }))}
             />
             <TextField
@@ -456,6 +457,25 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
               value={String(node.payload.energy_tolerance ?? "")}
               onchange={(event) => patchSelectedNode({ energy_tolerance: event.target.value })}
               placeholder="disabled"
+              mono
+            />
+            <TextField
+              label="Adaptive max error"
+              value={String(node.payload.max_error ?? "")}
+              onchange={(event) => patchSelectedNode({ max_error: event.target.value })}
+              placeholder="RK23/RK45 only"
+              mono
+            />
+            <TextField
+              label="Max pseudotime [s]"
+              value={String(node.payload.max_pseudotime_s ?? "")}
+              onchange={(event) => patchSelectedNode({ max_pseudotime_s: event.target.value })}
+              mono
+            />
+            <TextField
+              label="Max physical time [s]"
+              value={String(node.payload.max_physical_time_s ?? "")}
+              onchange={(event) => patchSelectedNode({ max_physical_time_s: event.target.value })}
               mono
             />
           </div>
@@ -546,6 +566,13 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
               value={String(node.payload.eigen_k_vector ?? "")}
               onchange={(event) => patchSelectedNode({ eigen_k_vector: event.target.value })}
               placeholder="kx, ky, kz"
+              mono
+            />
+            <TextField
+              label="k-path"
+              value={String(node.payload.eigen_k_path ?? "")}
+              onchange={(event) => patchSelectedNode({ eigen_k_path: event.target.value })}
+              placeholder="Γ:0,0,0; X:3.14e7,0,0 | samples=41"
               mono
             />
             <SelectField

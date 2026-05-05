@@ -121,6 +121,64 @@ class ProblemApiTests(unittest.TestCase):
             ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"], "auto"
         )
 
+    def test_problem_to_ir_serializes_fdm_pbc_truncated_images(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            pbc=fm.FdmPbc(
+                axes=(True, False, True),
+                demag="truncated_images",
+                image_counts=(8, 0, 3),
+            ),
+        )
+        ir = problem.to_ir()
+
+        self.assertEqual(
+            ir["pbc"],
+            {
+                "axes": ["periodic", "open", "periodic"],
+                "demag": "truncated_images",
+                "image_counts": [8, 0, 3],
+            },
+        )
+
+    def test_flat_pbc_configures_periodic_demag_images(self) -> None:
+        fm.reset()
+        try:
+            fm.pbc(x=True, y=True, demag="truncated_images", images=(6, 6, 0))
+
+            self.assertEqual(
+                flat_world._state._pbc.to_ir(),
+                {
+                    "axes": ["periodic", "periodic", "open"],
+                    "demag": "truncated_images",
+                    "image_counts": [6, 6, 0],
+                },
+            )
+        finally:
+            fm.reset()
+
+    def test_eigenmodes_serializes_floquet_pair_ids(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            energy=[fm.Exchange()],
+            study=fm.Eigenmodes(
+                outputs=[fm.SaveSpectrum()],
+                include_demag=False,
+                k_sampling=fm.KPoint("X", (1.0e7, 0.0, 0.0)),
+                spin_wave_bc=fm.FloquetBC(pair_ids=["x_periodic"]),
+            ),
+        )
+        ir = problem.to_ir()
+
+        self.assertEqual(
+            ir["study"]["spin_wave_bc"],
+            {
+                "kind": "floquet",
+                "pair_ids": ["x_periodic"],
+                "phase_convention": "exp_minus_i_k_dot_delta_r",
+            },
+        )
+
     def test_interfacial_dmi_interface_normal_serializes_to_ir(self) -> None:
         term = fm.InterfacialDMI(D=3e-3, interface_normal=(0.0, 3.0, 4.0))
         self.assertEqual(
@@ -2438,6 +2496,49 @@ class ProblemApiTests(unittest.TestCase):
 
         self.assertIn('fm.relax(algorithm="nonlinear_cg", tol=2e-06, max_steps=250, energy_tolerance=3e-12)', rewritten)
         self.assertIn("fm.run(9e-12)", rewritten)
+
+    def test_script_rewrite_applies_eigen_k_path_override(self) -> None:
+        script = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        fm.eigenmodes(count=4, include_demag=False)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_eigen_k_path.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        rewritten = rewrite_loaded_problem_script(
+            loaded,
+            overrides={
+                "stages": [
+                    {
+                        "kind": "eigenmodes",
+                        "eigen_k_path": "Γ:0,0,0; X:3.14e7,0,0 | samples=41",
+                        "eigen_spin_wave_bc": "floquet",
+                        "eigen_spin_wave_bc_config": {
+                            "kind": "floquet",
+                            "pair_ids": ["x_periodic"],
+                            "phase_convention": "exp_minus_i_k_dot_delta_r",
+                        },
+                    },
+                ],
+            },
+        )["rendered_source"]
+
+        self.assertIn("k_sampling=fm.KPath", rewritten)
+        self.assertIn('fm.KPoint("Γ", (0, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("X", (31400000, 0, 0))', rewritten)
+        self.assertIn("samples_per_segment=[41]", rewritten)
+        self.assertIn('"pair_ids": ["x_periodic"]', rewritten)
 
     def test_relaxation_stop_and_field_refresh_serialize_to_ir(self) -> None:
         geometry = fm.Box(size=(100e-9, 20e-9, 5e-9), name="track")

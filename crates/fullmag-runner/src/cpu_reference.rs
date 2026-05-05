@@ -97,11 +97,7 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
     // Use explicit thickness if provided, otherwise fall back to cell_dz (like amumax)
     let thickness = plan.stt_thickness.unwrap_or(cell_dz);
     // Fixed layer position controls current sign: "top" → +1, "bottom" → -1
-    let current_sign = match plan
-        .stt_fixed_layer_position
-        .as_deref()
-        .unwrap_or("top")
-    {
+    let current_sign = match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
         "bottom" => -1.0,
         _ => 1.0, // "top" or unset
     };

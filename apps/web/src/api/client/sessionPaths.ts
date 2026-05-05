@@ -104,6 +104,7 @@ export const sessionApiPaths = {
     sharedDomainTopology: openApiV2Path("/v2/sessions/current/meshing/meshes/shared-domain/topology"),
     sharedDomainQuality: openApiV2Path("/v2/sessions/current/meshing/meshes/shared-domain/quality"),
     sharedDomainReport: openApiV2Path("/v2/sessions/current/meshing/meshes/shared-domain/report"),
+    periodicPairs: openApiV2Path("/v2/sessions/current/meshing/mesh/periodic_pairs.v1"),
     objectTopology: (objectId: string) =>
       openApiV2Path("/v2/sessions/current/meshing/meshes/objects/{object_id}/topology").replace("{object_id}", encodeURIComponent(objectId)),
     partTopology: (partId: string) =>
@@ -125,6 +126,13 @@ export const sessionApiPaths = {
       openApiV2Path("/v2/sessions/current/analysis/eigenmodes/modes/{mode_id}").replace("{mode_id}", encodeURIComponent(modeId)),
     eigenDispersion: openApiV2Path("/v2/sessions/current/analysis/eigenmodes/dispersion"),
     eigenBranches: openApiV2Path("/v2/sessions/current/analysis/eigenmodes/branches"),
+    eigenSpectrumV2: openApiV2Path("/v2/sessions/current/analysis/eigen/spectrum.v2"),
+    eigenBranchesV2: openApiV2Path("/v2/sessions/current/analysis/eigen/branches.v2"),
+    eigenModeV2: (sampleIndex: number, modeIndex: number) =>
+      openApiV2Path("/v2/sessions/current/analysis/eigen/modes/{sample_index}/{mode_index}")
+        .replace("{sample_index}", encodeURIComponent(String(sampleIndex)))
+        .replace("{mode_index}", encodeURIComponent(String(modeIndex))),
+    eigenDispersionCsv: openApiV2Path("/v2/sessions/current/analysis/eigen/dispersion.csv"),
   },
   persistence: {
     checkpoints: openApiV2Path("/v2/sessions/current/persistence/checkpoints"),

@@ -147,6 +147,8 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
         element_markers: vec![7],
         boundary_faces: vec![[0, 1, 2]],
         boundary_markers: vec![3],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
         object_segments: vec![FemMeshObjectSegment {
             object_id: "body".to_string(),
             geometry_id: Some("body".to_string()),
@@ -210,6 +212,50 @@ fn sample_fem_mesh_payload_with_manifest() -> FemMeshPayload {
     mesh
 }
 
+fn sample_periodic_fem_mesh_payload() -> FemMeshPayload {
+    let mut mesh = sample_fem_mesh_payload();
+    mesh.nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0e-6, 0.0, 0.0],
+        [0.0, 1.0e-6, 0.0],
+        [1.0e-6, 1.0e-6, 0.0],
+        [0.0, 0.0, 1.0e-6],
+        [1.0e-6, 0.0, 1.0e-6],
+    ];
+    mesh.boundary_faces = vec![[0, 2, 4], [1, 3, 5]];
+    mesh.boundary_markers = vec![10, 11];
+    mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+        pair_id: "x_periodic".to_string(),
+        source_marker: Some("x_min".to_string()),
+        destination_marker: Some("x_max".to_string()),
+        marker_a: 10,
+        marker_b: 11,
+        translation: Some([1.0e-6, 0.0, 0.0]),
+        tolerance: Some(1.0e-12),
+        axis_hint: Some("x".to_string()),
+        orientation: Some("same".to_string()),
+        pairing_policy: Some("nearest".to_string()),
+    }];
+    mesh.periodic_node_pairs = vec![
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 2,
+            node_b: 3,
+        },
+        fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 4,
+            node_b: 5,
+        },
+    ];
+    mesh
+}
+
 fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
     FemMeshPayload {
         mesh_name: "scoped-test-mesh".to_string(),
@@ -228,6 +274,8 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
         element_markers: vec![7, 8],
         boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
         boundary_markers: vec![3, 4],
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
         object_segments: vec![
             FemMeshObjectSegment {
                 object_id: "body".to_string(),
@@ -2952,6 +3000,87 @@ async fn mesh_shared_domain_topology_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_returns_v1_diagnostics() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], "periodic_pairs.v1");
+    assert_eq!(json["revision"], 41);
+    assert_eq!(json["pairs"][0]["pair_id"], "x_periodic");
+    assert_eq!(json["pairs"][0]["source_marker"], "x_min");
+    assert_eq!(json["pairs"][0]["destination_marker"], "x_max");
+    assert_eq!(json["pairs"][0]["paired_node_count"], 3);
+    assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 0);
+    assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 0);
+    assert_eq!(json["pairs"][0]["max_residual_m"], 0.0);
+    assert_eq!(json["pairs"][0]["rms_residual_m"], 0.0);
+    assert_eq!(json["pairs"][0]["status"], "valid");
+}
+
+#[tokio::test]
+async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "pairs": [{
+                "pair_id": "x_periodic",
+                "source_marker": "x_min",
+                "destination_marker": "x_max",
+                "marker_a": 10,
+                "marker_b": 11,
+                "expected_translation_m": [1.0e-6, 0.0, 0.0],
+                "paired_node_count": 3,
+                "unpaired_source_node_count": 0,
+                "unpaired_destination_node_count": 0,
+                "max_residual_m": 0.0,
+                "rms_residual_m": 0.0,
+                "status": "valid"
+            }]
+        }))
+        .expect("periodic pairs fixture should serialize"),
+    )
+    .expect("periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], "periodic_pairs.v1");
+    assert_eq!(json["revision"], 0);
+    assert_eq!(json["pairs"][0]["pair_id"], "x_periodic");
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -5361,6 +5490,8 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             element_markers: Vec::new(),
             boundary_faces: Vec::new(),
             boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
             domain_mesh_mode: Some("shared_domain".to_string()),

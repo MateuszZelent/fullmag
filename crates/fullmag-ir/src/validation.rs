@@ -1,8 +1,8 @@
-use std::collections::BTreeSet;
 use crate::{
     CurrentModuleIR, CurrentTransportModelIR, DynamicsIR, EnergyTermIR, ProblemIR,
     SpinTorqueModuleIR,
 };
+use std::collections::BTreeSet;
 
 pub(crate) fn vector3_is_finite(vector: &[f64; 3]) -> bool {
     vector.iter().all(|value| value.is_finite())

@@ -108,3 +108,37 @@ pub fn expand_k_sampling(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::KPointIR;
+
+    #[test]
+    fn path_expansion_generates_monotonic_samples() {
+        let sampling = KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [4.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![4],
+            closed: false,
+        };
+
+        let samples = expand_k_sampling(Some(&sampling)).expect("path should expand");
+
+        assert_eq!(samples.len(), 5);
+        assert_eq!(samples[0].label.as_deref(), Some("G"));
+        assert_eq!(samples[4].label.as_deref(), Some("X"));
+        assert!(samples
+            .windows(2)
+            .all(|pair| pair[0].path_s < pair[1].path_s));
+        assert_eq!(samples[4].path_s, 4.0);
+    }
+}

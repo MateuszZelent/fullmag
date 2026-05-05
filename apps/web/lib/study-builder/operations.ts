@@ -114,10 +114,14 @@ function primitiveDefaults(kind: StudyPrimitiveStageKind): {
           kind,
           entrypoint_kind: kind,
           integrator: "auto",
+          fixed_timestep: "",
+          max_error: "",
           relax_algorithm: "llg_overdamped",
           torque_tolerance: "1e-4",
           energy_tolerance: "",
           max_steps: "5000",
+          max_pseudotime_s: "",
+          max_physical_time_s: "",
         },
       };
     case "run":
@@ -145,6 +149,7 @@ function primitiveDefaults(kind: StudyPrimitiveStageKind): {
           eigen_target_frequency: "",
           eigen_damping_policy: "ignore",
           eigen_k_vector: "",
+          eigen_k_path: "",
           eigen_spin_wave_bc: "free",
           eigen_spin_wave_bc_config: null,
         },

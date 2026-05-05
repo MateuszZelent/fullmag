@@ -38,6 +38,19 @@ __device__ inline int frequency_index(int i, int n) {
     return (i <= n / 2) ? i : (i - n);
 }
 
+__device__ __forceinline__ int pbc_neighbor_index(
+    int coord, int dim, int stride, int idx, int delta, int periodic)
+{
+    int nc = coord + delta;
+    if (periodic && dim > 1) {
+        if (nc < 0) nc = dim - 1;
+        if (nc >= dim) nc = 0;
+        return idx + (nc - coord) * stride;
+    }
+    if (nc < 0 || nc >= dim) return idx;
+    return idx + delta * stride;
+}
+
 __device__ inline cufftDoubleComplex cadd(cufftDoubleComplex a, cufftDoubleComplex b) {
     return make_cuDoubleComplex(a.x + b.x, a.y + b.y);
 }
@@ -255,6 +268,7 @@ __global__ void combine_effective_field_fp64_kernel(
     double D_int,
     double D_bulk,
     int nx, int ny, int nz,
+    int periodic_x, int periodic_y, int periodic_z,
     double inv_2dx, double inv_2dy, double inv_2dz,
     double thermal_sigma,
     uint64_t thermal_seed,
@@ -336,13 +350,12 @@ __global__ void combine_effective_field_fp64_kernel(
         int iy = rem / nx;
         int ix = rem - iy * nx;
 
-        // Clamped neighbor indices (Neumann BC)
-        int xm = (ix > 0)      ? idx - 1       : idx;
-        int xp = (ix < nx - 1) ? idx + 1       : idx;
-        int ym = (iy > 0)      ? idx - nx      : idx;
-        int yp = (iy < ny - 1) ? idx + nx      : idx;
-        int zm = (iz > 0)      ? idx - nx * ny : idx;
-        int zp = (iz < nz - 1) ? idx + nx * ny : idx;
+        int xm = pbc_neighbor_index(ix, nx, 1, idx, -1, periodic_x);
+        int xp = pbc_neighbor_index(ix, nx, 1, idx, 1, periodic_x);
+        int ym = pbc_neighbor_index(iy, ny, nx, idx, -1, periodic_y);
+        int yp = pbc_neighbor_index(iy, ny, nx, idx, 1, periodic_y);
+        int zm = pbc_neighbor_index(iz, nz, nx * ny, idx, -1, periodic_z);
+        int zp = pbc_neighbor_index(iz, nz, nx * ny, idx, 1, periodic_z);
 
         if (has_active_mask) {
             if (active_mask[xm] == 0) xm = idx;
@@ -613,6 +626,7 @@ void launch_effective_field_fp64(Context &ctx) {
         ctx.D_interfacial,
         ctx.D_bulk,
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
+        ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.thermal_sigma,
         ctx.step_count,

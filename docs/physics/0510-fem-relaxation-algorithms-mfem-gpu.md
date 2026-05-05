@@ -28,10 +28,16 @@ Current repo status relevant to this note:
 - `FemPlanIR` already carries mesh data, per-node initial magnetization, material payload,
   active term flags, precision, and LLG timing parameters,
 - the runner now executes bootstrap FEM CPU-reference plans,
-- `StudyIR::Relaxation` exists and three algorithms are FDM-executable:
-  `llg_overdamped`, `projected_gradient_bb`, and `nonlinear_cg`
-  (see `0500-fdm-relaxation-algorithms.md` for full specification),
-- higher-order FEM relaxation methods remain defined but not yet public-executable.
+- `StudyIR::Relaxation` exists and three algorithms are public-executable in at
+  least one maintained runtime lane: `llg_overdamped`, `projected_gradient_bb`,
+  and `nonlinear_cg` (see `0500-fdm-relaxation-algorithms.md` for full
+  specification),
+- FEM `projected_gradient_bb` and `nonlinear_cg` are currently implemented as a
+  bootstrap direct-minimization wrapper over native FEM field/energy snapshots;
+  they are executable but not yet the production FE-metric minimizers described
+  as the long-term target in this note,
+- higher-order FEM tangent-plane relaxation remains defined but not yet
+  public-executable.
 
 Shared stop/refresh semantics now live in
 `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. This note focuses
@@ -279,11 +285,14 @@ execution hints or backend policy, not in the top-level public object.
 Current executable subset (FEM backend):
 
 - `algorithm = "llg_overdamped"`
-
-FDM-only (see `0500-fdm-relaxation-algorithms.md`):
-
 - `algorithm = "projected_gradient_bb"`
 - `algorithm = "nonlinear_cg"`
+
+Current FEM caveat: `projected_gradient_bb` and `nonlinear_cg` use a bootstrap
+nodal tangent-gradient wrapper over native FEM snapshots. They are useful for
+validation and early workflows, but they are not the final mass-metric /
+preconditioned FEM minimizers. `tangent_plane_implicit` remains semantic-only
+and must be disabled in UI until a backend implementation exists.
 
 ### 4.2 ProblemIR representation
 
@@ -335,10 +344,11 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - [x] Python API
 - [x] ProblemIR
 - [x] Planner
-- [ ] Capability matrix
+- [x] Capability matrix
 - [x] FDM backend (`llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`)
 - [x] FEM backend (`llg_overdamped` on CPU reference)
-- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` — need mass-weighted inner products)
+- [x] FEM backend (`projected_gradient_bb`, `nonlinear_cg` bootstrap direct minimization)
+- [ ] FEM backend (`projected_gradient_bb`, `nonlinear_cg` production mass-weighted / preconditioned minimizers)
 - [ ] FEM backend (`tangent_plane_implicit`)
 - [ ] Hybrid backend
 - [ ] Outputs / observables

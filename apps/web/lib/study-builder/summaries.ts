@@ -74,6 +74,10 @@ export function summarizeMaterializedStage(stage: ScriptBuilderStageState): stri
       stage.relax_algorithm ? humanizeToken(stage.relax_algorithm) : null,
       stage.max_steps ? `${stage.max_steps} steps` : null,
       stage.torque_tolerance ? `tol ${stage.torque_tolerance}` : null,
+      stage.energy_tolerance ? `dE ${stage.energy_tolerance}` : null,
+      stage.max_error ? `err ${stage.max_error}` : null,
+      stage.max_pseudotime_s ? `pseudo ${stage.max_pseudotime_s} s` : null,
+      stage.max_physical_time_s ? `time ${stage.max_physical_time_s} s` : null,
     ].filter(Boolean).join(" · ");
   }
   if (stage.kind === "run") {

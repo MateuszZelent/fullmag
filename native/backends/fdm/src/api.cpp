@@ -394,10 +394,6 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (ctx->has_region_mask) {
         ctx->region_mask_host.assign(plan->region_mask, plan->region_mask + plan->region_mask_len);
     }
-    uint64_t expected_fft_cell_count_3d =
-        static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2) * (ctx->nz * 2);
-    uint64_t expected_fft_cell_count_2d =
-        static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2);
     if (ctx->has_demag_tensor_kernel) {
         if (!plan->demag_kernel_xx_spectrum || !plan->demag_kernel_yy_spectrum
             || !plan->demag_kernel_zz_spectrum || !plan->demag_kernel_xy_spectrum
@@ -406,19 +402,48 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             ctx->last_error = "demag kernel spectra pointers must all be present when demag_kernel_spectrum_len is set";
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
-        if (ctx->nz == 1 && plan->demag_kernel_spectrum_len == expected_fft_cell_count_2d * 2) {
-            ctx->thin_film_2d_demag = true;
-        } else if (plan->demag_kernel_spectrum_len == expected_fft_cell_count_3d * 2) {
-            ctx->thin_film_2d_demag = false;
+        const bool has_explicit_fft_dims =
+            plan->demag_fft_nx != 0 || plan->demag_fft_ny != 0 || plan->demag_fft_nz != 0;
+        if (has_explicit_fft_dims) {
+            if (plan->demag_fft_nx == 0 || plan->demag_fft_ny == 0 || plan->demag_fft_nz == 0) {
+                ctx->last_error = "demag FFT dimensions must either all be zero or all be non-zero";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            uint64_t expected_fft_cell_count =
+                static_cast<uint64_t>(plan->demag_fft_nx) * plan->demag_fft_ny * plan->demag_fft_nz;
+            if (plan->demag_kernel_spectrum_len != expected_fft_cell_count * 2) {
+                ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
+                    + std::to_string(expected_fft_cell_count * 2)
+                    + " for explicit FFT dimensions "
+                    + std::to_string(plan->demag_fft_nx) + "x"
+                    + std::to_string(plan->demag_fft_ny) + "x"
+                    + std::to_string(plan->demag_fft_nz)
+                    + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            ctx->fft_nx = plan->demag_fft_nx;
+            ctx->fft_ny = plan->demag_fft_ny;
+            ctx->fft_nz = plan->demag_fft_nz;
+            ctx->thin_film_2d_demag = ctx->fft_nz == 1;
         } else {
-            ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
-                + std::to_string(expected_fft_cell_count_3d * 2)
-                + " (3D)"
-                + (ctx->nz == 1
-                    ? " or " + std::to_string(expected_fft_cell_count_2d * 2) + " (thin-film 2D)"
-                    : std::string())
-                + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
-            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            uint64_t expected_fft_cell_count_3d =
+                static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2) * (ctx->nz * 2);
+            uint64_t expected_fft_cell_count_2d =
+                static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2);
+            if (ctx->nz == 1 && plan->demag_kernel_spectrum_len == expected_fft_cell_count_2d * 2) {
+                ctx->thin_film_2d_demag = true;
+            } else if (plan->demag_kernel_spectrum_len == expected_fft_cell_count_3d * 2) {
+                ctx->thin_film_2d_demag = false;
+            } else {
+                ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
+                    + std::to_string(expected_fft_cell_count_3d * 2)
+                    + " (3D)"
+                    + (ctx->nz == 1
+                        ? " or " + std::to_string(expected_fft_cell_count_2d * 2) + " (thin-film 2D)"
+                        : std::string())
+                    + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
         }
     }
 

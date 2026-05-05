@@ -1,15 +1,14 @@
-use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use crate::{
     AdaptiveTimeStepIR, BackendTarget, CurrentModuleIR, DomainFrameIR, EigenDampingPolicyIR,
     EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR, EquilibriumSourceIR,
-    ExecutionMode, ExecutionPrecision, ExchangeBoundaryCondition, FdmDemagPeriodicityIR,
+    ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision, FdmDemagPeriodicityIR,
     FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
-    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR,
-    MaterialIR, MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR,
-    RelaxationAlgorithmIR, SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, IntegratorChoice, KSamplingIR, MaterialIR,
+    MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR,
+    SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig,
 };
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionPlanSummary {

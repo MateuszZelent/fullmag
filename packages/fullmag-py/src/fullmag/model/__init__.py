@@ -58,6 +58,7 @@ from .problem import (
     DeviceTarget,
     ExecutionMode,
     ExecutionPrecision,
+    FdmPbc,
     Problem,
     RuntimeSelection,
     backend,
@@ -72,7 +73,7 @@ from .spin_torque import (
     ZhangLiSTT,
 )
 from .structure import Ferromagnet, Material, Region
-from .study import Eigenmodes, FrequencyResponse, RelaxStop, Relaxation, TimeEvolution
+from .study import Eigenmodes, FloquetBC, FrequencyResponse, PeriodicBC, RelaxStop, Relaxation, TimeEvolution
 from .eigen import KPath, KPoint, ModeTracking
 
 __all__ = [
@@ -106,12 +107,14 @@ __all__ = [
     "ExecutionMode",
     "ExecutionPrecision",
     "FieldRefreshPolicy",
+    "FdmPbc",
     "FDM",
     "FDMDemag",
     "FDMGrid",
     "FEM",
     "FemLinearSolverPolicy",
     "Ferromagnet",
+    "FloquetBC",
     "Hybrid",
     "ImportedGeometry",
     "Intersection",
@@ -130,6 +133,7 @@ __all__ = [
     "OERSTED_FIELD_MODELS",
     "PrescribedStrain",
     "Problem",
+    "PeriodicBC",
     "QuasistaticElasticity",
     "RelaxStop",
     "RfDrive",

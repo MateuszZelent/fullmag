@@ -3188,6 +3188,111 @@
         ],
         "type": "object"
       },
+      "MeshPeriodicPairResource": {
+        "properties": {
+          "destination_marker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_translation_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "marker_a": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "marker_b": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_residual_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pair_id": {
+            "type": "string"
+          },
+          "paired_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rms_residual_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source_marker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "unpaired_destination_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unpaired_source_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pair_id",
+          "marker_a",
+          "marker_b",
+          "paired_node_count",
+          "unpaired_source_node_count",
+          "unpaired_destination_node_count",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MeshPeriodicPairsResource": {
+        "properties": {
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/MeshPeriodicPairResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "schema_version",
+          "pairs"
+        ],
+        "type": "object"
+      },
       "MeshRegionResource": {
         "properties": {
           "bounds_max": {
@@ -7064,6 +7169,94 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/eigen/branches.v2": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_eigen_branches_v2",
+        "responses": {
+          "200": {
+            "description": "Tracked eigen branches v2"
+          },
+          "404": {
+            "description": "No branches v2 data"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/eigen/dispersion.csv": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_eigen_dispersion_csv",
+        "responses": {
+          "200": {
+            "description": "Eigen dispersion CSV v2"
+          },
+          "404": {
+            "description": "No dispersion CSV"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/eigen/modes/{sample_index}/{mode_index}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_eigen_modes_sample_index_mode_index",
+        "parameters": [
+          {
+            "description": "K-path sample index",
+            "in": "path",
+            "name": "sample_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Raw mode index within the sample",
+            "in": "path",
+            "name": "mode_index",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eigen mode artifact v2"
+          },
+          "404": {
+            "description": "Mode not found"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/eigen/spectrum.v2": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_eigen_spectrum_v2",
+        "responses": {
+          "200": {
+            "description": "Eigen spectrum artifact v2"
+          },
+          "404": {
+            "description": "No eigen spectrum v2 artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/analysis/eigenmodes/branches": {
       "get": {
         "operationId": "analysis_get_sessions_current_analysis_eigenmodes_branches",
@@ -7854,6 +8047,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "Comma-separated scalar columns to return, e.g. step,time,e_total",
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8045,6 +8247,35 @@
           },
           "404": {
             "description": "No active workspace or mesh summary"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshPeriodicPairsResource"
+                }
+              }
+            },
+            "description": "Shared-domain periodic mesh-pair diagnostics"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "304": {
+            "description": "Periodic mesh-pair diagnostics not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
           }
         },
         "tags": [

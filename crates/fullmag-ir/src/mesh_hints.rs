@@ -1,12 +1,11 @@
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
 #[allow(unused_imports)]
 use crate::{
-    ExecutionPrecision, ExchangeBoundaryCondition, FdmPeriodicityIR, IntegratorChoice,
-    FieldRefreshPolicyIR, FemLinearSolverPolicy, HybridHintsIR, RelaxationControlIR,
-    FdmMaterialIR,
+    ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPeriodicityIR,
+    FemLinearSolverPolicy, FieldRefreshPolicyIR, HybridHintsIR, IntegratorChoice,
+    RelaxationControlIR,
 };
-
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DiscretizationHintsIR {
@@ -162,15 +161,31 @@ pub struct MeshIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshPeriodicBoundaryPairIR {
     pub pair_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_marker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_marker: Option<String>,
+    #[serde(default)]
     pub marker_a: u32,
+    #[serde(default)]
     pub marker_b: u32,
     /// Lattice translation vector connecting face A to face B [m].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translation: Option<[f64; 3]>,
     /// Node-pairing tolerance [m]. When absent the mesher/planner chooses a
     /// default based on mesh element size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "tolerance_m",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,6 +269,52 @@ impl MeshIR {
                 ));
             }
         }
+        let mut source_nodes = BTreeSet::new();
+        let mut destination_nodes = BTreeSet::new();
+        for (index, pair) in self.periodic_node_pairs.iter().enumerate() {
+            if !source_nodes.insert((pair.pair_id.clone(), pair.node_a)) {
+                errors.push(format!(
+                    "mesh periodic node pair {index} duplicates source node {} for pair_id '{}'",
+                    pair.node_a, pair.pair_id
+                ));
+            }
+            if !destination_nodes.insert((pair.pair_id.clone(), pair.node_b)) {
+                errors.push(format!(
+                    "mesh periodic node pair {index} duplicates destination node {} for pair_id '{}'",
+                    pair.node_b, pair.pair_id
+                ));
+            }
+            if pair.node_a >= node_count || pair.node_b >= node_count {
+                continue;
+            }
+            let Some(boundary_pair) = self
+                .periodic_boundary_pairs
+                .iter()
+                .find(|boundary_pair| boundary_pair.pair_id == pair.pair_id)
+            else {
+                continue;
+            };
+            let Some(translation) = boundary_pair.translation else {
+                continue;
+            };
+            let src = self.nodes[pair.node_a as usize];
+            let dst = self.nodes[pair.node_b as usize];
+            let residual = [
+                dst[0] - src[0] - translation[0],
+                dst[1] - src[1] - translation[1],
+                dst[2] - src[2] - translation[2],
+            ];
+            let residual_norm =
+                (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
+                    .sqrt();
+            let tolerance = boundary_pair.tolerance.unwrap_or(1e-9).max(0.0);
+            if residual_norm > tolerance {
+                errors.push(format!(
+                    "mesh periodic node pair {index} residual {residual_norm:.3e} m exceeds tolerance {tolerance:.3e} m for pair_id '{}'",
+                    pair.pair_id
+                ));
+            }
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -262,4 +323,3 @@ impl MeshIR {
         }
     }
 }
-

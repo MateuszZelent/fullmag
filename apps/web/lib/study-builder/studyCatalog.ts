@@ -13,17 +13,17 @@ export const RELAX_ALGORITHM_DETAILS: Record<string, OptionDescriptor> = {
   projected_gradient_bb: {
     value: "projected_gradient_bb",
     label: "Projected gradient (BB)",
-    description: "Direct constrained energy minimization with Barzilai-Borwein step selection.",
+    description: "Direct constrained energy minimization with Barzilai-Borwein step selection; native GPU/FEM lanes currently use bootstrap field and energy snapshots.",
   },
   nonlinear_cg: {
     value: "nonlinear_cg",
     label: "Nonlinear conjugate gradient",
-    description: "Manifold optimization that can reduce iteration count on harder equilibrium problems.",
+    description: "Manifold optimization that can reduce iteration count on harder equilibrium problems; native GPU/FEM lanes currently use bootstrap field and energy snapshots.",
   },
   tangent_plane_implicit: {
     value: "tangent_plane_implicit",
     label: "Tangent-plane implicit",
-    description: "FEM-oriented stiff relaxation path; availability still depends on engine support.",
+    description: "Planned FEM-oriented stiff relaxation path; defined in the semantic model but disabled until engine support is available.",
   },
 };
 

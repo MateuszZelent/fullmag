@@ -1,11 +1,10 @@
-use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use crate::{
-    TimeDependenceIR, RelaxationAlgorithmIR, ExecutionPrecision, BackendTarget,
-    IntegratorChoice, SpinWaveBoundaryConditionIR, ModeTrackingIR, KPointIR,
-    RequestedFemDemagIR, ResolvedFemDemagIR, MechanicsIR, DiscretizationHintsIR,
-    RelaxationControlIR,
+    BackendTarget, DiscretizationHintsIR, ExecutionPrecision, IntegratorChoice, KPointIR,
+    MechanicsIR, ModeTrackingIR, RelaxationAlgorithmIR, RelaxationControlIR, RequestedFemDemagIR,
+    ResolvedFemDemagIR, SpinWaveBoundaryConditionIR, TimeDependenceIR,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RfDriveIR {
@@ -647,7 +646,6 @@ pub struct BackendPolicyIR {
     pub execution_precision: ExecutionPrecision,
     pub discretization_hints: Option<DiscretizationHintsIR>,
 }
-
 
 fn default_axis_z() -> [f64; 3] {
     [0.0, 0.0, 1.0]

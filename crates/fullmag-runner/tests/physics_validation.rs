@@ -697,24 +697,39 @@ fn cube_mesh(side_nm: f64) -> MeshIR {
     let periodic_boundary_pairs = vec![
         fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
             marker_a: 1,
             marker_b: 1,
             translation: None,
             tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
         },
         fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "y_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
             marker_a: 1,
             marker_b: 1,
             translation: None,
             tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
         },
         fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "z_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
             marker_a: 1,
             marker_b: 1,
             translation: None,
             tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
         },
     ];
     let periodic_node_pairs = vec![
@@ -1157,6 +1172,8 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
                 boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: None,
                 surface_anisotropy_axis: None,
             },
@@ -1226,6 +1243,8 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
                 boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: None,
                 surface_anisotropy_axis: None,
             },
@@ -1350,6 +1369,8 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::SurfaceAnisotropy,
                 boundary_pair_id: None,
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: Some(5.0e-4),
                 surface_anisotropy_axis: Some([0.0, 0.0, 1.0]),
             },
@@ -1420,6 +1441,8 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
                 fullmag_ir::SpinWaveBoundaryConfigIR {
                     kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
                     boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
                     surface_anisotropy_ks: None,
                     surface_anisotropy_axis: None,
                 },
@@ -1782,6 +1805,8 @@ fn eigen_bc_pinned_higher_frequency() {
                     fullmag_ir::SpinWaveBoundaryConfigIR {
                         kind: fullmag_ir::SpinWaveBoundaryKindIR::Pinned,
                         boundary_pair_id: None,
+                        pair_ids: Vec::new(),
+                        phase_convention: fullmag_ir::PhaseConventionIR::default(),
                         surface_anisotropy_ks: None,
                         surface_anisotropy_axis: None,
                     },
@@ -1893,6 +1918,8 @@ fn eigen_bc_periodic_requires_pairs_error() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
                 boundary_pair_id: None,
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: None,
                 surface_anisotropy_axis: None,
             },
@@ -1974,6 +2001,8 @@ fn eigen_bc_periodic_k_zero_matches_free() {
                     fullmag_ir::SpinWaveBoundaryConfigIR {
                         kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
                         boundary_pair_id: Some("x_faces".to_string()),
+                        pair_ids: Vec::new(),
+                        phase_convention: fullmag_ir::PhaseConventionIR::default(),
                         surface_anisotropy_ks: None,
                         surface_anisotropy_axis: None,
                     },

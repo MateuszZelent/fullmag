@@ -1,5 +1,6 @@
 use fullmag_engine::fem::{FemLlgProblem, MeshTopology};
 use fullmag_engine::fem_sparse::{lobpcg_generalized, CsrMatrix};
+use fullmag_engine::periodic::constraints::PeriodicDofMap;
 use fullmag_engine::{
     sub, EffectiveFieldObservables, EffectiveFieldTerms, LlgConfig, MaterialParameters,
     TimeIntegrator, Vector3, MU0,
@@ -26,6 +27,8 @@ const RELAX_MAX_STEPS: u64 = 4_000;
 /// DOF threshold above which LOBPCG sparse eigensolver is used instead of
 /// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
 const SPARSE_EIGEN_THRESHOLD: usize = 5_000;
+const FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED: &str =
+    "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary.";
 
 /// Convert a dense nalgebra DMatrix to a sparse CsrMatrix, dropping entries
 /// below `drop_tol` in absolute value.
@@ -54,6 +57,18 @@ fn dmatrix_to_csr(mat: &DMatrix<f64>, drop_tol: f64) -> CsrMatrix {
         col_idx,
         values,
     }
+}
+
+fn reject_unsupported_floquet_dynamic_demag(
+    spin_wave_bc: &SpinWaveBoundaryConditionIR,
+    include_demag: bool,
+) -> Result<(), RunError> {
+    if include_demag && matches!(spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet) {
+        return Err(RunError {
+            message: FLOQUET_DYNAMIC_DEMAG_UNSUPPORTED.to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +180,7 @@ fn execute_fem_eigen_inner(
             .to_string(),
         });
     }
+    reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
 
     let initial_magnetization = plan.equilibrium_magnetization.clone();
     let (problem, equilibrium, relaxation_steps, observables) =
@@ -852,7 +868,7 @@ fn phase_reduction(
         });
     }
 
-    let requested_pair = spin_wave_bc.boundary_pair_id();
+    let requested_pair_ids = spin_wave_bc.boundary_pair_ids();
     let k_vector = match (kind, k_sampling) {
         (SpinWaveBoundaryKindIR::Floquet, Some(KSamplingIR::Single { k_vector })) => {
             Some(*k_vector)
@@ -870,53 +886,51 @@ fn phase_reduction(
         _ => None,
     };
 
-    let mut adjacency = vec![Vec::<(usize, Complex64)>::new(); topology.n_nodes];
-    for (pair_id, node_a, node_b) in &topology.periodic_node_pairs {
-        if !requested_pair.is_none_or(|requested| requested == pair_id) {
-            continue;
-        }
-        let a = *node_a as usize;
-        let b = *node_b as usize;
-        let phase = if let Some(k) = k_vector {
-            let delta = [
-                topology.coords[b][0] - topology.coords[a][0],
-                topology.coords[b][1] - topology.coords[a][1],
-                topology.coords[b][2] - topology.coords[a][2],
-            ];
-            let angle = k[0] * delta[0] + k[1] * delta[1] + k[2] * delta[2];
-            Complex64::from_polar(1.0, angle)
-        } else {
-            Complex64::new(1.0, 0.0)
-        };
-        adjacency[a].push((b, phase));
-        adjacency[b].push((a, phase.conj()));
+    let selected_pairs = topology
+        .periodic_node_pairs
+        .iter()
+        .filter(|(pair_id, _, _)| {
+            requested_pair_ids.is_empty()
+                || requested_pair_ids
+                    .iter()
+                    .any(|requested| *requested == pair_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected_pairs.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "spin_wave_bc.kind='{}' did not match any mesh.periodic_node_pairs pair_id",
+                spin_wave_bc_label(spin_wave_bc.clone())
+            ),
+        });
     }
 
-    let mut visited = vec![false; topology.n_nodes];
-    let mut roots: Vec<usize> = (0..topology.n_nodes).collect();
-    let mut phases = vec![Complex64::new(1.0, 0.0); topology.n_nodes];
-
-    for start in 0..topology.n_nodes {
-        if visited[start] || topology.magnetic_node_volumes[start] <= 0.0 {
-            continue;
-        }
-        let mut queue = std::collections::VecDeque::new();
-        visited[start] = true;
-        roots[start] = start;
-        phases[start] = Complex64::new(1.0, 0.0);
-        queue.push_back(start);
-        while let Some(node) = queue.pop_front() {
-            for (next, phase) in &adjacency[node] {
-                let next_phase = phases[node] * *phase;
-                if !visited[*next] {
-                    visited[*next] = true;
-                    roots[*next] = start;
-                    phases[*next] = next_phase;
-                    queue.push_back(*next);
-                }
-            }
-        }
+    let dof_map = if let Some(k) = k_vector {
+        PeriodicDofMap::from_periodic_pair_tuples_floquet(
+            topology.n_nodes,
+            &selected_pairs,
+            &topology.periodic_boundary_pairs,
+            &topology.coords,
+            k,
+            spin_wave_bc.phase_convention(),
+        )
+    } else {
+        PeriodicDofMap::from_periodic_pair_tuples_static(topology.n_nodes, &selected_pairs)
     }
+    .map_err(|error| RunError {
+        message: format!("failed to build periodic DOF map: {}", error.message),
+    })?;
+
+    let roots = (0..topology.n_nodes)
+        .map(|node| dof_map.representative_nodes[dof_map.reduced_node(node)])
+        .collect::<Vec<_>>();
+    let phases = (0..topology.n_nodes)
+        .map(|node| {
+            let phase = dof_map.phase(node);
+            Complex64::new(phase.re, phase.im)
+        })
+        .collect::<Vec<_>>();
 
     Ok(Some(PhaseGroups { roots, phases }))
 }
@@ -2075,6 +2089,8 @@ fn spin_wave_bc_json(bc: &SpinWaveBoundaryConditionIR) -> serde_json::Value {
     serde_json::json!({
         "kind": spin_wave_bc_label(bc.clone()),
         "boundary_pair_id": bc.boundary_pair_id(),
+        "pair_ids": bc.boundary_pair_ids(),
+        "phase_convention": bc.phase_convention(),
         "surface_anisotropy_ks": bc.surface_anisotropy_ks(),
         "surface_anisotropy_axis": bc.surface_anisotropy_axis(),
     })
@@ -2334,5 +2350,107 @@ fn classify_polarization(
         "op"
     } else {
         "ip"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runner_rejects_floquet_dynamic_demag_gate() {
+        let bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::Floquet,
+            boundary_pair_id: Some("x_faces".to_string()),
+            pair_ids: Vec::new(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        });
+
+        let err = reject_unsupported_floquet_dynamic_demag(&bc, true)
+            .expect_err("Floquet dynamic demag must be blocked before execution");
+        assert!(err
+            .message
+            .contains("dynamic demag for Floquet periodic FEM is not implemented yet"));
+    }
+
+    #[test]
+    fn runner_allows_floquet_without_dynamic_demag_gate() {
+        let bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::Floquet,
+            boundary_pair_id: Some("x_faces".to_string()),
+            pair_ids: Vec::new(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        });
+
+        reject_unsupported_floquet_dynamic_demag(&bc, false)
+            .expect("Floquet phase reduction remains valid when dynamic demag is disabled");
+    }
+
+    #[test]
+    fn floquet_phase_uses_minus_sign_and_boundary_translation() {
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: "periodic_tet".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+            boundary_markers: vec![10, 11],
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 10,
+                marker_b: 11,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1e-12),
+                axis_hint: None,
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            }],
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let topology = MeshTopology::from_ir(&mesh).expect("valid FEM mesh");
+        let bc = SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+            kind: SpinWaveBoundaryKindIR::Floquet,
+            boundary_pair_id: Some("x_faces".to_string()),
+            pair_ids: Vec::new(),
+            phase_convention: fullmag_ir::PhaseConventionIR::default(),
+            surface_anisotropy_ks: None,
+            surface_anisotropy_axis: None,
+        });
+
+        let groups = phase_reduction(
+            &topology,
+            &bc,
+            Some(&KSamplingIR::Single {
+                k_vector: [std::f64::consts::FRAC_PI_2, 0.0, 0.0],
+            }),
+        )
+        .expect("Floquet phase reduction should be built")
+        .expect("Floquet BC should produce phase groups");
+
+        let phase = groups.phases[1];
+        assert!(
+            phase.re.abs() < 1e-12,
+            "phase should be imaginary: {phase:?}"
+        );
+        assert!(
+            (phase.im + 1.0).abs() < 1e-12,
+            "expected exp(-i*pi/2) from boundary translation, got {phase:?}"
+        );
     }
 }

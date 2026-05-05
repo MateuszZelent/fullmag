@@ -27,6 +27,19 @@ __device__ __forceinline__ double to_f64(T value) {
     return static_cast<double>(value);
 }
 
+__device__ __forceinline__ int pbc_neighbor_index(
+    int coord, int dim, int stride, int idx, int delta, int periodic)
+{
+    int nc = coord + delta;
+    if (periodic && dim > 1) {
+        if (nc < 0) nc = dim - 1;
+        if (nc >= dim) nc = 0;
+        return idx + (nc - coord) * stride;
+    }
+    if (nc < 0 || nc >= dim) return idx;
+    return idx + delta * stride;
+}
+
 __global__ void reduce_sum_blocks_kernel(const double *input, double *output, uint64_t n) {
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
     uint64_t global = static_cast<uint64_t>(blockIdx.x) * blockDim.x * 2ULL + threadIdx.x;
@@ -140,7 +153,10 @@ __global__ void exchange_energy_blocks_kernel(
     double cell_volume,
     double inv_dx2,
     double inv_dy2,
-    double inv_dz2)
+    double inv_dz2,
+    int periodic_x,
+    int periodic_y,
+    int periodic_z)
 {
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
     uint64_t total = static_cast<uint64_t>(nx) * ny * nz;
@@ -167,8 +183,10 @@ __global__ void exchange_energy_blocks_kernel(
         double cy = to_f64(my[idx]);
         double cz = to_f64(mz[idx]);
 
-        if (x + 1 < nx) {
-            uint64_t ni = idx + 1;
+        if (x + 1 < nx || (periodic_x && nx > 1)) {
+            uint64_t ni = (x + 1 < nx)
+                ? idx + 1
+                : idx + 1 - static_cast<uint64_t>(nx);
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
@@ -182,8 +200,10 @@ __global__ void exchange_energy_blocks_kernel(
                 }
             }
         }
-        if (y + 1 < ny) {
-            uint64_t ni = idx + nx;
+        if (y + 1 < ny || (periodic_y && ny > 1)) {
+            uint64_t ni = (y + 1 < ny)
+                ? idx + nx
+                : idx + static_cast<uint64_t>(nx) - static_cast<uint64_t>(ny) * nx;
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
@@ -197,8 +217,11 @@ __global__ void exchange_energy_blocks_kernel(
                 }
             }
         }
-        if (z + 1 < nz) {
-            uint64_t ni = idx + static_cast<uint64_t>(nx) * ny;
+        if (z + 1 < nz || (periodic_z && nz > 1)) {
+            uint64_t layer = static_cast<uint64_t>(nx) * ny;
+            uint64_t ni = (z + 1 < nz)
+                ? idx + layer
+                : idx + layer - static_cast<uint64_t>(nz) * layer;
             if (!has_active_mask || active_mask[ni] != 0) {
                 const double phi_j = has_volume_fraction ? volume_fraction[ni] : 1.0;
                 if (phi_j > 0.0) {
@@ -811,7 +834,10 @@ static double reduce_exchange_energy_dispatch(Context &ctx) {
             cell_volume,
             1.0 / (ctx.dx * ctx.dx),
             1.0 / (ctx.dy * ctx.dy),
-            1.0 / (ctx.dz * ctx.dz));
+            1.0 / (ctx.dz * ctx.dz),
+            ctx.periodic_x ? 1 : 0,
+            ctx.periodic_y ? 1 : 0,
+            ctx.periodic_z ? 1 : 0);
     }
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
@@ -1002,6 +1028,7 @@ __global__ void dmi_energy_blocks_kernel(
     int has_interfacial, int has_bulk,
     double D_int, double D_bulk,
     int nx, int ny, int nz,
+    int periodic_x, int periodic_y, int periodic_z,
     double inv_2dx, double inv_2dy, double inv_2dz,
     const uint8_t *active_mask, int has_active_mask)
 {
@@ -1019,12 +1046,12 @@ __global__ void dmi_energy_blocks_kernel(
         int iy = rem / nx;
         int ix = rem - iy * nx;
 
-        int xm = (ix > 0)      ? idx - 1       : idx;
-        int xp = (ix < nx - 1) ? idx + 1       : idx;
-        int ym = (iy > 0)      ? idx - nx      : idx;
-        int yp = (iy < ny - 1) ? idx + nx      : idx;
-        int zm = (iz > 0)      ? idx - nx * ny : idx;
-        int zp = (iz < nz - 1) ? idx + nx * ny : idx;
+        int xm = pbc_neighbor_index(ix, nx, 1, idx, -1, periodic_x);
+        int xp = pbc_neighbor_index(ix, nx, 1, idx, 1, periodic_x);
+        int ym = pbc_neighbor_index(iy, ny, nx, idx, -1, periodic_y);
+        int yp = pbc_neighbor_index(iy, ny, nx, idx, 1, periodic_y);
+        int zm = pbc_neighbor_index(iz, nz, nx * ny, idx, -1, periodic_z);
+        int zp = pbc_neighbor_index(iz, nz, nx * ny, idx, 1, periodic_z);
 
         if (has_active_mask) {
             if (active_mask[xm] == 0) xm = idx;
@@ -1114,6 +1141,7 @@ double reduce_dmi_energy_fp64(Context &ctx) {
         ctx.has_interfacial_dmi ? 1 : 0, ctx.has_bulk_dmi ? 1 : 0,
         ctx.D_interfacial, ctx.D_bulk,
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
+        ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
@@ -1131,6 +1159,7 @@ double reduce_dmi_energy_fp32(Context &ctx) {
         ctx.has_interfacial_dmi ? 1 : 0, ctx.has_bulk_dmi ? 1 : 0,
         ctx.D_interfacial, ctx.D_bulk,
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
+        ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);

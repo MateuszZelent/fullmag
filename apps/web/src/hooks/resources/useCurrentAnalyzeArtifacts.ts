@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
+  AnySpectrumArtifact,
   DispersionRow,
   EigenBranchesArtifact,
   EigenModeArtifact,
-  EigenSpectrumArtifact,
   FemMeshPayload,
 } from "@/components/analyze/eigenTypes";
+import { buildModeKey } from "@/components/analyze/eigenTypes";
 import { fetchAnalyzeArtifact } from "@/features/analyze";
 import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
@@ -61,10 +62,10 @@ export interface CurrentAnalyzeArtifactsState {
   error: string | null;
   modeError: string | null;
   mesh: FemMeshPayload | null;
-  spectrum: EigenSpectrumArtifact | null;
+  spectrum: AnySpectrumArtifact | null;
   branches: EigenBranchesArtifact | null;
   dispersionRows: DispersionRow[];
-  modeCache: Record<number, EigenModeArtifact>;
+  modeCache: Record<string, EigenModeArtifact>;
   hasEigenArtifacts: boolean;
   /** Map from mode index → artifact path (only modes that have a saved field file). */
   modeArtifactMap: Map<number, string>;
@@ -84,10 +85,10 @@ export function useCurrentAnalyzeArtifacts(
   const [error, setError] = useState<string | null>(null);
   const [modeError, setModeError] = useState<string | null>(null);
   const [mesh, setMesh] = useState<FemMeshPayload | null>(null);
-  const [spectrum, setSpectrum] = useState<EigenSpectrumArtifact | null>(null);
+  const [spectrum, setSpectrum] = useState<AnySpectrumArtifact | null>(null);
   const [branches, setBranches] = useState<EigenBranchesArtifact | null>(null);
   const [dispersionRows, setDispersionRows] = useState<DispersionRow[]>([]);
-  const [modeCache, setModeCache] = useState<Record<number, EigenModeArtifact>>({});
+  const [modeCache, setModeCache] = useState<Record<string, EigenModeArtifact>>({});
   const [modeArtifactMap, setModeArtifactMap] = useState<Map<number, string>>(new Map());
   const [internalRefreshNonce, setInternalRefreshNonce] = useState(0);
 
@@ -132,15 +133,21 @@ export function useCurrentAnalyzeArtifacts(
 
         const artifacts = liveArtifacts;
         const artifactPaths = artifacts.map((artifact) => artifact.path);
-        const hasSpectrum = artifactPaths.some(
-          (path) => path === "eigen/spectrum.json" || path.startsWith("eigen/spectrum"),
-        );
-        const hasDispersion = artifactPaths.some(
-          (path) => path === "eigen/dispersion.json" || path.startsWith("eigen/dispersion"),
-        );
-        const hasBranches = artifactPaths.some(
-          (path) => path === "eigen/branches.json" || path.startsWith("eigen/branches"),
-        );
+        const hasSpectrumV2 = artifactPaths.includes("eigen/spectrum.v2.json");
+        const hasBranchesV2 = artifactPaths.includes("eigen/branches.v2.json");
+        const hasDispersionV2 = artifactPaths.includes("eigen/dispersion.csv");
+        const hasSpectrum = hasSpectrumV2
+          || artifactPaths.some(
+            (path) => path === "eigen/spectrum.json" || path.startsWith("eigen/spectrum"),
+          );
+        const hasDispersion = hasDispersionV2
+          || artifactPaths.some(
+            (path) => path === "eigen/dispersion.json" || path.startsWith("eigen/dispersion"),
+          );
+        const hasBranches = hasBranchesV2
+          || artifactPaths.some(
+            (path) => path === "eigen/branches.json" || path.startsWith("eigen/branches"),
+          );
 
         const nextModeArtifactMap = new Map<number, string>();
         for (const a of artifacts) {
@@ -152,7 +159,7 @@ export function useCurrentAnalyzeArtifacts(
 
         const [nextSpectrum, nextDispersion, nextBranches] = await Promise.all([
           hasSpectrum
-            ? fetchAnalyzeArtifact<EigenSpectrumArtifact>(
+            ? fetchAnalyzeArtifact<AnySpectrumArtifact>(
                 {
                   domain: "eigenmodes",
                   tab: "spectrum",
@@ -160,12 +167,14 @@ export function useCurrentAnalyzeArtifacts(
                   refreshNonce,
                 },
                 (requestSignal) =>
-                  client.eigen.getSpectrum({ signal: requestSignal }) as Promise<EigenSpectrumArtifact>,
+                  (hasSpectrumV2
+                    ? client.eigen.getSpectrumV2({ signal: requestSignal })
+                    : client.eigen.getSpectrum({ signal: requestSignal })) as Promise<AnySpectrumArtifact>,
               ).catch(
                 () => null,
               )
             : Promise.resolve(null),
-          hasDispersion
+          hasDispersion && !hasDispersionV2
             ? fetchAnalyzeArtifact<EigenDispersionResponse>(
                 {
                   domain: "eigenmodes",
@@ -188,7 +197,9 @@ export function useCurrentAnalyzeArtifacts(
                   refreshNonce,
                 },
                 (requestSignal) =>
-                  client.eigen.getBranches({ signal: requestSignal }) as Promise<EigenBranchesArtifact>,
+                  (hasBranchesV2
+                    ? client.eigen.getBranchesV2({ signal: requestSignal })
+                    : client.eigen.getBranches({ signal: requestSignal })) as Promise<EigenBranchesArtifact>,
               ).catch(
                 () => null,
               )
@@ -224,7 +235,8 @@ export function useCurrentAnalyzeArtifacts(
     if (!enabled) {
       return;
     }
-    if (modeCache[index]) return;
+    const cacheKey = buildModeKey(sampleIndex ?? 0, index);
+    if (modeCache[cacheKey]) return;
 
     setModeLoadState("loading");
     setModeError(null);
@@ -239,12 +251,14 @@ export function useCurrentAnalyzeArtifacts(
           refreshNonce,
         },
         (requestSignal) =>
-          client.eigen.getMode(
-            { index, sampleIndex },
-            { signal: requestSignal },
-          ) as Promise<EigenModeArtifact>,
+          (sampleIndex != null
+            ? client.eigen.getModeV2(sampleIndex, index, { signal: requestSignal })
+            : client.eigen.getMode(
+                { index },
+                { signal: requestSignal },
+              )) as Promise<EigenModeArtifact>,
       );
-      setModeCache((prev) => ({ ...prev, [index]: artifact }));
+      setModeCache((prev) => ({ ...prev, [cacheKey]: artifact }));
       setModeLoadState("loaded");
     } catch (err) {
       setModeError(err instanceof Error ? err.message : String(err));

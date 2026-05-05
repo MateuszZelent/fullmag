@@ -1022,11 +1022,14 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
           entrypoint_kind: String(stage?.entrypoint_kind ?? ""),
           integrator: String(stage?.integrator ?? ""),
           fixed_timestep: String(stage?.fixed_timestep ?? ""),
+          max_error: String(stage?.max_error ?? ""),
           until_seconds: String(stage?.until_seconds ?? ""),
           relax_algorithm: String(stage?.relax_algorithm ?? ""),
           torque_tolerance: String(stage?.torque_tolerance ?? ""),
           energy_tolerance: String(stage?.energy_tolerance ?? ""),
           max_steps: String(stage?.max_steps ?? ""),
+          max_pseudotime_s: String(stage?.max_pseudotime_s ?? ""),
+          max_physical_time_s: String(stage?.max_physical_time_s ?? ""),
           eigen_count: String(stage?.eigen_count ?? ""),
           eigen_target: String(stage?.eigen_target ?? ""),
           eigen_include_demag: Boolean(stage?.eigen_include_demag ?? false),
@@ -1035,6 +1038,7 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
           eigen_target_frequency: String(stage?.eigen_target_frequency ?? ""),
           eigen_damping_policy: String(stage?.eigen_damping_policy ?? ""),
           eigen_k_vector: String(stage?.eigen_k_vector ?? ""),
+          eigen_k_path: String(stage?.eigen_k_path ?? ""),
           eigen_spin_wave_bc: String(stage?.eigen_spin_wave_bc ?? ""),
           eigen_spin_wave_bc_config:
             stage?.eigen_spin_wave_bc_config && typeof stage.eigen_spin_wave_bc_config === "object"

@@ -209,6 +209,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_shared_domain_report),
         )
         .route(
+            "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+            get(handlers::meshing::get_mesh_periodic_pairs),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/objects/:object_id/topology",
             get(handlers::meshing::get_mesh_object_topology),
         )
@@ -354,16 +358,32 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_spectrum),
         )
         .route(
+            "/v2/sessions/current/analysis/eigen/spectrum.v2",
+            get(handlers::analysis::get_spectrum_v2),
+        )
+        .route(
             "/v2/sessions/current/analysis/eigenmodes/modes/:mode_id",
             get(get_eigenmode_by_id),
+        )
+        .route(
+            "/v2/sessions/current/analysis/eigen/modes/:sample_index/:mode_index",
+            get(handlers::analysis::get_mode_v2),
         )
         .route(
             "/v2/sessions/current/analysis/eigenmodes/dispersion",
             get(handlers::analysis::get_dispersion),
         )
         .route(
+            "/v2/sessions/current/analysis/eigen/dispersion.csv",
+            get(handlers::analysis::get_dispersion_csv),
+        )
+        .route(
             "/v2/sessions/current/analysis/eigenmodes/branches",
             get(handlers::analysis::get_branches),
+        )
+        .route(
+            "/v2/sessions/current/analysis/eigen/branches.v2",
+            get(handlers::analysis::get_branches_v2),
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints",

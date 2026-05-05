@@ -57,18 +57,18 @@ export const RELAXATION_PROFILES: Record<string, { label: string; performance: s
   },
   projected_gradient_bb: {
     label: "Projected gradient (BB)",
-    performance: "Often converges faster than overdamped LLG on FDM when the landscape is reasonably well behaved.",
+    performance: "Often converges faster than overdamped LLG; CUDA FDM and FEM currently use bootstrap field/energy snapshot paths.",
     physics: "Direct energy minimization on the unit-sphere constraint rather than explicit physical time stepping.",
   },
   nonlinear_cg: {
     label: "Nonlinear conjugate gradient",
-    performance: "Can reduce iteration count substantially on harder minimization problems, at the cost of more algorithmic complexity.",
+    performance: "Can reduce iteration count on harder minimization problems; CUDA FDM and FEM currently use bootstrap field/energy snapshot paths.",
     physics: "Direct manifold optimization with conjugate directions, so it targets equilibrium states rather than transient dynamics.",
   },
   tangent_plane_implicit: {
     label: "Tangent-plane implicit",
-    performance: "Designed for stiff FEM relaxation, but availability depends on backend support.",
-    physics: "Implicit tangent-plane stepping respects the unit-magnetization constraint while improving stiffness handling.",
+    performance: "Planned FEM relaxation path; not executable in the current public runner.",
+    physics: "Reserved for the future implicit tangent-plane formulation. Current releases must keep it disabled in authoring UI.",
   },
 };
 

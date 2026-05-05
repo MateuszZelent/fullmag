@@ -26,20 +26,33 @@ pub(crate) fn relaxation_converged(
     pure_damping_rhs: bool,
 ) -> bool {
     let max_torque = effective_max_torque_apm(stats, gyromagnetic_ratio, damping, pure_damping_rhs);
-    if control
-        .stop
-        .torque_tolerance_apm
-        .is_some_and(|threshold| max_torque > threshold)
-    {
+    let energy_delta = previous_total_energy.map(|previous| (previous - stats.e_total).abs());
+    relaxation_stop_criteria_satisfied(control, energy_delta, max_torque)
+}
+
+pub(crate) fn relaxation_stop_criteria_satisfied(
+    control: &RelaxationControlIR,
+    energy_delta_j: Option<f64>,
+    max_torque_apm: f64,
+) -> bool {
+    let has_torque = control.stop.torque_tolerance_apm.is_some();
+    let has_energy = control.stop.energy_tolerance_j.is_some();
+
+    if !has_torque && !has_energy {
         return false;
     }
-    match (control.stop.energy_tolerance_j, previous_total_energy) {
-        (Some(energy_tolerance), Some(previous_energy)) => {
-            (previous_energy - stats.e_total).abs() <= energy_tolerance
-        }
+
+    let torque_ok = control
+        .stop
+        .torque_tolerance_apm
+        .is_none_or(|threshold| max_torque_apm <= threshold);
+    let energy_ok = match (control.stop.energy_tolerance_j, energy_delta_j) {
+        (Some(threshold), Some(delta)) => delta <= threshold,
         (Some(_), None) => false,
         (None, _) => true,
-    }
+    };
+
+    torque_ok && energy_ok
 }
 
 pub(crate) fn approximate_max_torque(
@@ -404,19 +417,11 @@ pub(crate) fn execute_projected_gradient_bb(
         energy = e_trial;
         steps += 1;
 
-        // Check energy tolerance if specified
-        if let Some(etol) = control.stop.energy_tolerance_j {
-            let energy_delta = (prev_energy - energy).abs();
-            let max_torque = compute_max_torque(&m, &h_eff);
-            if control
-                .stop
-                .torque_tolerance_apm
-                .is_some_and(|threshold| max_torque <= threshold)
-                && energy_delta <= etol
-            {
-                converged = true;
-                break;
-            }
+        let energy_delta = (prev_energy - energy).abs();
+        let max_torque = compute_max_torque(&m, &h_eff);
+        if relaxation_stop_criteria_satisfied(control, Some(energy_delta), max_torque) {
+            converged = true;
+            break;
         }
     }
 
@@ -561,6 +566,7 @@ pub(crate) fn execute_nonlinear_cg(
         }
 
         // Accept step
+        let prev_energy = energy;
         m = m_new;
         h_eff = h_eff_new;
         g = g_new;
@@ -568,6 +574,13 @@ pub(crate) fn execute_nonlinear_cg(
         p = p_new;
         energy = e_new;
         steps += 1;
+
+        let energy_delta = (prev_energy - energy).abs();
+        let max_torque = compute_max_torque(&m, &h_eff);
+        if relaxation_stop_criteria_satisfied(control, Some(energy_delta), max_torque) {
+            converged = true;
+            break;
+        }
     }
 
     let final_torque = compute_max_torque(&m, &h_eff);
@@ -585,5 +598,90 @@ pub(crate) fn execute_nonlinear_cg(
         final_energy: energy,
         final_max_torque: final_torque,
         converged,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR};
+
+    fn control(
+        torque_tolerance_apm: Option<f64>,
+        energy_tolerance_j: Option<f64>,
+    ) -> RelaxationControlIR {
+        RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: RelaxStopIR {
+                torque_tolerance_apm,
+                energy_tolerance_j,
+                max_steps: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        }
+    }
+
+    #[test]
+    fn relaxation_convergence_supports_energy_only_stop() {
+        let control = control(None, Some(1e-18));
+        let previous_total_energy = Some(1.0);
+        let stats = StepStats {
+            e_total: 1.0 - 5e-19,
+            max_torque_Apm: 1e9,
+            ..StepStats::default()
+        };
+
+        assert!(relaxation_converged(
+            &control,
+            &stats,
+            previous_total_energy,
+            2.211e5,
+            1.0,
+            true,
+        ));
+    }
+
+    #[test]
+    fn relaxation_convergence_requires_both_torque_and_energy_when_both_are_set() {
+        let control = control(Some(1e-3), Some(1e-18));
+        let previous_total_energy = Some(1.0);
+        let stats = StepStats {
+            e_total: 1.0 - 5e-19,
+            max_torque_Apm: 1e-2,
+            ..StepStats::default()
+        };
+
+        assert!(!relaxation_converged(
+            &control,
+            &stats,
+            previous_total_energy,
+            2.211e5,
+            1.0,
+            true,
+        ));
+    }
+
+    #[test]
+    fn relaxation_convergence_does_not_fire_for_budget_only_stop() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: None,
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        };
+
+        assert!(!relaxation_converged(
+            &control,
+            &StepStats::default(),
+            Some(1.0),
+            2.211e5,
+            1.0,
+            true,
+        ));
     }
 }

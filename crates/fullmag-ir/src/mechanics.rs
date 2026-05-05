@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::ExecutionMode;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HybridHintsIR {
@@ -93,4 +93,3 @@ pub enum MechanicsIR {
         mechanical_dt: Option<f64>,
     },
 }
-

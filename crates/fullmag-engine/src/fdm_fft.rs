@@ -362,6 +362,57 @@ pub fn compute_newell_kernel_spectra(
     }
 }
 
+pub fn compute_periodic_newell_kernel_spectra(
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    periodic: [bool; 3],
+    image_counts: [u32; 3],
+) -> DemagKernelSpectra {
+    let boundary = FdmBoundaryPolicy {
+        x: if periodic[0] {
+            AxisBoundary::Periodic
+        } else {
+            AxisBoundary::Open
+        },
+        y: if periodic[1] {
+            AxisBoundary::Periodic
+        } else {
+            AxisBoundary::Open
+        },
+        z: if periodic[2] {
+            AxisBoundary::Periodic
+        } else {
+            AxisBoundary::Open
+        },
+    };
+    let workspace =
+        FftWorkspace::new_with_boundary(nx, ny, nz, dx, dy, dz, &boundary, image_counts);
+    let flatten = |values: &[Complex<f64>]| -> Vec<f64> {
+        let mut flat = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            flat.push(value.re);
+            flat.push(value.im);
+        }
+        flat
+    };
+
+    DemagKernelSpectra {
+        px: workspace.px,
+        py: workspace.py,
+        pz: workspace.pz,
+        n_xx: flatten(&workspace.kern_xx),
+        n_yy: flatten(&workspace.kern_yy),
+        n_zz: flatten(&workspace.kern_zz),
+        n_xy: flatten(&workspace.kern_xy),
+        n_xz: flatten(&workspace.kern_xz),
+        n_yz: flatten(&workspace.kern_yz),
+    }
+}
+
 pub fn compute_newell_kernel_spectra_thin_film_2d(
     nx: usize,
     ny: usize,

@@ -37,5 +37,6 @@ Recommended filenames:
 - `0200-llg-exchange-reference-engine.md`
 - `0300-gpu-fdm-precision-and-calibration.md`
 - `0400-demagnetization.md`
+- `0710-periodic-and-floquet-boundary-conditions.md`
 
 The numbering is semantic, not bureaucratic.

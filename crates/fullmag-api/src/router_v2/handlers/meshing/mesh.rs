@@ -1,6 +1,7 @@
 //! Mesh resource endpoints.
 
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -17,13 +18,15 @@ use crate::schemas::mesh::{
     MeshInterfaceQualityResource, MeshInterfaceReportResource, MeshLastSuccessfulBuildResource,
     MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
     MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
-    MeshObjectSizeFieldResource, MeshPartResource, MeshRegionResource, MeshSemanticsResource,
+    MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicPairResource,
+    MeshPeriodicPairsResource, MeshRegionResource, MeshSemanticsResource,
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
     MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource, MeshUniverseQualityResource,
     MeshUniverseReportResource,
 };
+use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
 use fullmag_authoring::{
     SceneDocument, SceneMeshInterface, SceneObject, ScriptBuilderMeshState,
@@ -483,6 +486,80 @@ pub async fn get_mesh_shared_domain_quality(
         revision: snapshot.mesh_revision,
         quality: mesh_workspace.get("mesh_quality_summary").cloned(),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/mesh/periodic_pairs.v1",
+    responses(
+        (status = 200, description = "Shared-domain periodic mesh-pair diagnostics", body = MeshPeriodicPairsResource),
+        (status = 304, description = "Periodic mesh-pair diagnostics not modified for the supplied ETag"),
+        (status = 204, description = "No FEM mesh available"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_periodic_pairs(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let (body, source_id) = if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        (
+            build_periodic_pairs_resource(&snapshot, mesh),
+            mesh.generation_id
+                .as_deref()
+                .unwrap_or("no-generation")
+                .to_string(),
+        )
+    } else if let Some(artifact) = periodic_pairs_resource_from_artifact(&snapshot)? {
+        (artifact, "artifact-file".to_string())
+    } else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "mesh-periodic-pairs:{source_id}:{}:{}",
+        snapshot.mesh_revision,
+        body.pairs.len()
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+fn periodic_pairs_resource_from_artifact(
+    snapshot: &SessionStateResponse,
+) -> Result<Option<MeshPeriodicPairsResource>, ApiError> {
+    let Some(artifact_dir) = current_artifact_dir(snapshot) else {
+        return Ok(None);
+    };
+    let artifact_path = artifact_dir.join("mesh").join("periodic_pairs.v1.json");
+    if !artifact_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&artifact_path).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read periodic pairs artifact '{}': {error}",
+            artifact_path.display()
+        ))
+    })?;
+    let mut value = serde_json::from_str::<Value>(&content).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to parse periodic pairs artifact '{}': {error}",
+            artifact_path.display()
+        ))
+    })?;
+    if let Some(object) = value.as_object_mut() {
+        object
+            .entry("revision".to_string())
+            .or_insert_with(|| json!(snapshot.mesh_revision));
+    }
+    let resource = serde_json::from_value::<MeshPeriodicPairsResource>(value).map_err(|error| {
+        ApiError::internal(format!(
+            "periodic pairs artifact '{}' does not match periodic_pairs.v1: {error}",
+            artifact_path.display()
+        ))
+    })?;
+    Ok(Some(resource))
 }
 
 #[utoipa::path(
@@ -1168,6 +1245,156 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
     }
 }
 
+fn build_periodic_pairs_resource(
+    snapshot: &SessionStateResponse,
+    mesh: &FemMeshPayload,
+) -> MeshPeriodicPairsResource {
+    let boundary_nodes_by_marker = boundary_nodes_by_marker(mesh);
+    let node_pairs_by_id = mesh.periodic_node_pairs.iter().fold(
+        HashMap::<String, Vec<&fullmag_ir::MeshPeriodicNodePairIR>>::new(),
+        |mut acc, pair| {
+            acc.entry(pair.pair_id.clone()).or_default().push(pair);
+            acc
+        },
+    );
+
+    let pairs = mesh
+        .periodic_boundary_pairs
+        .iter()
+        .map(|boundary_pair| {
+            let node_pairs = node_pairs_by_id
+                .get(&boundary_pair.pair_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let source_nodes = boundary_nodes_by_marker
+                .get(&boundary_pair.marker_a)
+                .cloned()
+                .unwrap_or_default();
+            let destination_nodes = boundary_nodes_by_marker
+                .get(&boundary_pair.marker_b)
+                .cloned()
+                .unwrap_or_default();
+            let paired_source_nodes = node_pairs
+                .iter()
+                .map(|pair| pair.node_a)
+                .collect::<BTreeSet<_>>();
+            let paired_destination_nodes = node_pairs
+                .iter()
+                .map(|pair| pair.node_b)
+                .collect::<BTreeSet<_>>();
+            let diagnostics = periodic_pair_residuals(mesh, boundary_pair, node_pairs);
+
+            MeshPeriodicPairResource {
+                pair_id: boundary_pair.pair_id.clone(),
+                source_marker: boundary_pair.source_marker.clone(),
+                destination_marker: boundary_pair.destination_marker.clone(),
+                marker_a: boundary_pair.marker_a,
+                marker_b: boundary_pair.marker_b,
+                expected_translation_m: boundary_pair.translation,
+                paired_node_count: node_pairs.len() as u32,
+                unpaired_source_node_count: source_nodes.difference(&paired_source_nodes).count()
+                    as u32,
+                unpaired_destination_node_count: destination_nodes
+                    .difference(&paired_destination_nodes)
+                    .count() as u32,
+                max_residual_m: diagnostics.max_residual_m,
+                rms_residual_m: diagnostics.rms_residual_m,
+                status: diagnostics.status,
+            }
+        })
+        .collect();
+
+    MeshPeriodicPairsResource {
+        revision: snapshot.mesh_revision,
+        schema_version: "periodic_pairs.v1".to_string(),
+        pairs,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PeriodicResidualDiagnostics {
+    max_residual_m: Option<f64>,
+    rms_residual_m: Option<f64>,
+    status: String,
+}
+
+fn periodic_pair_residuals(
+    mesh: &FemMeshPayload,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+    node_pairs: &[&fullmag_ir::MeshPeriodicNodePairIR],
+) -> PeriodicResidualDiagnostics {
+    if node_pairs.is_empty() {
+        return PeriodicResidualDiagnostics {
+            max_residual_m: None,
+            rms_residual_m: None,
+            status: "empty".to_string(),
+        };
+    }
+    let Some(translation) = boundary_pair.translation else {
+        return PeriodicResidualDiagnostics {
+            max_residual_m: None,
+            rms_residual_m: None,
+            status: "missing_translation".to_string(),
+        };
+    };
+
+    let mut max_residual = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut valid_count = 0usize;
+    for pair in node_pairs {
+        let Some(src) = mesh.nodes.get(pair.node_a as usize) else {
+            return PeriodicResidualDiagnostics {
+                max_residual_m: None,
+                rms_residual_m: None,
+                status: "invalid_node_reference".to_string(),
+            };
+        };
+        let Some(dst) = mesh.nodes.get(pair.node_b as usize) else {
+            return PeriodicResidualDiagnostics {
+                max_residual_m: None,
+                rms_residual_m: None,
+                status: "invalid_node_reference".to_string(),
+            };
+        };
+        let residual = [
+            dst[0] - src[0] - translation[0],
+            dst[1] - src[1] - translation[1],
+            dst[2] - src[2] - translation[2],
+        ];
+        let norm =
+            (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
+                .sqrt();
+        max_residual = max_residual.max(norm);
+        sum_sq += norm * norm;
+        valid_count += 1;
+    }
+    let rms = (sum_sq / valid_count as f64).sqrt();
+    let tolerance = boundary_pair.tolerance.unwrap_or(1e-9).max(0.0);
+    let status = if max_residual > tolerance {
+        "residual_exceeds_tolerance"
+    } else {
+        "valid"
+    };
+
+    PeriodicResidualDiagnostics {
+        max_residual_m: Some(max_residual),
+        rms_residual_m: Some(rms),
+        status: status.to_string(),
+    }
+}
+
+fn boundary_nodes_by_marker(mesh: &FemMeshPayload) -> HashMap<u32, BTreeSet<u32>> {
+    let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
+    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
+        let Some(marker) = mesh.boundary_markers.get(face_index).copied() else {
+            continue;
+        };
+        let nodes = nodes_by_marker.entry(marker).or_default();
+        nodes.extend(face.iter().copied());
+    }
+    nodes_by_marker
+}
+
 fn mesh_manifest_regions(scene: &SceneDocument, mesh: &FemMeshPayload) -> Vec<MeshRegionResource> {
     scene
         .objects
@@ -1311,6 +1538,8 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
         element_markers,
         boundary_faces,
         boundary_markers,
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
         object_segments: vec![FemMeshObjectSegment {
             object_id: object_id.to_string(),
             geometry_id: segment.geometry_id.clone(),
@@ -1459,6 +1688,8 @@ fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPaylo
         element_markers,
         boundary_faces,
         boundary_markers,
+        periodic_boundary_pairs: Vec::new(),
+        periodic_node_pairs: Vec::new(),
         object_segments,
         mesh_parts: vec![mesh_part],
         domain_mesh_mode: mesh.domain_mesh_mode.clone(),

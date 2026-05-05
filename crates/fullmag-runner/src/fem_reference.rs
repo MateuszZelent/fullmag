@@ -120,10 +120,17 @@ pub(crate) fn fem_observables_for_magnetization(
 pub(crate) fn build_problem_and_state(
     plan: &FemPlanIR,
 ) -> Result<(FemLlgProblem, FemLlgState), RunError> {
-    // FEM-011: periodic_node_pairs / periodic_boundary_pairs in the mesh IR are
-    // topology metadata auto-detected from axis-aligned airbox faces.  They do
-    // NOT imply the solver should enforce periodic BCs.  The CPU reference
-    // engine uses Neumann (natural) BC only, so we simply ignore the pairs.
+    if !plan.mesh.periodic_node_pairs.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "FEM reference runner cannot execute mesh '{}' with {} periodic_node_pairs: \
+                 this time-domain path does not enforce periodic constraints. Use the FEM eigen \
+                 runner with spin_wave_bc='periodic'/'floquet' or provide a non-periodic mesh.",
+                plan.mesh.mesh_name,
+                plan.mesh.periodic_node_pairs.len()
+            ),
+        });
+    }
 
     let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("MeshTopology: {}", error),
@@ -1253,6 +1260,39 @@ mod tests {
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn reference_runner_rejects_periodic_mesh_pairs() {
+        let mut plan = make_test_plan(false);
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+
+        let err = build_problem_and_state(&plan)
+            .expect_err("reference FEM runner must reject unenforced periodic pairs");
+        assert!(
+            err.message.contains("periodic_node_pairs")
+                && err
+                    .message
+                    .contains("does not enforce periodic constraints"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 
     fn make_box_demag_plan() -> FemPlanIR {

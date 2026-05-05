@@ -65,6 +65,7 @@ from fullmag.model.problem import (
     DiscretizationHints,
     ExecutionMode,
     ExecutionPrecision,
+    FdmPbc,
     Problem,
     resolve_geometry_sources,
     RuntimeSelection,
@@ -890,7 +891,7 @@ class _WorldState:
     _adaptive_mesh: dict[str, object] | None = None
 
     # Periodic boundary conditions (per-axis)
-    _pbc: tuple[bool, bool, bool] | None = None
+    _pbc: FdmPbc | None = None
 
     # Outputs
     _outputs: list = field(default_factory=list)
@@ -955,6 +956,7 @@ class EigenmodesStageSpec:
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
     k_vector: tuple[float, float, float] | None = None
+    k_sampling: object | None = None
     bc: str | dict[str, object] = "free"
 
 
@@ -1274,6 +1276,7 @@ def eigenmodes_stage(
     normalization: str = "unit_l2",
     damping_policy: str = "ignore",
     k_vector: tuple[float, float, float] | None = None,
+    k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
 ) -> EigenmodesStageSpec:
     return EigenmodesStageSpec(
@@ -1286,6 +1289,7 @@ def eigenmodes_stage(
         normalization=normalization,
         damping_policy=damping_policy,
         k_vector=k_vector,
+        k_sampling=k_sampling,
         bc=bc,
     )
 
@@ -1363,6 +1367,7 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
                 eigen_normalization=stage_spec.normalization,
                 eigen_damping_policy=stage_spec.damping_policy,
                 eigen_k_vector=stage_spec.k_vector,
+                eigen_k_sampling=stage_spec.k_sampling,
                 eigen_spin_wave_bc=stage_spec.bc,
             ),
             entrypoint_kind="flat_eigenmodes",
@@ -1842,6 +1847,7 @@ class StudyStagesBuilder:
         normalization: str = "unit_l2",
         damping_policy: str = "ignore",
         k_vector: tuple[float, float, float] | None = None,
+        k_sampling: object | None = None,
         bc: str | dict[str, object] = "free",
     ) -> "StudyStagesBuilder":
         return self.add_stage(
@@ -1855,6 +1861,7 @@ class StudyStagesBuilder:
                 normalization=normalization,
                 damping_policy=damping_policy,
                 k_vector=k_vector,
+                k_sampling=k_sampling,
                 bc=bc,
             )
         )
@@ -2404,6 +2411,7 @@ class StudyBuilder:
         normalization: str = "unit_l2",
         damping_policy: str = "ignore",
         k_vector: tuple[float, float, float] | None = None,
+        k_sampling: object | None = None,
         bc: str = "free",
     ) -> Any:
         return eigenmodes(
@@ -2416,6 +2424,7 @@ class StudyBuilder:
             normalization=normalization,
             damping_policy=damping_policy,
             k_vector=k_vector,
+            k_sampling=k_sampling,
             bc=bc,
         )
 
@@ -2538,18 +2547,33 @@ def boundary_correction(mode: str) -> None:
     _state._boundary_correction = mode
 
 
-def pbc(x: bool = False, y: bool = False, z: bool = False) -> None:
+def pbc(
+    x: bool = False,
+    y: bool = False,
+    z: bool = False,
+    *,
+    demag: Literal["open", "truncated_images"] = "open",
+    images: tuple[int, int, int] | None = None,
+) -> None:
     """Enable periodic boundary conditions for FDM along the given axes.
 
     Parameters
     ----------
     x, y, z : bool
         Set to ``True`` to make the corresponding axis periodic.
+    demag : str
+        ``"open"`` keeps the open-boundary FFT demag kernel. ``"truncated_images"``
+        enables MuMax-style periodic image summation on the CPU FDM path.
+    images : tuple[int, int, int] | None
+        Optional image counts for truncated-images demag. ``None`` uses backend defaults.
     """
-    if not any((x, y, z)):
+    axes = (bool(x), bool(y), bool(z))
+    if not any(axes):
+        if demag != "open" or images is not None:
+            raise ValueError("pbc demag/images require at least one periodic axis")
         _state._pbc = None
     else:
-        _state._pbc = (bool(x), bool(y), bool(z))
+        _state._pbc = FdmPbc(axes=axes, demag=demag, image_counts=images)
 
 
 def _configure_object_mesh_defaults(
@@ -3807,6 +3831,7 @@ def _build_problem(
     eigen_normalization: str = "unit_l2",
     eigen_damping_policy: str = "ignore",
     eigen_k_vector: tuple[float, float, float] | None = None,
+    eigen_k_sampling: object | None = None,
     eigen_spin_wave_bc: str | dict[str, object] = "free",
 ) -> Problem:
     """Construct a Problem from the current world state."""
@@ -3928,6 +3953,7 @@ def _build_problem(
             normalization=eigen_normalization,
             damping_policy=eigen_damping_policy,
             spin_wave_bc=eigen_spin_wave_bc,
+            k_sampling=eigen_k_sampling,
             k_vector=eigen_k_vector,
             dynamics=dynamics,
         )
@@ -4306,6 +4332,7 @@ def eigenmodes(
     normalization: str = "unit_l2",
     damping_policy: str = "ignore",
     k_vector: tuple[float, float, float] | None = None,
+    k_sampling: object | None = None,
     bc: str | dict[str, object] = "free",
 ) -> Any:
     """Build the problem and queue/run an eigenmodes analysis.
@@ -4344,6 +4371,7 @@ def eigenmodes(
         eigen_equilibrium_artifact=equilibrium_artifact,
         eigen_normalization=normalization,
         eigen_damping_policy=damping_policy,
+        eigen_k_sampling=k_sampling,
         eigen_k_vector=k_vector,
         eigen_spin_wave_bc=bc,
     )

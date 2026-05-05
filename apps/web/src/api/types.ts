@@ -895,6 +895,27 @@ export interface MeshSharedDomainQualityResource {
   quality?: MeshQualityRecord | null;
 }
 
+export interface MeshPeriodicPairsResource {
+  revision: number;
+  schema_version: "periodic_pairs.v1" | string;
+  pairs: MeshPeriodicPairEntry[];
+}
+
+export interface MeshPeriodicPairEntry {
+  pair_id: string;
+  source_marker?: string | null;
+  destination_marker?: string | null;
+  marker_a: number;
+  marker_b: number;
+  expected_translation_m?: [number, number, number] | null;
+  paired_node_count: number;
+  unpaired_source_node_count: number;
+  unpaired_destination_node_count: number;
+  max_residual_m?: number | null;
+  rms_residual_m?: number | null;
+  status: string;
+}
+
 export interface MeshObjectSegmentEntry {
   object_id: string;
   geometry_id?: string | null;

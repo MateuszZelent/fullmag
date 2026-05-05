@@ -39,6 +39,7 @@ from .gmsh_bridge import (
     resolve_mesh_size_controls,
 )
 from .quality import MeshValidationReport, validate_mesh
+from .periodic import PeriodicBoundaryPair, periodic_x, periodic_y, periodic_z
 from .surface_assets import SurfaceAsset, export_geometry_to_stl, load_surface_asset
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -49,6 +50,7 @@ __all__ = [
     "ComponentDescriptor",
     "MeshData",
     "MeshOptions",
+    "PeriodicBoundaryPair",
     "MeshQualityReport",
     "MeshStatisticsReport",
     "MeshStatisticsScope",
@@ -67,6 +69,9 @@ __all__ = [
     "generate_mesh_from_file",
     "generate_shared_domain_mesh_from_components",
     "load_surface_asset",
+    "periodic_x",
+    "periodic_y",
+    "periodic_z",
     "ResolvedAirboxTarget",
     "ResolvedObjectPreviewTarget",
     "ResolvedSharedDomainTargets",

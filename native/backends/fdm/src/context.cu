@@ -322,9 +322,11 @@ static bool alloc_fft_workspace(Context &ctx) {
         return true;
     }
 
-    ctx.fft_nx = ctx.nx * 2;
-    ctx.fft_ny = ctx.ny * 2;
-    ctx.fft_nz = ctx.thin_film_2d_demag ? 1 : ctx.nz * 2;
+    if (ctx.fft_nx == 0 || ctx.fft_ny == 0 || ctx.fft_nz == 0) {
+        ctx.fft_nx = ctx.nx * 2;
+        ctx.fft_ny = ctx.ny * 2;
+        ctx.fft_nz = ctx.thin_film_2d_demag ? 1 : ctx.nz * 2;
+    }
     ctx.fft_cell_count =
         static_cast<uint64_t>(ctx.fft_nx) * ctx.fft_ny * ctx.fft_nz;
 

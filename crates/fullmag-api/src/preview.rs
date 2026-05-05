@@ -137,6 +137,8 @@ mod tests {
             element_markers: Vec::new(),
             boundary_faces: Vec::new(),
             boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
             object_segments,
             mesh_parts,
             domain_mesh_mode: None,

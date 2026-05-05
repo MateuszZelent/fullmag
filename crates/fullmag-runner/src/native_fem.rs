@@ -163,6 +163,18 @@ impl NativeFemBackend {
                 message: single_precision_rejection(plan).to_string(),
             });
         }
+        if !plan.mesh.periodic_node_pairs.is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "native FEM time-domain backend cannot execute mesh '{}' with {} \
+                     periodic_node_pairs: this path does not enforce periodic constraints. \
+                     Use the FEM eigen solver with spin_wave_bc='periodic'/'floquet' or provide \
+                     a non-periodic mesh.",
+                    plan.mesh.mesh_name,
+                    plan.mesh.periodic_node_pairs.len()
+                ),
+            });
+        }
         let nodes_flat: Vec<f64> = plan
             .mesh
             .nodes
@@ -571,7 +583,11 @@ impl NativeFemBackend {
                     _ => 1.0,
                 };
                 let j = plan.current_density.unwrap_or([0.0, 0.0, 0.0]);
-                [j[0] * current_sign, j[1] * current_sign, j[2] * current_sign]
+                [
+                    j[0] * current_sign,
+                    j[1] * current_sign,
+                    j[2] * current_sign,
+                ]
             },
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
@@ -1651,8 +1667,14 @@ mod tests {
                         lambda: plan.stt_lambda.expect("stt lambda"),
                         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
                         degree: plan.stt_degree.expect("stt degree"),
-                        thickness: plan.stt_thickness.unwrap_or_else(|| effective_magnetic_thickness(&plan.mesh)),
-                        current_sign: match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                        thickness: plan
+                            .stt_thickness
+                            .unwrap_or_else(|| effective_magnetic_thickness(&plan.mesh)),
+                        current_sign: match plan
+                            .stt_fixed_layer_position
+                            .as_deref()
+                            .unwrap_or("top")
+                        {
                             "bottom" => -1.0,
                             _ => 1.0,
                         },

@@ -309,25 +309,6 @@ pub(crate) fn plan_fdm(
         );
     }
 
-    // ── PBC capability gate ──────────────────────────────────────────────
-    // CPU FDM supports periodic exchange/DMI stencils and truncated-image demag.
-    // CUDA FDM currently supports periodic exchange wrapping, but native demag
-    // remains open-boundary only.
-    if let Some(ref pbc) = problem.pbc {
-        if pbc.has_any_periodic()
-            && runtime_requests_cuda(problem)
-            && enable_demag
-            && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
-        {
-            errors.push(
-                "PBC not supported on CUDA FDM demag: TruncatedImages periodic demag \
-                 is implemented in the CPU reference path only. Use demag='open' for \
-                 CUDA or run this periodic-demag case on the CPU FDM backend."
-                    .to_string(),
-            );
-        }
-    }
-
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -1201,22 +1182,6 @@ pub(crate) fn plan_fdm_multilayer(
             "the public multilayer FDM runner currently supports only 'llg_overdamped' relaxation"
                 .to_string(),
         );
-    }
-
-    // ── PBC capability gate (multilayer) ─────────────────────────────────
-    if let Some(ref pbc) = problem.pbc {
-        if pbc.has_any_periodic()
-            && runtime_requests_cuda(problem)
-            && enable_demag
-            && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
-        {
-            errors.push(
-                "PBC not supported on CUDA FDM multilayer demag: TruncatedImages periodic \
-                 demag is implemented in the CPU reference path only. Use demag='open' \
-                 for CUDA or run this periodic-demag case on the CPU FDM backend."
-                    .to_string(),
-            );
-        }
     }
 
     if !errors.is_empty() {

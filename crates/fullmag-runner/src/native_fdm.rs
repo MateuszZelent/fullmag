@@ -192,7 +192,21 @@ impl NativeFdmBackend {
             Some(plan.region_mask.clone())
         };
         let demag_kernel_spectra = if plan.enable_demag {
-            if plan.grid.cells[2] == 1 {
+            if let Some(pbc) = plan.periodicity.as_ref().filter(|pbc| {
+                pbc.has_any_periodic()
+                    && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
+            }) {
+                Some(fullmag_engine::compute_periodic_newell_kernel_spectra(
+                    plan.grid.cells[0] as usize,
+                    plan.grid.cells[1] as usize,
+                    plan.grid.cells[2] as usize,
+                    plan.cell_size[0],
+                    plan.cell_size[1],
+                    plan.cell_size[2],
+                    [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)],
+                    pbc.image_counts.unwrap_or([10, 10, 10]),
+                ))
+            } else if plan.grid.cells[2] == 1 {
                 Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(
                     plan.grid.cells[0] as usize,
                     plan.grid.cells[1] as usize,
@@ -380,6 +394,15 @@ impl NativeFdmBackend {
             demag_kernel_spectrum_len: demag_kernel_spectra
                 .as_ref()
                 .map_or(0, |kernels| kernels.n_xx.len() as u64),
+            demag_fft_nx: demag_kernel_spectra
+                .as_ref()
+                .map_or(0, |kernels| kernels.px as u32),
+            demag_fft_ny: demag_kernel_spectra
+                .as_ref()
+                .map_or(0, |kernels| kernels.py as u32),
+            demag_fft_nz: demag_kernel_spectra
+                .as_ref()
+                .map_or(0, |kernels| kernels.pz as u32),
             active_mask: active_mask_flat
                 .as_ref()
                 .map_or(std::ptr::null(), |mask| mask.as_ptr()),

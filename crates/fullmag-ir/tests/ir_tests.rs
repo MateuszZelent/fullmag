@@ -1,7 +1,6 @@
 use fullmag_ir::*;
 use std::collections::{BTreeMap, HashMap};
 
-
 #[test]
 fn bootstrap_example_round_trips_as_json() {
     let ir = ProblemIR::bootstrap_example();
@@ -62,8 +61,7 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 
 #[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
-    let fixture =
-        include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
+    let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
     let decoded: ProblemIR =
         serde_json::from_str(fixture).expect("golden v0.1.0 fixture should migrate");
 
@@ -99,10 +97,12 @@ fn hybrid_mode_requires_hybrid_backend() {
     let errors = ir
         .validate()
         .expect_err("hybrid mode without hybrid backend must fail");
-    assert!(errors
-        .iter()
-        .any(|error| error
-            .contains("execution_mode='hybrid' requires requested_backend='hybrid'")));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error
+                .contains("execution_mode='hybrid' requires requested_backend='hybrid'"))
+    );
 }
 
 #[test]
@@ -144,8 +144,7 @@ fn llg_requires_supported_integrator() {
 #[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
-    ir.magnets[0].initial_magnetization =
-        Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
+    ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
 
     let errors = ir
         .validate()
@@ -375,6 +374,21 @@ fn spin_wave_boundary_condition_accepts_legacy_and_structured_forms() {
     assert_eq!(structured.boundary_pair_id(), Some("x_faces"));
     assert_eq!(structured.surface_anisotropy_ks(), Some(0.002));
     assert_eq!(structured.surface_anisotropy_axis(), Some([0.0, 0.0, 1.0]));
+
+    let pair_ids: SpinWaveBoundaryConditionIR = serde_json::from_str(
+        r#"{
+            "kind": "floquet",
+            "pair_ids": ["x_faces", "y_faces"]
+        }"#,
+    )
+    .expect("pair_ids spin-wave BC should deserialize");
+    assert_eq!(pair_ids.kind(), SpinWaveBoundaryKindIR::Floquet);
+    assert_eq!(pair_ids.boundary_pair_id(), Some("x_faces"));
+    assert_eq!(pair_ids.boundary_pair_ids(), vec!["x_faces", "y_faces"]);
+    assert_eq!(
+        pair_ids.phase_convention(),
+        PhaseConventionIR::ExpMinusIKDotDeltaR
+    );
 }
 
 #[test]
@@ -393,10 +407,15 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
         boundary_markers: vec![99, 99],
         periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
             marker_a: 99,
             marker_b: 99,
             translation: None,
             tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
         }],
         periodic_node_pairs: vec![MeshPeriodicNodePairIR {
             pair_id: "x_faces".to_string(),
@@ -407,6 +426,126 @@ fn mesh_periodic_pair_validation_allows_shared_boundary_marker_pairs() {
     };
 
     assert!(mesh.validate().is_ok());
+}
+
+#[test]
+fn mesh_periodic_boundary_pair_accepts_documented_marker_form() {
+    let pair: MeshPeriodicBoundaryPairIR = serde_json::from_value(serde_json::json!({
+        "pair_id": "x_periodic",
+        "source_marker": "x_min",
+        "destination_marker": "x_max",
+        "translation": [1.0e-6, 0.0, 0.0],
+        "tolerance_m": 1.0e-12,
+        "axis_hint": "x",
+        "orientation": "source_to_destination",
+        "pairing_policy": "node_nearest_within_tolerance"
+    }))
+    .expect("documented periodic boundary pair form should deserialize");
+
+    assert_eq!(pair.pair_id, "x_periodic");
+    assert_eq!(pair.source_marker.as_deref(), Some("x_min"));
+    assert_eq!(pair.destination_marker.as_deref(), Some("x_max"));
+    assert_eq!(pair.marker_a, 0);
+    assert_eq!(pair.marker_b, 0);
+    assert_eq!(pair.translation, Some([1.0e-6, 0.0, 0.0]));
+    assert_eq!(pair.tolerance, Some(1.0e-12));
+    assert_eq!(pair.axis_hint.as_deref(), Some("x"));
+    assert_eq!(pair.orientation.as_deref(), Some("source_to_destination"));
+    assert_eq!(
+        pair.pairing_policy.as_deref(),
+        Some("node_nearest_within_tolerance")
+    );
+}
+
+#[test]
+fn mesh_periodic_pair_validation_rejects_bad_translation_residual() {
+    let mesh = MeshIR {
+        mesh_name: "box".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        boundary_markers: vec![10, 11],
+        periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }],
+        periodic_node_pairs: vec![MeshPeriodicNodePairIR {
+            pair_id: "x_faces".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }],
+        per_domain_quality: HashMap::new(),
+    };
+
+    let errors = mesh
+        .validate()
+        .expect_err("periodic node pair residual should exceed tolerance");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("residual") && error.contains("exceeds tolerance")));
+}
+
+#[test]
+fn mesh_periodic_pair_validation_rejects_duplicate_destination_nodes() {
+    let mesh = MeshIR {
+        mesh_name: "box".to_string(),
+        nodes: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        elements: vec![[0, 1, 2, 3]],
+        element_markers: vec![1],
+        boundary_faces: vec![[0, 2, 3], [1, 2, 3]],
+        boundary_markers: vec![10, 11],
+        periodic_boundary_pairs: vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_faces".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }],
+        periodic_node_pairs: vec![
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "x_faces".to_string(),
+                node_a: 2,
+                node_b: 1,
+            },
+        ],
+        per_domain_quality: HashMap::new(),
+    };
+
+    let errors = mesh
+        .validate()
+        .expect_err("duplicate periodic destination node should be rejected");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("duplicates destination node 1") && error.contains("x_faces")));
 }
 
 #[test]
@@ -565,9 +704,7 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         .validate()
         .expect_err("dispersion-only eigen study must fail validation");
     assert!(errors.iter().any(|error| {
-        error.contains(
-            "eigenmodes study requires at least one eigen_spectrum or eigen_mode output",
-        )
+        error.contains("eigenmodes study requires at least one eigen_spectrum or eigen_mode output")
     }));
 }
 
@@ -610,9 +747,9 @@ fn excitation_analysis_source_must_reference_antenna_module() {
     let errors = ir
         .validate()
         .expect_err("excitation analysis must stay antenna-only");
-    assert!(errors.iter().any(|error| {
-        error.contains("must reference an antenna_field_source current module")
-    }));
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("must reference an antenna_field_source current module") }));
 }
 
 #[test]

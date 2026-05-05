@@ -411,6 +411,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "eigen_normalization": study.normalization,
             "eigen_damping_policy": study.damping_policy,
             "eigen_k_vector": ",".join(str(component) for component in study.k_vector) if study.k_vector is not None else "",
+            "eigen_k_path": "",
             "eigen_spin_wave_bc": study.spin_wave_bc if isinstance(study.spin_wave_bc, str) else str(study.spin_wave_bc.get("kind", "")),
             "eigen_spin_wave_bc_config": study.spin_wave_bc if isinstance(study.spin_wave_bc, dict) else None,
         }
@@ -1648,7 +1649,12 @@ def _render_stages(
             if spin_wave_bc != "free":
                 call_parts.append(f"bc={_py_repr(spin_wave_bc)}")  # type: ignore[arg-type]
             k_vector_raw = _override_string(stage_override, "eigen_k_vector", None)
-            if k_vector_raw is not None and k_vector_raw.strip():
+            k_path_expr = _render_stage_k_path_expr(
+                _override_string(stage_override, "eigen_k_path", None)
+            )
+            if k_path_expr is not None:
+                call_parts.append(f"k_sampling={k_path_expr}")
+            elif k_vector_raw is not None and k_vector_raw.strip():
                 try:
                     parsed = tuple(float(component.strip()) for component in k_vector_raw.split(","))
                     if len(parsed) == 3:
@@ -3003,6 +3009,59 @@ def _text_value(value: object) -> str:
         return ""
     text = str(value).strip()
     return text
+
+
+def _render_stage_k_path_expr(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    point_part, _, option_part = raw.partition("|")
+    points: list[tuple[str, tuple[float, float, float]]] = []
+    for item in point_part.split(";"):
+        entry = item.strip()
+        if not entry:
+            continue
+        label, sep, vector_text = entry.partition(":")
+        if not sep:
+            label = f"k{len(points)}"
+            vector_text = entry
+        components = [part.strip() for part in vector_text.split(",")]
+        if len(components) != 3:
+            return None
+        try:
+            vector = tuple(float(component) for component in components)
+        except ValueError:
+            return None
+        points.append((label.strip() or f"k{len(points)}", vector))  # type: ignore[arg-type]
+    if len(points) < 2:
+        return None
+
+    samples: list[int] = []
+    for option in option_part.split(";"):
+        key, sep, option_value = option.strip().partition("=")
+        if sep and key.strip().lower() in {"samples", "samples_per_segment"}:
+            try:
+                samples = [max(1, int(part.strip())) for part in option_value.split(",") if part.strip()]
+            except ValueError:
+                return None
+    segment_count = len(points) - 1
+    if not samples:
+        samples = [41] * segment_count
+    elif len(samples) == 1 and segment_count > 1:
+        samples = samples * segment_count
+    elif len(samples) != segment_count:
+        return None
+
+    rendered_points = ", ".join(
+        f"fm.KPoint({_py_repr(label)}, {_py_tuple3(vector)})"
+        for label, vector in points
+    )
+    return (
+        f"fm.KPath(points=[{rendered_points}], "
+        f"samples_per_segment={samples!r})"
+    )
 
 
 def _text_mesh_size(value: object) -> str:

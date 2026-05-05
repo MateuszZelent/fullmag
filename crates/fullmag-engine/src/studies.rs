@@ -614,10 +614,15 @@ fn structured_periodic_pairs(
     for (pair_id, axis) in pair_specs {
         boundary_pairs.push(MeshPeriodicBoundaryPairIR {
             pair_id: pair_id.to_string(),
+            source_marker: None,
+            destination_marker: None,
             marker_a: 1,
             marker_b: 1,
             translation: None,
             tolerance: None,
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
         });
         for k in 0..=divisions {
             for j in 0..=divisions {

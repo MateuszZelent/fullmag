@@ -36,6 +36,69 @@ SUPPORTED_SPIN_WAVE_BCS = {"free", "pinned", "periodic", "floquet", "surface_ani
 
 
 @dataclass(frozen=True, slots=True)
+class PeriodicBC:
+    pair_ids: Sequence[str]
+
+    def __post_init__(self) -> None:
+        normalized = tuple(require_non_empty(pair_id, "pair_id") for pair_id in self.pair_ids)
+        if not normalized:
+            raise ValueError("PeriodicBC requires at least one pair_id")
+        object.__setattr__(self, "pair_ids", normalized)
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "periodic",
+            "pair_ids": list(self.pair_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FloquetBC:
+    pair_ids: Sequence[str]
+    phase_convention: str = "exp_minus_i_k_dot_delta_r"
+
+    def __post_init__(self) -> None:
+        normalized = tuple(require_non_empty(pair_id, "pair_id") for pair_id in self.pair_ids)
+        if not normalized:
+            raise ValueError("FloquetBC requires at least one pair_id")
+        object.__setattr__(self, "pair_ids", normalized)
+        object.__setattr__(
+            self,
+            "phase_convention",
+            require_non_empty(self.phase_convention, "phase_convention"),
+        )
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "floquet",
+            "pair_ids": list(self.pair_ids),
+            "phase_convention": self.phase_convention,
+        }
+
+
+SpinWaveBoundarySpec = str | dict[str, object] | PeriodicBC | FloquetBC
+
+
+def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, object]:
+    if hasattr(value, "to_ir"):
+        serialized = value.to_ir()
+    else:
+        serialized = value
+    if isinstance(serialized, str):
+        if serialized not in SUPPORTED_SPIN_WAVE_BCS:
+            supported = ", ".join(sorted(SUPPORTED_SPIN_WAVE_BCS))
+            raise ValueError(f"spin_wave_bc must be one of: {supported}")
+        return serialized
+    if isinstance(serialized, dict):
+        kind = serialized.get("kind")
+        if kind not in SUPPORTED_SPIN_WAVE_BCS:
+            supported = ", ".join(sorted(SUPPORTED_SPIN_WAVE_BCS))
+            raise ValueError(f"spin_wave_bc.kind must be one of: {supported}")
+        return serialized
+    raise ValueError("spin_wave_bc must be a string, mapping, PeriodicBC, or FloquetBC")
+
+
+@dataclass(frozen=True, slots=True)
 class TimeEvolution:
     dynamics: LLG
     outputs: Sequence[TimeOutputSpec]
@@ -295,7 +358,7 @@ class Eigenmodes:
     mode_tracking: ModeTracking | None = None
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
-    spin_wave_bc: str | dict[str, object] = "free"
+    spin_wave_bc: SpinWaveBoundarySpec = "free"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -336,17 +399,7 @@ class Eigenmodes:
         if self.damping_policy not in SUPPORTED_EIGEN_DAMPING_POLICIES:
             supported = ", ".join(sorted(SUPPORTED_EIGEN_DAMPING_POLICIES))
             raise ValueError(f"damping_policy must be one of: {supported}")
-        if isinstance(self.spin_wave_bc, str):
-            if self.spin_wave_bc not in SUPPORTED_SPIN_WAVE_BCS:
-                supported = ", ".join(sorted(SUPPORTED_SPIN_WAVE_BCS))
-                raise ValueError(f"spin_wave_bc must be one of: {supported}")
-        elif isinstance(self.spin_wave_bc, dict):
-            kind = self.spin_wave_bc.get("kind")
-            if kind not in SUPPORTED_SPIN_WAVE_BCS:
-                supported = ", ".join(sorted(SUPPORTED_SPIN_WAVE_BCS))
-                raise ValueError(f"spin_wave_bc.kind must be one of: {supported}")
-        else:
-            raise ValueError("spin_wave_bc must be a string or a mapping")
+        _serialize_spin_wave_bc(self.spin_wave_bc)
         # Validate alias / primary representation early to fail loudly.
         coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
 
@@ -384,7 +437,7 @@ class Eigenmodes:
             ),
             "normalization": self.normalization,
             "damping_policy": self.damping_policy,
-            "spin_wave_bc": self.spin_wave_bc,
+            "spin_wave_bc": _serialize_spin_wave_bc(self.spin_wave_bc),
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
         if self.mode_tracking is not None:
@@ -405,7 +458,7 @@ class FrequencyResponse:
     k_vector: tuple[float, float, float] | None = None
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
-    spin_wave_bc: str | dict[str, object] = "free"
+    spin_wave_bc: SpinWaveBoundarySpec = "free"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -418,6 +471,7 @@ class FrequencyResponse:
             raise ValueError("frequencies_hz must contain positive values only")
         object.__setattr__(self, "frequencies_hz", normalized_freqs)
         coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+        _serialize_spin_wave_bc(self.spin_wave_bc)
 
     def to_ir(self) -> dict[str, object]:
         equilibrium: dict[str, object]
@@ -441,7 +495,7 @@ class FrequencyResponse:
             ),
             "normalization": self.normalization,
             "damping_policy": self.damping_policy,
-            "spin_wave_bc": self.spin_wave_bc,
+            "spin_wave_bc": _serialize_spin_wave_bc(self.spin_wave_bc),
             "excitation": {"field_au_per_m": list(self.excitation_field_au_per_m)},
             "frequencies_hz": {"values_hz": list(self.frequencies_hz)},
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},

@@ -3,6 +3,10 @@
 import { useEffect, useMemo } from "react";
 
 import type { AnalyzeSelectionState, AnalyzeTab } from "./analyzeSelection";
+import {
+  buildModeKey,
+  normalizeSpectrumArtifact,
+} from "@/components/analyze/eigenTypes";
 import { useCurrentAnalyzeArtifacts } from "@/src/hooks/resources/useCurrentAnalyzeArtifacts";
 
 interface AnalyzeWorkspaceController {
@@ -19,24 +23,36 @@ export function useAnalyzeWorkspaceState(
     enabled: analyzeSelection.domain === "eigenmodes",
   });
   const selectedMode = analyzeSelection.selectedModeIndex;
+  const selectedSampleIndex = analyzeSelection.sampleIndex ?? 0;
+  const normalizedSpectrum = useMemo(
+    () => normalizeSpectrumArtifact(artifacts.spectrum),
+    [artifacts.spectrum],
+  );
 
   const selectedModeArtifact =
-    selectedMode != null ? (artifacts.modeCache[selectedMode] ?? null) : null;
+    selectedMode != null
+      ? (artifacts.modeCache[buildModeKey(selectedSampleIndex, selectedMode)]
+          ?? artifacts.modeCache[buildModeKey(0, selectedMode)]
+          ?? null)
+      : null;
 
   const selectedModeSummary = useMemo(
     () =>
-      artifacts.spectrum?.modes.find((mode) => mode.index === selectedMode) ?? null,
-    [artifacts.spectrum, selectedMode],
+      normalizedSpectrum?.samples
+        .find((sample) => sample.sample_index === selectedSampleIndex)
+        ?.modes.find((mode) => mode.raw_mode_index === selectedMode) ?? null,
+    [normalizedSpectrum, selectedMode, selectedSampleIndex],
   );
 
   useEffect(() => {
-    if (!artifacts.spectrum || artifacts.spectrum.modes.length === 0) {
+    const firstSample = normalizedSpectrum?.samples[0];
+    if (!firstSample || firstSample.modes.length === 0) {
       return;
     }
     if (analyzeSelection.selectedModeIndex == null) {
-      setSelectedModeIndex(artifacts.spectrum.modes[0].index);
+      setSelectedModeIndex(firstSample.modes[0].raw_mode_index);
     }
-  }, [artifacts.spectrum, analyzeSelection.selectedModeIndex, setSelectedModeIndex]);
+  }, [normalizedSpectrum, analyzeSelection.selectedModeIndex, setSelectedModeIndex]);
 
   useEffect(() => {
     if (selectedMode != null) {

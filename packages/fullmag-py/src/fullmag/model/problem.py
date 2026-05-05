@@ -45,6 +45,52 @@ SERIALIZER_VERSION = "0.2.0"
 _FEM_MESH_CACHE_VERSION = "v3"
 
 
+@dataclass(frozen=True, slots=True)
+class FdmPbc:
+    axes: tuple[bool, bool, bool]
+    demag: str = "open"
+    image_counts: tuple[int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        axes = tuple(bool(value) for value in self.axes)
+        if len(axes) != 3:
+            raise ValueError("FdmPbc.axes must contain exactly three booleans")
+        object.__setattr__(self, "axes", axes)
+
+        demag = self.demag.strip().lower()
+        if demag not in {"open", "truncated_images"}:
+            raise ValueError("FdmPbc.demag must be 'open' or 'truncated_images'")
+        object.__setattr__(self, "demag", demag)
+
+        if demag == "open" and self.image_counts is not None:
+            raise ValueError("FdmPbc.image_counts require demag='truncated_images'")
+
+        if self.image_counts is not None:
+            counts = tuple(int(value) for value in self.image_counts)
+            if len(counts) != 3:
+                raise ValueError("FdmPbc.image_counts must contain exactly three integers")
+            if any(value < 0 for value in counts):
+                raise ValueError("FdmPbc.image_counts must be non-negative")
+            object.__setattr__(self, "image_counts", counts)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "axes": ["periodic" if enabled else "open" for enabled in self.axes],
+            "demag": self.demag,
+        }
+        if self.image_counts is not None:
+            payload["image_counts"] = list(self.image_counts)
+        return payload
+
+
+def _pbc_to_ir(pbc: FdmPbc | tuple[bool, bool, bool] | None) -> dict[str, object] | None:
+    if pbc is None:
+        return None
+    if isinstance(pbc, FdmPbc):
+        return pbc.to_ir()
+    return FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
+
+
 def _fdm_cell_centers_from_asset(asset: dict[str, Any]) -> list[list[float]]:
     cells = [int(value) for value in asset.get("cells", [0, 0, 0])]
     cell_size = [float(value) for value in asset.get("cell_size", [0.0, 0.0, 0.0])]
@@ -938,7 +984,7 @@ class Problem:
     mechanical_loads: Sequence[MechanicalLoad] = ()
 
     # Periodic boundary conditions (per-axis, for FDM)
-    pbc: tuple[bool, bool, bool] | None = None
+    pbc: FdmPbc | tuple[bool, bool, bool] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
@@ -1154,14 +1200,7 @@ class Problem:
             "mechanical_bcs": [bc.to_ir() for bc in self.mechanical_bcs],
             "mechanical_loads": [ml.to_ir() for ml in self.mechanical_loads],
             # Periodic boundary conditions
-            **({"pbc": {
-                "axes": [
-                    "periodic" if self.pbc[0] else "open",
-                    "periodic" if self.pbc[1] else "open",
-                    "periodic" if self.pbc[2] else "open",
-                ],
-                "demag": "open",
-            }} if self.pbc is not None else {}),
+            **({"pbc": pbc_ir} if (pbc_ir := _pbc_to_ir(self.pbc)) is not None else {}),
         }
 
     def _resolve_discretization(

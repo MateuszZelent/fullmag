@@ -4,6 +4,7 @@
 //! relaxation algorithm variants, exchange/axis/demag boundary conditions,
 //! FDM periodicity, spin-wave boundary conditions, and imported geometry scale.
 
+use crate::PhaseConventionIR;
 use serde::{Deserialize, Serialize};
 
 // ── Core execution choices ────────────────────────────────────────────────────
@@ -156,6 +157,10 @@ pub struct SpinWaveBoundaryConfigIR {
     pub kind: SpinWaveBoundaryKindIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_pair_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pair_ids: Vec<String>,
+    #[serde(default)]
+    pub phase_convention: PhaseConventionIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_anisotropy_ks: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -186,7 +191,23 @@ impl SpinWaveBoundaryConditionIR {
     pub fn boundary_pair_id(&self) -> Option<&str> {
         match self {
             Self::Legacy(_) => None,
-            Self::Config(config) => config.boundary_pair_id.as_deref(),
+            Self::Config(config) => config
+                .boundary_pair_id
+                .as_deref()
+                .or_else(|| config.pair_ids.first().map(String::as_str)),
+        }
+    }
+
+    pub fn boundary_pair_ids(&self) -> Vec<&str> {
+        match self {
+            Self::Legacy(_) => Vec::new(),
+            Self::Config(config) => {
+                if config.pair_ids.is_empty() {
+                    config.boundary_pair_id.iter().map(String::as_str).collect()
+                } else {
+                    config.pair_ids.iter().map(String::as_str).collect()
+                }
+            }
         }
     }
 
@@ -194,6 +215,13 @@ impl SpinWaveBoundaryConditionIR {
         match self {
             Self::Legacy(_) => None,
             Self::Config(config) => config.surface_anisotropy_ks,
+        }
+    }
+
+    pub fn phase_convention(&self) -> PhaseConventionIR {
+        match self {
+            Self::Legacy(_) => PhaseConventionIR::default(),
+            Self::Config(config) => config.phase_convention,
         }
     }
 

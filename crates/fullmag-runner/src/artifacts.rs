@@ -5,6 +5,7 @@ use fullmag_ir::BackendPlanIR;
 
 use crate::types::{ExecutedRun, StepStats};
 
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -214,6 +215,8 @@ pub(crate) fn write_artifacts(
         fs::write(artifact_path, &artifact.bytes)?;
     }
 
+    write_periodic_pairs_artifact(output_dir, plan)?;
+
     write_prescribed_current_transport_artifacts(
         output_dir,
         problem,
@@ -223,6 +226,176 @@ pub(crate) fn write_artifacts(
     )?;
 
     Ok(())
+}
+
+fn write_periodic_pairs_artifact(
+    output_dir: &Path,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> std::io::Result<()> {
+    let Some(mesh) = periodic_mesh(plan) else {
+        return Ok(());
+    };
+    if mesh.periodic_boundary_pairs.is_empty() {
+        return Ok(());
+    }
+
+    let boundary_nodes_by_marker = mesh_boundary_nodes_by_marker(mesh);
+    let node_pairs_by_id = mesh.periodic_node_pairs.iter().fold(
+        HashMap::<String, Vec<&fullmag_ir::MeshPeriodicNodePairIR>>::new(),
+        |mut acc, pair| {
+            acc.entry(pair.pair_id.clone()).or_default().push(pair);
+            acc
+        },
+    );
+    let pairs = mesh
+        .periodic_boundary_pairs
+        .iter()
+        .map(|boundary_pair| {
+            let node_pairs = node_pairs_by_id
+                .get(&boundary_pair.pair_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let source_nodes = boundary_nodes_by_marker
+                .get(&boundary_pair.marker_a)
+                .cloned()
+                .unwrap_or_default();
+            let destination_nodes = boundary_nodes_by_marker
+                .get(&boundary_pair.marker_b)
+                .cloned()
+                .unwrap_or_default();
+            let paired_source_nodes = node_pairs
+                .iter()
+                .map(|pair| pair.node_a)
+                .collect::<BTreeSet<_>>();
+            let paired_destination_nodes = node_pairs
+                .iter()
+                .map(|pair| pair.node_b)
+                .collect::<BTreeSet<_>>();
+            let diagnostics = mesh_periodic_pair_residuals(mesh, boundary_pair, node_pairs);
+
+            serde_json::json!({
+                "pair_id": boundary_pair.pair_id.clone(),
+                "source_marker": boundary_pair.source_marker.clone(),
+                "destination_marker": boundary_pair.destination_marker.clone(),
+                "marker_a": boundary_pair.marker_a,
+                "marker_b": boundary_pair.marker_b,
+                "expected_translation_m": boundary_pair.translation,
+                "paired_node_count": node_pairs.len(),
+                "unpaired_source_node_count": source_nodes.difference(&paired_source_nodes).count(),
+                "unpaired_destination_node_count": destination_nodes.difference(&paired_destination_nodes).count(),
+                "max_residual_m": diagnostics.max_residual_m,
+                "rms_residual_m": diagnostics.rms_residual_m,
+                "status": diagnostics.status,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let payload = serde_json::json!({
+        "schema_version": "periodic_pairs.v1",
+        "pairs": pairs,
+    });
+    let artifact_path = output_dir.join("mesh").join("periodic_pairs.v1.json");
+    if let Some(parent) = artifact_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(
+        artifact_path,
+        serde_json::to_string_pretty(&payload).unwrap(),
+    )?;
+
+    Ok(())
+}
+
+fn periodic_mesh(plan: &fullmag_ir::ExecutionPlanIR) -> Option<&fullmag_ir::MeshIR> {
+    match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => Some(&fem.mesh),
+        BackendPlanIR::FemEigen(fem) => Some(&fem.mesh),
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MeshPeriodicResidualDiagnostics {
+    max_residual_m: Option<f64>,
+    rms_residual_m: Option<f64>,
+    status: String,
+}
+
+fn mesh_periodic_pair_residuals(
+    mesh: &fullmag_ir::MeshIR,
+    boundary_pair: &fullmag_ir::MeshPeriodicBoundaryPairIR,
+    node_pairs: &[&fullmag_ir::MeshPeriodicNodePairIR],
+) -> MeshPeriodicResidualDiagnostics {
+    if node_pairs.is_empty() {
+        return MeshPeriodicResidualDiagnostics {
+            max_residual_m: None,
+            rms_residual_m: None,
+            status: "empty".to_string(),
+        };
+    }
+    let Some(translation) = boundary_pair.translation else {
+        return MeshPeriodicResidualDiagnostics {
+            max_residual_m: None,
+            rms_residual_m: None,
+            status: "missing_translation".to_string(),
+        };
+    };
+
+    let mut max_residual = 0.0f64;
+    let mut sum_sq = 0.0f64;
+    let mut valid_count = 0usize;
+    for pair in node_pairs {
+        let Some(src) = mesh.nodes.get(pair.node_a as usize) else {
+            return MeshPeriodicResidualDiagnostics {
+                max_residual_m: None,
+                rms_residual_m: None,
+                status: "invalid_node_reference".to_string(),
+            };
+        };
+        let Some(dst) = mesh.nodes.get(pair.node_b as usize) else {
+            return MeshPeriodicResidualDiagnostics {
+                max_residual_m: None,
+                rms_residual_m: None,
+                status: "invalid_node_reference".to_string(),
+            };
+        };
+        let residual = [
+            dst[0] - src[0] - translation[0],
+            dst[1] - src[1] - translation[1],
+            dst[2] - src[2] - translation[2],
+        ];
+        let norm =
+            (residual[0] * residual[0] + residual[1] * residual[1] + residual[2] * residual[2])
+                .sqrt();
+        max_residual = max_residual.max(norm);
+        sum_sq += norm * norm;
+        valid_count += 1;
+    }
+    let rms = (sum_sq / valid_count as f64).sqrt();
+    let tolerance = boundary_pair.tolerance.unwrap_or(1e-9).max(0.0);
+    let status = if max_residual > tolerance {
+        "residual_exceeds_tolerance"
+    } else {
+        "valid"
+    };
+
+    MeshPeriodicResidualDiagnostics {
+        max_residual_m: Some(max_residual),
+        rms_residual_m: Some(rms),
+        status: status.to_string(),
+    }
+}
+
+fn mesh_boundary_nodes_by_marker(mesh: &fullmag_ir::MeshIR) -> HashMap<u32, BTreeSet<u32>> {
+    let mut nodes_by_marker = HashMap::<u32, BTreeSet<u32>>::new();
+    for (face_index, face) in mesh.boundary_faces.iter().enumerate() {
+        let Some(marker) = mesh.boundary_markers.get(face_index).copied() else {
+            continue;
+        };
+        let nodes = nodes_by_marker.entry(marker).or_default();
+        nodes.extend(face.iter().copied());
+    }
+    nodes_by_marker
 }
 
 fn write_prescribed_current_transport_artifacts(
@@ -812,6 +985,81 @@ mod tests {
         let values = artifact["values"].as_array().expect("values should exist");
         assert_eq!(values.len(), 4);
         assert_eq!(values[0], serde_json::json!([0.0, 0.0, 5e10]));
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn periodic_pairs_artifact_reports_pair_diagnostics() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0e-6, 0.0, 0.0],
+            [0.0, 1.0e-6, 0.0],
+            [1.0e-6, 1.0e-6, 0.0],
+            [0.0, 0.0, 1.0e-6],
+            [1.0e-6, 0.0, 1.0e-6],
+        ];
+        fem.mesh.boundary_faces = vec![[0, 2, 4], [1, 3, 5]];
+        fem.mesh.boundary_markers = vec![10, 11];
+        fem.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 10,
+            marker_b: 11,
+            translation: Some([1.0e-6, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: Some("same".to_string()),
+            pairing_policy: Some("nearest".to_string()),
+        }];
+        fem.mesh.periodic_node_pairs = vec![
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_periodic".to_string(),
+                node_a: 0,
+                node_b: 1,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_periodic".to_string(),
+                node_a: 2,
+                node_b: 3,
+            },
+            fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x_periodic".to_string(),
+                node_a: 4,
+                node_b: 5,
+            },
+        ];
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-periodic-pairs-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        write_periodic_pairs_artifact(&output_dir, &plan)
+            .expect("periodic pairs artifact should be written");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))
+                .expect("periodic pairs artifact should exist"),
+        )
+        .expect("periodic pairs artifact should parse");
+        assert_eq!(artifact["schema_version"], "periodic_pairs.v1");
+        assert_eq!(artifact["pairs"][0]["pair_id"], "x_periodic");
+        assert_eq!(artifact["pairs"][0]["paired_node_count"], 3);
+        assert_eq!(artifact["pairs"][0]["unpaired_source_node_count"], 0);
+        assert_eq!(artifact["pairs"][0]["unpaired_destination_node_count"], 0);
+        assert_eq!(artifact["pairs"][0]["max_residual_m"], 0.0);
+        assert_eq!(artifact["pairs"][0]["status"], "valid");
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

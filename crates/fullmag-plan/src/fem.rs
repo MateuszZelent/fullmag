@@ -745,6 +745,18 @@ pub(crate) fn plan_fem(
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
+    if !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "PBC not supported: FEM static/time-domain mesh '{}' declares {} \
+                 periodic_node_pairs, but this solver path does not enforce periodic constraints. \
+                 Use the FEM eigen solver with spin_wave_bc='periodic'/'floquet' or provide a \
+                 non-periodic mesh.",
+                mesh_name,
+                mesh.periodic_node_pairs.len()
+            )],
+        });
+    }
     if shared_domain_mesh_requested(problem, demag_realization)
         && domain_mesh_mode != fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
     {
@@ -1358,20 +1370,44 @@ pub(crate) fn plan_fem_eigen(
                 .to_string(),
         );
     }
+    if operator.include_demag
+        && matches!(
+            spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Floquet
+        )
+    {
+        errors.push(
+            "dynamic demag for Floquet periodic FEM is not implemented yet. Disable demag or use k=0/free boundary."
+                .to_string(),
+        );
+    }
     match spin_wave_bc.kind() {
         fullmag_ir::SpinWaveBoundaryKindIR::Periodic => {
-            let has_pairs = if let Some(pair_id) = spin_wave_bc.boundary_pair_id() {
-                mesh_parts.iter().any(|(_, mesh)| {
-                    mesh.periodic_node_pairs
+            let requested_pair_ids = spin_wave_bc.boundary_pair_ids();
+            let has_pairs = if requested_pair_ids.is_empty() {
+                if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
+                    !domain_asset.mesh.periodic_node_pairs.is_empty()
+                } else {
+                    mesh_parts
                         .iter()
-                        .any(|pair| pair.pair_id == pair_id)
-                })
-            } else if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
-                !domain_asset.mesh.periodic_node_pairs.is_empty()
+                        .any(|(_, mesh)| !mesh.periodic_node_pairs.is_empty())
+                }
             } else {
-                mesh_parts
-                    .iter()
-                    .any(|(_, mesh)| !mesh.periodic_node_pairs.is_empty())
+                requested_pair_ids.iter().all(|pair_id| {
+                    mesh_parts.iter().any(|(_, mesh)| {
+                        mesh.periodic_node_pairs
+                            .iter()
+                            .any(|pair| pair.pair_id == *pair_id)
+                    }) || resolved_domain_mesh_asset
+                        .as_ref()
+                        .is_some_and(|domain_asset| {
+                            domain_asset
+                                .mesh
+                                .periodic_node_pairs
+                                .iter()
+                                .any(|pair| pair.pair_id == *pair_id)
+                        })
+                })
             };
             if !has_pairs {
                 errors.push(
@@ -1381,18 +1417,31 @@ pub(crate) fn plan_fem_eigen(
             }
         }
         fullmag_ir::SpinWaveBoundaryKindIR::Floquet => {
-            let has_pairs = if let Some(pair_id) = spin_wave_bc.boundary_pair_id() {
-                mesh_parts.iter().any(|(_, mesh)| {
-                    mesh.periodic_node_pairs
+            let requested_pair_ids = spin_wave_bc.boundary_pair_ids();
+            let has_pairs = if requested_pair_ids.is_empty() {
+                if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
+                    !domain_asset.mesh.periodic_node_pairs.is_empty()
+                } else {
+                    mesh_parts
                         .iter()
-                        .any(|pair| pair.pair_id == pair_id)
-                })
-            } else if let Some(domain_asset) = resolved_domain_mesh_asset.as_ref() {
-                !domain_asset.mesh.periodic_node_pairs.is_empty()
+                        .any(|(_, mesh)| !mesh.periodic_node_pairs.is_empty())
+                }
             } else {
-                mesh_parts
-                    .iter()
-                    .any(|(_, mesh)| !mesh.periodic_node_pairs.is_empty())
+                requested_pair_ids.iter().all(|pair_id| {
+                    mesh_parts.iter().any(|(_, mesh)| {
+                        mesh.periodic_node_pairs
+                            .iter()
+                            .any(|pair| pair.pair_id == *pair_id)
+                    }) || resolved_domain_mesh_asset
+                        .as_ref()
+                        .is_some_and(|domain_asset| {
+                            domain_asset
+                                .mesh
+                                .periodic_node_pairs
+                                .iter()
+                                .any(|pair| pair.pair_id == *pair_id)
+                        })
+                })
             };
             if !has_pairs {
                 errors.push(

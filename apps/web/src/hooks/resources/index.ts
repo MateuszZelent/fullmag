@@ -16,6 +16,16 @@ export {
 export { useCommands } from "./useCommands";
 export { useCommandCompletion } from "./useCommandCompletion";
 export { useArtifacts } from "./useArtifacts";
+export {
+  useEigenBranchesV2,
+  useEigenDispersionCsv,
+  useEigenModeV2,
+  useEigenSpectrumV2,
+} from "./useEigenArtifactsV2";
+export type {
+  UseEigenArtifactV2Options,
+  UseEigenArtifactV2Result,
+} from "./useEigenArtifactsV2";
 export { useGeometryCapabilities, useSceneDocument } from "./useSceneDocument";
 export { useStageExecution } from "./useStageExecution";
 export { useWorkspaceLayout } from "./useWorkspaceLayout";
@@ -34,6 +44,7 @@ export {
   useMeshSharedDomainReport,
   useMeshSharedDomainQuality,
   useMeshSharedDomainManifest,
+  usePeriodicPairs,
   useMeshSharedDomainTopology,
   useMeshObjectConfig,
   useMeshObjectReport,

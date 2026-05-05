@@ -159,6 +159,16 @@ export class LiveSessionClient {
     }
   }
 
+  async getText(path: string, opts?: RequestOptions): Promise<string> {
+    const url = this.resolveUrl(path);
+    const response = await this.executeRequest("GET", url, undefined, opts);
+    try {
+      return await response.text();
+    } catch (err) {
+      throw LiveApiError.networkError(url, err);
+    }
+  }
+
   /**
    * Like getBinary but also returns response headers.
    * Useful for ETag/304 caching and content-length inspection.

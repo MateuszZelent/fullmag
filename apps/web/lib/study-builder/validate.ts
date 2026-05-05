@@ -4,6 +4,23 @@ import type { StudyPipelineDocumentState, StudyPipelineNodeState } from "@/lib/s
 type ValidatableStudyPipelineNode = StudyPipelineDocument["nodes"][number] | StudyPipelineNodeState;
 type ValidatableStudyPipeline = StudyPipelineDocument | StudyPipelineDocumentState;
 
+function flattenEnabledNodes(
+  document: ValidatableStudyPipeline,
+): ValidatableStudyPipelineNode[] {
+  const result: ValidatableStudyPipelineNode[] = [];
+  const walk = (nodes: ReadonlyArray<ValidatableStudyPipelineNode>) => {
+    for (const node of nodes) {
+      if (!node.enabled) continue;
+      result.push(node);
+      if (node.node_kind === "group") {
+        walk(node.children);
+      }
+    }
+  };
+  walk(document.nodes);
+  return result;
+}
+
 function flattenEnabledNodeKinds(
   document: ValidatableStudyPipeline,
 ): Array<{ kind: string; nodeId: string }> {
@@ -103,6 +120,18 @@ export function validateStudyPipeline(
       nodeId: enabled[firstEigenIndex]?.nodeId ?? null,
       message: "Eigenmodes stage found without a prior relax stage.",
       suggestion: "Insert a relax stage before eigenmodes.",
+    });
+  }
+
+  for (const node of flattenEnabledNodes(document)) {
+    if (node.node_kind !== "primitive" || node.stage_kind !== "relax") continue;
+    if (String(node.payload.relax_algorithm ?? "") !== "tangent_plane_implicit") continue;
+    diagnostics.push({
+      id: `relax-tangent-plane-unavailable-${node.id}`,
+      severity: "error",
+      nodeId: node.id,
+      message: "Tangent-plane implicit relaxation is defined but not executable in the current runner.",
+      suggestion: "Use LLG overdamped, Projected gradient (BB), or Nonlinear conjugate gradient.",
     });
   }
 

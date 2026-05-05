@@ -22,6 +22,7 @@ import type {
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshObjectSizeFieldResource,
+  MeshPeriodicPairsResource,
   MeshSharedDomainConfigReplaceRequest,
   MeshSharedDomainConfigResource,
   MeshSharedDomainManifestResource,
@@ -540,6 +541,16 @@ export function useMeshSharedDomainTopology(options?: MeshHookOptions) {
       getLiveSessionClient().mesh.getSharedDomainTopologyResponse(requestOptions),
     options,
   );
+}
+
+export function usePeriodicPairs(options?: MeshHookOptions) {
+  const resource = useMeshJsonResource<MeshPeriodicPairsResource>(
+    "mesh-periodic-pairs",
+    () => getLiveSessionClient().mesh.getPeriodicPairs(),
+    options,
+    (opts) => getLiveSessionClient().mesh.getPeriodicPairsResponse(opts),
+  );
+  return { periodicPairs: resource.data, ...resource };
 }
 
 export function useMeshObjectConfig(

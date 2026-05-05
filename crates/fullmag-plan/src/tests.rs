@@ -781,6 +781,84 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
 }
 
 #[test]
+fn fem_static_time_domain_rejects_periodic_mesh_pairs() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 5e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "periodic_strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2], [0, 1, 3]],
+                boundary_markers: vec![10, 11],
+                periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_periodic".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 11,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: Some(1e-12),
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }],
+                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                }],
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
+
+    let err = plan(&ir).expect_err("FEM time-domain periodic mesh should be rejected");
+    assert!(
+        err.reasons
+            .iter()
+            .any(|reason| reason.contains("periodic_node_pairs")
+                && reason.contains("does not enforce periodic constraints")),
+        "error should reject unenforced FEM periodic mesh, got: {:?}",
+        err.reasons
+    );
+}
+
+#[test]
 fn fem_backend_interfacial_dmi_requires_explicit_interface_normal_in_strict_mode() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
@@ -3150,10 +3228,15 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
                     marker_a: 10,
                     marker_b: 11,
                     translation: None,
                     tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
                 }],
                 periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
                     pair_id: "x_faces".to_string(),
@@ -3184,6 +3267,8 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
                 boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: None,
                 surface_anisotropy_axis: None,
             },
@@ -3233,10 +3318,15 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
                 boundary_markers: vec![1],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
                     marker_a: 10,
                     marker_b: 11,
                     translation: None,
                     tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
                 }],
                 periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
                     pair_id: "x_faces".to_string(),
@@ -3267,6 +3357,8 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
                 boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: None,
                 surface_anisotropy_axis: None,
             },
@@ -3282,6 +3374,113 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
     let plan =
         plan(&ir).expect("floquet FEM eigen with pairing metadata and k_sampling should plan");
     assert!(matches!(plan.backend_plan, BackendPlanIR::FemEigen(_)));
+}
+
+#[test]
+fn fem_eigen_floquet_dynamic_demag_is_rejected() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: None,
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: Some("meshes/unit_tet.msh".to_string()),
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: Some("meshes/unit_tet.msh".to_string()),
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip_air_periodic".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![10, 99],
+                periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_faces".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 10,
+                    marker_b: 99,
+                    translation: None,
+                    tolerance: None,
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }],
+                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_faces".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                }],
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        },
+    ];
+    ir.study = fullmag_ir::StudyIR::Eigenmodes {
+        dynamics: ir.study.dynamics().clone(),
+        operator: fullmag_ir::EigenOperatorConfigIR {
+            kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+            include_demag: true,
+        },
+        count: 3,
+        target: fullmag_ir::EigenTargetIR::Lowest,
+        equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+        k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+            k_vector: [1.0e7, 0.0, 0.0],
+        }),
+        normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+        damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        },
+        mode_tracking: None,
+    };
+
+    let err = plan(&ir).expect_err("Floquet FEM eigen with dynamic demag is unsupported");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason
+            .contains("dynamic demag for Floquet periodic FEM is not implemented yet")));
 }
 
 #[test]
@@ -3339,6 +3538,8 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
             fullmag_ir::SpinWaveBoundaryConfigIR {
                 kind: fullmag_ir::SpinWaveBoundaryKindIR::SurfaceAnisotropy,
                 boundary_pair_id: None,
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
                 surface_anisotropy_ks: Some(0.0),
                 surface_anisotropy_axis: Some([0.0, 0.0, 0.0]),
             },
@@ -3974,7 +4175,7 @@ fn fdm_cpu_pbc_truncated_images_demag_plans() {
 }
 
 #[test]
-fn fdm_cuda_pbc_truncated_images_demag_is_rejected() {
+fn fdm_cuda_pbc_truncated_images_demag_plans() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms.push(EnergyTermIR::Demag {
         realization: fullmag_ir::RequestedFemDemagIR::Auto,
@@ -3992,12 +4193,39 @@ fn fdm_cuda_pbc_truncated_images_demag_is_rejected() {
         demag: FdmDemagPeriodicityIR::TruncatedImages,
         image_counts: Some([4, 4, 0]),
     });
-    let err = plan(&ir).expect_err("CUDA FDM + PBC TruncatedImages demag should be rejected");
-    assert!(
-        err.reasons
-            .iter()
-            .any(|r| r.contains("CUDA FDM demag") && r.contains("TruncatedImages")),
-        "error should mention CUDA TruncatedImages demag not supported, got: {:?}",
-        err.reasons
+    let plan = plan(&ir).expect("CUDA FDM + PBC TruncatedImages demag should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert_eq!(
+                fdm.periodicity.as_ref().and_then(|pbc| pbc.image_counts),
+                Some([4, 4, 0])
+            );
+        }
+        _ => panic!("expected FDM plan"),
+    }
+}
+
+#[test]
+fn fdm_cuda_pbc_dmi_plans() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::BulkDmi { d: 1.0e-3 });
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
     );
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        demag: FdmDemagPeriodicityIR::Open,
+        image_counts: None,
+    });
+
+    let plan = plan(&ir).expect("CUDA FDM + PBC DMI should plan");
+    match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => assert_eq!(fdm.periodicity, ir.pbc),
+        _ => panic!("expected FDM plan"),
+    }
 }
