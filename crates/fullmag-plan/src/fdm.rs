@@ -181,122 +181,9 @@ pub(crate) fn plan_fdm(
             true,
         )
     } else {
-        match &shape {
-            GeometryShape::Box { size } => {
-                let grid_cells = [
-                    (size[0] / cell_size[0]).round().max(1.0) as u32,
-                    (size[1] / cell_size[1]).round().max(1.0) as u32,
-                    (size[2] / cell_size[2]).round().max(1.0) as u32,
-                ];
-                (*size, None, grid_cells, false)
-            }
-            GeometryShape::Cylinder { radius, height } => {
-                let diameter = 2.0 * radius;
-                let bbox = [diameter, diameter, *height];
-                let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
-                let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
-                let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-                let n = (nx * ny * nz) as usize;
-                let cx = nx as f64 * cell_size[0] * 0.5;
-                let cy = ny as f64 * cell_size[1] * 0.5;
-                let r2 = radius * radius;
-                let mut mask = vec![false; n];
-                for z in 0..nz {
-                    for y in 0..ny {
-                        for x in 0..nx {
-                            let px = (x as f64 + 0.5) * cell_size[0] - cx;
-                            let py = (y as f64 + 0.5) * cell_size[1] - cy;
-                            let idx = (x + nx * (y + ny * z)) as usize;
-                            mask[idx] = (px * px + py * py) <= r2;
-                        }
-                    }
-                }
-                (bbox, Some(mask), [nx, ny, nz], false)
-            }
-            GeometryShape::Imported { source, format } => {
-                errors.push(format!(
-                    "geometry '{}' ({format}:{source}) requires a precomputed FDM grid asset; no voxelized active_mask was provided",
-                    geometry.name()
-                ));
-                ([1.0, 1.0, 1.0], None, [1, 1, 1], false)
-            }
-            GeometryShape::Difference { base, tool } => {
-                let bbox = match base.as_ref() {
-                    GeometryShape::Box { size } => *size,
-                    GeometryShape::Cylinder { radius, height } => {
-                        [2.0 * radius, 2.0 * radius, *height]
-                    }
-                    _ => {
-                        errors.push("CSG Difference: base must be a Box or Cylinder".to_string());
-                        [1.0, 1.0, 1.0]
-                    }
-                };
-                let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;
-                let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
-                let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
-                let n = (nx * ny * nz) as usize;
-                let mut mask = vec![true; n];
-
-                if let GeometryShape::Cylinder { radius, .. } = base.as_ref() {
-                    let cx = nx as f64 * cell_size[0] * 0.5;
-                    let cy = ny as f64 * cell_size[1] * 0.5;
-                    let r2 = radius * radius;
-                    for z in 0..nz {
-                        for y in 0..ny {
-                            for x in 0..nx {
-                                let px = (x as f64 + 0.5) * cell_size[0] - cx;
-                                let py = (y as f64 + 0.5) * cell_size[1] - cy;
-                                let idx = (x + nx * (y + ny * z)) as usize;
-                                mask[idx] = (px * px + py * py) <= r2;
-                            }
-                        }
-                    }
-                }
-
-                match tool.as_ref() {
-                    GeometryShape::Cylinder { radius, .. } => {
-                        let cx = nx as f64 * cell_size[0] * 0.5;
-                        let cy = ny as f64 * cell_size[1] * 0.5;
-                        let r2 = radius * radius;
-                        for z in 0..nz {
-                            for y in 0..ny {
-                                for x in 0..nx {
-                                    let px = (x as f64 + 0.5) * cell_size[0] - cx;
-                                    let py = (y as f64 + 0.5) * cell_size[1] - cy;
-                                    let idx = (x + nx * (y + ny * z)) as usize;
-                                    if (px * px + py * py) <= r2 {
-                                        mask[idx] = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    GeometryShape::Box { size: tool_size } => {
-                        let hx = tool_size[0] * 0.5;
-                        let hy = tool_size[1] * 0.5;
-                        let cx = nx as f64 * cell_size[0] * 0.5;
-                        let cy = ny as f64 * cell_size[1] * 0.5;
-                        for z in 0..nz {
-                            for y in 0..ny {
-                                for x in 0..nx {
-                                    let px = (x as f64 + 0.5) * cell_size[0] - cx;
-                                    let py = (y as f64 + 0.5) * cell_size[1] - cy;
-                                    let idx = (x + nx * (y + ny * z)) as usize;
-                                    if px.abs() <= hx && py.abs() <= hy {
-                                        mask[idx] = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        errors.push("CSG Difference: tool must be a Box or Cylinder".to_string());
-                    }
-                }
-
-                (bbox, Some(mask), [nx, ny, nz], false)
-            }
-        }
+        let (bounding_size, active_mask, grid_cells, _origin) =
+            voxelize_shape(&shape, cell_size, &mut errors);
+        (bounding_size, active_mask, grid_cells, false)
     };
 
     if !used_precomputed_asset {
@@ -439,6 +326,18 @@ pub(crate) fn plan_fdm(
         GeometryShape::Cylinder { radius, .. } => format!(
             "Cylinder (r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
             radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::SinWaveguide {
+            period,
+            amplitude,
+            ..
+        } => format!(
+            "SinWaveguide (period={:.3e}, amplitude={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            period, amplitude, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
+        GeometryShape::ArchWaveguide { arch_height, .. } => format!(
+            "ArchWaveguide (arch_height={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            arch_height, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
         GeometryShape::Imported { format, .. } => format!(
             "Imported geometry ({format}) used precomputed FDM grid asset: {}x{}x{} cells, {}/{} active cells",
