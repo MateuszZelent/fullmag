@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { materializeStudyPipeline } from "../materialize";
+import { createGroundStateTemplate } from "../templates";
 import { validateStudyPipeline } from "../validate";
 import type { StudyPipelineDocument } from "../types";
 
@@ -63,5 +64,18 @@ describe("study builder relaxation controls", () => {
         }),
       ]),
     );
+  });
+
+  it("seeds new ground-state relax stages with the canonical torque default", () => {
+    const document = createGroundStateTemplate();
+
+    expect(document.nodes[0]).toMatchObject({
+      node_kind: "primitive",
+      stage_kind: "relax",
+      payload: expect.objectContaining({
+        torque_tolerance: "1e-4",
+        max_steps: "5000",
+      }),
+    });
   });
 });

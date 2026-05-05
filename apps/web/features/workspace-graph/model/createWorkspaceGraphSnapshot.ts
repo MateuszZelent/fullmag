@@ -194,7 +194,10 @@ export function createWorkspaceGraphSnapshot(
       activeResultNodeId: selectedResultNodeId,
       activeViewportDocumentId,
     },
-    scalarRows: input.scalarRows,
+    // Scalar samples belong to the runtime/data-plane stores, not the workspace
+    // graph. Keep the field as an empty compatibility shim so graph snapshots
+    // do not carry high-frequency live sample payloads.
+    scalarRows: [],
     updatedAt: Date.now(),
   };
 }

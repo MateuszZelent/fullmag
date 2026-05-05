@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ViewportCameraState } from "@/features/workspace-graph";
 import {
-  buildViewportFitSeed,
   resolveViewportCameraPersistCandidate,
-} from "../useViewportDataBridge";
+  resolveViewportCameraPersistFlush,
+  viewportCameraStatesEqual,
+} from "../viewportCameraPersistence";
 
 function cameraState(
   position: [number, number, number],
@@ -20,37 +21,16 @@ function cameraState(
   };
 }
 
-describe("buildViewportFitSeed", () => {
-  it("stays stable across presentation mode changes and only tracks topology-relevant inputs", () => {
-    const base = buildViewportFitSeed({
-      resolvedFemTopologyKey: "gen:42",
-      scaledFemMeshData: {
-        nNodes: 128,
-        nElements: 96,
-        boundaryFaces: new Array(24).fill(0),
-      },
-    });
+describe("viewportCameraStatesEqual", () => {
+  it("tolerates tiny floating-point round-trip noise", () => {
+    const currentCamera = cameraState([1, 2, 3]);
 
-    const sameTopology = buildViewportFitSeed({
-      resolvedFemTopologyKey: "gen:42",
-      scaledFemMeshData: {
-        nNodes: 128,
-        nElements: 96,
-        boundaryFaces: new Array(24).fill(1),
-      },
-    });
-
-    const newTopology = buildViewportFitSeed({
-      resolvedFemTopologyKey: "gen:43",
-      scaledFemMeshData: {
-        nNodes: 128,
-        nElements: 96,
-        boundaryFaces: new Array(24).fill(0),
-      },
-    });
-
-    expect(base).toBe(sameTopology);
-    expect(newTopology).not.toBe(base);
+    expect(
+      viewportCameraStatesEqual(currentCamera, {
+        ...currentCamera,
+        position: [1, 2, 3 + 1e-10],
+      }),
+    ).toBe(true);
   });
 });
 
@@ -104,5 +84,35 @@ describe("resolveViewportCameraPersistCandidate", () => {
       documentId: "viewport:study:core:3d",
       cameraState: nextCamera,
     });
+  });
+});
+
+describe("resolveViewportCameraPersistFlush", () => {
+  it("defers pending graph writes while camera interaction is active", () => {
+    const pending = {
+      documentId: "viewport:study:core:3d",
+      cameraState: cameraState([4, 5, 6]),
+    };
+
+    expect(
+      resolveViewportCameraPersistFlush({
+        interactionActive: true,
+        pending,
+      }),
+    ).toBeNull();
+  });
+
+  it("allows the pending graph write after camera interaction ends", () => {
+    const pending = {
+      documentId: "viewport:study:core:3d",
+      cameraState: cameraState([4, 5, 6]),
+    };
+
+    expect(
+      resolveViewportCameraPersistFlush({
+        interactionActive: false,
+        pending,
+      }),
+    ).toBe(pending);
   });
 });

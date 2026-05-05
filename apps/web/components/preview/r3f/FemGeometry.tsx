@@ -4,6 +4,7 @@ import type { FemMeshData, FemColorField, MeshDisplayScope, RenderMode } from ".
 import { computeFaceAspectRatios } from "./colorUtils";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
 import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
 import type { FemGeometryPassState } from "./femGeometryRenderPasses";
 import {
@@ -55,6 +56,7 @@ interface FemGeometryProps {
   enableGeometryVertexColors?: boolean;
   enableGeometryPointerInteractions?: boolean;
   enableGeometryHoverInteractions?: boolean;
+  viewportTelemetryLabel?: string;
 }
 
 function flattenBoundaryFaces(customBoundaryFaces: readonly [number, number, number][]): Uint32Array {
@@ -151,6 +153,7 @@ export const FemGeometry = memo(function FemGeometry({
   enableGeometryVertexColors = true,
   enableGeometryPointerInteractions = true,
   enableGeometryHoverInteractions = true,
+  viewportTelemetryLabel,
 }: FemGeometryProps) {
   const scheduleInvalidate = useBatchedInvalidate();
   const resourceOwner = `FemGeometry:${useId()}`;
@@ -542,6 +545,13 @@ export const FemGeometry = memo(function FemGeometry({
     shrinkFactor,
   ]);
 
+  useEffect(() => {
+    if (!viewportTelemetryLabel) {
+      return;
+    }
+    recordViewportLifecycleEventForLabel(viewportTelemetryLabel, "topology_rebuild");
+  }, [geometry, viewportTelemetryLabel]);
+
   const clippingPlanes = useMemo(() => {
     const plane = resolveFemClipPlane({
       enabled: clipEnabled,
@@ -606,6 +616,7 @@ export const FemGeometry = memo(function FemGeometry({
     uniformColor,
     vertexMap,
     enableGeometryVertexColors,
+    viewportTelemetryLabel,
   });
 
   // ── Notify parent about geometry center (proper useEffect, not useMemo side-effect) ─

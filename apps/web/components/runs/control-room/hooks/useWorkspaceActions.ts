@@ -60,6 +60,7 @@ import {
   visualizationPatchForOpacity,
   visualizationPatchForRenderMode,
 } from "../visualizationStateSync";
+import { canIssueSolverControlCommand } from "../commandControlGuards";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 export type QuantitySwitchCacheState =
@@ -925,31 +926,44 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   }, [commandErrorMessage, commandPostInFlight, commandStatus]);
 
   const commandBusy = commandPostInFlight;
-  const canRunCommand =
-    interactiveEnabled &&
-    (awaitingCommand || isWaitingForCompute || workspaceStatus === "paused") &&
-    runtimeCanAcceptCommands &&
-    !commandBusy;
+  const canRunCommand = canIssueSolverControlCommand({
+    action: "run",
+    interactiveEnabled,
+    runtimeCanAcceptCommands,
+    commandBusy,
+    workspaceStatus,
+    isWaitingForCompute,
+    awaitingCommand,
+  });
   const canRelaxCommand =
     interactiveEnabled &&
     awaitingCommand &&
     runtimeCanAcceptCommands &&
     !commandBusy;
-  const canPauseCommand =
-    interactiveEnabled &&
-    workspaceStatus === "running" &&
-    runtimeCanAcceptCommands &&
-    !commandBusy;
-  const canStopCommand =
-    interactiveEnabled &&
-    (isWaitingForCompute || workspaceStatus === "running" || workspaceStatus === "paused") &&
-    runtimeCanAcceptCommands &&
-    !commandBusy;
-  const canSkipCommand =
-    interactiveEnabled &&
-    (workspaceStatus === "running" || workspaceStatus === "paused") &&
-    runtimeCanAcceptCommands &&
-    !commandBusy;
+  const canPauseCommand = canIssueSolverControlCommand({
+    action: "pause",
+    interactiveEnabled,
+    runtimeCanAcceptCommands,
+    commandBusy,
+    workspaceStatus,
+    isWaitingForCompute,
+  });
+  const canStopCommand = canIssueSolverControlCommand({
+    action: "stop",
+    interactiveEnabled,
+    runtimeCanAcceptCommands,
+    commandBusy,
+    workspaceStatus,
+    isWaitingForCompute,
+  });
+  const canSkipCommand = canIssueSolverControlCommand({
+    action: "skip",
+    interactiveEnabled,
+    runtimeCanAcceptCommands,
+    commandBusy,
+    workspaceStatus,
+    isWaitingForCompute,
+  });
   const primaryRunAction =
     isWaitingForCompute ? "compute" : workspaceStatus === "paused" ? "resume" : "run";
   const primaryRunLabel =

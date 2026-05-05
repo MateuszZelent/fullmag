@@ -24,7 +24,43 @@ export interface ViewportTelemetryEntry {
   lastFrameAt: number;
   lastFrameAtUnixMs: number;
   mountedAt: number;
+  lifecycle: ViewportLifecycleTelemetryCounts;
 }
+
+export interface ViewportLifecycleTelemetryCounts {
+  canvasMounts: number;
+  canvasUnmounts: number;
+  contextLost: number;
+  contextRestored: number;
+  cameraFits: number;
+  cameraRestores: number;
+  cameraPersists: number;
+  topologyRebuilds: number;
+  fieldBufferUpdates: number;
+}
+
+export type ViewportLifecycleTelemetryEvent =
+  | "canvas_mount"
+  | "canvas_unmount"
+  | "context_lost"
+  | "context_restored"
+  | "camera_fit"
+  | "camera_restore"
+  | "camera_persist"
+  | "topology_rebuild"
+  | "field_buffer_update";
+
+const EMPTY_LIFECYCLE_COUNTS: ViewportLifecycleTelemetryCounts = {
+  canvasMounts: 0,
+  canvasUnmounts: 0,
+  contextLost: 0,
+  contextRestored: 0,
+  cameraFits: 0,
+  cameraRestores: 0,
+  cameraPersists: 0,
+  topologyRebuilds: 0,
+  fieldBufferUpdates: 0,
+};
 
 const listeners = new Set<() => void>();
 const entries = new Map<string, ViewportTelemetryEntry>();
@@ -55,7 +91,7 @@ function refreshTelemetrySnapshot(): void {
   );
 }
 
-function getViewportTelemetrySnapshot(): ViewportTelemetryEntry[] {
+export function getViewportTelemetrySnapshot(): ViewportTelemetryEntry[] {
   return telemetrySnapshot;
 }
 
@@ -83,6 +119,61 @@ export function updateViewportTelemetry(
   entries.set(id, { ...current, ...patch });
   refreshTelemetrySnapshot();
   emitViewportTelemetryChange();
+}
+
+export function recordViewportLifecycleEvent(
+  id: string,
+  event: ViewportLifecycleTelemetryEvent,
+): void {
+  const current = entries.get(id);
+  if (!current) {
+    return;
+  }
+  const lifecycle = { ...current.lifecycle };
+  switch (event) {
+    case "canvas_mount":
+      lifecycle.canvasMounts += 1;
+      break;
+    case "canvas_unmount":
+      lifecycle.canvasUnmounts += 1;
+      break;
+    case "context_lost":
+      lifecycle.contextLost += 1;
+      break;
+    case "context_restored":
+      lifecycle.contextRestored += 1;
+      break;
+    case "camera_fit":
+      lifecycle.cameraFits += 1;
+      break;
+    case "camera_restore":
+      lifecycle.cameraRestores += 1;
+      break;
+    case "camera_persist":
+      lifecycle.cameraPersists += 1;
+      break;
+    case "topology_rebuild":
+      lifecycle.topologyRebuilds += 1;
+      break;
+    case "field_buffer_update":
+      lifecycle.fieldBufferUpdates += 1;
+      break;
+  }
+  entries.set(id, { ...current, lifecycle });
+  refreshTelemetrySnapshot();
+  emitViewportTelemetryChange();
+}
+
+export function recordViewportLifecycleEventForLabel(
+  label: string,
+  event: ViewportLifecycleTelemetryEvent,
+): void {
+  const ids = Array.from(entries.values())
+    .filter((entry) => entry.label === label)
+    .map((entry) => entry.id);
+  for (const id of ids) {
+    recordViewportLifecycleEvent(id, event);
+  }
 }
 
 export function unregisterViewportTelemetry(id: string): void {
@@ -136,6 +227,7 @@ export function useViewportTelemetryEntry(args: {
       lastFrameAt: 0,
       lastFrameAtUnixMs: 0,
       mountedAt: 0,
+      lifecycle: { ...EMPTY_LIFECYCLE_COUNTS },
     });
     updateViewportTelemetry(id, {
       mountedAt: typeof performance !== "undefined" ? performance.now() : Date.now(),
@@ -152,12 +244,16 @@ export function useViewportTelemetryEntry(args: {
   const update = useCallback((patch: Partial<ViewportTelemetryEntry>) => {
     updateViewportTelemetry(id, patch);
   }, [id]);
+  const recordLifecycleEvent = useCallback((event: ViewportLifecycleTelemetryEvent) => {
+    recordViewportLifecycleEvent(id, event);
+  }, [id]);
 
   return useMemo(
     () => ({
       id,
       update,
+      recordLifecycleEvent,
     }),
-    [id, update],
+    [id, recordLifecycleEvent, update],
   );
 }

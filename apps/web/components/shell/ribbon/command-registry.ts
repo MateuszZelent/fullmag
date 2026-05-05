@@ -20,6 +20,7 @@ export type ResultAnalysisKind =
 
 export type ViewportMeshRenderMode = "surface" | "wireframe" | "mesh" | "surface+edges" | "points";
 export type AirboxDisplayScope = "surface" | "full";
+export type WorkspacePanelId = "explorer" | "inspector" | "telemetry";
 
 export type AirboxDisplayPatch = Partial<{
   visible: boolean;
@@ -60,12 +61,16 @@ export interface RibbonCommandContext {
   airMeshSurfaceVisible?: boolean | null;
   airMeshWireframeVisible?: boolean | null;
   airMeshPointsVisible?: boolean | null;
+  airMeshVectorsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
   viewportLegendVisible?: boolean;
+  explorerVisible?: boolean;
+  inspectorVisible?: boolean;
+  telemetryVisible?: boolean;
   activeTransformScope?: "object" | "texture" | null;
   onViewChange?: (mode: string) => void;
   onSidebarToggle?: () => void;
@@ -74,6 +79,8 @@ export interface RibbonCommandContext {
   onSetViewportAxesScope?: (scope: "universe" | "object") => void;
   onToggleUniverseWireframe?: () => void;
   onToggleViewportLegend?: () => void;
+  onRestoreWorkspacePanel?: (panel: WorkspacePanelId) => void;
+  onHideWorkspacePanel?: (panel: WorkspacePanelId) => void;
   onSimAction?: (action: string) => void;
   onQuickPreviewSelect?: (quantityId: string) => void;
   onSetPreviewComponent?: (component: "3D" | "x" | "y" | "z" | "magnitude") => void;
@@ -478,6 +485,8 @@ export type RibbonCommand =
   | { id: "viewport.toggle-legend" }
   | { id: "visualization.create-preset" }
   | { id: "viewport.toggle-sidebar" }
+  | { id: "workspace.restore-panel"; panel: WorkspacePanelId }
+  | { id: "workspace.hide-panel"; panel: WorkspacePanelId }
   | { id: "viewport.focus-selected-object" }
   | { id: "solver.control"; action: "relax" | "run" | "pause" | "stop" | "skip" | "compute_fields" }
   | { id: "preview.select-quantity"; quantityId: string }
@@ -621,6 +630,10 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onCreateVisualizationPreset === "function";
     case "viewport.toggle-sidebar":
       return typeof ctx.onSidebarToggle === "function";
+    case "workspace.restore-panel":
+      return typeof ctx.onRestoreWorkspacePanel === "function";
+    case "workspace.hide-panel":
+      return typeof ctx.onHideWorkspacePanel === "function";
     case "viewport.focus-selected-object":
       return Boolean(ctx.selectedObjectId) && typeof ctx.onRequestObjectFocus === "function";
     case "solver.control":
@@ -841,6 +854,12 @@ export function executeRibbonCommand(
       return;
     case "viewport.toggle-sidebar":
       ctx.onSidebarToggle?.();
+      return;
+    case "workspace.restore-panel":
+      ctx.onRestoreWorkspacePanel?.(command.panel);
+      return;
+    case "workspace.hide-panel":
+      ctx.onHideWorkspacePanel?.(command.panel);
       return;
     case "viewport.focus-selected-object":
       if (ctx.selectedObjectId) {

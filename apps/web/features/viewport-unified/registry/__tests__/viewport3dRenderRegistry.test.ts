@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveViewport3DModeFlags,
   resolveViewport3DRenderRoute,
   resolveViewportInternalToolbarModes,
 } from "../viewport3dRenderRegistry";
@@ -42,6 +43,42 @@ describe("resolveViewport3DRenderRoute", () => {
         isFem3DMode: false,
       }),
     ).toBe("fdm-3d");
+  });
+});
+
+describe("resolveViewport3DModeFlags", () => {
+  it("routes FEM Mesh through the dedicated fem-mesh path instead of fem-3d", () => {
+    expect(
+      resolveViewport3DModeFlags({
+        isFemDiscretization: true,
+        viewMode: "Mesh",
+      }),
+    ).toEqual({
+      isFemMeshMode: true,
+      isFem3DMode: false,
+    });
+  });
+
+  it("keeps FEM 3D and FDM mesh modes distinct", () => {
+    expect(
+      resolveViewport3DModeFlags({
+        isFemDiscretization: true,
+        viewMode: "3D",
+      }),
+    ).toEqual({
+      isFemMeshMode: false,
+      isFem3DMode: true,
+    });
+
+    expect(
+      resolveViewport3DModeFlags({
+        isFemDiscretization: false,
+        viewMode: "Mesh",
+      }),
+    ).toEqual({
+      isFemMeshMode: false,
+      isFem3DMode: false,
+    });
   });
 });
 

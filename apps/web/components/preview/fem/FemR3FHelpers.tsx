@@ -53,12 +53,14 @@ export function CameraAutoFit({
   targetCenter,
   controlsRef,
   lastAppliedRef: externalLastAppliedRef,
+  onFitApplied,
 }: {
   maxDim: number;
   generation: number;
   targetCenter?: THREE.Vector3;
   controlsRef?: React.MutableRefObject<any>;
   lastAppliedRef?: React.MutableRefObject<{ generation: number; camera: THREE.Camera | null }>;
+  onFitApplied?: () => void;
 }) {
   const { camera, invalidate } = useThree();
   const internalLastAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>({
@@ -93,6 +95,7 @@ export function CameraAutoFit({
         targetCenter,
         controlsRef?.current ?? undefined,
       );
+      onFitApplied?.();
       if (FEM_R3F_DEBUG_LOGS) {
         console.info("[viewport3d:fem] camera auto-fit applied", {
           generation,
@@ -117,6 +120,6 @@ export function CameraAutoFit({
         window.cancelAnimationFrame(raf);
       }
     };
-  }, [camera, controlsRef, invalidate, maxDim, generation, targetCenter]);
+  }, [camera, controlsRef, generation, invalidate, maxDim, onFitApplied, targetCenter]);
   return null;
 }

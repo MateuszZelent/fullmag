@@ -2,26 +2,13 @@
 
 import { useMemo } from "react";
 
-type FemFieldDataLike = {
-  x: ArrayLike<number>;
-  y: ArrayLike<number>;
-  z: ArrayLike<number>;
-};
+import type {
+  FemLiveRenderDebugData,
+} from "@/features/viewport-unified/model/femLiveRenderDebugData";
 
-export interface FemLiveRenderDebugData {
-  backendLabel: string;
-  viewMode: string;
-  fieldLabel: string;
-  viewportLabel: string;
-  transportLabel: string;
-  solverStep: number | string | null;
-  bufferSourceStep: number | string | null;
-  liveFieldSourceStep: number | string | null;
-  previewSourceStep: number | string | null;
-  fieldData: FemFieldDataLike | null | undefined;
-  fieldRevision: number | string | null | undefined;
-  fieldDataTimestamp: number | null | undefined;
-}
+export type { FemLiveRenderDebugData };
+
+type FemFieldDataLike = FemLiveRenderDebugData["fieldData"];
 
 function formatScalar(value: number | string | null | undefined): string {
   if (typeof value === "string") {
@@ -145,6 +132,12 @@ export function FemLiveRenderDebugPanel({
         <span className="font-mono text-right text-foreground">{debugData.viewportLabel}</span>
         <span className="text-muted-foreground">Transport</span>
         <span className="font-mono text-right text-foreground">{debugData.transportLabel}</span>
+        {debugData.viewportUpdateClass ? (
+          <>
+            <span className="text-muted-foreground">Update class</span>
+            <span className="font-mono text-right text-foreground">{debugData.viewportUpdateClass}</span>
+          </>
+        ) : null}
         <span className="text-muted-foreground">Solver step</span>
         <span className="font-mono text-right text-foreground">{formatScalar(debugData.solverStep)}</span>
         <span className="text-muted-foreground">Buffer source step</span>

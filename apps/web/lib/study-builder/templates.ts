@@ -14,10 +14,9 @@ export function createGroundStateTemplate(): StudyPipelineDocument {
           kind: "relax",
           relax_algorithm: "llg_overdamped",
           max_steps: "5000",
-          torque_tolerance: "1e-6",
+          torque_tolerance: "1e-4",
         },
       },
     ],
   };
 }
-

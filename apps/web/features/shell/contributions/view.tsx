@@ -454,7 +454,7 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const geometryVisible =
     ctx.airMeshGeometryVisible ?? (shaded || wireframe || points);
   const pointsLayerOn = geometryVisible && points;
-  const vectors = ctx.femVectorDomainFilter === "airbox_only" && Boolean(ctx.meshShowArrows);
+  const vectors = Boolean(ctx.airMeshVectorsVisible);
   const airboxBadge = (() => {
     if (!ctx.airboxVisible) return "hidden";
     const parts: string[] = [];
@@ -1511,11 +1511,80 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
         id: "view-panels",
         icon: <PanelRight size={20} />,
         label: "Panels",
-        tooltip: "Toggle inspector, legend, and diagnostics panels",
-        active: ctx.sidebarVisible || ctx.viewportLegendVisible,
+        tooltip: "Restore explorer, inspector, telemetry, and legend panels",
+        active:
+          ctx.explorerVisible ||
+          ctx.inspectorVisible ||
+          ctx.telemetryVisible ||
+          ctx.viewportLegendVisible,
         iconColor: "text-muted-foreground",
         menu: [
-          { type: "checkbox", id: "panels:right", label: "Right inspector", checked: ctx.sidebarVisible, onCheckedChange: () => ctx.run({ id: "viewport.toggle-sidebar" }) },
+          {
+            type: "item",
+            id: "panels:explorer:restore",
+            label: "Restore Explorer",
+            disabled: !ctx.can({ id: "workspace.restore-panel", panel: "explorer" }),
+            action: () => ctx.run({ id: "workspace.restore-panel", panel: "explorer" }),
+          },
+          {
+            type: "item",
+            id: "panels:explorer:hide",
+            label: "Hide Explorer",
+            disabled:
+              !ctx.explorerVisible ||
+              !ctx.can({ id: "workspace.hide-panel", panel: "explorer" }),
+            action: () => ctx.run({ id: "workspace.hide-panel", panel: "explorer" }),
+          },
+          {
+            type: "status",
+            id: "panels:explorer:status",
+            label: "Explorer",
+            value: ctx.explorerVisible ? "Visible" : "Hidden",
+          },
+          {
+            type: "item",
+            id: "panels:inspector:restore",
+            label: "Restore Inspector",
+            disabled: !ctx.can({ id: "workspace.restore-panel", panel: "inspector" }),
+            action: () => ctx.run({ id: "workspace.restore-panel", panel: "inspector" }),
+          },
+          {
+            type: "item",
+            id: "panels:inspector:hide",
+            label: "Hide Inspector",
+            disabled:
+              !ctx.inspectorVisible ||
+              !ctx.can({ id: "workspace.hide-panel", panel: "inspector" }),
+            action: () => ctx.run({ id: "workspace.hide-panel", panel: "inspector" }),
+          },
+          {
+            type: "status",
+            id: "panels:inspector:status",
+            label: "Inspector",
+            value: ctx.inspectorVisible ? "Visible" : "Hidden",
+          },
+          {
+            type: "item",
+            id: "panels:telemetry:restore",
+            label: "Restore Telemetry",
+            disabled: !ctx.can({ id: "workspace.restore-panel", panel: "telemetry" }),
+            action: () => ctx.run({ id: "workspace.restore-panel", panel: "telemetry" }),
+          },
+          {
+            type: "item",
+            id: "panels:telemetry:hide",
+            label: "Hide Telemetry",
+            disabled:
+              !ctx.telemetryVisible ||
+              !ctx.can({ id: "workspace.hide-panel", panel: "telemetry" }),
+            action: () => ctx.run({ id: "workspace.hide-panel", panel: "telemetry" }),
+          },
+          {
+            type: "status",
+            id: "panels:telemetry:status",
+            label: "Telemetry",
+            value: ctx.telemetryVisible ? "Visible" : "Hidden",
+          },
           { type: "checkbox", id: "panels:legend", label: "Legend", checked: ctx.viewportLegendVisible, onCheckedChange: () => ctx.run({ id: "viewport.toggle-legend" }) },
           { type: "checkbox", id: "panels:scene-info", label: "Scene info", checked: false, disabled: true, disabledReason: "Scene info panel is diagnostic-only in the current viewport", onCheckedChange: () => undefined },
           { type: "checkbox", id: "panels:diagnostics", label: "Diagnostics", checked: false, disabled: true, disabledReason: "Diagnostics are controlled by frontend diagnostic flags", onCheckedChange: () => undefined },

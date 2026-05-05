@@ -60,6 +60,8 @@ interface FdmInstancesProps {
   /** When false, clears all instances without re-uploading geometry (toolbar toggle). */
   vectorsVisible?: boolean;
   onVisibleCount?: (count: number) => void;
+  onTopologyRebuild?: () => void;
+  onFieldBufferUpdate?: () => void;
 }
 
 /* ── Quality configs ───────────────────────────────────────────────── */
@@ -168,6 +170,17 @@ export function shouldAnimateFdmInstanceBuffers({
     return false;
   }
   return estimateFdmInstanceAnimationSnapshotBytes({ visible, includeMatrices }) <= byteBudget;
+}
+
+export type FdmInstanceLifecycleEvent = "topology_rebuild" | "field_buffer_update";
+
+export function resolveFdmInstanceLifecycleEvent(
+  previousRenderSignature: string | null,
+  nextRenderSignature: string,
+): FdmInstanceLifecycleEvent {
+  return previousRenderSignature === nextRenderSignature
+    ? "field_buffer_update"
+    : "topology_rebuild";
 }
 
 /* ── Color helpers ─────────────────────────────────────────────────── */
@@ -287,6 +300,8 @@ function FdmInstances({
   isolateGridBounds,
   vectorsVisible = true,
   onVisibleCount,
+  onTopologyRebuild,
+  onFieldBufferUpdate,
 }: FdmInstancesProps) {
   const resourceOwner = `FdmInstances:${useId()}`;
   const meshRef = useRef<THREE.InstancedMesh>(null);
@@ -486,6 +501,14 @@ function FdmInstances({
       gridBounds.maxIz,
       activeMask ? "masked" : "all",
     ].join(":");
+    const lifecycleEvent = resolveFdmInstanceLifecycleEvent(renderSignatureRef.current, renderSignature);
+    const recordBufferLifecycleUpdate = () => {
+      if (lifecycleEvent === "topology_rebuild") {
+        onTopologyRebuild?.();
+      } else {
+        onFieldBufferUpdate?.();
+      }
+    };
 
     // Toolbar "vectors off" — clear instances without rebuilding geometry.
     if (!vectorsVisible) {
@@ -496,6 +519,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
+      recordBufferLifecycleUpdate();
       scheduleInvalidate();
       return;
     }
@@ -534,6 +558,7 @@ function FdmInstances({
       if (!canAnimate) {
         mesh.instanceMatrix.needsUpdate = true;
         instanceColor.needsUpdate = true;
+        recordBufferLifecycleUpdate();
         scheduleInvalidate();
         transitionCleanupRef.current = null;
         return;
@@ -564,6 +589,7 @@ function FdmInstances({
         cleanupMatrices();
         cleanupColors();
       };
+      recordBufferLifecycleUpdate();
     };
 
     if (!displayToCellRef.current || displayToCellRef.current.length < count) {
@@ -583,6 +609,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
+      recordBufferLifecycleUpdate();
       scheduleInvalidate();
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
@@ -607,6 +634,7 @@ function FdmInstances({
       mesh.instanceMatrix.needsUpdate = true;
       instanceColor.needsUpdate = true;
       onVisibleCount?.(0);
+      recordBufferLifecycleUpdate();
       scheduleInvalidate();
       const timestampMs = typeof performance !== "undefined" ? performance.now() : Date.now();
       recordFrontendPerfSample({
@@ -789,6 +817,8 @@ function FdmInstances({
     ny,
     nz,
     onVisibleCount,
+    onFieldBufferUpdate,
+    onTopologyRebuild,
     quality,
     sampling,
     scheduleInvalidate,

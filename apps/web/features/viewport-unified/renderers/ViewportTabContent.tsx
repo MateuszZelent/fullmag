@@ -5,7 +5,11 @@ import dynamic from "next/dynamic";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { DEFAULT_WORKSPACE_SYNC_STATE } from "@/src/features/workspaceSync";
 import { ViewportHost } from "@/features";
-import { UnifiedViewport3DRenderer, Viewport3DHost } from "@/features/viewport-unified";
+import { Viewport3DHost } from "@/features/viewport-unified/components/Viewport3DHost";
+import {
+  resolveViewport3DModeFlags,
+  UnifiedViewport3DRenderer,
+} from "@/features/viewport-unified/registry/viewport3dRenderRegistry";
 import FemMeshView3D from "@/components/preview/FemMeshView3D";
 import type { Viewport3DHealthReport } from "@/components/preview/FemMeshView3D";
 import { ViewportErrorBoundary } from "@/components/preview/ViewportErrorBoundary";
@@ -265,6 +269,7 @@ export function ViewportTabContent({
             viewportDocumentId: bridge.graphActiveViewportDocumentId,
             persistedCameraState: bridge.graphActiveViewportCameraState,
             onPersistCameraState: bridge.persistViewportCameraState,
+            onCameraInteractionChange: bridge.setViewportCameraInteractionActive,
             viewportAxesScope: ctx.viewportAxesScope,
             universeWireframeVisible: ctx.universeWireframeVisible,
             onRequestObjectSelect: bridge.handleRequestObjectSelect,
@@ -378,6 +383,7 @@ export function ViewportTabContent({
             viewportDocumentId={bridge.graphActiveViewportDocumentId}
             persistedCameraState={bridge.graphActiveViewportCameraState}
             onPersistCameraState={bridge.persistViewportCameraState}
+            onCameraInteractionChange={bridge.setViewportCameraInteractionActive}
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
@@ -512,6 +518,7 @@ export function ViewportTabContent({
               viewportDocumentId={bridge.graphActiveViewportDocumentId}
               persistedCameraState={bridge.graphActiveViewportCameraState}
               onPersistCameraState={bridge.persistViewportCameraState}
+              onCameraInteractionChange={bridge.setViewportCameraInteractionActive}
               renderMode={
                 geometryViewportPresetActive
                   ? "surface"
@@ -627,6 +634,7 @@ export function ViewportTabContent({
             viewportDocumentId: bridge.graphActiveViewportDocumentId,
             persistedCameraState: bridge.graphActiveViewportCameraState,
             onPersistCameraState: bridge.persistViewportCameraState,
+            onCameraInteractionChange: bridge.setViewportCameraInteractionActive,
             viewport3DModel: bridge.hostedVectorSurfaceViewportModel,
             vectors: geometryViewportPresetActive ? null : bridge.vectorSurfaceVectors,
             toolbarMode: bridge.vectorToolbarMode,
@@ -658,6 +666,7 @@ export function ViewportTabContent({
             viewportDocumentId={bridge.graphActiveViewportDocumentId}
             persistedCameraState={bridge.graphActiveViewportCameraState}
             onPersistCameraState={bridge.persistViewportCameraState}
+            onCameraInteractionChange={bridge.setViewportCameraInteractionActive}
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
@@ -866,14 +875,15 @@ export function ViewportTabContent({
             renderComponent={(componentKey) => {
               switch (componentKey) {
                 case "UnifiedViewport3D": {
+                  const viewport3DModeFlags = resolveViewport3DModeFlags({
+                    isFemDiscretization: Boolean(bridge.femDiscretization),
+                    viewMode: ctx.effectiveViewMode,
+                  });
                   const viewport3D = (
                     <UnifiedViewport3DRenderer
                       showGeometryAuthoringViewport={false}
-                      isFemMeshMode={false}
-                      isFem3DMode={Boolean(
-                        bridge.femDiscretization &&
-                          (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh"),
-                      )}
+                      isFemMeshMode={viewport3DModeFlags.isFemMeshMode}
+                      isFem3DMode={viewport3DModeFlags.isFem3DMode}
                       renderGeometryAuthoring={renderHostedFem3DViewport}
                       renderFemMesh={renderHostedFemMeshViewport}
                       renderFem3D={renderHostedFem3DViewport}

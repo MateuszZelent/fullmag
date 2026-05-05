@@ -8,8 +8,90 @@ export interface CommandBlockReasonContext {
 
 export type SolverControlAction = "run" | "pause" | "stop" | "skip";
 
+const RUNNING_SOLVER_STATUSES = new Set(["running"]);
+const PAUSED_SOLVER_STATUSES = new Set(["paused"]);
+
 function formatWorkspaceStatus(status: string): string {
   return status.replace(/_/g, " ");
+}
+
+function normalizeWorkspaceStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toLowerCase();
+}
+
+export function solverControlStatusAllows(
+  action: SolverControlAction,
+  workspaceStatus: string | null | undefined,
+  isWaitingForCompute = false,
+): boolean {
+  const status = normalizeWorkspaceStatus(workspaceStatus);
+  if (action === "run") {
+    return (
+      isWaitingForCompute ||
+      status === "waiting_for_compute" ||
+      status === "awaiting_command" ||
+      status === "paused"
+    );
+  }
+  if (action === "pause") {
+    return RUNNING_SOLVER_STATUSES.has(status);
+  }
+  if (action === "stop") {
+    return (
+      isWaitingForCompute ||
+      status === "waiting_for_compute" ||
+      RUNNING_SOLVER_STATUSES.has(status) ||
+      PAUSED_SOLVER_STATUSES.has(status)
+    );
+  }
+  return RUNNING_SOLVER_STATUSES.has(status) || PAUSED_SOLVER_STATUSES.has(status);
+}
+
+export function solverControlRequiresRuntimeAcceptance(
+  action: SolverControlAction,
+  workspaceStatus: string | null | undefined,
+  isWaitingForCompute = false,
+): boolean {
+  if (action === "run") {
+    return normalizeWorkspaceStatus(workspaceStatus) !== "paused";
+  }
+  const statusAllowsInterrupt = solverControlStatusAllows(action, workspaceStatus, isWaitingForCompute);
+  return !statusAllowsInterrupt;
+}
+
+export function canIssueSolverControlCommand(
+  ctx: {
+    interactiveEnabled: boolean;
+    runtimeCanAcceptCommands: boolean;
+    commandBusy: boolean;
+    workspaceStatus: string | null | undefined;
+    action: SolverControlAction;
+    isWaitingForCompute?: boolean;
+    awaitingCommand?: boolean;
+    builderRunBlocked?: boolean;
+  },
+): boolean {
+  if (!ctx.interactiveEnabled || ctx.commandBusy) {
+    return false;
+  }
+  const statusAllowsAction =
+    ctx.action === "run"
+      ? Boolean(
+          ctx.awaitingCommand ||
+            ctx.isWaitingForCompute ||
+            normalizeWorkspaceStatus(ctx.workspaceStatus) === "paused",
+        )
+      : solverControlStatusAllows(ctx.action, ctx.workspaceStatus, ctx.isWaitingForCompute);
+  if (!statusAllowsAction) {
+    return false;
+  }
+  if (ctx.action === "run" && ctx.builderRunBlocked) {
+    return false;
+  }
+  return (
+    ctx.runtimeCanAcceptCommands ||
+    !solverControlRequiresRuntimeAcceptance(ctx.action, ctx.workspaceStatus, ctx.isWaitingForCompute)
+  );
 }
 
 export function commandBlockedReason(
@@ -20,7 +102,10 @@ export function commandBlockedReason(
   if (!ctx.interactiveEnabled) {
     return "Solver commands are disabled because this workspace is not running in interactive mode.";
   }
-  if (!ctx.runtimeCanAcceptCommands) {
+  if (
+    !ctx.runtimeCanAcceptCommands &&
+    solverControlRequiresRuntimeAcceptance(action, ctx.workspaceStatus)
+  ) {
     return "Solver runtime is busy and cannot accept commands yet.";
   }
   if (ctx.commandBusy) {
@@ -28,6 +113,13 @@ export function commandBlockedReason(
   }
   if (action === "run" && builderRunBlocked) {
     return "Compute is blocked because the Geometry builder has changes that must be built or validated first.";
+  }
+  if (
+    solverControlStatusAllows(action, ctx.workspaceStatus) &&
+    (ctx.runtimeCanAcceptCommands ||
+      !solverControlRequiresRuntimeAcceptance(action, ctx.workspaceStatus))
+  ) {
+    return null;
   }
 
   const status = formatWorkspaceStatus(ctx.workspaceStatus);

@@ -101,6 +101,9 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       domainCapabilities={command.domainCapabilities}
       solverRunning={command.workspaceStatus === "running"}
       sidebarVisible={!viewport.sidebarCollapsed}
+      explorerVisible={props.explorerVisible}
+      inspectorVisible={props.inspectorVisible}
+      telemetryVisible={props.telemetryVisible}
       selectedNodeId={model.selectedSidebarNodeId}
       canRun={command.canRunCommand && !builderRunBlocked}
       canRelax={command.canRelaxCommand && !builderRunBlocked}
@@ -115,6 +118,8 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       runLabel={command.primaryRunLabel}
       onViewChange={viewport.handleViewModeChange}
       onSidebarToggle={() => viewport.setSidebarCollapsed((value) => !value)}
+      onRestoreWorkspacePanel={props.onRestoreWorkspacePanel}
+      onHideWorkspacePanel={props.onHideWorkspacePanel}
       onSimAction={command.handleSimulationAction}
       quickPreviewTargets={viewport.quickPreviewTargets}
       selectedQuantity={viewport.requestedPreviewQuantity}

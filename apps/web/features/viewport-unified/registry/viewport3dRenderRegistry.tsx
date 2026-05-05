@@ -13,6 +13,16 @@ export interface Viewport3DRenderRouteInput {
   isFem3DMode: boolean;
 }
 
+export interface Viewport3DModeFlagsInput {
+  isFemDiscretization: boolean;
+  viewMode: "3D" | "2D" | "Mesh" | "Analyze";
+}
+
+export interface Viewport3DModeFlags {
+  isFemMeshMode: boolean;
+  isFem3DMode: boolean;
+}
+
 export interface Viewport3DRouteRenderers {
   renderGeometryAuthoring: () => ReactNode;
   renderFemMesh: () => ReactNode;
@@ -45,6 +55,16 @@ export function resolveViewport3DRenderRoute({
     return "fem-3d";
   }
   return "fdm-3d";
+}
+
+export function resolveViewport3DModeFlags({
+  isFemDiscretization,
+  viewMode,
+}: Viewport3DModeFlagsInput): Viewport3DModeFlags {
+  return {
+    isFemMeshMode: isFemDiscretization && viewMode === "Mesh",
+    isFem3DMode: isFemDiscretization && viewMode === "3D",
+  };
 }
 
 export function renderViewport3DRoute(

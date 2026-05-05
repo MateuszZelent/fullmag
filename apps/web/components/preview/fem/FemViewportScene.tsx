@@ -338,6 +338,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showAntennaOverlays = true,
   showSceneAxes = true,
   onArrowSampledCount,
+  telemetryLabel,
 }: {
   meshData: FemMeshData;
   hasMeshParts: boolean;
@@ -413,6 +414,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   showAntennaOverlays?: boolean;
   showSceneAxes?: boolean;
   onArrowSampledCount?: (count: number | undefined) => void;
+  telemetryLabel?: string;
 }) {
   React.useEffect(() => {
     if (
@@ -623,6 +625,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
                   enableGeometryVertexColors={enableGeometryVertexColors}
                   enableGeometryPointerInteractions={enableGeometryPointerInteractions}
                   enableGeometryHoverInteractions={enableGeometryHoverInteractions}
+                  viewportTelemetryLabel={telemetryLabel}
                 />
               );
             })
@@ -659,6 +662,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
           enableGeometryVertexColors={enableGeometryVertexColors}
           enableGeometryPointerInteractions={enableGeometryPointerInteractions}
           enableGeometryHoverInteractions={enableGeometryHoverInteractions}
+          viewportTelemetryLabel={telemetryLabel}
         />
       ) : null}
 
@@ -699,6 +703,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
           enableGeometryVertexColors={enableGeometryVertexColors}
           enableGeometryPointerInteractions={enableGeometryPointerInteractions}
           enableGeometryHoverInteractions={enableGeometryHoverInteractions}
+          viewportTelemetryLabel={telemetryLabel}
         />
       ) : null}
 

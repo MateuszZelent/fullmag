@@ -61,6 +61,10 @@ import SettingsDialog from "../workspace/overlays/SettingsDialog";
 import PhysicsDocsDrawer from "../workspace/overlays/PhysicsDocsDrawer";
 import WorkspaceDockingShell from "../workspace/docking/WorkspaceDockingShell";
 import { useActiveStageLayout, useWorkspaceStore } from "@/lib/workspace/workspace-store";
+import {
+  createDefaultDockLayout,
+  resolveDockResponsivePreset,
+} from "@/components/workspace/docking/dockLayoutDefaults";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
@@ -94,8 +98,161 @@ import {
   syncStudyRuntimeState,
 } from "./control-room/controlRoomShellHelpers";
 import { useMeshBuildFlow } from "./control-room/useMeshBuildFlow";
+import type { DockLayoutModel } from "@/lib/workspace/dockLayoutContract";
+import type { WorkspacePanelId } from "@/components/shell/ribbon/command-registry";
 
 const WORKSPACE_ANALYZE_HREF = "/workspace/analyze";
+const DEFAULT_PANEL_DOCKS = {
+  build: {
+    explorer: "model",
+    inspector: "properties",
+    telemetry: "messages",
+  },
+  study: {
+    explorer: "study-tree",
+    inspector: "solver",
+    telemetry: "jobs",
+  },
+  analyze: {
+    explorer: "results-tree",
+    inspector: "display",
+    telemetry: "charts",
+  },
+} as const;
+const PANEL_COMPONENT_BY_ID: Record<WorkspacePanelId, "dock-left" | "dock-right" | "dock-bottom"> = {
+  explorer: "dock-left",
+  inspector: "dock-right",
+  telemetry: "dock-bottom",
+};
+
+function cloneDockLayoutModel(model: DockLayoutModel): DockLayoutModel {
+  return JSON.parse(JSON.stringify(model)) as DockLayoutModel;
+}
+
+function layoutNodeContainsComponent(node: unknown, component: string): boolean {
+  if (!node || typeof node !== "object") {
+    return false;
+  }
+  const typedNode = node as {
+    type?: string;
+    component?: string;
+    children?: unknown[];
+  };
+  if (typedNode.type === "tab") {
+    return typedNode.component === component;
+  }
+  if (Array.isArray(typedNode.children)) {
+    return typedNode.children.some((child) => layoutNodeContainsComponent(child, component));
+  }
+  return false;
+}
+
+function replaceLayoutPanelNode(
+  node: unknown,
+  component: string,
+  replacement: unknown,
+): { nextNode: unknown; replaced: boolean } {
+  if (!node || typeof node !== "object") {
+    return { nextNode: node, replaced: false };
+  }
+  const typedNode = node as {
+    type?: string;
+    children?: unknown[];
+  };
+  if (typedNode.type === "tabset" && layoutNodeContainsComponent(typedNode, component)) {
+    return { nextNode: replacement, replaced: true };
+  }
+  if (!Array.isArray(typedNode.children)) {
+    return { nextNode: node, replaced: false };
+  }
+  let replaced = false;
+  const nextChildren = typedNode.children.map((child) => {
+    if (replaced || !layoutNodeContainsComponent(child, component)) {
+      return child;
+    }
+    const result = replaceLayoutPanelNode(child, component, replacement);
+    replaced = result.replaced;
+    return result.nextNode;
+  });
+  if (!replaced) {
+    return { nextNode: node, replaced: false };
+  }
+  return {
+    nextNode: {
+      ...typedNode,
+      children: nextChildren,
+    },
+    replaced: true,
+  };
+}
+
+function findPanelNodeInLayout(node: unknown, component: string): unknown | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const typedNode = node as {
+    type?: string;
+    children?: unknown[];
+  };
+  if (typedNode.type === "tabset" && layoutNodeContainsComponent(typedNode, component)) {
+    return typedNode;
+  }
+  if (!Array.isArray(typedNode.children)) {
+    return null;
+  }
+  for (const child of typedNode.children) {
+    if (!layoutNodeContainsComponent(child, component)) {
+      continue;
+    }
+    const nested = findPanelNodeInLayout(child, component);
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function replaceBorderPanelNode(
+  borders: unknown,
+  component: string,
+  replacement: unknown,
+): unknown[] {
+  const currentBorders = Array.isArray(borders) ? borders : [];
+  let replaced = false;
+  const nextBorders = currentBorders.map((border) => {
+    if (replaced || !layoutNodeContainsComponent(border, component)) {
+      return border;
+    }
+    replaced = true;
+    return replacement;
+  });
+  if (replaced || !replacement) {
+    return nextBorders;
+  }
+  return [...nextBorders, replacement];
+}
+
+function resetDockPanelSize(
+  model: DockLayoutModel,
+  defaultModel: DockLayoutModel,
+  panel: WorkspacePanelId,
+): DockLayoutModel {
+  const component = PANEL_COMPONENT_BY_ID[panel];
+  const nextModel = cloneDockLayoutModel(model);
+  const defaultLayout = defaultModel.layout;
+  const defaultBorders = Array.isArray(defaultModel.borders) ? defaultModel.borders : [];
+  const layoutReplacement = findPanelNodeInLayout(defaultLayout, component);
+  const borderReplacement = defaultBorders.find((border) => layoutNodeContainsComponent(border, component)) ?? null;
+
+  if (layoutReplacement) {
+    const replacedLayout = replaceLayoutPanelNode(nextModel.layout, component, layoutReplacement);
+    nextModel.layout = replacedLayout.nextNode as DockLayoutModel["layout"];
+  }
+  if (borderReplacement) {
+    nextModel.borders = replaceBorderPanelNode(nextModel.borders, component, borderReplacement) as DockLayoutModel["borders"];
+  }
+  return nextModel;
+}
 
 /* ── Inner shell (consumes context) ── */
 
@@ -132,6 +289,11 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const rightInspectorOpen = useWorkspaceStore((state) => state.rightInspectorOpen);
   const setRightInspectorOpen = useWorkspaceStore((state) => state.setRightInspectorOpen);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
+  const dockLayoutByStage = useWorkspaceStore((state) => state.dockLayoutByStage);
+  const setLeftDock = useWorkspaceStore((state) => state.setLeftDock);
+  const setRightDock = useWorkspaceStore((state) => state.setRightDock);
+  const setBottomDock = useWorkspaceStore((state) => state.setBottomDock);
+  const setDockLayout = useWorkspaceStore((state) => state.setDockLayout);
   const activeCoreTab = useWorkspaceStore((state) => state.activeCoreTab);
   const setActiveCoreTab = useWorkspaceStore((state) => state.setActiveCoreTab);
   const setActiveContextualTab = useWorkspaceStore((state) => state.setActiveContextualTab);
@@ -183,6 +345,68 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       setRightInspectorOpen(next);
     }
   }, [activeStageLayout.rightDock, rightInspectorOpen, setRightInspectorOpen]);
+
+  const handleRestoreWorkspacePanel = useCallback(
+    (panel: WorkspacePanelId) => {
+      const stage = currentStage;
+      const preset = resolveDockResponsivePreset(viewportSize.width);
+      const currentEnvelope = dockLayoutByStage[stage][preset];
+      const currentModel = currentEnvelope?.model ?? createDefaultDockLayout(preset);
+      const defaultModel = createDefaultDockLayout(preset);
+
+      if (panel === "explorer") {
+        setSidebarCollapsed(false);
+        setLeftDock(stage, DEFAULT_PANEL_DOCKS[stage].explorer);
+      } else if (panel === "inspector") {
+        setRightInspectorOpen(true);
+        setRightDock(stage, DEFAULT_PANEL_DOCKS[stage].inspector);
+      } else {
+        setBottomDock(stage, DEFAULT_PANEL_DOCKS[stage].telemetry);
+      }
+
+      setDockLayout(stage, preset, resetDockPanelSize(currentModel, defaultModel, panel));
+    },
+    [
+      currentStage,
+      dockLayoutByStage,
+      setBottomDock,
+      setDockLayout,
+      setLeftDock,
+      setRightDock,
+      setRightInspectorOpen,
+      setSidebarCollapsed,
+      viewportSize.width,
+    ],
+  );
+
+  const handleHideWorkspacePanel = useCallback(
+    (panel: WorkspacePanelId) => {
+      const stage = currentStage;
+      if (panel === "explorer") {
+        setSidebarCollapsed(true);
+        setLeftDock(stage, null);
+        return;
+      }
+      if (panel === "inspector") {
+        setRightInspectorOpen(false);
+        setRightDock(stage, null);
+        return;
+      }
+      setBottomDock(stage, null);
+    },
+    [
+      currentStage,
+      setBottomDock,
+      setLeftDock,
+      setRightDock,
+      setRightInspectorOpen,
+      setSidebarCollapsed,
+    ],
+  );
+
+  const explorerVisible = !sidebarCollapsed && Boolean(activeStageLayout.leftDock);
+  const inspectorVisible = rightInspectorOpen && Boolean(activeStageLayout.rightDock);
+  const telemetryVisible = Boolean(activeStageLayout.bottomDock);
 
   const spatialPreview = _transport.preview?.kind === "spatial" ? _transport.preview : null;
   const { handleViewportHealthChange, viewport3DStatus } = useViewport3DStatus({
@@ -658,6 +882,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         viewport3DStatus={viewport3DStatus.status}
         viewport3DStatusReason={viewport3DStatus.reason}
         viewport3DStatusDetail={viewport3DStatus.detail}
+        explorerVisible={explorerVisible}
+        inspectorVisible={inspectorVisible}
+        telemetryVisible={telemetryVisible}
         onCreateVisualizationPreset={handleCreateVisualizationPreset}
         airboxVisible={ribbonAirboxVisible}
         onToggleAirbox={() =>
@@ -680,6 +907,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         airMeshSurfaceVisible={airboxDisplayState.surface}
         airMeshWireframeVisible={airboxDisplayState.wireframe}
         airMeshPointsVisible={airboxDisplayState.points}
+        airMeshVectorsVisible={airboxDisplayState.vectorsVisible}
         airMeshWireframeScope={airboxDisplayState.wireframeScope}
         airMeshPointsScope={airboxDisplayState.pointsScope}
         airMeshVectorsScope={airboxDisplayState.vectorsScope}
@@ -777,6 +1005,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         onSetFemArrowStyle={handleRibbonFemArrowStyle}
         onSetAirboxDisplay={handleRibbonAirboxDisplay}
         onSetSlice2DToolbar={handleRibbonSlice2DToolbar}
+        onRestoreWorkspacePanel={handleRestoreWorkspacePanel}
+        onHideWorkspacePanel={handleHideWorkspacePanel}
         onDispatchVisualization={handleDispatchVisualization}
         onSetTextureTransformMode={handleSetTextureTransformMode}
         onBuilderAddPrimitive={handleBuilderAddPrimitive}

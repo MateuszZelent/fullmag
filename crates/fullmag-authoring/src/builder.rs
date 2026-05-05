@@ -696,7 +696,7 @@ fn default_solver_relax_algorithm() -> String {
 }
 
 fn default_solver_torque_tol() -> String {
-    "1e-5".to_string()
+    "1e-4".to_string()
 }
 
 fn default_solver_energy_tol() -> String {
@@ -704,7 +704,20 @@ fn default_solver_energy_tol() -> String {
 }
 
 fn default_solver_max_steps() -> String {
-    "100000".to_string()
+    "5000".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScriptBuilderSolverState;
+
+    #[test]
+    fn solver_defaults_match_canonical_relax_defaults() {
+        let defaults = ScriptBuilderSolverState::default();
+        assert_eq!(defaults.relax_algorithm, "llg_overdamped");
+        assert_eq!(defaults.torque_tolerance, "1e-4");
+        assert_eq!(defaults.max_relax_steps, "5000");
+    }
 }
 
 // --- ScriptBuilderMeshState defaults ---

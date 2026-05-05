@@ -8,6 +8,7 @@ import {
   parseDockLayoutByPreset,
 } from "./dockLayoutContract";
 import type { LaunchIntent } from "./launch-intent";
+import { resolveWorkspaceTabMountPolicy } from "./workspace-tab-policy";
 
 export type WorkspaceStage = "build" | "study";
 export type WorkspaceMode = WorkspaceStage | "analyze";
@@ -137,21 +138,13 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
   };
 }
 
-function isWebGLWorkspaceTabKind(kind: WorkspaceTabKind): boolean {
-  return (
-    kind === "viewport-3d" ||
-    kind === "viewport-2d" ||
-    kind === "viewport-mesh" ||
-    kind === "result-quantity"
-  );
-}
-
 export function normalizeWorkspaceTab(tab: WorkspaceTabNormalizerInput): WorkspaceTab {
   const requestedMountPolicy: WorkspaceTabMountPolicy =
     tab.mountPolicy ?? (tab.lifecycle === "warm" || tab.keepAlive ? "hidden-mounted" : "active-only");
-  const mountPolicy: WorkspaceTabMountPolicy = isWebGLWorkspaceTabKind(tab.kind)
-    ? "active-only"
-    : requestedMountPolicy;
+  const mountPolicy = resolveWorkspaceTabMountPolicy({
+    kind: tab.kind,
+    requestedMountPolicy,
+  });
   return {
     id: tab.id,
     key: tab.key,

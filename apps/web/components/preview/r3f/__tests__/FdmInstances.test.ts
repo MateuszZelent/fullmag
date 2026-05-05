@@ -3,6 +3,7 @@ import {
   FDM_INSTANCE_ANIMATION_BYTE_BUDGET,
   estimateFdmInstanceAnimationSnapshotBytes,
   resolveFdmGridBounds,
+  resolveFdmInstanceLifecycleEvent,
   resolveFdmMaterialOpacity,
   shouldAnimateFdmInstanceBuffers,
 } from "../FdmInstances";
@@ -128,5 +129,20 @@ describe("FDM instance animation budget", () => {
         byteBudget: FDM_INSTANCE_ANIMATION_BYTE_BUDGET,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveFdmInstanceLifecycleEvent", () => {
+  it("classifies render signature changes as topology rebuilds", () => {
+    expect(resolveFdmInstanceLifecycleEvent(null, "voxel:field:1")).toBe("topology_rebuild");
+    expect(resolveFdmInstanceLifecycleEvent("voxel:field:1", "voxel:field:2")).toBe(
+      "topology_rebuild",
+    );
+  });
+
+  it("classifies same-signature vector updates as field buffer updates", () => {
+    expect(resolveFdmInstanceLifecycleEvent("voxel:field:1", "voxel:field:1")).toBe(
+      "field_buffer_update",
+    );
   });
 });

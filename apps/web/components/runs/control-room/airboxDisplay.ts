@@ -13,6 +13,7 @@ export interface AirboxDisplayState {
   surface: boolean;
   wireframe: boolean;
   points: boolean;
+  vectorsVisible: boolean;
   /**
    * Derived from the canonical pass state via `bestPresetFromPasses()`.
    * May be `"custom"` when the active passes do not map to any named preset
@@ -37,6 +38,7 @@ export function airboxDisplayStateFromRenderMode(
       surface: false,
       wireframe: true,
       points: false,
+      vectorsVisible: false,
       renderMode: "wireframe",
       wireframeScope: "full",
       pointsScope: "surface",
@@ -49,6 +51,7 @@ export function airboxDisplayStateFromRenderMode(
     surface: passes.surface,
     wireframe: passes.surfaceEdges,
     points: passes.points,
+    vectorsVisible: false,
     renderMode,
     wireframeScope: "surface",
     pointsScope: "surface",
@@ -72,6 +75,7 @@ export function resolveAirboxDisplayState(
     surface: current.surface,
     wireframe: current.wireframe,
     points: current.points,
+    vectorsVisible: current.vectorsVisible,
     wireframeScope:
       current.renderMode === "mesh"
         ? modeDefaults.wireframeScope
@@ -133,6 +137,7 @@ export function resolveAirboxDisplayState(
     surface: shaded,
     wireframe,
     points,
+    vectorsVisible: base.vectorsVisible,
     renderMode,
     wireframeScope: patch.wireframeScope ?? base.wireframeScope,
     pointsScope: patch.pointsScope ?? base.pointsScope,

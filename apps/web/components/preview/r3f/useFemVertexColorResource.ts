@@ -9,6 +9,7 @@ import {
 } from "./femVertexColors";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
 
 function flattenBoundaryFaces(customBoundaryFaces: readonly [number, number, number][]): Uint32Array {
@@ -41,6 +42,7 @@ export function useFemVertexColorResource({
   uniformColor,
   vertexMap,
   enableGeometryVertexColors,
+  viewportTelemetryLabel,
 }: {
   customBoundaryFaces?: readonly [number, number, number][] | null;
   field: FemColorField;
@@ -59,6 +61,7 @@ export function useFemVertexColorResource({
   uniformColor?: string;
   vertexMap: Int32Array | null;
   enableGeometryVertexColors: boolean;
+  viewportTelemetryLabel?: string;
 }): void {
   const colorTransitionCleanupRef = useRef<(() => void) | null>(null);
 
@@ -239,6 +242,9 @@ export function useFemVertexColorResource({
                 : String(fieldRevision),
         },
       });
+      if (viewportTelemetryLabel) {
+        recordViewportLifecycleEventForLabel(viewportTelemetryLabel, "field_buffer_update");
+      }
     };
     void runColorUpload();
     return () => {
@@ -264,5 +270,6 @@ export function useFemVertexColorResource({
     uniformColor,
     vertexMap,
     enableGeometryVertexColors,
+    viewportTelemetryLabel,
   ]);
 }

@@ -173,6 +173,9 @@ export interface RibbonBuildContext {
   viewportAxesScope: "universe" | "object";
   universeWireframeVisible: boolean;
   viewportLegendVisible: boolean;
+  explorerVisible: boolean;
+  inspectorVisible: boolean;
+  telemetryVisible: boolean;
 
   // ── Study context ──
   studyNodeContext: StudyNodeContext | null;
@@ -212,6 +215,7 @@ export interface RibbonBuildContext {
   airMeshSurfaceVisible?: boolean | null;
   airMeshWireframeVisible?: boolean | null;
   airMeshPointsVisible?: boolean | null;
+  airMeshVectorsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;

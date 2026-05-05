@@ -77,6 +77,7 @@ export interface RibbonBarProps extends RibbonCommandContext {
   airMeshSurfaceVisible?: boolean | null;
   airMeshWireframeVisible?: boolean | null;
   airMeshPointsVisible?: boolean | null;
+  airMeshVectorsVisible?: boolean | null;
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;

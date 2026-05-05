@@ -17,7 +17,9 @@ import FdmLighting from "@/components/preview/r3f/FdmLighting";
 import SceneAxes3D from "@/components/preview/r3f/SceneAxes3D";
 import { useCanvasHost } from "@/components/preview/shared/useCanvasHost";
 import ViewportTelemetryProbe from "@/components/preview/shared/ViewportTelemetryProbe";
-import { resolveContextLossRecovery } from "@/components/preview/shared/ScientificViewportShell";
+import { useViewportContextLossRecovery } from "@/components/preview/shared/useViewportContextLossRecovery";
+import { useViewportSceneBridgeSync } from "@/components/preview/shared/useViewportSceneBridgeSync";
+import { resolveViewportFrameloop } from "@/components/preview/shared/viewportFrameloopPolicy";
 import TextureTransformGizmo, {
   type TextureGizmoMode,
   type TexturePreviewProxy,
@@ -65,6 +67,12 @@ import { TransformGizmoLayer } from "@/components/preview/transform/TransformGiz
 import { axisLabelsForConvention } from "@/components/preview/transform/axisConvention";
 import { useSceneCameraChange } from "@/components/preview/camera/useSceneCameraChange";
 import {
+  isViewportCameraAlreadyAtPersistedState,
+  shouldSkipViewportCameraRestoreForAppliedState,
+  shouldSkipViewportCameraRestoreForRestoredState,
+  useViewportCameraPersistenceController,
+} from "@/features/viewport-unified/camera-lifecycle";
+import {
   captureViewportCameraState,
   restoreViewportCameraState,
 } from "@/components/preview/camera/persistedViewportCamera";
@@ -81,26 +89,21 @@ import {
   type VoxelSampling,
   type TopoComponent,
 } from "@/components/preview/useFdmViewportSettings";
+import {
+  shouldRenderVectorSurfaceCanvas,
+} from "@/components/preview/shared/viewportWebglCanvasPolicy";
 import type { ViewportCameraState } from "@/features/workspace-graph";
+import type {
+  VectorLiveRenderDebugData,
+} from "@/features/viewport-unified/model/vectorLiveRenderDebugData";
 
 const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
 const VECTOR_SURFACE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
-const CAMERA_PERSIST_IDLE_MS = 240;
 
-export function shouldRenderVectorSurfaceCanvas({
-  canvasEnabled,
-  hostReady,
-  viewportVisible,
-}: {
-  canvasEnabled: boolean;
-  hostReady: boolean;
-  viewportVisible: boolean;
-}): boolean {
-  return canvasEnabled && hostReady && viewportVisible;
-}
+export { shouldRenderVectorSurfaceCanvas };
 
 function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>): void {
   if (!VECTOR_SURFACE_DEBUG_LOGS) {
@@ -118,14 +121,7 @@ interface Props {
   grid: [number, number, number];
   vectors: Float64Array | null;
   fieldLabel?: string;
-  liveRenderDebugData?: {
-    source: "authored" | "preview" | "live" | "none";
-    fieldDataRevision: string | null;
-    fieldDataTimestamp: number | null;
-    liveFieldSourceStep: number | null;
-    previewSourceStep: number | null;
-    effectiveStep: number | null;
-  } | null;
+  liveRenderDebugData?: VectorLiveRenderDebugData | null;
   geometryMode?: boolean;
   activeMask?: boolean[] | null;
   /** Physical extent [x, y, z] in metres — enables in-scene axis labels */
@@ -158,6 +154,7 @@ interface Props {
   viewportDocumentId?: string | null;
   persistedCameraState?: ViewportCameraState | null;
   onPersistCameraState?: (state: ViewportCameraState) => void;
+  onCameraInteractionChange?: (active: boolean) => void;
   /** Optional extra R3F nodes rendered inside the scene (e.g. geometry builder layer). */
   authoringOverlay?: ReactNode;
 }
@@ -272,30 +269,6 @@ function formatDebugTimestamp(timestamp: number | null | undefined): string {
   });
 }
 
-function tupleClose(
-  a: readonly number[] | null | undefined,
-  b: readonly number[] | null | undefined,
-): boolean {
-  if (!a || !b || a.length !== b.length) return false;
-  return a.every((value, index) => Math.abs(value - (b[index] ?? Number.NaN)) < 1e-9);
-}
-
-function viewportCameraStatesEqual(
-  a: ViewportCameraState | null | undefined,
-  b: ViewportCameraState | null | undefined,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    tupleClose(a.position, b.position) &&
-    tupleClose(a.target, b.target) &&
-    tupleClose(a.up, b.up) &&
-    a.projection === b.projection &&
-    a.navigation === b.navigation &&
-    a.lastFocusedObjectId === b.lastFocusedObjectId
-  );
-}
-
 function settingsFromViewport3DModel(
   base: Settings,
   model: Viewport3DModel | null | undefined,
@@ -380,11 +353,13 @@ function SyncedControls({
   viewCubeBridgeRef,
   target,
   cameraEnabled = true,
+  onInteractionChange,
 }: {
   controlsRefObject: React.MutableRefObject<any>;
   viewCubeBridgeRef: React.MutableRefObject<any>;
   target: [number, number, number];
   cameraEnabled?: boolean;
+  onInteractionChange?: (active: boolean) => void;
 }) {
   const { camera } = useThree();
   const stepLockState = useRef(createCameraStepLockState());
@@ -402,32 +377,19 @@ function SyncedControls({
       controls?.update();
     }
   }, [camera, controlsRefObject, profile]);
+  const handleInteractionStart = useCallback(() => {
+    onInteractionChange?.(true);
+  }, [onInteractionChange]);
+  const handleInteractionEnd = useCallback(() => {
+    onInteractionChange?.(false);
+  }, [onInteractionChange]);
 
-  useEffect(() => {
-    let raf = 0;
-    let disposed = false;
-
-    const syncBridge = () => {
-      if (disposed) {
-        return;
-      }
-      const controls = controlsRefObject.current ?? null;
-      viewCubeBridgeRef.current = { camera, controls };
-      if (!controls) {
-        raf = window.requestAnimationFrame(syncBridge);
-      }
-    };
-
-    syncBridge();
-
-    return () => {
-      disposed = true;
-      if (raf) {
-        window.cancelAnimationFrame(raf);
-      }
-      viewCubeBridgeRef.current = null;
-    };
-  }, [camera, controlsRefObject, viewCubeBridgeRef]);
+  useViewportSceneBridgeSync({
+    bridgeRef: viewCubeBridgeRef,
+    controlsRef: controlsRefObject,
+    camera,
+    awaitControls: true,
+  });
 
   return (
     <TrackballControls
@@ -438,6 +400,8 @@ function SyncedControls({
       dynamicDampingFactor={profile.dampingFactor}
       target={target}
       onChange={handleChange}
+      onStart={handleInteractionStart}
+      onEnd={handleInteractionEnd}
       enabled={cameraEnabled}
     />
   );
@@ -853,6 +817,7 @@ function UnifiedVectorFieldRendererInner({
   viewportDocumentId = null,
   persistedCameraState = null,
   onPersistCameraState,
+  onCameraInteractionChange,
   authoringOverlay = null,
 }: Props) {
   const { hostRef, hostNode } = useCanvasHost<HTMLDivElement>();
@@ -867,12 +832,26 @@ function UnifiedVectorFieldRendererInner({
   const canvasDpr = settings.quality === "ultra"
     ? Math.min(typeof window !== "undefined" ? window.devicePixelRatio : 1, 2)
     : 1;
+  const frameloop = resolveViewportFrameloop({
+    hidden: !viewportVisible,
+    renderMode: "demand",
+    forcedFrameloopMode: String(FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.frameloopMode) as
+      | "always"
+      | "demand"
+      | "never",
+  });
   const telemetry = useViewportTelemetryEntry({
     label: "vector-surface-viewport",
     renderer: "webgl",
-    frameloop: viewportVisible ? "demand" : "never",
+    frameloop,
     hidden: !viewportVisible,
   });
+  const recordFdmTopologyRebuild = useCallback(() => {
+    telemetry.recordLifecycleEvent("topology_rebuild");
+  }, [telemetry]);
+  const recordFdmFieldBufferUpdate = useCallback(() => {
+    telemetry.recordLifecycleEvent("field_buffer_update");
+  }, [telemetry]);
   const [openPopover, setOpenPopover] = useState<"color" | "display" | "topo" | "camera" | "info" | "rotation" | null>(null);
   const renderCountRef = useRef(0);
   const lastPersistLogAtMsRef = useRef(0);
@@ -945,13 +924,12 @@ function UnifiedVectorFieldRendererInner({
 
   const controlsRef = useRef<any>(null);
   const viewCubeSceneRef = useRef<any>(null);
+  const cameraInteractionActiveRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
   const r3fSceneRef = useRef<THREE.Scene | null>(null);
   const r3fCameraRef = useRef<THREE.Camera | null>(null);
   const canvasContextCleanupRef = useRef<(() => void) | null>(null);
-  const contextLossRetryTimestampsRef = useRef<number[]>([]);
-  const contextLossRetryTimerRef = useRef<number | null>(null);
   const [canvasContextGeneration, setCanvasContextGeneration] = useState(0);
   const [rotationSnapshots, setRotationSnapshots] = useState<Record<RotationPanelKey, OrientationDebugSnapshot | null>>({
     viewport: null,
@@ -1029,6 +1007,52 @@ function UnifiedVectorFieldRendererInner({
         : `fdm:world:${sceneTarget.join("x")}:${sceneFrame.extent.join("x")}`,
     [deferredGrid, geometryMode, sceneFrame.extent, sceneMode, sceneTarget, viewportDocumentId],
   );
+  const clearVectorSurfaceCanvasRefs = useCallback(() => {
+    canvasRef.current = null;
+    glRef.current = null;
+    r3fSceneRef.current = null;
+    r3fCameraRef.current = null;
+  }, []);
+  const remountVectorSurfaceCanvas = useCallback(() => {
+    clearVectorSurfaceCanvasRefs();
+    logVectorSurfaceDebug("webgl remount requested", {
+      key: cameraPersistenceKey,
+    });
+    setCanvasContextGeneration((generation) => generation + 1);
+  }, [cameraPersistenceKey, clearVectorSurfaceCanvasRefs]);
+  const {
+    handleContextLost,
+    handleContextRestored,
+    clearRetryTimer: clearContextLossRetryTimer,
+  } = useViewportContextLossRecovery({
+    hidden: !viewportVisible,
+    onRemount: remountVectorSurfaceCanvas,
+    onContextLost: () => {
+      telemetry.recordLifecycleEvent("context_lost");
+    },
+    onRecoveryScheduled: (decision) => {
+      clearVectorSurfaceCanvasRefs();
+      logVectorSurfaceDebug("webgl context lost", {
+        key: cameraPersistenceKey,
+        generation: canvasContextGeneration,
+        retryDelayMs: decision.retryDelayMs,
+      });
+    },
+    onRecoveryBlocked: (decision) => {
+      logVectorSurfaceDebug("webgl context lost; automatic remount blocked", {
+        key: cameraPersistenceKey,
+        generation: canvasContextGeneration,
+        retryCount: decision.nextTimestamps.length,
+      });
+    },
+    onContextRestored: () => {
+      telemetry.recordLifecycleEvent("context_restored");
+      logVectorSurfaceDebug("webgl context restored", {
+        key: cameraPersistenceKey,
+        generation: canvasContextGeneration,
+      });
+    },
+  });
   const cameraRestoreReadyRef = useRef(false);
   const lastRestoredCameraRef = useRef<{
     key: string;
@@ -1063,7 +1087,14 @@ function UnifiedVectorFieldRendererInner({
       });
     };
   }, [cameraPersistenceKey, viewportDocumentId]);
+  const rotationSnapshotsEnabled =
+    toolbarMode !== "hidden" &&
+    FRONTEND_DIAGNOSTIC_FLAGS.vectorSurfaceViewport.showToolbar &&
+    FRONTEND_DIAGNOSTIC_FLAGS.vectorSurfaceViewport.enableRotationDebugControls;
   const updateRotationSnapshot = useCallback((key: RotationPanelKey, snapshot: OrientationDebugSnapshot) => {
+    if (!rotationSnapshotsEnabled) {
+      return;
+    }
     setRotationSnapshots((previous) => {
       const current = previous[key];
       if (
@@ -1074,7 +1105,7 @@ function UnifiedVectorFieldRendererInner({
       }
       return { ...previous, [key]: snapshot };
     });
-  }, []);
+  }, [rotationSnapshotsEnabled]);
   const syncViewportRotationSnapshot = useCallback(() => {
     const bridge = viewCubeSceneRef.current;
     if (!bridge?.camera) {
@@ -1082,7 +1113,15 @@ function UnifiedVectorFieldRendererInner({
     }
     updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
   }, [updateRotationSnapshot]);
+  useEffect(() => {
+    if (rotationSnapshotsEnabled) {
+      syncViewportRotationSnapshot();
+    }
+  }, [rotationSnapshotsEnabled, syncViewportRotationSnapshot]);
   const persistCameraState = useCallback(() => {
+    if (cameraInteractionActiveRef.current) {
+      return;
+    }
     if (!cameraRestoreReadyRef.current) {
       return;
     }
@@ -1105,65 +1144,33 @@ function UnifiedVectorFieldRendererInner({
       });
     }
     if (onPersistCameraState) {
+      telemetry.recordLifecycleEvent("camera_persist");
       onPersistCameraState(state);
       return;
     }
+    telemetry.recordLifecycleEvent("camera_persist");
     VECTOR_SURFACE_CAMERA_STATE_CACHE.set(cameraPersistenceKey, {
       position: state.position,
       up: state.up,
       target: state.target,
     });
-  }, [cameraPersistenceKey, onPersistCameraState]);
-  const persistCameraStateRef = useRef(persistCameraState);
-  useEffect(() => {
-    persistCameraStateRef.current = persistCameraState;
-  }, [persistCameraState]);
-  const cameraInteractionActiveRef = useRef(false);
-  const pendingCameraPersistRef = useRef(false);
-  const cameraPersistTimerRef = useRef<number | null>(null);
-  const clearCameraPersistTimer = useCallback(() => {
-    if (cameraPersistTimerRef.current === null) {
-      return;
-    }
-    window.clearTimeout(cameraPersistTimerRef.current);
-    cameraPersistTimerRef.current = null;
-  }, []);
-  const flushDeferredCameraPersist = useCallback(() => {
-    clearCameraPersistTimer();
-    if (!pendingCameraPersistRef.current) {
-      return;
-    }
-    pendingCameraPersistRef.current = false;
-    persistCameraStateRef.current();
-  }, [clearCameraPersistTimer]);
-  const scheduleDeferredCameraPersist = useCallback(() => {
-    pendingCameraPersistRef.current = true;
-    clearCameraPersistTimer();
-    if (cameraInteractionActiveRef.current) {
-      return;
-    }
-    cameraPersistTimerRef.current = window.setTimeout(
-      flushDeferredCameraPersist,
-      CAMERA_PERSIST_IDLE_MS,
-    );
-  }, [clearCameraPersistTimer, flushDeferredCameraPersist]);
+  }, [cameraPersistenceKey, onPersistCameraState, telemetry]);
+  const cameraPersistenceController = useViewportCameraPersistenceController(persistCameraState);
+  const handleCameraInteractionChange = useCallback((active: boolean) => {
+    cameraInteractionActiveRef.current = active;
+    cameraPersistenceController.setInteractionActive(active);
+    onCameraInteractionChange?.(active);
+  }, [cameraPersistenceController, onCameraInteractionChange]);
   const handleCameraInteractionStart = useCallback(() => {
-    cameraInteractionActiveRef.current = true;
-    clearCameraPersistTimer();
-  }, [clearCameraPersistTimer]);
+    handleCameraInteractionChange(true);
+  }, [handleCameraInteractionChange]);
   const handleCameraInteractionEnd = useCallback(() => {
-    cameraInteractionActiveRef.current = false;
-    flushDeferredCameraPersist();
-  }, [flushDeferredCameraPersist]);
-  useEffect(() => {
-    return () => {
-      flushDeferredCameraPersist();
-    };
-  }, [flushDeferredCameraPersist]);
+    handleCameraInteractionChange(false);
+  }, [handleCameraInteractionChange]);
   const handleSceneCameraChange = useCallback(() => {
     syncViewportRotationSnapshot();
-    scheduleDeferredCameraPersist();
-  }, [scheduleDeferredCameraPersist, syncViewportRotationSnapshot]);
+    cameraPersistenceController.schedule();
+  }, [cameraPersistenceController, syncViewportRotationSnapshot]);
   useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange, {
     onInteractionStart: handleCameraInteractionStart,
     onInteractionEnd: handleCameraInteractionEnd,
@@ -1186,10 +1193,11 @@ function UnifiedVectorFieldRendererInner({
       // camera snapback when the parent re-creates the camera object because
       // an unrelated viewport document field changed (e.g., solver scalar row).
       if (
-        cameraRestoreReadyRef.current &&
-        persistedCameraState &&
-        lastAppliedPersistedStateRef.current &&
-        viewportCameraStatesEqual(persistedCameraState, lastAppliedPersistedStateRef.current)
+        shouldSkipViewportCameraRestoreForAppliedState({
+          restoreReady: cameraRestoreReadyRef.current,
+          persistedCameraState,
+          lastAppliedCameraState: lastAppliedPersistedStateRef.current,
+        })
       ) {
         logVectorSurfaceDebug("camera restore skipped (same persisted state)", {
           key: cameraPersistenceKey,
@@ -1202,17 +1210,24 @@ function UnifiedVectorFieldRendererInner({
         navigation: "trackball",
         lastFocusedObjectId: lastFocusedObjectIdRef.current,
       });
-      const lastRestored = lastRestoredCameraRef.current;
       if (
-        cameraRestoreReadyRef.current &&
-        lastRestored?.key === cameraPersistenceKey &&
-        viewportCameraStatesEqual(lastRestored.state, persistedCameraState) &&
-        (!persistedCameraState || viewportCameraStatesEqual(currentState, persistedCameraState))
+        shouldSkipViewportCameraRestoreForRestoredState({
+          restoreReady: cameraRestoreReadyRef.current,
+          cameraKey: cameraPersistenceKey,
+          persistedCameraState,
+          currentCameraState: currentState,
+          lastRestoredCamera: lastRestoredCameraRef.current,
+        })
       ) {
         syncViewportRotationSnapshot();
         return;
       }
-      if (persistedCameraState && viewportCameraStatesEqual(currentState, persistedCameraState)) {
+      if (
+        isViewportCameraAlreadyAtPersistedState({
+          persistedCameraState,
+          currentCameraState: currentState,
+        })
+      ) {
         lastRestoredCameraRef.current = {
           key: cameraPersistenceKey,
           state: persistedCameraState,
@@ -1242,6 +1257,7 @@ function UnifiedVectorFieldRendererInner({
           return true;
         })();
       if (restored) {
+        telemetry.recordLifecycleEvent("camera_restore");
         lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
         logVectorSurfaceDebug("camera restored", {
           key: cameraPersistenceKey,
@@ -1271,7 +1287,7 @@ function UnifiedVectorFieldRendererInner({
         window.cancelAnimationFrame(raf);
       }
     };
-  }, [cameraPersistenceKey, persistedCameraState, syncViewportRotationSnapshot]);
+  }, [cameraPersistenceKey, persistedCameraState, syncViewportRotationSnapshot, telemetry]);
 
   // Snap camera to a direction
   const snapCamera = useCallback((dir: [number, number, number], up: [number, number, number] = [0, 1, 0]) => {
@@ -1349,16 +1365,10 @@ function UnifiedVectorFieldRendererInner({
     return () => {
       canvasContextCleanupRef.current?.();
       canvasContextCleanupRef.current = null;
-      if (contextLossRetryTimerRef.current !== null) {
-        window.clearTimeout(contextLossRetryTimerRef.current);
-        contextLossRetryTimerRef.current = null;
-      }
-      canvasRef.current = null;
-      glRef.current = null;
-      r3fSceneRef.current = null;
-      r3fCameraRef.current = null;
+      clearContextLossRetryTimer();
+      clearVectorSurfaceCanvasRefs();
     };
-  }, []);
+  }, [clearContextLossRetryTimer, clearVectorSurfaceCanvasRefs]);
 
   const selectedAxesOverlay = useMemo(
     () => selectedObjectId
@@ -1951,7 +1961,7 @@ function UnifiedVectorFieldRendererInner({
           <Canvas
             key={canvasContextGeneration}
             eventSource={hostNode ?? undefined}
-            frameloop={viewportVisible ? "demand" : "never"}
+            frameloop={frameloop}
             className="w-full h-full pointer-events-auto"
             camera={{
               fov: 50,
@@ -1969,53 +1979,17 @@ function UnifiedVectorFieldRendererInner({
             }}
             onCreated={({ gl, scene, camera }) => {
               canvasContextCleanupRef.current?.();
+              telemetry.recordLifecycleEvent("canvas_mount");
               canvasRef.current = gl.domElement;
               glRef.current = gl;
               r3fSceneRef.current = scene;
               r3fCameraRef.current = camera;
               const canvas = gl.domElement;
-              const handleContextLost = (event: Event) => {
-                event.preventDefault();
-                if (!viewportVisible) {
-                  return;
-                }
-                logVectorSurfaceDebug("webgl context lost", {
-                  key: cameraPersistenceKey,
-                  generation: canvasContextGeneration,
-                });
-                const decision = resolveContextLossRecovery({
-                  nowMs: Date.now(),
-                  retryTimestamps: contextLossRetryTimestampsRef.current,
-                });
-                contextLossRetryTimestampsRef.current = decision.nextTimestamps;
-                if (!decision.allowed || contextLossRetryTimerRef.current !== null) {
-                  return;
-                }
-                canvasRef.current = null;
-                glRef.current = null;
-                r3fSceneRef.current = null;
-                r3fCameraRef.current = null;
-                contextLossRetryTimerRef.current = window.setTimeout(() => {
-                  contextLossRetryTimerRef.current = null;
-                  logVectorSurfaceDebug("webgl remount requested", {
-                    key: cameraPersistenceKey,
-                  });
-                  setCanvasContextGeneration((generation) => generation + 1);
-                }, decision.retryDelayMs);
-              };
-              const handleContextRestored = () => {
-                logVectorSurfaceDebug("webgl context restored", {
-                  key: cameraPersistenceKey,
-                  generation: canvasContextGeneration,
-                });
-              };
               canvas.addEventListener("webglcontextlost", handleContextLost, false);
               canvas.addEventListener("webglcontextrestored", handleContextRestored, false);
               canvasContextCleanupRef.current = () => {
-                if (contextLossRetryTimerRef.current !== null) {
-                  window.clearTimeout(contextLossRetryTimerRef.current);
-                  contextLossRetryTimerRef.current = null;
-                }
+                telemetry.recordLifecycleEvent("canvas_unmount");
+                clearContextLossRetryTimer();
                 canvas.removeEventListener("webglcontextlost", handleContextLost, false);
                 canvas.removeEventListener("webglcontextrestored", handleContextRestored, false);
               };
@@ -2048,6 +2022,8 @@ function UnifiedVectorFieldRendererInner({
                 sceneOpacityMultiplier={sceneOpacityMultiplier}
                 isolateGridBounds={isolateGridBounds}
                 vectorsVisible={vectorsVisible}
+                onTopologyRebuild={recordFdmTopologyRebuild}
+                onFieldBufferUpdate={recordFdmFieldBufferUpdate}
               />
             ) : null}
 
@@ -2095,6 +2071,7 @@ function UnifiedVectorFieldRendererInner({
               viewCubeBridgeRef={viewCubeSceneRef}
               target={stableOrbitTarget}
               cameraEnabled={cameraActive && viewportVisible}
+              onInteractionChange={handleCameraInteractionChange}
             />
 
             {activeTextureTransform && !cameraActive && (

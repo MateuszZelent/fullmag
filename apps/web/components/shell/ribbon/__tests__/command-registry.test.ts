@@ -466,4 +466,42 @@ describe("ribbon viewport commands", () => {
       }),
     ).toBe(true);
   });
+
+  it("dispatches workspace panel restore through the dedicated callback", () => {
+    const onRestoreWorkspacePanel = vi.fn();
+    const ctx = context({ onRestoreWorkspacePanel });
+
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "workspace.restore-panel",
+        panel: "explorer",
+      }),
+    ).toBe(true);
+
+    executeRibbonCommand(ctx, {
+      id: "workspace.restore-panel",
+      panel: "telemetry",
+    });
+
+    expect(onRestoreWorkspacePanel).toHaveBeenCalledWith("telemetry");
+  });
+
+  it("dispatches workspace panel hide through the dedicated callback", () => {
+    const onHideWorkspacePanel = vi.fn();
+    const ctx = context({ onHideWorkspacePanel });
+
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "workspace.hide-panel",
+        panel: "inspector",
+      }),
+    ).toBe(true);
+
+    executeRibbonCommand(ctx, {
+      id: "workspace.hide-panel",
+      panel: "explorer",
+    });
+
+    expect(onHideWorkspacePanel).toHaveBeenCalledWith("explorer");
+  });
 });

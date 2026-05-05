@@ -18,7 +18,7 @@ import {
   resetViewportResourceManagerForTests,
   trackViewportResource,
 } from "@/lib/debug/viewportResourceManager";
-import { resolveContextLossRecovery } from "../../shared/ScientificViewportShell";
+import { resolveContextLossRecovery } from "../../shared/viewportContextLossPolicy";
 import type { FemMeshData } from "../../fem/femMeshTypes";
 
 function makeStressMesh(): FemMeshData {

@@ -40,12 +40,18 @@ import { resolveAirboxArrowSamplingMode } from "./fem/airboxVectorSampling";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
+import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
 import { DEFAULT_VIEWPORT_VISUAL_PROFILE } from "@/lib/profiles/frontendRuntimeProfiles";
 import {
   captureOrientationDebugSnapshot,
   type OrientationDebugSnapshot,
 } from "./camera/cameraOrientation";
 import { useSceneCameraChange } from "./camera/useSceneCameraChange";
+import {
+  shouldSkipViewportCameraRestoreForAppliedState,
+  shouldSkipViewportCameraRestoreForScope,
+  useViewportCameraPersistenceController,
+} from "@/features/viewport-unified/camera-lifecycle";
 import {
   captureViewportCameraState,
   restoreViewportCameraState,
@@ -84,29 +90,11 @@ const DIMMED_MIN_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.dimmedMinAir;
 const SELECTED_LIFT_MAGNETIC = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftMagnetic;
 const SELECTED_LIFT_AIR = DEFAULT_VIEWPORT_VISUAL_PROFILE.selectedLiftAir;
 const BLANK_VIEWPORT_RECOVERY_GRACE_MS = 900;
-const CAMERA_PERSIST_IDLE_MS = 240;
 
 export interface Viewport3DHealthReport {
   status: "active" | "inactive" | "warning";
   reason: string;
   detail: string;
-}
-
-/* ── P-21: structural equality helper ─────────────────────────────── */
-function viewportCameraStatesClose(
-  a: ViewportCameraState | null | undefined,
-  b: ViewportCameraState | null | undefined,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  const eps = 1e-9;
-  const arrClose = (x: readonly number[], y: readonly number[]) =>
-    x.length === y.length && x.every((v, i) => Math.abs(v - y[i]) < eps);
-  return (
-    arrClose(a.position, b.position) &&
-    arrClose(a.target, b.target) &&
-    arrClose(a.up, b.up)
-  );
 }
 
 interface Props {
@@ -212,6 +200,7 @@ interface Props {
   viewportDocumentId?: string | null;
   persistedCameraState?: ViewportCameraState | null;
   onPersistCameraState?: (state: ViewportCameraState) => void;
+  onCameraInteractionChange?: (active: boolean) => void;
   onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
   authoringOverlay?: ReactNode;
 }
@@ -310,6 +299,7 @@ function FemMeshView3DInner({
   viewportDocumentId = null,
   persistedCameraState = null,
   onPersistCameraState,
+  onCameraInteractionChange,
   onViewportHealthChange,
   authoringOverlay = null,
 }: Props) {
@@ -340,6 +330,7 @@ function FemMeshView3DInner({
   const viewCubeSceneRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const qualityProfileRef = useRef<ViewportQualityProfileId>("interactive");
+  const cameraInteractionActiveRef = useRef(false);
   const cameraPersistenceScope = viewportDocumentId ?? topologyKey;
   const cameraRestoreReadyRef = useRef(false);
   const restoredCameraScopeRef = useRef<string | null>(null);
@@ -443,6 +434,7 @@ function FemMeshView3DInner({
     onPreviewMaxPointsChange,
     onLegendOpenChange,
   });
+  const rotationDebugActive = openPopover === "rotation";
   useEffect(() => {
     if (
       persistedCameraState?.projection &&
@@ -540,6 +532,9 @@ function FemMeshView3DInner({
     shouldRenderMagneticGeometryResolved,
     shouldRenderAirGeometry,
   } = vectorDomain;
+  const telemetryLabel = quantityId
+    ? `fem-${quantityId}-${runtimeRenderMode}`
+    : `fem-${runtimeRenderMode}`;
   const effectiveArrowSamplingMode = useMemo<ArrowSamplingMode>(
     () =>
       resolveAirboxArrowSamplingMode({
@@ -850,6 +845,9 @@ function FemMeshView3DInner({
     key: "viewport" | "viewCube" | "hsl",
     snapshot: OrientationDebugSnapshot,
   ) => {
+    if (!rotationDebugActive) {
+      return;
+    }
     setRotationSnapshots((previous) => {
       const current = previous[key];
       if (current?.signature === snapshot.signature && current.cssTransform === snapshot.cssTransform) {
@@ -857,7 +855,7 @@ function FemMeshView3DInner({
       }
       return { ...previous, [key]: snapshot };
     });
-  }, []);
+  }, [rotationDebugActive]);
   const syncViewportRotationSnapshot = useCallback(() => {
     const bridge = viewCubeSceneRef.current;
     if (!bridge?.camera) {
@@ -865,7 +863,15 @@ function FemMeshView3DInner({
     }
     updateRotationSnapshot("viewport", captureOrientationDebugSnapshot(bridge.camera));
   }, [updateRotationSnapshot]);
+  useEffect(() => {
+    if (rotationDebugActive) {
+      syncViewportRotationSnapshot();
+    }
+  }, [rotationDebugActive, syncViewportRotationSnapshot]);
   const persistCameraState = useCallback(() => {
+    if (cameraInteractionActiveRef.current) {
+      return;
+    }
     if (!cameraRestoreReadyRef.current) {
       return;
     }
@@ -877,75 +883,44 @@ function FemMeshView3DInner({
     if (!state || !onPersistCameraState) {
       return;
     }
+    recordViewportLifecycleEventForLabel(telemetryLabel, "camera_persist");
     onPersistCameraState(state);
-  }, [cameraProjection, navigationMode, onPersistCameraState]);
-  const persistCameraStateRef = useRef(persistCameraState);
-  useEffect(() => {
-    persistCameraStateRef.current = persistCameraState;
-  }, [persistCameraState]);
-  const cameraInteractionActiveRef = useRef(false);
-  const pendingCameraPersistRef = useRef(false);
-  const cameraPersistTimerRef = useRef<number | null>(null);
-  const clearCameraPersistTimer = useCallback(() => {
-    if (cameraPersistTimerRef.current === null) {
-      return;
-    }
-    window.clearTimeout(cameraPersistTimerRef.current);
-    cameraPersistTimerRef.current = null;
-  }, []);
-  const flushDeferredCameraPersist = useCallback(() => {
-    clearCameraPersistTimer();
-    if (!pendingCameraPersistRef.current) {
-      return;
-    }
-    pendingCameraPersistRef.current = false;
-    persistCameraStateRef.current();
-  }, [clearCameraPersistTimer]);
-  const scheduleDeferredCameraPersist = useCallback(() => {
-    pendingCameraPersistRef.current = true;
-    clearCameraPersistTimer();
-    if (cameraInteractionActiveRef.current) {
-      return;
-    }
-    cameraPersistTimerRef.current = window.setTimeout(
-      flushDeferredCameraPersist,
-      CAMERA_PERSIST_IDLE_MS,
-    );
-  }, [clearCameraPersistTimer, flushDeferredCameraPersist]);
-  const handleCameraInteractionStart = useCallback(() => {
-    cameraInteractionActiveRef.current = true;
-    clearCameraPersistTimer();
-  }, [clearCameraPersistTimer]);
-  const handleCameraInteractionEnd = useCallback(() => {
-    cameraInteractionActiveRef.current = false;
-    flushDeferredCameraPersist();
-  }, [flushDeferredCameraPersist]);
-  useEffect(() => {
-    return () => {
-      flushDeferredCameraPersist();
-    };
-  }, [flushDeferredCameraPersist]);
+  }, [cameraProjection, navigationMode, onPersistCameraState, telemetryLabel]);
+  const cameraPersistenceController = useViewportCameraPersistenceController(persistCameraState);
+  const handleViewportInteractionChange = useCallback((next: boolean) => {
+    cameraInteractionActiveRef.current = next;
+    cameraPersistenceController.setInteractionActive(next);
+    setInteractionActive(next);
+    onCameraInteractionChange?.(next);
+  }, [cameraPersistenceController, onCameraInteractionChange, setInteractionActive]);
   const handleSceneCameraChange = useCallback(() => {
     syncViewportRotationSnapshot();
-    scheduleDeferredCameraPersist();
-  }, [scheduleDeferredCameraPersist, syncViewportRotationSnapshot]);
+    cameraPersistenceController.schedule();
+  }, [cameraPersistenceController, syncViewportRotationSnapshot]);
+  const recordCameraFit = useCallback(() => {
+    recordViewportLifecycleEventForLabel(telemetryLabel, "camera_fit");
+  }, [telemetryLabel]);
   // P-21: Track the last persisted camera state we actually applied. Used to detect reference
   // identity changes that carry identical values (e.g., when graphActiveViewportDocument gets a
   // new object because a non-camera field changed), so we don\u2019t hard-set the camera unnecessarily.
   const lastAppliedCameraStateRef = useRef<ViewportCameraState | null>(null);
 
   useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange, {
-    onInteractionStart: handleCameraInteractionStart,
-    onInteractionEnd: handleCameraInteractionEnd,
+    onInteractionStart: cameraPersistenceController.handleInteractionStart,
+    onInteractionEnd: cameraPersistenceController.handleInteractionEnd,
   });
   useEffect(() => {
     if (
-      restoredCameraScopeRef.current === cameraPersistenceScope &&
-      cameraRestoreReadyRef.current &&
-      // P-18: guard must also match the canvas generation so that after context loss recovery
-      // (canvasContextGeneration increment \u2192 Canvas remount \u2192 cameraContextKey increment) the
-      // restore effect runs again instead of returning early.
-      lastRestoredContextKeyRef.current === cameraContextKey
+      shouldSkipViewportCameraRestoreForScope({
+        restoreReady: cameraRestoreReadyRef.current,
+        restoredScope: restoredCameraScopeRef.current,
+        currentScope: cameraPersistenceScope,
+        // P-18: guard must also match the canvas generation so that after context loss recovery
+        // (canvasContextGeneration increment \u2192 Canvas remount \u2192 cameraContextKey increment) the
+        // restore effect runs again instead of returning early.
+        lastRestoredContextKey: lastRestoredContextKeyRef.current,
+        currentContextKey: cameraContextKey,
+      })
     ) {
       syncViewportRotationSnapshot();
       return;
@@ -954,10 +929,11 @@ function FemMeshView3DInner({
     // to what we already applied. This prevents a camera snapback when the parent re-creates the
     // camera object because an unrelated viewport document field changed.
     if (
-      cameraRestoreReadyRef.current &&
-      persistedCameraState &&
-      lastAppliedCameraStateRef.current &&
-      viewportCameraStatesClose(persistedCameraState, lastAppliedCameraStateRef.current)
+      shouldSkipViewportCameraRestoreForAppliedState({
+        restoreReady: cameraRestoreReadyRef.current,
+        persistedCameraState,
+        lastAppliedCameraState: lastAppliedCameraStateRef.current,
+      })
     ) {
       return;
     }
@@ -975,6 +951,7 @@ function FemMeshView3DInner({
         return;
       }
       if (restoreViewportCameraState(bridge, persistedCameraState)) {
+        recordViewportLifecycleEventForLabel(telemetryLabel, "camera_restore");
         lastFocusedObjectIdRef.current = persistedCameraState?.lastFocusedObjectId ?? null;
       }
       restoredCameraScopeRef.current = cameraPersistenceScope;
@@ -992,7 +969,7 @@ function FemMeshView3DInner({
         window.cancelAnimationFrame(raf);
       }
     };
-  }, [cameraPersistenceScope, persistedCameraState, syncViewportRotationSnapshot, cameraContextKey]);
+  }, [cameraContextKey, cameraPersistenceScope, persistedCameraState, syncViewportRotationSnapshot, telemetryLabel]);
   const applyRotationEuler = useCallback((nextEulerDeg: [number, number, number]) => {
     const quaternion = new THREE.Quaternion().setFromEuler(
       new THREE.Euler(
@@ -1148,7 +1125,7 @@ function FemMeshView3DInner({
           hidden: !viewportVisible,
           interactionActive: viewportVisible && interactionActive,
         }}
-        onInteractionChange={setInteractionActive}
+        onInteractionChange={handleViewportInteractionChange}
         target={shellTarget}
         bridgeRef={viewCubeSceneRef}
         controlsRef={controlsRef}
@@ -1170,11 +1147,7 @@ function FemMeshView3DInner({
           enableControls:
             selectionOnlyInteractionMode || textureGizmoDragging ? false : true,
         }}
-        telemetryLabel={
-          quantityId
-            ? `fem-${quantityId}-${runtimeRenderMode}`
-            : `fem-${runtimeRenderMode}`
-        }
+        telemetryLabel={telemetryLabel}
       >
         {!missingExactScopeSegment ? (
           <>
@@ -1187,6 +1160,7 @@ function FemMeshView3DInner({
               targetCenter={dynamicGeomCenter}
               controlsRef={controlsRef}
               lastAppliedRef={cameraAutoFitAppliedRef}
+              onFitApplied={recordCameraFit}
             />
           ) : null}
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
@@ -1271,6 +1245,7 @@ function FemMeshView3DInner({
             showAntennaOverlays={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAntennaOverlays}
             showSceneAxes={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes}
             onArrowSampledCount={setSampledArrowCount}
+            telemetryLabel={telemetryLabel}
           />
           {authoringOverlay}
           </>

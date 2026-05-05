@@ -37,10 +37,7 @@ function signatureForStudyPipeline(
   return flattenStudyPipelineNodes(studyPipeline.nodes);
 }
 
-function buildWorkspaceGraphBridgeSignature(input: WorkspaceGraphBridgeInput): string {
-  const lastScalarRow = input.scalarRows.length > 0
-    ? input.scalarRows[input.scalarRows.length - 1]
-    : null;
+export function buildWorkspaceGraphBridgeSignature(input: WorkspaceGraphBridgeInput): string {
   return JSON.stringify({
     enabled: input.enabled !== false,
     projectLabel: input.projectLabel,
@@ -68,12 +65,12 @@ function buildWorkspaceGraphBridgeSignature(input: WorkspaceGraphBridgeInput): s
       })),
       datasets: input.resultsWorkspace.datasets.map((entry) => ({
         id: entry.id,
-        sampleCount: entry.sampleCount,
         hasFinalState: entry.hasFinalState,
       })),
       derivedValues: input.resultsWorkspace.derivedValues.map((entry) => ({
         id: entry.id,
-        latestValue: entry.latestValue,
+        quantityId: entry.quantityId,
+        sourceDatasetId: entry.sourceDatasetId,
       })),
     },
     quantities: input.quantities.map((quantity) => ({
@@ -81,8 +78,6 @@ function buildWorkspaceGraphBridgeSignature(input: WorkspaceGraphBridgeInput): s
       available: quantity.available,
       kind: quantity.kind ?? null,
     })),
-    scalarRowsLength: input.scalarRows.length,
-    scalarRowsLast: lastScalarRow,
   });
 }
 

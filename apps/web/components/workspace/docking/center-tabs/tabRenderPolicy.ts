@@ -1,4 +1,5 @@
 import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
+import { isWebGLWorkspaceTabKind } from "@/lib/workspace/workspace-tab-policy";
 
 type RenderPolicyTab = Pick<WorkspaceTab, "id" | "kind" | "mountPolicy">;
 
@@ -16,12 +17,7 @@ export interface WorkspaceTabRenderDecision {
 }
 
 export function isWebGLWorkspaceTab(tab: Pick<WorkspaceTab, "kind">): boolean {
-  return (
-    tab.kind === "viewport-3d" ||
-    tab.kind === "viewport-2d" ||
-    tab.kind === "viewport-mesh" ||
-    tab.kind === "result-quantity"
-  );
+  return isWebGLWorkspaceTabKind(tab.kind);
 }
 
 export function resolveWorkspaceTabRenderDecision(

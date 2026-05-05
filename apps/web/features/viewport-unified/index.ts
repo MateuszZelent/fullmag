@@ -94,6 +94,7 @@ export { Viewport3DHost } from "./components/Viewport3DHost";
 export { UNIFIED_VIEWPORT_3D } from "./registry/unifiedViewEntry";
 export {
   renderViewport3DRoute,
+  resolveViewport3DModeFlags,
   resolveViewport3DRenderRoute,
   resolveViewportInternalToolbarModes,
   UnifiedViewport3DRenderer,
@@ -105,5 +106,7 @@ export type {
   Viewport3DRenderRoute,
   Viewport3DRenderRouteInput,
   Viewport3DRouteRenderers,
+  Viewport3DModeFlags,
+  Viewport3DModeFlagsInput,
   UnifiedViewport3DRendererProps,
 } from "./registry/viewport3dRenderRegistry";

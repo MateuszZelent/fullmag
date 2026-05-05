@@ -149,4 +149,4 @@ study.save("mx", every=1e-14)
 study.save("E_total", every=1e-14)
 
 # Stages
-study.stages.add_relax(algorithm="llg_overdamped", tol=1e-06, max_steps=10000)
+study.stages.add_relax(algorithm="llg_overdamped", tol=1e-06)

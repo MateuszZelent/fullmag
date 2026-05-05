@@ -17,6 +17,9 @@ import { exportCanvasAsImage } from "../export/FigureExport";
 import type { TextureTransform3D } from "@/lib/textureTransform";
 import type { BuilderObjectOverlay, FocusObjectRequest } from "../../runs/control-room/shared";
 import type { FemMeshData, RenderLayer } from "./femMeshTypes";
+import {
+  resolveViewportCameraFitDecision,
+} from "@/features/viewport-unified/camera-lifecycle";
 
 interface UseFemSceneGeometryArgs {
   meshData: FemMeshData;
@@ -387,25 +390,14 @@ export function useFemSceneGeometry({
   const lastFittedGeomRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!enableCameraFitEffect) {
-      return;
-    }
-    const fitSeed = viewportFitSeed == null ? null : String(viewportFitSeed);
-    // When no explicit seed is provided, use a stable placeholder so that
-    // incremental geometry-bounds updates (floating-point changes during mesh
-    // streaming) do NOT re-trigger auto-fit.  Only an explicit viewportFitSeed
-    // change (topology revision, manual fit request) should fire a new fit.
-    const sig = fitSeed ?? "initial";
-    // User camera persistence must win over automatic fit-seed driven refits.
-    // During live relax updates, resource/mesh metadata can transiently change
-    // `viewportFitSeed`, which used to re-trigger auto-fit and snap the camera
-    // back despite a persisted user camera.
-    if (suppressInitialCameraFit) {
-      lastFittedGeomRef.current = sig;
-      return;
-    }
-    if (lastFittedGeomRef.current !== sig) {
-      lastFittedGeomRef.current = sig;
+    const decision = resolveViewportCameraFitDecision({
+      enabled: enableCameraFitEffect,
+      persistedCameraAvailable: suppressInitialCameraFit,
+      previousFitSignature: lastFittedGeomRef.current,
+      viewportFitSeed,
+    });
+    lastFittedGeomRef.current = decision.nextFitSignature;
+    if (decision.shouldAdvanceGeneration) {
       setCameraFitGeneration((g) => g + 1);
     }
   }, [

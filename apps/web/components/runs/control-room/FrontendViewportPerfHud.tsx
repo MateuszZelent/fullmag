@@ -149,6 +149,17 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
       triangles: webglEntries.reduce((sum, entry) => sum + entry.triangles, 0),
       geometries: webglEntries.reduce((sum, entry) => sum + entry.geometries, 0),
       textures: webglEntries.reduce((sum, entry) => sum + entry.textures, 0),
+      lifecycle: {
+        canvasMounts: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.canvasMounts, 0),
+        canvasUnmounts: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.canvasUnmounts, 0),
+        contextLost: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.contextLost, 0),
+        contextRestored: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.contextRestored, 0),
+        cameraFits: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.cameraFits, 0),
+        cameraRestores: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.cameraRestores, 0),
+        cameraPersists: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.cameraPersists, 0),
+        topologyRebuilds: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.topologyRebuilds, 0),
+        fieldBufferUpdates: webglEntries.reduce((sum, entry) => sum + entry.lifecycle.fieldBufferUpdates, 0),
+      },
       entries: webglEntries.slice(0, 2),
       femTopology: (() => {
         const recent = recentDurations(perfSamples, "FemGeometry", "topologyTotal");
@@ -276,6 +287,18 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
           <span>{fmtInt(metrics.geometries)}</span>
           <span className="text-muted-foreground">textures</span>
           <span>{fmtInt(metrics.textures)}</span>
+          <span className="text-muted-foreground">canvas mount/unmount</span>
+          <span>{fmtInt(metrics.lifecycle.canvasMounts)} / {fmtInt(metrics.lifecycle.canvasUnmounts)}</span>
+          <span className="text-muted-foreground">context lost/restored</span>
+          <span>{fmtInt(metrics.lifecycle.contextLost)} / {fmtInt(metrics.lifecycle.contextRestored)}</span>
+          <span className="text-muted-foreground">camera fit/restore/persist</span>
+          <span>
+            {fmtInt(metrics.lifecycle.cameraFits)} / {fmtInt(metrics.lifecycle.cameraRestores)} / {fmtInt(metrics.lifecycle.cameraPersists)}
+          </span>
+          <span className="text-muted-foreground">topology rebuilds</span>
+          <span>{fmtInt(metrics.lifecycle.topologyRebuilds)}</span>
+          <span className="text-muted-foreground">field buffer updates</span>
+          <span>{fmtInt(metrics.lifecycle.fieldBufferUpdates)}</span>
           <span className="text-muted-foreground">Fem topo (last/p95)</span>
           <span>{fmtPair(metrics.femTopology.last, metrics.femTopology.p95)}</span>
           <span className="text-muted-foreground">Fem colors (last/p95)</span>
@@ -317,7 +340,13 @@ export const FrontendViewportPerfHud = memo(function FrontendViewportPerfHud() {
             {metrics.entries.map((entry) => (
               <div key={entry.id} className="flex items-center justify-between gap-3">
                 <span className="truncate">{entry.label}</span>
-                <span>{fmtInt(entry.drawCalls)} dc</span>
+                <span>
+                  {fmtInt(entry.drawCalls)} dc · c {fmtInt(entry.lifecycle.cameraFits)}/{fmtInt(entry.lifecycle.cameraRestores)}/{fmtInt(entry.lifecycle.cameraPersists)}
+                  {" · topo "}
+                  {fmtInt(entry.lifecycle.topologyRebuilds)}
+                  {" · field "}
+                  {fmtInt(entry.lifecycle.fieldBufferUpdates)}
+                </span>
               </div>
             ))}
           </div>

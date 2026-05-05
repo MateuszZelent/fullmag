@@ -60,6 +60,7 @@ export function resolveAirboxDisplayStateFromRenderPlan({
     surface,
     wireframe,
     points,
+    vectorsVisible: airbox?.vectors ?? false,
     renderMode,
     wireframeScope:
       current?.wireframeScope ??

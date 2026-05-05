@@ -56,6 +56,9 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     viewportAxesScope: "universe",
     universeWireframeVisible: true,
     viewportLegendVisible: false,
+    explorerVisible: true,
+    inspectorVisible: true,
+    telemetryVisible: true,
     studyNodeContext: null,
     quickPreviewTargets: [
       { id: "m", shortLabel: "m", available: true },
@@ -93,6 +96,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     airMeshSurfaceVisible: true,
     airMeshWireframeVisible: true,
     airMeshPointsVisible: false,
+    airMeshVectorsVisible: false,
     airMeshWireframeScope: "surface",
     airMeshPointsScope: "surface",
     airMeshVectorsScope: "surface",
@@ -559,10 +563,9 @@ describe("View ribbon contribution", () => {
         airMeshSurfaceVisible: false,
         airMeshWireframeVisible: false,
         airMeshPointsVisible: true,
+        airMeshVectorsVisible: true,
         airMeshPointsScope: "full",
         airMeshVectorsScope: "surface",
-        femVectorDomainFilter: "airbox_only",
-        meshShowArrows: true,
       }),
     )[0];
     const airbox = global.actions.find((action) => action.id === "view-airbox");
@@ -573,9 +576,14 @@ describe("View ribbon contribution", () => {
     });
   });
 
-  it("tracks airbox vector checkbox by domain and global vector visibility", () => {
+  it("tracks airbox vector checkbox from canonical airbox vector visibility", () => {
     const globalWithAirboxVectors = buildViewRibbonGroups(
-      baseContext({ femVectorDomainFilter: "airbox_only", meshShowArrows: false, airboxVisible: true }),
+      baseContext({
+        airboxVisible: true,
+        airMeshVectorsVisible: false,
+        femVectorDomainFilter: "airbox_only",
+        meshShowArrows: true,
+      }),
     )[0];
     const airboxWithAirboxVectors = globalWithAirboxVectors.actions.find((action) => action.id === "view-airbox");
 
@@ -585,13 +593,107 @@ describe("View ribbon contribution", () => {
     });
 
     const globalWithAirboxVectorsVisible = buildViewRibbonGroups(
-      baseContext({ femVectorDomainFilter: "airbox_only", meshShowArrows: true, airboxVisible: true }),
+      baseContext({
+        airboxVisible: true,
+        airMeshVectorsVisible: true,
+        femVectorDomainFilter: "auto",
+        meshShowArrows: false,
+      }),
     )[0];
     const airboxWithAirboxVectorsVisible = globalWithAirboxVectorsVisible.actions.find((action) => action.id === "view-airbox");
 
     expect(findNode(airboxWithAirboxVectorsVisible?.menu ?? [], "airbox:vectors")).toMatchObject({
       type: "checkbox",
       checked: true,
+    });
+  });
+
+  it("exposes explicit restore actions for explorer, inspector, and telemetry", () => {
+    const run = vi.fn();
+    const panelsGroup = buildViewRibbonGroups(
+      baseContext({
+        run,
+        explorerVisible: false,
+        inspectorVisible: false,
+        telemetryVisible: false,
+      }),
+    ).find((group) => group.id === "view-display");
+    if (!panelsGroup) {
+      throw new Error("Expected view-display group");
+    }
+    const panelsAction = panelsGroup.actions.find((action) => action.id === "view-panels");
+    const menu = panelsAction?.menu ?? [];
+
+    expect(findNode(menu, "panels:explorer:status")).toMatchObject({
+      type: "status",
+      value: "Hidden",
+    });
+    expect(findNode(menu, "panels:inspector:status")).toMatchObject({
+      type: "status",
+      value: "Hidden",
+    });
+    expect(findNode(menu, "panels:telemetry:status")).toMatchObject({
+      type: "status",
+      value: "Hidden",
+    });
+
+    const restoreExplorer = findNode(menu, "panels:explorer:restore");
+    const restoreInspector = findNode(menu, "panels:inspector:restore");
+    const restoreTelemetry = findNode(menu, "panels:telemetry:restore");
+
+    restoreExplorer?.action?.();
+    restoreInspector?.action?.();
+    restoreTelemetry?.action?.();
+
+    expect(run).toHaveBeenNthCalledWith(1, {
+      id: "workspace.restore-panel",
+      panel: "explorer",
+    });
+    expect(run).toHaveBeenNthCalledWith(2, {
+      id: "workspace.restore-panel",
+      panel: "inspector",
+    });
+    expect(run).toHaveBeenNthCalledWith(3, {
+      id: "workspace.restore-panel",
+      panel: "telemetry",
+    });
+  });
+
+  it("exposes explicit hide actions for explorer, inspector, and telemetry", () => {
+    const run = vi.fn();
+    const panelsGroup = buildViewRibbonGroups(
+      baseContext({
+        run,
+        explorerVisible: true,
+        inspectorVisible: true,
+        telemetryVisible: true,
+      }),
+    ).find((group) => group.id === "view-display");
+    if (!panelsGroup) {
+      throw new Error("Expected view-display group");
+    }
+    const panelsAction = panelsGroup.actions.find((action) => action.id === "view-panels");
+    const menu = panelsAction?.menu ?? [];
+
+    const hideExplorer = findNode(menu, "panels:explorer:hide");
+    const hideInspector = findNode(menu, "panels:inspector:hide");
+    const hideTelemetry = findNode(menu, "panels:telemetry:hide");
+
+    hideExplorer?.action?.();
+    hideInspector?.action?.();
+    hideTelemetry?.action?.();
+
+    expect(run).toHaveBeenNthCalledWith(1, {
+      id: "workspace.hide-panel",
+      panel: "explorer",
+    });
+    expect(run).toHaveBeenNthCalledWith(2, {
+      id: "workspace.hide-panel",
+      panel: "inspector",
+    });
+    expect(run).toHaveBeenNthCalledWith(3, {
+      id: "workspace.hide-panel",
+      panel: "telemetry",
     });
   });
 

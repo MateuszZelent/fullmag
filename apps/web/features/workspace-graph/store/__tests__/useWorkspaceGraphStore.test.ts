@@ -149,6 +149,42 @@ describe("workspace graph store", () => {
     expect(snapshot.derivedValues[0]?.quantityId).toBe("e_total");
     expect(snapshot.selection.activeViewportDocumentId).toBe("viewport:study:core:3d");
     expect(snapshot.viewportDocuments["viewport:study:core:3d"]?.camera).toBeNull();
+    expect(snapshot.scalarRows).toEqual([]);
+  });
+
+  it("keeps live scalar row payloads out of workspace graph snapshots", () => {
+    const snapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: {
+        build: [],
+        study: [],
+        analyze: [],
+      },
+      activeWorkspaceTabByStage: {
+        build: null,
+        study: "core:3d",
+        analyze: null,
+      },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [
+        { time: 1e-12, e_total: 1.25e-18 },
+        { time: 2e-12, e_total: 1.2e-18 },
+      ],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "3D",
+      plane: "xy",
+      sliceIndex: 0,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+
+    expect(snapshot.scalarRows).toEqual([]);
+    expect(snapshot.datasets[0]?.sampleCount).toBe(2);
+    expect(snapshot.solutions[0]?.revision).toBe(2);
   });
 
   it("applies patches and viewport document upserts deterministically", () => {
@@ -429,5 +465,61 @@ describe("workspace graph store", () => {
     // not the exact secondSnapshot reference, but values must match.
     expect(useWorkspaceGraphStore.getState().snapshot).toEqual(secondSnapshot);
     expect(useWorkspaceGraphStore.getState().snapshot).not.toBe(snapshotRefAfterFirstSet);
+  });
+
+  it("preserves stable viewport and computed array references without JSON serialization", () => {
+    const firstSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+    useWorkspaceGraphStore.getState().applySnapshot(firstSnapshot, "sig:refs-a");
+    const storedFirst = useWorkspaceGraphStore.getState().snapshot;
+    const firstViewportDoc = storedFirst.viewportDocuments["viewport:study:core:3d"];
+    const firstStudyNodes = storedFirst.studyNodes;
+    const firstSolutions = storedFirst.solutions;
+    const firstDatasets = storedFirst.datasets;
+    const firstDerivedValues = storedFirst.derivedValues;
+    const firstQuantityFrames = storedFirst.quantityFrames;
+
+    const secondSnapshot = createWorkspaceGraphSnapshot({
+      projectLabel: "Micromagnetic Workspace",
+      workspaceMode: "study",
+      workspaceTabs: { build: [], study: [], analyze: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      selectedNodeId: "study.root",
+      studyPipeline,
+      resultsWorkspace,
+      quantities,
+      scalarRows: [],
+      requestedPreviewQuantity: "m",
+      requestedPreviewComponent: "x",
+      plane: "xy",
+      sliceIndex: 1,
+      viewMode: "3D",
+      renderMode: "surface",
+    });
+    useWorkspaceGraphStore.getState().applySnapshot(secondSnapshot, "sig:refs-b");
+    const storedSecond = useWorkspaceGraphStore.getState().snapshot;
+
+    expect(storedSecond.viewportDocuments["viewport:study:core:3d"]).toBe(firstViewportDoc);
+    expect(storedSecond.studyNodes).toBe(firstStudyNodes);
+    expect(storedSecond.solutions).toBe(firstSolutions);
+    expect(storedSecond.datasets).toBe(firstDatasets);
+    expect(storedSecond.derivedValues).toBe(firstDerivedValues);
+    expect(storedSecond.quantityFrames).toBe(firstQuantityFrames);
+    expect(storedSecond).toEqual(secondSnapshot);
   });
 });

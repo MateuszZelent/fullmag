@@ -19,72 +19,27 @@ import {
   createCameraStepLockState,
   applyCameraStepLock,
 } from "../camera/cameraProfiles";
+import { useViewportSceneBridgeSync } from "./useViewportSceneBridgeSync";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
+import {
+  shouldRenderViewportWebglCanvas,
+} from "./viewportWebglCanvasPolicy";
+import {
+  resolveViewportFrameloop,
+  type ViewportFrameloopMode,
+} from "./viewportFrameloopPolicy";
+import {
+  CONTEXT_LOSS_RETRY_WINDOW_MS,
+} from "./viewportContextLossPolicy";
+import { useViewportContextLossRecovery } from "./useViewportContextLossRecovery";
 
 export type ShellProjection = "perspective" | "orthographic";
 export type ShellNavigation = "trackball" | "cad";
-export type ViewportFrameloopMode = "always" | "demand" | "never";
 
 const DEFAULT_SHELL_TARGET: [number, number, number] = [0, 0, 0];
-export const CONTEXT_LOSS_RETRY_WINDOW_MS = 30_000;
-export const CONTEXT_LOSS_MAX_RETRIES = 2;
-export const CONTEXT_LOSS_RETRY_DELAY_MS = 250;
-
-export interface ContextLossRecoveryDecision {
-  allowed: boolean;
-  nextTimestamps: number[];
-  retryDelayMs: number;
-}
-
-export function resolveContextLossRecovery({
-  nowMs,
-  retryTimestamps,
-  retryWindowMs = CONTEXT_LOSS_RETRY_WINDOW_MS,
-  maxRetries = CONTEXT_LOSS_MAX_RETRIES,
-  retryDelayMs = CONTEXT_LOSS_RETRY_DELAY_MS,
-}: {
-  nowMs: number;
-  retryTimestamps: readonly number[];
-  retryWindowMs?: number;
-  maxRetries?: number;
-  retryDelayMs?: number;
-}): ContextLossRecoveryDecision {
-  const windowStart = nowMs - retryWindowMs;
-  const recentTimestamps = retryTimestamps.filter((timestamp) => timestamp >= windowStart);
-  if (recentTimestamps.length >= maxRetries) {
-    return {
-      allowed: false,
-      nextTimestamps: recentTimestamps,
-      retryDelayMs: 0,
-    };
-  }
-  const nextTimestamps = [...recentTimestamps, nowMs];
-  return {
-    allowed: true,
-    nextTimestamps,
-    retryDelayMs: retryDelayMs * nextTimestamps.length,
-  };
-}
-
-export function shouldRenderViewportWebglCanvas({
-  hidden,
-  hostReady,
-  bareCanvas,
-}: {
-  hidden: boolean;
-  hostReady: boolean;
-  bareCanvas: boolean;
-}): boolean {
-  if (hidden) {
-    return false;
-  }
-  if (bareCanvas) {
-    return true;
-  }
-  return hostReady;
-}
+export { shouldRenderViewportWebglCanvas };
 
 export interface ViewportRenderPolicy {
   mode: "always" | "demand" | "paused";
@@ -348,37 +303,7 @@ function ShellBridgeSync({
   awaitControls: boolean;
 }) {
   const { camera } = useThree();
-
-  useEffect(() => {
-    if (!bridgeRef) {
-      return;
-    }
-
-    let raf = 0;
-    let disposed = false;
-
-    const syncBridge = () => {
-      if (disposed) {
-        return;
-      }
-      const controls = controlsRef.current ?? null;
-      bridgeRef.current = { camera, controls };
-      if (awaitControls && !controls) {
-        raf = window.requestAnimationFrame(syncBridge);
-      }
-    };
-
-    syncBridge();
-
-    return () => {
-      disposed = true;
-      if (raf) {
-        window.cancelAnimationFrame(raf);
-      }
-      bridgeRef.current = null;
-    };
-  }, [awaitControls, bridgeRef, camera, controlsRef]);
-
+  useViewportSceneBridgeSync({ bridgeRef, controlsRef, camera, awaitControls });
   return null;
 }
 
@@ -440,23 +365,17 @@ export default function ScientificViewportShell({
   const profile = getViewportQualityProfile(qualityProfile);
   const interactionActiveRef = useRef(false);
   const canvasContextCleanupRef = useRef<(() => void) | null>(null);
-  const contextLossRetryTimestampsRef = useRef<number[]>([]);
-  const contextLossRetryTimerRef = useRef<number | null>(null);
   const [canvasContextGeneration, setCanvasContextGeneration] = useState(0);
-  const [contextLossBlocked, setContextLossBlocked] = useState(false);
   const resolvedRenderMode = renderPolicy?.mode ?? "demand";
   const resolvedHidden = renderPolicy?.hidden ?? false;
   const forcedFrameloopMode = String(
     diagnosticOverrides?.forceFrameloopMode ?? FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.frameloopMode,
   ) as ViewportFrameloopMode;
-  const frameloop: ViewportFrameloopMode =
-    resolvedHidden || resolvedRenderMode === "paused"
-      ? "never"
-      : forcedFrameloopMode === "always" || resolvedRenderMode === "always"
-        ? "always"
-        : forcedFrameloopMode === "never"
-          ? "never"
-          : "demand";
+  const frameloop = resolveViewportFrameloop({
+    hidden: resolvedHidden,
+    renderMode: resolvedRenderMode,
+    forcedFrameloopMode,
+  });
   const telemetry = useViewportTelemetryEntry({
     label: telemetryLabel,
     renderer: "webgl",
@@ -471,15 +390,55 @@ export default function ScientificViewportShell({
     onInteractionChange?.(next);
   }, [onInteractionChange]);
 
-  const retryWebglViewport = useCallback(() => {
-    if (contextLossRetryTimerRef.current !== null) {
-      window.clearTimeout(contextLossRetryTimerRef.current);
-      contextLossRetryTimerRef.current = null;
-    }
-    contextLossRetryTimestampsRef.current = [];
-    setContextLossBlocked(false);
+  const remountWebglViewport = useCallback(() => {
     setCanvasContextGeneration((generation) => generation + 1);
   }, []);
+  const {
+    contextLossBlocked,
+    retryWebglViewport,
+    handleContextLost,
+    handleContextRestored,
+    clearRetryTimer: clearContextLossRetryTimer,
+  } = useViewportContextLossRecovery({
+    hidden: resolvedHidden,
+    onRemount: remountWebglViewport,
+    onContextLost: () => {
+      telemetry.recordLifecycleEvent("context_lost");
+    },
+    onHiddenContextLost: () => {
+      console.warn("[viewport-webgl] hidden context lost; hidden WebGL tabs should be active-only", {
+        telemetryLabel,
+        generation: canvasContextGeneration,
+      });
+    },
+    onRecoveryBlocked: (decision) => {
+      console.error("[viewport-webgl] context lost; automatic remount blocked after repeated failures", {
+        telemetryLabel,
+        generation: canvasContextGeneration,
+        retryCount: decision.nextTimestamps.length,
+        retryWindowMs: CONTEXT_LOSS_RETRY_WINDOW_MS,
+      });
+    },
+    onRecoveryScheduled: (decision) => {
+      console.warn("[viewport-webgl] context lost; scheduling canvas remount", {
+        telemetryLabel,
+        generation: canvasContextGeneration,
+        retryDelayMs: decision.retryDelayMs,
+      });
+    },
+    onContextRestored: () => {
+      telemetry.recordLifecycleEvent("context_restored");
+      if (
+        FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
+        FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
+      ) {
+        console.info("[viewport-webgl] context restored", {
+          telemetryLabel,
+          generation: canvasContextGeneration,
+        });
+      }
+    },
+  });
 
   const glOptions = useMemo(
     () => ({
@@ -512,6 +471,7 @@ export default function ScientificViewportShell({
       onCreated={({ gl, camera }) => {
         canvasContextCleanupRef.current?.();
         const canvas = gl.domElement;
+        telemetry.recordLifecycleEvent("canvas_mount");
         if (
           FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
           FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
@@ -525,59 +485,11 @@ export default function ScientificViewportShell({
             },
           });
         }
-        const handleContextLost = (event: Event) => {
-          event.preventDefault();
-          if (resolvedHidden) {
-            console.warn("[viewport-webgl] hidden context lost; hidden WebGL tabs should be active-only", {
-              telemetryLabel,
-              generation: canvasContextGeneration,
-            });
-            return;
-          }
-          const decision = resolveContextLossRecovery({
-            nowMs: Date.now(),
-            retryTimestamps: contextLossRetryTimestampsRef.current,
-          });
-          contextLossRetryTimestampsRef.current = decision.nextTimestamps;
-          if (!decision.allowed) {
-            setContextLossBlocked(true);
-            console.error("[viewport-webgl] context lost; automatic remount blocked after repeated failures", {
-              telemetryLabel,
-              generation: canvasContextGeneration,
-              retryCount: decision.nextTimestamps.length,
-              retryWindowMs: CONTEXT_LOSS_RETRY_WINDOW_MS,
-            });
-            return;
-          }
-          setContextLossBlocked(false);
-          if (contextLossRetryTimerRef.current !== null) {
-            return;
-          }
-          console.warn("[viewport-webgl] context lost; scheduling canvas remount", {
-            telemetryLabel,
-            generation: canvasContextGeneration,
-            retryDelayMs: decision.retryDelayMs,
-          });
-          contextLossRetryTimerRef.current = window.setTimeout(() => {
-            contextLossRetryTimerRef.current = null;
-            setCanvasContextGeneration((generation) => generation + 1);
-          }, decision.retryDelayMs);
-        };
-        const handleContextRestored = () => {
-          setContextLossBlocked(false);
-          if (
-            FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
-            FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
-          ) {
-            console.info("[viewport-webgl] context restored", {
-              telemetryLabel,
-              generation: canvasContextGeneration,
-            });
-          }
-        };
         canvas.addEventListener("webglcontextlost", handleContextLost, false);
         canvas.addEventListener("webglcontextrestored", handleContextRestored, false);
         canvasContextCleanupRef.current = () => {
+          telemetry.recordLifecycleEvent("canvas_unmount");
+          clearContextLossRetryTimer();
           canvas.removeEventListener("webglcontextlost", handleContextLost, false);
           canvas.removeEventListener("webglcontextrestored", handleContextRestored, false);
         };
@@ -640,12 +552,9 @@ export default function ScientificViewportShell({
     return () => {
       canvasContextCleanupRef.current?.();
       canvasContextCleanupRef.current = null;
-      if (contextLossRetryTimerRef.current !== null) {
-        window.clearTimeout(contextLossRetryTimerRef.current);
-        contextLossRetryTimerRef.current = null;
-      }
+      clearContextLossRetryTimer();
     };
-  }, []);
+  }, [clearContextLossRetryTimer]);
 
   return (
     <div ref={hostRef} className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden rounded-md bg-background">

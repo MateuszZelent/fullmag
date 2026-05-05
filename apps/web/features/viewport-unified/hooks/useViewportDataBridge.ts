@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
-import { useWorkspaceGraphStore } from "@/features";
 import { useBuilderKeyboardShortcuts } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
@@ -26,20 +25,29 @@ import {
 import { selectionFromControlRoomState } from "@/src/features/workspaceSync";
 import type { MeshWorkspaceModel } from "@/src/features/meshWorkspace";
 import type { Slice2DModel } from "@/src/features/slice2d";
-import {
-  resolveViewportInternalToolbarModes,
-  useViewport3DController,
-  useViewport3DVectorFieldModel,
-} from "@/features/viewport-unified";
+import { useViewport3DController } from "@/features/viewport-unified/hooks/useViewport3DController";
+import { useViewport3DVectorFieldModel } from "@/features/viewport-unified/hooks/useViewport3DVectorFieldModel";
+import { resolveViewportInternalToolbarModes } from "@/features/viewport-unified/registry/viewport3dRenderRegistry";
 import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
+import { resolveViewport3DRolloutRoute } from "@/features/viewport-unified/model/viewport3dRolloutRoute";
+import { useViewport3DUpdateClassification } from "@/features/viewport-unified/hooks/useViewport3DUpdateClassification";
+import { useViewport3DRolloutTelemetry } from "@/features/viewport-unified/hooks/useViewport3DRolloutTelemetry";
+import {
+  buildFemLiveRenderDebugData,
+} from "@/features/viewport-unified/model/femLiveRenderDebugData";
+import {
+  buildVectorLiveRenderDebugData,
+} from "@/features/viewport-unified/model/vectorLiveRenderDebugData";
+import {
+  buildViewportFitSeed,
+  useViewportGraphCameraBridge,
+} from "@/features/viewport-unified/camera-lifecycle";
 import type { Viewport3DInteractionMode } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
 import type { UnifiedRenderState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
-import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import type { TextureGizmoMode } from "@/components/preview/TextureTransformGizmo";
-import type { FemLiveRenderDebugData } from "@/components/preview/fem/FemLiveRenderDebugPanel";
 import type { RenderMode as FemRenderMode } from "@/components/preview/FemMeshView3D";
 import { downsampleVectorFieldSpatialBins } from "@/components/preview/fem/femFieldDownsample";
 import { resolveAntennaNodeName } from "@/components/runs/control-room/shared";
@@ -72,7 +80,6 @@ import {
 } from "@/components/runs/control-room/resolvedRenderPlanView";
 import type { MeshEntityViewState, MeshEntityViewStateMap } from "@/lib/session/types";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
-import type { ViewportCameraState, ViewportDocumentState } from "@/features/workspace-graph";
 
 /* ── Debug flag ───────────────────────────────────────────────────── */
 const DEBUG_GIZMO_SYNC =
@@ -83,12 +90,6 @@ const VIEWPORT_BRIDGE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
-const CAMERA_GRAPH_PERSIST_DEBOUNCE_MS = 180;
-
-export type PendingViewportCameraPersist = {
-  documentId: string;
-  cameraState: ViewportCameraState;
-};
 
 function logViewportBridgeDebug(event: string, payload?: Record<string, unknown>): void {
   if (!VIEWPORT_BRIDGE_DEBUG_LOGS) {
@@ -130,100 +131,6 @@ function meshWorkspaceRenderModeToFem(
   if (mode === "solid+wireframe") return "surface+edges";
   if (mode === "wireframe" || mode === "points") return mode;
   return "surface";
-}
-
-export function buildViewportFitSeed(args: {
-  resolvedFemTopologyKey: string | null;
-  scaledFemMeshData:
-    | {
-        nNodes: number;
-        nElements: number;
-        boundaryFaces: ArrayLike<number>;
-      }
-    | null
-    | undefined;
-}): string {
-  const sampleKey = args.scaledFemMeshData
-    ? `${args.scaledFemMeshData.nNodes}:${args.scaledFemMeshData.nElements}:${args.scaledFemMeshData.boundaryFaces.length}`
-    : "none";
-  return [args.resolvedFemTopologyKey ?? "no-topology", sampleKey].join("|");
-}
-
-function tupleClose(
-  a: readonly number[] | null | undefined,
-  b: readonly number[] | null | undefined,
-): boolean {
-  if (!a || !b || a.length !== b.length) return false;
-  return a.every((value, index) => Math.abs(value - (b[index] ?? Number.NaN)) < 1e-9);
-}
-
-function viewportCameraStatesEqual(
-  a: ViewportCameraState | null | undefined,
-  b: ViewportCameraState | null | undefined,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    tupleClose(a.position, b.position) &&
-    tupleClose(a.target, b.target) &&
-    tupleClose(a.up, b.up) &&
-    a.projection === b.projection &&
-    a.navigation === b.navigation &&
-    a.lastFocusedObjectId === b.lastFocusedObjectId
-  );
-}
-
-export function resolveViewportCameraPersistCandidate(args: {
-  documentId: string;
-  currentCamera: ViewportCameraState | null | undefined;
-  pending: PendingViewportCameraPersist | null | undefined;
-  nextCamera: ViewportCameraState | null | undefined;
-}): PendingViewportCameraPersist | null {
-  if (!args.nextCamera || viewportCameraStatesEqual(args.currentCamera, args.nextCamera)) {
-    return null;
-  }
-  if (
-    args.pending?.documentId === args.documentId &&
-    viewportCameraStatesEqual(args.pending.cameraState, args.nextCamera)
-  ) {
-    return null;
-  }
-  return {
-    documentId: args.documentId,
-    cameraState: args.nextCamera,
-  };
-}
-
-/**
- * P-26: Structural equality for ViewportDocumentState to prevent Zustand
- * selectors from returning a new reference every time the workspace graph
- * snapshot changes for unrelated reasons (e.g., new scalar row during
- * solver relaxation). Camera values are compared with epsilon tolerance
- * via `viewportCameraStatesEqual` so that floating-point round-trip
- * noise is tolerated.
- */
-function viewportDocumentShallowEqual(
-  a: ViewportDocumentState | null,
-  b: ViewportDocumentState | null,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.id === b.id &&
-    a.workspaceMode === b.workspaceMode &&
-    a.tabId === b.tabId &&
-    a.viewMode === b.viewMode &&
-    a.quantityId === b.quantityId &&
-    a.component === b.component &&
-    a.plane === b.plane &&
-    a.sliceIndex === b.sliceIndex &&
-    a.selectedDatasetId === b.selectedDatasetId &&
-    a.selectedResultNodeId === b.selectedResultNodeId &&
-    a.renderMode === b.renderMode &&
-    viewportCameraStatesEqual(a.camera, b.camera) &&
-    a.overlayToggles.telemetryHudVisible === b.overlayToggles.telemetryHudVisible &&
-    a.overlayToggles.previewNoticesVisible === b.overlayToggles.previewNoticesVisible
-  );
 }
 
 export function resolveEffectiveMeshEntityRenderMode(args: {
@@ -482,101 +389,14 @@ export function useViewportDataBridge() {
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
 
-  /* ── Graph workspace ── */
-  // P-26: Stabilize viewport document reference to prevent camera restore
-  // effects from firing when only non-viewport fields (e.g., scalar rows)
-  // change in the workspace graph snapshot. We read the raw document from
-  // the store and apply structural equality via a ref to avoid returning a
-  // new reference identity on every snapshot update.
-  const graphActiveViewportDocumentRaw = useWorkspaceGraphStore((state) => {
-    const id = state.snapshot.selection.activeViewportDocumentId;
-    return id ? state.snapshot.viewportDocuments[id] ?? null : null;
-  });
-  const graphActiveViewportDocumentRef = useRef(graphActiveViewportDocumentRaw);
-  if (!viewportDocumentShallowEqual(graphActiveViewportDocumentRef.current, graphActiveViewportDocumentRaw)) {
-    graphActiveViewportDocumentRef.current = graphActiveViewportDocumentRaw;
-  }
-  const graphActiveViewportDocument = graphActiveViewportDocumentRef.current;
-  const upsertViewportDocument = useWorkspaceGraphStore((state) => state.upsertViewportDocument);
-  const graphActiveResultNodeId = useWorkspaceGraphStore((state) =>
-    state.snapshot.selection.activeResultNodeId,
-  );
-  const graphViewportResultNodeId =
-    graphActiveViewportDocument?.selectedResultNodeId ?? graphActiveResultNodeId;
-  const graphActiveViewportDocumentId = graphActiveViewportDocument?.id ?? null;
-  const graphActiveViewportCameraState = graphActiveViewportDocument?.camera ?? null;
-  const lastLoggedViewportDocumentIdRef = useRef<string | null>(null);
-  const pendingViewportCameraPersistRef = useRef<PendingViewportCameraPersist | null>(null);
-  const pendingViewportCameraTimerRef = useRef<number | null>(null);
-  const flushPendingViewportCameraState = useCallback(() => {
-    const pending = pendingViewportCameraPersistRef.current;
-    pendingViewportCameraPersistRef.current = null;
-    pendingViewportCameraTimerRef.current = null;
-    if (!pending) {
-      return;
-    }
-    const document = useWorkspaceGraphStore.getState().snapshot.viewportDocuments[pending.documentId];
-    if (!document || viewportCameraStatesEqual(document.camera, pending.cameraState)) {
-      return;
-    }
-    logViewportBridgeDebug("persist camera to workspace graph", {
-      viewportDocumentId: document.id,
-      projection: pending.cameraState.projection,
-      navigation: pending.cameraState.navigation,
-      position: pending.cameraState.position,
-      target: pending.cameraState.target,
-    });
-    upsertViewportDocument({
-      ...document,
-      camera: pending.cameraState,
-    });
-  }, [upsertViewportDocument]);
-  useEffect(() => {
-    return () => {
-      if (pendingViewportCameraTimerRef.current !== null) {
-        window.clearTimeout(pendingViewportCameraTimerRef.current);
-        pendingViewportCameraTimerRef.current = null;
-      }
-      flushPendingViewportCameraState();
-    };
-  }, [flushPendingViewportCameraState]);
-  useEffect(() => {
-    if (lastLoggedViewportDocumentIdRef.current === graphActiveViewportDocumentId) {
-      return;
-    }
-    logViewportBridgeDebug("active viewport document changed", {
-      previousId: lastLoggedViewportDocumentIdRef.current,
-      nextId: graphActiveViewportDocumentId,
-      hasCameraState: Boolean(graphActiveViewportCameraState),
-    });
-    lastLoggedViewportDocumentIdRef.current = graphActiveViewportDocumentId;
-  }, [graphActiveViewportCameraState, graphActiveViewportDocumentId]);
-  const persistViewportCameraState = useCallback(
-    (cameraState: ViewportCameraState | null) => {
-      const document = graphActiveViewportDocumentRef.current;
-      if (!document || !cameraState) {
-        return;
-      }
-      const nextPersist = resolveViewportCameraPersistCandidate({
-        documentId: document.id,
-        currentCamera: document.camera,
-        pending: pendingViewportCameraPersistRef.current,
-        nextCamera: cameraState,
-      });
-      if (!nextPersist) {
-        return;
-      }
-      pendingViewportCameraPersistRef.current = nextPersist;
-      if (pendingViewportCameraTimerRef.current !== null) {
-        window.clearTimeout(pendingViewportCameraTimerRef.current);
-      }
-      pendingViewportCameraTimerRef.current = window.setTimeout(
-        flushPendingViewportCameraState,
-        CAMERA_GRAPH_PERSIST_DEBOUNCE_MS,
-      );
-    },
-    [flushPendingViewportCameraState],
-  );
+  const {
+    graphActiveViewportDocument,
+    graphViewportResultNodeId,
+    graphActiveViewportDocumentId,
+    graphActiveViewportCameraState,
+    persistViewportCameraState,
+    setViewportCameraInteractionActive,
+  } = useViewportGraphCameraBridge(logViewportBridgeDebug);
 
   /* ── Derived values from ctx ── */
   const effectiveViewMode = ctx.effectiveViewMode;
@@ -1468,14 +1288,15 @@ export function useViewportDataBridge() {
 
   /* ── Debug render data ── */
   const liveRenderDebugData = useMemo(
-    () => ({
-      source: ctx.selectedVectorSourceKind,
-      fieldDataRevision: ctx.fieldDataRevision,
-      fieldDataTimestamp: ctx.fieldDataTimestamp,
-      liveFieldSourceStep: ctx.liveFieldSourceStep,
-      previewSourceStep: ctx.previewSourceStep,
-      effectiveStep: ctx.effectiveStep,
-    }),
+    () =>
+      buildVectorLiveRenderDebugData({
+        source: ctx.selectedVectorSourceKind,
+        fieldDataRevision: ctx.fieldDataRevision,
+        fieldDataTimestamp: ctx.fieldDataTimestamp,
+        liveFieldSourceStep: ctx.liveFieldSourceStep,
+        previewSourceStep: ctx.previewSourceStep,
+        effectiveStep: ctx.effectiveStep,
+      }),
     [
       ctx.selectedVectorSourceKind,
       ctx.fieldDataRevision,
@@ -1819,6 +1640,21 @@ export function useViewportDataBridge() {
     },
   });
 
+  const { updateClass: viewport3DUpdateClass } = useViewport3DUpdateClassification({
+    topologyRevision: resolvedFemTopologyKey,
+    meshFieldRevision: scaledFemMeshData?.fieldRevision,
+    dataFieldRevision: ctx.fieldDataRevision,
+    effectiveViewMode: ctx.effectiveViewMode,
+    selectedQuantity: ctx.selectedQuantity,
+    effectiveVectorComponent: ctx.effectiveVectorComponent,
+    meshRenderMode: ctx.meshRenderMode,
+    meshClipEnabled: ctx.meshClipEnabled,
+    meshClipAxis: ctx.meshClipAxis,
+    meshClipPos: ctx.meshClipPos,
+    femVectorDomainFilter: ctx.femVectorDomainFilter,
+    femFerromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
+  });
+
   const createViewport3DModel = viewport3DController.createModel;
   const hostedMixedViewportModel = useMemo(
     () => createViewport3DModel("mixed"),
@@ -1845,44 +1681,17 @@ export function useViewportDataBridge() {
 
   /* ── Viewport 3D rollout route ── */
   const viewport3DRolloutRoute = useMemo(() => {
-    let route:
-      | "minimal-diagnostic"
-      | "geometry-authoring"
-      | "fem-3d"
-      | "fem-mesh"
-      | "fem-bounds-fallback"
-      | "fdm-3d"
-      | "fdm-mesh"
-      | "slice-2d"
-      | "analyze"
-      | "empty" = "empty";
-    let fallbackUsed = false;
-    if (minimalViewportSelectionPath) {
-      route = "minimal-diagnostic";
-    } else if (
-      femDiscretization &&
-      (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh")
-    ) {
-      if (!ctx.femMeshData && showFemBoundsPreview) {
-        route = "fem-bounds-fallback";
-        fallbackUsed = true;
-      } else {
-        route = "fem-3d";
-      }
-    } else if (showVectorSurface3D) {
-      route = isVectorSurfaceMeshActive ? "fdm-mesh" : "fdm-3d";
-    } else if (ctx.effectiveViewMode === "2D") {
-      route = "slice-2d";
-    } else if (ctx.effectiveViewMode === "Analyze") {
-      route = "analyze";
-    }
-    return {
-      route,
-      fallbackUsed,
-      signature: `${route}|${fallbackUsed ? "fallback" : "primary"}|${
-        viewport3dStages.viewport3d_unified_cutover ? "cutover" : "staged"
-      }`,
-    };
+    return resolveViewport3DRolloutRoute({
+      minimalViewportSelectionPath,
+      showGeometryAuthoringViewport,
+      femDiscretization,
+      effectiveViewMode: ctx.effectiveViewMode,
+      hasFemMeshData: Boolean(ctx.femMeshData),
+      showFemBoundsPreview,
+      showVectorSurface3D,
+      isVectorSurfaceMeshActive,
+      cutover: viewport3dStages.viewport3d_unified_cutover,
+    });
   }, [
     ctx.effectiveViewMode,
     ctx.femMeshData,
@@ -1895,71 +1704,28 @@ export function useViewportDataBridge() {
     viewport3dStages.viewport3d_unified_cutover,
   ]);
 
-  const lastViewport3DRolloutSignatureRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (lastViewport3DRolloutSignatureRef.current === viewport3DRolloutRoute.signature) return;
-    lastViewport3DRolloutSignatureRef.current = viewport3DRolloutRoute.signature;
-    const timestampMs =
-      typeof performance !== "undefined" ? performance.now() : Date.now();
-    recordFrontendPerfSample({
-      scope: "Viewport3DRollout",
-      phase: "route-selected",
-      durationMs: 0,
-      timestampMs,
-      meta: {
-        route: viewport3DRolloutRoute.route,
-        fallbackUsed: viewport3DRolloutRoute.fallbackUsed,
-        cutover: viewport3dStages.viewport3d_unified_cutover,
-      },
-    });
-    if (viewport3DRolloutRoute.fallbackUsed) {
-      recordFrontendPerfSample({
-        scope: "Viewport3DRollout",
-        phase: "fallback-used",
-        durationMs: 0,
-        timestampMs,
-        meta: {
-          route: viewport3DRolloutRoute.route,
-          cutover: viewport3dStages.viewport3d_unified_cutover,
-        },
-      });
-    }
-  }, [
-    viewport3DRolloutRoute.fallbackUsed,
-    viewport3DRolloutRoute.route,
-    viewport3DRolloutRoute.signature,
+  useViewport3DRolloutTelemetry(
+    viewport3DRolloutRoute,
     viewport3dStages.viewport3d_unified_cutover,
-  ]);
+  );
 
   /* ── FEM live render debug ── */
-  const femLiveRenderDebugData = useMemo<FemLiveRenderDebugData | null>(
+  const femLiveRenderDebugData = useMemo(
     () =>
-      femDiscretization
-        ? {
-            backendLabel: "fem",
-            viewMode: ctx.effectiveViewMode,
-            fieldLabel: ctx.quantityDescriptor?.label ?? ctx.selectedQuantity,
-            viewportLabel: "FEM meshData",
-            transportLabel: ctx.selectedVectorSourceKind,
-            solverStep: ctx.effectiveStep,
-            bufferSourceStep:
-              ctx.selectedVectorSourceKind === "live"
-                ? ctx.liveFieldSourceStep
-                : ctx.selectedVectorSourceKind === "preview"
-                  ? ctx.previewSourceStep
-                  : null,
-            liveFieldSourceStep: ctx.liveFieldSourceStep,
-            previewSourceStep: ctx.previewSourceStep,
-            fieldData: scaledFemMeshData?.fieldData,
-            fieldRevision:
-              scaledFemMeshData?.fieldRevision != null
-                ? String(scaledFemMeshData.fieldRevision)
-                : ctx.fieldDataRevision != null
-                  ? String(ctx.fieldDataRevision)
-                  : null,
-            fieldDataTimestamp: ctx.fieldDataTimestamp ?? null,
-          }
-        : null,
+      buildFemLiveRenderDebugData({
+        femDiscretization,
+        viewMode: ctx.effectiveViewMode,
+        fieldLabel: ctx.quantityDescriptor?.label ?? ctx.selectedQuantity,
+        selectedVectorSourceKind: ctx.selectedVectorSourceKind,
+        effectiveStep: ctx.effectiveStep,
+        liveFieldSourceStep: ctx.liveFieldSourceStep,
+        previewSourceStep: ctx.previewSourceStep,
+        fieldData: scaledFemMeshData?.fieldData,
+        meshFieldRevision: scaledFemMeshData?.fieldRevision,
+        dataFieldRevision: ctx.fieldDataRevision,
+        fieldDataTimestamp: ctx.fieldDataTimestamp,
+        viewportUpdateClass: viewport3DUpdateClass,
+      }),
     [
       ctx.effectiveStep,
       ctx.effectiveViewMode,
@@ -1973,6 +1739,7 @@ export function useViewportDataBridge() {
       femDiscretization,
       scaledFemMeshData?.fieldData,
       scaledFemMeshData?.fieldRevision,
+      viewport3DUpdateClass,
     ],
   );
 
@@ -2085,6 +1852,7 @@ export function useViewportDataBridge() {
     openSelectedSubmeshesToolbox,
     applyTextureTransform,
     persistViewportCameraState,
+    setViewportCameraInteractionActive,
     viewportSelectedObjectId,
   } as const;
 }

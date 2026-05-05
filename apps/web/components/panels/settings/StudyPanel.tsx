@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import type { MeshPeriodicPairEntry } from "@/src/api/types";
-import { usePeriodicPairs } from "@/src/hooks/resources";
+import { usePeriodicPairs, useStageExecution } from "@/src/hooks/resources";
 import { fmtExp } from "@/lib/format";
 import { getFemElementCount, getFemNodeCount } from "@/lib/session/femTopology";
 import {
@@ -29,6 +29,7 @@ import StageInspector from "@/components/workspace/study-builder/StageInspector"
 import StudyBuilderWorkspace from "@/components/workspace/study-builder/StudyBuilderWorkspace";
 import { useTransport, useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { Button } from "../../ui/button";
+import MetricTile from "../../ui/MetricTile";
 import SelectField from "../../ui/SelectField";
 import TextField from "../../ui/TextField";
 import {
@@ -39,6 +40,7 @@ import {
   studyKindForPlan,
 } from "./helpers";
 import { InfoRow, SidebarSection, StatusBadge } from "./primitives";
+import { buildRelaxationInspectorState } from "./relaxationInspector";
 
 interface StudyPanelProps {
   nodeId: string;
@@ -233,11 +235,17 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     stateIoBusy: cmd.stateIoBusy,
     effectiveDt: transport.effectiveDt,
     hasSolverTelemetry: transport.hasSolverTelemetry,
+    scalarRows: transport.scalarRows,
   };
   const periodicPairsResource = usePeriodicPairs({
     enabled: true,
     sessionKey: ctx.sceneResourceSessionKey ?? ctx.session?.session_id ?? null,
     revision: ctx.resourceRevisions?.mesh_revision ?? ctx.resourceRevisions?.mesh_build_revision ?? null,
+  });
+  const stageExecutionResource = useStageExecution({
+    enabled: true,
+    sessionKey: ctx.sceneResourceSessionKey ?? ctx.session?.session_id ?? null,
+    revision: ctx.resourceRevisions?.stages_revision ?? null,
   });
   const periodicPairs = periodicPairsResource.periodicPairs?.pairs ?? [];
   const studyNode = useMemo(
@@ -301,6 +309,16 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     const flatIndex = Number(studyNode.stageKey);
     return Number.isFinite(flatIndex) && ctx.studyStages[flatIndex] ? [ctx.studyStages[flatIndex]] : [];
   })();
+
+  const selectedStageIndexes = useMemo(() => {
+    if (studyNode.kind !== "study-stage") return [];
+    if (studyNode.source === "pipeline" && selectedAuthoringNode) {
+      const entry = findMaterializedEntry(materialized.map, selectedAuthoringNode.id);
+      return entry?.stageIndexes ?? [];
+    }
+    const flatIndex = Number(studyNode.stageKey);
+    return Number.isFinite(flatIndex) && ctx.studyStages[flatIndex] ? [flatIndex] : [];
+  }, [ctx.studyStages, materialized.map, selectedAuthoringNode, studyNode]);
 
   const selectedDiagnostics = useMemo(() => {
     if (studyNode.kind !== "study-stage" || !selectedAuthoringNode) return [];
@@ -470,8 +488,87 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       if (node.node_kind !== "primitive" || node.stage_kind !== "relax") {
         return <StageSectionNote title="Stop Criteria" body="This node is only meaningful for primitive Relax stages." />;
       }
+      const torqueToleranceText = String(node.payload.torque_tolerance ?? "");
+      const legacyTorqueDefault = torqueToleranceText.trim() === "1e-6";
+      const stageIndex = selectedStageIndexes[0] ?? null;
+      const stageRecord =
+        stageIndex != null
+          ? stageExecutionResource.stageExecution?.stages[stageIndex] ?? null
+          : null;
+      const stageStatus =
+        stageIndex != null
+          ? stageExecutionResource.stageExecution?.stage_statuses[stageIndex] ?? null
+          : null;
+      const relaxRuntime = buildRelaxationInspectorState({
+        payload: node.payload,
+        stageExecutionRecord: stageRecord,
+        stageStatus,
+        scalarRows: ctx.scalarRows,
+      });
       return (
         <SidebarSection title="Stop Criteria" icon="🎯" defaultOpen={true}>
+          {legacyTorqueDefault ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[0.72rem] leading-relaxed text-amber-100">
+              This relax stage still carries the stale legacy torque default `1e-6 A/m`.
+              That threshold is much stricter than the canonical `1e-4 A/m` product default and can
+              push already-relaxed layouts all the way to `max_steps`.
+              <div className="mt-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => patchSelectedNode({ torque_tolerance: "1e-4" })}
+                >
+                  Use canonical 1e-4 A/m
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
+            <MetricTile
+              label={relaxRuntime.overviewLabel}
+              value={relaxRuntime.overviewValue}
+              detail={relaxRuntime.overviewDetail}
+              progress={relaxRuntime.overviewProgress ?? undefined}
+              tone={relaxRuntime.overviewTone}
+            />
+            <MetricTile
+              label="Runtime stop record"
+              value={relaxRuntime.lastStopLabel}
+              detail={relaxRuntime.lastStopDetail}
+              progress={
+                stageRecord?.reason != null || stageStatus === "completed" || stageStatus === "done"
+                  ? 100
+                  : undefined
+              }
+              tone={
+                stageRecord?.reason === "backend_error"
+                  ? "danger"
+                  : stageRecord?.reason === "max_steps" ||
+                      stageRecord?.reason === "max_pseudotime" ||
+                      stageRecord?.reason === "max_physical_time"
+                    ? "warn"
+                    : "default"
+              }
+            />
+          </div>
+          <div className="rounded-lg border border-border/10 bg-card/35 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
+            {relaxRuntime.semantics}
+          </div>
+          {relaxRuntime.metrics.length > 0 ? (
+            <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
+              {relaxRuntime.metrics.map((metric) => (
+                <MetricTile
+                  key={metric.key}
+                  label={metric.label}
+                  value={metric.value}
+                  detail={metric.detail}
+                  progress={metric.progress ?? undefined}
+                  tone={metric.tone}
+                />
+              ))}
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <SelectField
               label="Relax algorithm"

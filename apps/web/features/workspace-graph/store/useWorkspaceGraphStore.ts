@@ -64,13 +64,88 @@ function viewportDocumentStatesEqual(
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
+  return (
+    a.id === b.id &&
+    a.workspaceMode === b.workspaceMode &&
+    a.tabId === b.tabId &&
+    a.viewMode === b.viewMode &&
+    a.quantityId === b.quantityId &&
+    a.component === b.component &&
+    a.plane === b.plane &&
+    a.sliceIndex === b.sliceIndex &&
+    a.selectedDatasetId === b.selectedDatasetId &&
+    a.selectedResultNodeId === b.selectedResultNodeId &&
+    a.renderMode === b.renderMode &&
+    cameraStatesEqual(a.camera, b.camera) &&
+    a.overlayToggles.telemetryHudVisible === b.overlayToggles.telemetryHudVisible &&
+    a.overlayToggles.previewNoticesVisible === b.overlayToggles.previewNoticesVisible
+  );
 }
 
-function arraysStructurallyEqual(a: unknown[], b: unknown[]): boolean {
+function cameraStatesEqual(
+  a: ViewportDocumentState["camera"],
+  b: ViewportDocumentState["camera"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    tupleEqual(a.position, b.position) &&
+    tupleEqual(a.target, b.target) &&
+    tupleEqual(a.up, b.up) &&
+    a.projection === b.projection &&
+    a.navigation === b.navigation &&
+    a.lastFocusedObjectId === b.lastFocusedObjectId
+  );
+}
+
+function tupleEqual(a: readonly number[], b: readonly number[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function primitiveArraysEqual(a: readonly unknown[], b: readonly unknown[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function shallowRecordsArrayEqual<T extends object>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index]! as Record<string, unknown>;
+    const right = b[index]! as Record<string, unknown>;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) {
+      return false;
+    }
+    for (const key of leftKeys) {
+      const leftValue = left[key];
+      const rightValue = right[key];
+      if (Array.isArray(leftValue) && Array.isArray(rightValue)) {
+        if (!primitiveArraysEqual(leftValue, rightValue)) {
+          return false;
+        }
+        continue;
+      }
+      if (leftValue !== rightValue) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => ({
@@ -86,8 +161,8 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
       }
       // P-26: Per-field structural sharing — preserve sub-object references
       // when values haven't changed between snapshots. During solver relaxation,
-      // only `scalarRows`, `solutions`, `datasets`, `derivedValues`, and
-      // `updatedAt` typically change. Everything else (selection,
+      // only `solutions`, `datasets`, `derivedValues`, and `updatedAt`
+      // typically change. Everything else (selection,
       // viewportDocuments, resultsWorkspace, etc.) stays structurally
       // identical. By preserving their references, downstream Zustand selectors
       // and React useMemo/useEffect dependencies remain stable.
@@ -129,21 +204,21 @@ export const useWorkspaceGraphStore = create<WorkspaceGraphStoreState>((set) => 
         }
         shared.viewportDocuments = allDocsEqual ? prevDocs : mergedDocs;
       }
-      // Arrays with computed values: compare by stringified content
-      // (these are small arrays, so JSON comparison is cheap)
-      if (arraysStructurallyEqual(prev.studyNodes, snapshot.studyNodes)) {
+      // Arrays with computed view-model records: compare shallow primitive fields
+      // and primitive child arrays without serializing the hot snapshot path.
+      if (shallowRecordsArrayEqual(prev.studyNodes, snapshot.studyNodes)) {
         shared.studyNodes = prev.studyNodes;
       }
-      if (arraysStructurallyEqual(prev.solutions, snapshot.solutions)) {
+      if (shallowRecordsArrayEqual(prev.solutions, snapshot.solutions)) {
         shared.solutions = prev.solutions;
       }
-      if (arraysStructurallyEqual(prev.datasets, snapshot.datasets)) {
+      if (shallowRecordsArrayEqual(prev.datasets, snapshot.datasets)) {
         shared.datasets = prev.datasets;
       }
-      if (arraysStructurallyEqual(prev.derivedValues, snapshot.derivedValues)) {
+      if (shallowRecordsArrayEqual(prev.derivedValues, snapshot.derivedValues)) {
         shared.derivedValues = prev.derivedValues;
       }
-      if (arraysStructurallyEqual(prev.quantityFrames, snapshot.quantityFrames)) {
+      if (shallowRecordsArrayEqual(prev.quantityFrames, snapshot.quantityFrames)) {
         shared.quantityFrames = prev.quantityFrames;
       }
       return { snapshot: shared, lastSnapshotSignature: signature };

@@ -19,8 +19,8 @@ export function ViewportOverlayLayout({
       className={cn(
         "absolute inset-0 z-10 pointer-events-none p-3",
         "grid gap-3",
-        "grid-cols-[auto_1fr_auto]",
-        "grid-rows-[auto_1fr_auto]",
+        "grid-cols-[auto_minmax(0,1fr)_auto]",
+        "grid-rows-[auto_minmax(0,1fr)_auto]",
         className
       )}
       style={{
@@ -46,7 +46,7 @@ type SlotProps = {
 ViewportOverlayLayout.TopLeft = function TopLeft({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-start", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-start min-h-0 min-w-0", className)}
       style={{ gridArea: "top-left" }}
     >
       {children}
@@ -57,7 +57,7 @@ ViewportOverlayLayout.TopLeft = function TopLeft({ children, className }: SlotPr
 ViewportOverlayLayout.TopCenter = function TopCenter({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-center justify-start", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-center justify-start min-h-0 min-w-0", className)}
       style={{ gridArea: "top-center" }}
     >
       {children}
@@ -68,7 +68,7 @@ ViewportOverlayLayout.TopCenter = function TopCenter({ children, className }: Sl
 ViewportOverlayLayout.TopRight = function TopRight({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-start", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-start min-h-0 min-w-0", className)}
       style={{ gridArea: "top-right" }}
     >
       {children}
@@ -79,7 +79,7 @@ ViewportOverlayLayout.TopRight = function TopRight({ children, className }: Slot
 ViewportOverlayLayout.BottomLeft = function BottomLeft({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-end", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-end min-h-0 min-w-0", className)}
       style={{ gridArea: "bottom-left" }}
     >
       {children}
@@ -90,7 +90,7 @@ ViewportOverlayLayout.BottomLeft = function BottomLeft({ children, className }: 
 ViewportOverlayLayout.BottomCenter = function BottomCenter({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-center justify-end", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-center justify-end min-h-0 min-w-0", className)}
       style={{ gridArea: "bottom-center" }}
     >
       {children}
@@ -101,7 +101,7 @@ ViewportOverlayLayout.BottomCenter = function BottomCenter({ children, className
 ViewportOverlayLayout.BottomRight = function BottomRight({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-end", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-end min-h-0 min-w-0", className)}
       style={{ gridArea: "bottom-right" }}
     >
       {children}
@@ -112,7 +112,7 @@ ViewportOverlayLayout.BottomRight = function BottomRight({ children, className }
 ViewportOverlayLayout.Right = function Right({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-start h-full min-h-0", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-end justify-start h-full min-h-0 min-w-0", className)}
       style={{ gridArea: "right" }}
     >
       {children}
@@ -123,7 +123,7 @@ ViewportOverlayLayout.Right = function Right({ children, className }: SlotProps)
 ViewportOverlayLayout.Left = function Left({ children, className }: SlotProps) {
   return (
     <div
-      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-start h-full min-h-0", className)}
+      className={cn("pointer-events-none flex flex-col gap-2 items-start justify-start h-full min-h-0 min-w-0", className)}
       style={{ gridArea: "left" }}
     >
       {children}
