@@ -22,6 +22,7 @@ use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::cpu_reference;
+use crate::fem_baseline;
 use crate::fem_eigen;
 #[cfg(feature = "fem-gpu")]
 use crate::interactive_runtime::cached_preview_quantities_for;
@@ -999,6 +1000,11 @@ pub(crate) fn snapshot_fem_preview(
             ),
         });
     }
+    if !plan.mesh.periodic_node_pairs.is_empty()
+        && !fem_static_periodic_native_exchange_supported(plan)
+    {
+        return fem_baseline::snapshot_preview(plan, request);
+    }
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
@@ -1015,6 +1021,11 @@ pub(crate) fn snapshot_fem_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = active_fem_preview_quantities(engine, plan, quantities);
+    if !plan.mesh.periodic_node_pairs.is_empty()
+        && !fem_static_periodic_native_exchange_supported(plan)
+    {
+        return fem_baseline::snapshot_vector_fields(plan, &quantities, request);
+    }
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(plan);
@@ -1030,6 +1041,41 @@ fn fem_plan_for_cpu_native(plan: &FemPlanIR) -> FemPlanIR {
         cpu_plan.mfem_device_string = Some("cpu".to_string());
     }
     cpu_plan
+}
+
+fn fem_static_periodic_native_exchange_supported(plan: &FemPlanIR) -> bool {
+    if plan.mesh.periodic_node_pairs.is_empty() {
+        return true;
+    }
+    plan.enable_exchange
+        && !plan.enable_demag
+        && plan.interfacial_dmi.is_none()
+        && plan.bulk_dmi.is_none()
+        && plan.dind_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.dbulk_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.uniaxial_anisotropy.is_none()
+        && plan.material.uniaxial_anisotropy_k2.is_none()
+        && plan.material.cubic_anisotropy_kc1.is_none()
+        && plan.material.cubic_anisotropy_kc2.is_none()
+        && plan.material.cubic_anisotropy_kc3.is_none()
+        && plan.material.ms_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.a_field.as_ref().map_or(true, Vec::is_empty)
+        && plan
+            .material
+            .alpha_field
+            .as_ref()
+            .map_or(true, Vec::is_empty)
+        && plan.material.ku_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.ku2_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.kc1_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.kc2_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.material.kc3_field.as_ref().map_or(true, Vec::is_empty)
+        && plan.current_density.is_none()
+        && plan.stt_spin_polarization.is_none()
+        && plan.temperature.unwrap_or(0.0) <= 0.0
+        && !plan.has_oersted_cylinder
+        && plan.oersted_field_xyz.as_ref().map_or(true, Vec::is_empty)
+        && plan.magnetoelastic.is_none()
 }
 
 #[cfg(feature = "cuda")]
@@ -1411,6 +1457,22 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    if !normalized_plan.mesh.periodic_node_pairs.is_empty()
+        && !fem_static_periodic_native_exchange_supported(&normalized_plan)
+    {
+        eprintln!(
+            "info: FEM static periodic constraints are executed by the Rust FEM reference path \
+             because this run uses terms outside the current native exchange periodic \
+             constraint support."
+        );
+        return fem_baseline::execute_reference_fem(
+            &normalized_plan,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        );
+    }
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
@@ -3553,6 +3615,42 @@ mod tests {
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn execute_fem_routes_unsupported_static_periodic_pairs_to_reference_guardrail() {
+        let mut plan = tiny_fem_plan();
+        plan.initial_magnetization[1] = [0.0, 1.0, 0.0];
+        plan.material.uniaxial_anisotropy = Some(1.0e4);
+        plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 1,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: None,
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+
+        assert!(!fem_static_periodic_native_exchange_supported(&plan));
+
+        let err = execute_fem(FemEngine::CpuNative, &plan, 1e-13, &[], None, None)
+            .expect_err("unsupported static periodic FEM should stop in reference guardrail");
+        assert!(
+            err.message.contains("Internal FEM baseline engine")
+                || err.message.contains("FEM reference runner cannot execute"),
+            "unexpected guardrail error: {}",
+            err.message
+        );
     }
 
     #[test]

@@ -1089,6 +1089,8 @@ pub struct FemLlgProblem {
     pub material: MaterialParameters,
     pub dynamics: LlgConfig,
     pub terms: EffectiveFieldTerms,
+    /// Static periodic node reduction for FEM reference exchange operators.
+    static_periodic_dof_map: Option<PeriodicDofMap>,
     /// Interface normal used by interfacial DMI in FEM reference path.
     /// Defaults to +z and is normalized internally before use.
     pub dmi_interface_normal: Vector3,
@@ -1120,6 +1122,7 @@ impl Clone for FemLlgProblem {
             material: self.material.clone(),
             dynamics: self.dynamics.clone(),
             terms: self.terms.clone(),
+            static_periodic_dof_map: self.static_periodic_dof_map.clone(),
             dmi_interface_normal: self.dmi_interface_normal,
             sparse_cg_tol: self.sparse_cg_tol,
             sparse_cg_max_iter: self.sparse_cg_max_iter,
@@ -1140,6 +1143,7 @@ impl PartialEq for FemLlgProblem {
             && self.material == other.material
             && self.dynamics == other.dynamics
             && self.terms == other.terms
+            && self.static_periodic_dof_map == other.static_periodic_dof_map
             && self.dmi_interface_normal == other.dmi_interface_normal
             && self.sparse_cg_tol == other.sparse_cg_tol
             && self.sparse_cg_max_iter == other.sparse_cg_max_iter
@@ -1147,6 +1151,28 @@ impl PartialEq for FemLlgProblem {
             && self.operator_mode == other.operator_mode
             && self.demag_csr == other.demag_csr
             && self.demag_dirichlet_boundary == other.demag_dirichlet_boundary
+    }
+}
+
+fn static_periodic_dof_map_or_none(topology: &MeshTopology) -> Option<PeriodicDofMap> {
+    if topology.periodic_node_pairs.is_empty() {
+        None
+    } else {
+        Some(
+            topology
+                .static_periodic_dof_map()
+                .expect("MeshIR validation should produce a valid static periodic DOF map"),
+        )
+    }
+}
+
+fn apply_static_periodic_constraints_to_vectors(
+    magnetization: &mut [Vector3],
+    dof_map: &PeriodicDofMap,
+) {
+    for full_node in 0..dof_map.full_node_count {
+        let representative = dof_map.representative_nodes[dof_map.reduced_node(full_node)];
+        magnetization[full_node] = magnetization[representative];
     }
 }
 
@@ -1160,11 +1186,13 @@ impl FemLlgProblem {
         let demag_csr = topology.demag_csr.clone();
         let n = topology.n_nodes;
         let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
+        let static_periodic_dof_map = static_periodic_dof_map_or_none(&topology);
         Self {
             topology,
             material,
             dynamics,
             terms,
+            static_periodic_dof_map,
             dmi_interface_normal: [0.0, 0.0, 1.0],
             sparse_cg_tol: None,
             sparse_cg_max_iter: None,
@@ -1196,11 +1224,13 @@ impl FemLlgProblem {
         };
         let n_nodes = topology.n_nodes;
         let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
+        let static_periodic_dof_map = static_periodic_dof_map_or_none(&topology);
         Self {
             topology,
             material,
             dynamics,
             terms,
+            static_periodic_dof_map,
             dmi_interface_normal: [0.0, 0.0, 1.0],
             sparse_cg_tol: None,
             sparse_cg_max_iter: None,
@@ -1228,8 +1258,16 @@ impl FemLlgProblem {
         FemDemagRealization::Poisson
     }
 
+    fn apply_static_periodic_constraints_to_state(&self, state: &mut FemLlgState) {
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            apply_static_periodic_constraints_to_vectors(&mut state.magnetization, dof_map);
+        }
+    }
+
     pub fn new_state(&self, magnetization: Vec<Vector3>) -> Result<FemLlgState> {
-        FemLlgState::new(&self.topology, magnetization)
+        let mut state = FemLlgState::new(&self.topology, magnetization)?;
+        self.apply_static_periodic_constraints_to_state(&mut state);
+        Ok(state)
     }
 
     pub fn exchange_field(&self, state: &FemLlgState) -> Result<Vec<Vector3>> {
@@ -1297,28 +1335,33 @@ impl FemLlgProblem {
 
         // Exchange
         if self.terms.exchange {
-            let coeff = 2.0 * self.material.exchange_stiffness
-                / (MU0 * self.material.saturation_magnetisation);
-            let csr = &self.topology.magnetic_stiffness_csr;
-            for (i, m) in magnetization.iter().enumerate() {
-                scratch.mx[i] = m[0];
-                scratch.my[i] = m[1];
-                scratch.mz[i] = m[2];
-            }
-            csr.spmv_into(&scratch.mx, &mut scratch.kx);
-            csr.spmv_into(&scratch.my, &mut scratch.ky);
-            csr.spmv_into(&scratch.mz, &mut scratch.kz);
-            for i in 0..n {
-                let lumped_mass = self.topology.magnetic_node_volumes[i];
-                if lumped_mass > 0.0 {
-                    let inv_mass = 1.0 / lumped_mass;
-                    scratch.h_eff[i] = [
-                        -coeff * scratch.kx[i] * inv_mass,
-                        -coeff * scratch.ky[i] * inv_mass,
-                        -coeff * scratch.kz[i] * inv_mass,
-                    ];
-                } else {
-                    scratch.h_eff[i] = [0.0, 0.0, 0.0];
+            if self.static_periodic_dof_map.is_some() {
+                let exchange_field = self.exchange_field_from_vectors(magnetization);
+                scratch.h_eff[..n].copy_from_slice(&exchange_field[..n]);
+            } else {
+                let coeff = 2.0 * self.material.exchange_stiffness
+                    / (MU0 * self.material.saturation_magnetisation);
+                let csr = &self.topology.magnetic_stiffness_csr;
+                for (i, m) in magnetization.iter().enumerate() {
+                    scratch.mx[i] = m[0];
+                    scratch.my[i] = m[1];
+                    scratch.mz[i] = m[2];
+                }
+                csr.spmv_into(&scratch.mx, &mut scratch.kx);
+                csr.spmv_into(&scratch.my, &mut scratch.ky);
+                csr.spmv_into(&scratch.mz, &mut scratch.kz);
+                for i in 0..n {
+                    let lumped_mass = self.topology.magnetic_node_volumes[i];
+                    if lumped_mass > 0.0 {
+                        let inv_mass = 1.0 / lumped_mass;
+                        scratch.h_eff[i] = [
+                            -coeff * scratch.kx[i] * inv_mass,
+                            -coeff * scratch.ky[i] * inv_mass,
+                            -coeff * scratch.kz[i] * inv_mass,
+                        ];
+                    } else {
+                        scratch.h_eff[i] = [0.0, 0.0, 0.0];
+                    }
                 }
             }
         } else {
@@ -2241,10 +2284,27 @@ impl FemLlgProblem {
 
     /// Validate that the problem configuration is physically consistent.
     pub fn validate_reference_semantics(&self) -> Result<()> {
-        if !self.topology.periodic_node_pairs.is_empty() {
+        if self.static_periodic_dof_map.is_some() && self.terms.demag {
             return Err(EngineError::new(format!(
-                "{} periodic node pairs present, but the Rust FEM reference solver does not \
-                 enforce periodic constraints in exchange or demag",
+                "{} periodic node pairs present, but the Rust FEM reference solver does not yet \
+                 reduce the Poisson demag operator for static periodic constraints",
+                self.topology.periodic_node_pairs.len()
+            )));
+        }
+        if self.static_periodic_dof_map.is_some()
+            && (self.terms.interfacial_dmi.is_some()
+                || self.terms.bulk_dmi.is_some()
+                || self.terms.per_node_field.is_some()
+                || self.terms.magnetoelastic.is_some()
+                || self.terms.zhang_li_stt.is_some()
+                || self.terms.slonczewski_stt.is_some()
+                || self.terms.sot.is_some()
+                || self.terms.oersted_cylinder.is_some())
+        {
+            return Err(EngineError::new(format!(
+                "{} periodic node pairs present, but the Rust FEM reference static periodic \
+                 path currently supports only exchange, uniform Zeeman field, and local \
+                 anisotropy terms",
                 self.topology.periodic_node_pairs.len()
             )));
         }
@@ -2474,6 +2534,10 @@ impl FemLlgProblem {
     }
 
     fn exchange_field_from_vectors(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            return self.exchange_field_from_vectors_static_periodic(magnetization, dof_map);
+        }
+
         let coeff =
             2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
         let n_nodes = self.topology.n_nodes;
@@ -2510,7 +2574,75 @@ impl FemLlgProblem {
         field
     }
 
+    fn exchange_field_from_vectors_static_periodic(
+        &self,
+        magnetization: &[Vector3],
+        dof_map: &PeriodicDofMap,
+    ) -> Vec<Vector3> {
+        let coeff =
+            2.0 * self.material.exchange_stiffness / (MU0 * self.material.saturation_magnetisation);
+        let n_nodes = self.topology.n_nodes;
+        let n_reduced = dof_map.reduced_node_count;
+        let csr = &self.topology.magnetic_stiffness_csr;
+
+        let mut mx = vec![0.0; n_nodes];
+        let mut my = vec![0.0; n_nodes];
+        let mut mz = vec![0.0; n_nodes];
+        for full_node in 0..n_nodes {
+            let representative = dof_map.representative_nodes[dof_map.reduced_node(full_node)];
+            let m = magnetization[representative];
+            mx[full_node] = m[0];
+            my[full_node] = m[1];
+            mz[full_node] = m[2];
+        }
+
+        let kx = csr.spmv(&mx);
+        let ky = csr.spmv(&my);
+        let kz = csr.spmv(&mz);
+        let mut reduced_kx = vec![0.0; n_reduced];
+        let mut reduced_ky = vec![0.0; n_reduced];
+        let mut reduced_kz = vec![0.0; n_reduced];
+        let mut reduced_mass = vec![0.0; n_reduced];
+        for full_node in 0..n_nodes {
+            let reduced = dof_map.reduced_node(full_node);
+            reduced_kx[reduced] += kx[full_node];
+            reduced_ky[reduced] += ky[full_node];
+            reduced_kz[reduced] += kz[full_node];
+            reduced_mass[reduced] += self.topology.magnetic_node_volumes[full_node];
+        }
+
+        let mut reduced_field = vec![[0.0, 0.0, 0.0]; n_reduced];
+        for reduced in 0..n_reduced {
+            let lumped_mass = reduced_mass[reduced];
+            if lumped_mass > 0.0 {
+                let inv_mass = 1.0 / lumped_mass;
+                reduced_field[reduced] = [
+                    -coeff * reduced_kx[reduced] * inv_mass,
+                    -coeff * reduced_ky[reduced] * inv_mass,
+                    -coeff * reduced_kz[reduced] * inv_mass,
+                ];
+            }
+        }
+
+        let mut field = vec![[0.0, 0.0, 0.0]; n_nodes];
+        for full_node in 0..n_nodes {
+            field[full_node] = reduced_field[dof_map.reduced_node(full_node)];
+        }
+        field
+    }
+
     fn exchange_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let projected_magnetization;
+        let magnetization = if let Some(dof_map) = &self.static_periodic_dof_map {
+            projected_magnetization = {
+                let mut values = magnetization.to_vec();
+                apply_static_periodic_constraints_to_vectors(&mut values, dof_map);
+                values
+            };
+            projected_magnetization.as_slice()
+        } else {
+            magnetization
+        };
         let exchange_stiffness = self.material.exchange_stiffness;
         #[cfg(feature = "parallel")]
         let energy: f64 = (0..self.topology.elements.len())
@@ -3329,6 +3461,10 @@ mod tests {
     use crate::{CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO};
 
     fn unit_tet_problem() -> FemLlgProblem {
+        unit_tet_problem_with_static_periodic(false, false)
+    }
+
+    fn unit_tet_problem_with_static_periodic(periodic: bool, demag: bool) -> FemLlgProblem {
         let mesh = MeshIR {
             mesh_name: "unit_tet".to_string(),
             nodes: vec![
@@ -3341,8 +3477,31 @@ mod tests {
             element_markers: vec![1],
             boundary_faces: vec![[0, 1, 2]],
             boundary_markers: vec![1],
-            periodic_boundary_pairs: Vec::new(),
-            periodic_node_pairs: Vec::new(),
+            periodic_boundary_pairs: if periodic {
+                vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                    pair_id: "x_periodic".to_string(),
+                    source_marker: None,
+                    destination_marker: None,
+                    marker_a: 1,
+                    marker_b: 1,
+                    translation: Some([1.0, 0.0, 0.0]),
+                    tolerance: Some(1e-12),
+                    axis_hint: None,
+                    orientation: None,
+                    pairing_policy: None,
+                }]
+            } else {
+                Vec::new()
+            },
+            periodic_node_pairs: if periodic {
+                vec![fullmag_ir::MeshPeriodicNodePairIR {
+                    pair_id: "x_periodic".to_string(),
+                    node_a: 0,
+                    node_b: 1,
+                }]
+            } else {
+                Vec::new()
+            },
             per_domain_quality: std::collections::HashMap::new(),
         };
         let topology = MeshTopology::from_ir(&mesh).expect("unit tet topology");
@@ -3352,7 +3511,7 @@ mod tests {
             LlgConfig::new(DEFAULT_GYROMAGNETIC_RATIO, TimeIntegrator::Heun).expect("llg"),
             EffectiveFieldTerms {
                 exchange: true,
-                demag: false,
+                demag,
                 external_field: None,
                 per_node_field: None,
                 magnetoelastic: None,
@@ -3475,23 +3634,45 @@ mod tests {
     }
 
     #[test]
-    fn reference_semantics_rejects_unenforced_periodic_pairs() {
-        let mut problem = unit_tet_problem();
+    fn reference_semantics_allows_exchange_only_static_periodic_pairs() {
+        let problem = unit_tet_problem_with_static_periodic(true, false);
+
         problem
-            .topology
-            .periodic_node_pairs
-            .push(("x_periodic".to_string(), 0, 1));
+            .validate_reference_semantics()
+            .expect("exchange-only static periodic FEM should be supported");
+    }
+
+    #[test]
+    fn reference_semantics_rejects_periodic_demag_until_reduced() {
+        let problem = unit_tet_problem_with_static_periodic(true, true);
 
         let err = problem
             .validate_reference_semantics()
-            .expect_err("reference FEM must reject unenforced periodic pairs");
+            .expect_err("periodic FEM demag must remain rejected until reduced");
         let message = err.to_string();
 
         assert!(
-            message.contains("does not enforce periodic constraints"),
+            message.contains("does not yet reduce the Poisson demag operator"),
             "unexpected error: {}",
             message
         );
+    }
+
+    #[test]
+    fn static_periodic_exchange_reconstructs_equal_pair_field() {
+        let problem = unit_tet_problem_with_static_periodic(true, false);
+        let state = problem
+            .new_state(vec![
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0],
+            ])
+            .expect("periodic state");
+
+        assert_eq!(state.magnetization()[0], state.magnetization()[1]);
+        let field = problem.exchange_field(&state).expect("exchange field");
+        assert_eq!(field[0], field[1]);
     }
 
     #[test]

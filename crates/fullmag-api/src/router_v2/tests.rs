@@ -10,7 +10,7 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeSet, VecDeque};
@@ -3076,6 +3076,194 @@ async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
     assert_eq!(json["schema_version"], "periodic_pairs.v1");
     assert_eq!(json["revision"], 0);
     assert_eq!(json["pairs"][0]["pair_id"], "x_periodic");
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn eigen_v2_artifact_endpoints_return_json_and_csv_contracts() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    let modes_dir = eigen_dir.join("modes").join("sample_0003");
+    fs::create_dir_all(&modes_dir).expect("eigen artifact dirs should be created");
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "solver_model": "fem_eigen_floquet_dense_debug",
+            "sample_count": 1,
+            "samples": [{
+                "sample_index": 3,
+                "label": "X",
+                "k_vector": [1.0, 0.0, 0.0],
+                "path_s": 1.0,
+                "segment_index": 0,
+                "t_in_segment": 1.0,
+                "modes": [{
+                    "raw_mode_index": 7,
+                    "branch_id": 4,
+                    "frequency_real_hz": 1.5e9,
+                    "frequency_imag_hz": 0.0,
+                    "angular_frequency_rad_per_s": 9.42477796077e9,
+                    "eigenvalue_real": 1.0,
+                    "eigenvalue_imag": 0.0,
+                    "norm": 1.0,
+                    "max_amplitude": 1.0,
+                    "dominant_polarization": "x",
+                    "k_vector": [1.0, 0.0, 0.0]
+                }]
+            }]
+        }))
+        .expect("spectrum fixture should serialize"),
+    )
+    .expect("spectrum artifact should be written");
+    fs::write(
+        eigen_dir.join("branches.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_branches.v2",
+            "solver_model": "fem_eigen_floquet_dense_debug",
+            "branches": [{
+                "branch_id": 4,
+                "label": "acoustic",
+                "points": [{
+                    "sample_index": 3,
+                    "raw_mode_index": 7,
+                    "frequency_real_hz": 1.5e9,
+                    "frequency_imag_hz": 0.0,
+                    "tracking_confidence": 0.99,
+                    "overlap_prev": 0.99
+                }]
+            }]
+        }))
+        .expect("branches fixture should serialize"),
+    )
+    .expect("branches artifact should be written");
+    fs::write(
+        modes_dir.join("mode_0007.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_mode.v2",
+            "solver_model": "fem_eigen_floquet_dense_debug",
+            "sample_index": 3,
+            "raw_mode_index": 7,
+            "branch_id": 4,
+            "frequency_real_hz": 1.5e9,
+            "frequency_imag_hz": 0.0,
+            "angular_frequency_rad_per_s": 9.42477796077e9,
+            "normalization": "unit_l2",
+            "damping_policy": "ignore",
+            "dominant_polarization": "x",
+            "k_vector": [1.0, 0.0, 0.0],
+            "real": [[1.0, 0.0, 0.0]],
+            "imag": [[0.0, 1.0, 0.0]],
+            "amplitude": [1.0],
+            "phase": [0.0]
+        }))
+        .expect("mode fixture should serialize"),
+    )
+    .expect("mode artifact should be written");
+    fs::write(
+        eigen_dir.join("dispersion.csv"),
+        "sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score\n3,1,1,0,0,X,7,4,1500000000,9424777960.77,0,1e-9,0.99\n",
+    )
+    .expect("dispersion csv should be written");
+
+    let spectrum = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(spectrum.status(), StatusCode::OK);
+    let spectrum_json = body_json(spectrum).await;
+    assert_eq!(spectrum_json["schema_version"], "eigen_spectrum.v2");
+    assert_eq!(spectrum_json["samples"][0]["path_s"], 1.0);
+
+    let branches = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigen/branches.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(branches.status(), StatusCode::OK);
+    let branches_json = body_json(branches).await;
+    assert_eq!(branches_json["schema_version"], "eigen_branches.v2");
+    assert_eq!(branches_json["branches"][0]["branch_id"], 4);
+
+    let mode = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigen/modes/3/7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode.status(), StatusCode::OK);
+    let mode_json = body_json(mode).await;
+    assert_eq!(mode_json["sample_index"], 3);
+    assert_eq!(mode_json["raw_mode_index"], 7);
+    assert_eq!(mode_json["branch_id"], 4);
+
+    let dispersion = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigen/dispersion.csv")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(dispersion.status(), StatusCode::OK);
+    assert_eq!(
+        dispersion.headers().get(header::CONTENT_TYPE).unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let csv = String::from_utf8(body_bytes(dispersion).await).expect("csv body should be utf-8");
+    assert!(csv.starts_with("sample_index,path_s_rad_per_m,kx_rad_per_m"));
+    assert!(csv.contains(",branch_id,"));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn eigen_branches_v2_missing_artifact_returns_404() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact dir should be created");
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "solver_model": "fem_eigen_floquet_dense_debug",
+            "sample_count": 0,
+            "samples": []
+        }))
+        .expect("spectrum fixture should serialize"),
+    )
+    .expect("spectrum artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/analysis/eigen/branches.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = String::from_utf8(body_bytes(response).await).expect("body should be utf-8");
+    assert!(body.contains("branches.v2") || body.contains("branches.v2.json"));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }

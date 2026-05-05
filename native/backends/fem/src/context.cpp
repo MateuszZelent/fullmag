@@ -47,6 +47,116 @@ void fill_repeated_vector_field(
     }
 }
 
+bool build_static_periodic_reduction(Context &ctx, std::string &error) {
+    ctx.periodic_reduced_node.clear();
+    ctx.periodic_representative_nodes.clear();
+    ctx.periodic_reduced_node_count = 0;
+    if (ctx.periodic_node_pairs.empty()) {
+        return true;
+    }
+
+    std::vector<uint32_t> parent(static_cast<size_t>(ctx.n_nodes), 0u);
+    for (uint32_t i = 0; i < ctx.n_nodes; ++i) {
+        parent[static_cast<size_t>(i)] = i;
+    }
+
+    auto find_root = [&](uint32_t node) {
+        uint32_t root = node;
+        while (parent[static_cast<size_t>(root)] != root) {
+            root = parent[static_cast<size_t>(root)];
+        }
+        while (parent[static_cast<size_t>(node)] != node) {
+            const uint32_t next = parent[static_cast<size_t>(node)];
+            parent[static_cast<size_t>(node)] = root;
+            node = next;
+        }
+        return root;
+    };
+
+    auto unite = [&](uint32_t a, uint32_t b) {
+        const uint32_t root_a = find_root(a);
+        const uint32_t root_b = find_root(b);
+        if (root_a == root_b) {
+            return;
+        }
+        const uint32_t representative = std::min(root_a, root_b);
+        const uint32_t dependent = std::max(root_a, root_b);
+        parent[static_cast<size_t>(dependent)] = representative;
+    };
+
+    const size_t n_pairs = ctx.periodic_node_pairs.size() / 2u;
+    for (size_t pair_index = 0; pair_index < n_pairs; ++pair_index) {
+        const uint32_t node_a = ctx.periodic_node_pairs[pair_index * 2u];
+        const uint32_t node_b = ctx.periodic_node_pairs[pair_index * 2u + 1u];
+        if (node_a >= ctx.n_nodes || node_b >= ctx.n_nodes) {
+            error = "FEM mesh periodic_node_pairs references node outside mesh";
+            return false;
+        }
+        if (node_a == node_b) {
+            error = "FEM mesh periodic_node_pairs contains a self-pair";
+            return false;
+        }
+        unite(node_a, node_b);
+    }
+
+    const uint32_t unset_reduced = static_cast<uint32_t>(-1);
+    std::vector<uint32_t> root_to_reduced(static_cast<size_t>(ctx.n_nodes), unset_reduced);
+    ctx.periodic_reduced_node.assign(static_cast<size_t>(ctx.n_nodes), 0u);
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t root = find_root(node);
+        uint32_t reduced = root_to_reduced[static_cast<size_t>(root)];
+        if (reduced == unset_reduced) {
+            reduced = static_cast<uint32_t>(ctx.periodic_representative_nodes.size());
+            root_to_reduced[static_cast<size_t>(root)] = reduced;
+            ctx.periodic_representative_nodes.push_back(root);
+        }
+        ctx.periodic_reduced_node[static_cast<size_t>(node)] = reduced;
+    }
+    ctx.periodic_reduced_node_count =
+        static_cast<uint32_t>(ctx.periodic_representative_nodes.size());
+    return true;
+}
+
+void project_static_periodic_aos(const Context &ctx, std::vector<double> &field_xyz) {
+    if (ctx.periodic_reduced_node.empty()) {
+        return;
+    }
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t representative = ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        const size_t dst = static_cast<size_t>(node) * 3u;
+        const size_t src = static_cast<size_t>(representative) * 3u;
+        field_xyz[dst + 0u] = field_xyz[src + 0u];
+        field_xyz[dst + 1u] = field_xyz[src + 1u];
+        field_xyz[dst + 2u] = field_xyz[src + 2u];
+    }
+}
+
+bool validate_periodic_scalar_field_classes(
+    const Context &ctx,
+    const std::vector<double> &field,
+    const char *field_name,
+    std::string &error)
+{
+    if (field.empty() || ctx.periodic_reduced_node.empty()) {
+        return true;
+    }
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t representative =
+            ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        const double value = field[static_cast<size_t>(node)];
+        const double expected = field[static_cast<size_t>(representative)];
+        const double tolerance = 1e-12 * std::max(1.0, std::abs(expected));
+        if (std::abs(value - expected) > tolerance) {
+            error = std::string("native FEM periodic_node_pairs require per-node field '") +
+                    field_name + "' to be equal within each periodic node class";
+            return false;
+        }
+    }
+    return true;
+}
+
 void fill_zero_vector_field(std::vector<double> &buffer, uint32_t n_nodes) {
     buffer.assign(static_cast<size_t>(n_nodes) * 3u, 0.0);
 }
@@ -281,6 +391,10 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         error = "initial magnetization pointer is null";
         return false;
     }
+    if (plan.mesh.n_periodic_node_pairs > 0 && plan.mesh.periodic_node_pairs == nullptr) {
+        error = "FEM mesh periodic_node_pairs pointer is null";
+        return false;
+    }
 
     const uint64_t expected_m_len = static_cast<uint64_t>(plan.mesh.n_nodes) * 3ull;
     if (plan.initial_magnetization_len != expected_m_len) {
@@ -363,6 +477,28 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         plan.external_field_am[1],
         plan.external_field_am[2],
     };
+    if (plan.mesh.n_periodic_node_pairs > 0) {
+        const size_t pair_scalar_count =
+            static_cast<size_t>(plan.mesh.n_periodic_node_pairs) * 2u;
+        ctx.periodic_node_pairs.assign(
+            plan.mesh.periodic_node_pairs,
+            plan.mesh.periodic_node_pairs + pair_scalar_count);
+        for (uint32_t pair_index = 0; pair_index < plan.mesh.n_periodic_node_pairs; ++pair_index) {
+            const uint32_t node_a = ctx.periodic_node_pairs[static_cast<size_t>(pair_index) * 2u];
+            const uint32_t node_b = ctx.periodic_node_pairs[static_cast<size_t>(pair_index) * 2u + 1u];
+            if (node_a >= ctx.n_nodes || node_b >= ctx.n_nodes) {
+                error = "FEM mesh periodic_node_pairs references node outside mesh";
+                return false;
+            }
+            if (node_a == node_b) {
+                error = "FEM mesh periodic_node_pairs contains a self-pair";
+                return false;
+            }
+        }
+        if (!build_static_periodic_reduction(ctx, error)) {
+            return false;
+        }
+    }
     ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;
     ctx.anisotropy_Ku = plan.uniaxial_anisotropy_constant;
     ctx.anisotropy_Ku2 = plan.uniaxial_anisotropy_k2;
@@ -412,6 +548,7 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.stt_lambda = plan.stt_lambda;
     ctx.stt_epsilon_prime = plan.stt_epsilon_prime;
     ctx.stt_free_layer_thickness = plan.stt_free_layer_thickness;
+    ctx.stt_current_sign = plan.stt_current_sign;
 
     // Copy per-node spatially varying fields
     auto copy_field = [](std::vector<double> &dst, const double *src, uint64_t len) {
@@ -601,6 +738,7 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     ctx.m_xyz.assign(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));
+    project_static_periodic_aos(ctx, ctx.m_xyz);
 
     // Build magnetic element mask to match the shared Rust FEM contract:
     // - mixed 0/non-zero markers => non-zero markers are magnetic, 0 is air,
@@ -780,8 +918,44 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     // FND-013: read consistent-mass flag from plan.
     // ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
 
+    const bool consistent_mass_requested = plan.use_consistent_mass != 0;
+    if (!ctx.periodic_node_pairs.empty()) {
+        if (!ctx.enable_exchange) {
+            error =
+                "native FEM periodic_node_pairs require enable_exchange=true";
+            return false;
+        }
+        if (ctx.enable_demag || ctx.enable_dmi || ctx.enable_bulk_dmi ||
+            ctx.enable_anisotropy || ctx.enable_cubic_anisotropy ||
+            ctx.enable_magnetoelastic || ctx.has_oersted_cylinder ||
+            ctx.has_oersted_field || ctx.temperature > 0.0 ||
+            ctx.has_zhang_li_stt || ctx.has_slonczewski_stt) {
+            error =
+                "native FEM time-domain periodic_node_pairs currently support only "
+                "exchange with optional uniform external field; demag, DMI, anisotropy, "
+                "magnetoelastic, thermal noise, Oersted and STT require dedicated "
+                "periodic reduced operators";
+            return false;
+        }
+        if (!validate_periodic_scalar_field_classes(ctx, ctx.Ms_field, "Ms_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.A_field, "A_field", error) ||
+            !validate_periodic_scalar_field_classes(ctx, ctx.alpha_field, "alpha_field", error)) {
+            return false;
+        }
+        if (!ctx.Ku_field.empty() || !ctx.Ku2_field.empty() ||
+            !ctx.Dind_field.empty() || !ctx.Dbulk_field.empty() ||
+            !ctx.Kc1_field.empty() || !ctx.Kc2_field.empty() ||
+            !ctx.Kc3_field.empty()) {
+            error =
+                "native FEM time-domain periodic_node_pairs currently support per-node "
+                "Ms/A/alpha fields only for exchange; anisotropy and DMI material fields "
+                "need dedicated periodic reduced operators";
+            return false;
+        }
+    }
+
 #if FULLMAG_HAS_MFEM_STACK
-    ctx.use_consistent_mass = (plan.use_consistent_mass != 0);
+    ctx.use_consistent_mass = consistent_mass_requested;
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }

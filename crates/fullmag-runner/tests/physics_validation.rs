@@ -11,8 +11,8 @@
 use fullmag_ir::{
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenOperatorIR,
     EigenTargetIR, EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionPrecision,
-    FdmMaterialIR, FdmPlanIR, FemEigenPlanIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR,
-    OutputIR, RelaxationAlgorithmIR, RelaxationControlIR,
+    FdmMaterialIR, FdmPlanIR, FemEigenPlanIR, GridDimensions, IntegratorChoice, KPointIR,
+    KSamplingIR, MaterialIR, MeshIR, OutputIR, RelaxationAlgorithmIR, RelaxationControlIR,
 };
 use fullmag_runner::RunStatus;
 
@@ -28,6 +28,59 @@ fn permalloy() -> FdmMaterialIR {
         exchange_stiffness: 13e-12,      // J/m
         damping: 0.5,                    // overdamped for relaxation
         ..Default::default()
+    }
+}
+
+#[test]
+fn frequency_domain_golden_artifacts_are_contract_shaped() {
+    let golden_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("tests/golden/frequency_domain/exchange_chain_gamma_x");
+
+    let problem: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(golden_dir.join("problem.json")).expect("problem golden should exist"),
+    )
+    .expect("problem golden should be valid json");
+    assert_eq!(
+        problem["physics"]["spin_wave_bc"]["phase_convention"],
+        "exp_minus_i_k_dot_delta_r"
+    );
+
+    let spectrum: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(golden_dir.join("spectrum.v2.json"))
+            .expect("spectrum.v2 golden should exist"),
+    )
+    .expect("spectrum.v2 golden should be valid json");
+    assert_eq!(spectrum["schema_version"], "eigen_spectrum.v2");
+    assert_eq!(spectrum["samples"][1]["label"], "X");
+    assert_eq!(spectrum["samples"][1]["path_s"], 50_000_000.0);
+    assert_eq!(spectrum["samples"][1]["modes"][0]["branch_id"], 0);
+
+    let branches: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(golden_dir.join("branches.v2.json"))
+            .expect("branches.v2 golden should exist"),
+    )
+    .expect("branches.v2 golden should be valid json");
+    assert_eq!(branches["schema_version"], "eigen_branches.v2");
+    assert_eq!(branches["branches"][0]["points"][1]["sample_index"], 1);
+    assert_eq!(branches["branches"][0]["points"][1]["overlap_prev"], 0.99);
+
+    let dispersion = std::fs::read_to_string(golden_dir.join("dispersion.csv"))
+        .expect("csv golden should exist");
+    let header = dispersion.lines().next().expect("csv should have a header");
+    for required in [
+        "sample_index",
+        "path_s_rad_per_m",
+        "kx_rad_per_m",
+        "ky_rad_per_m",
+        "kz_rad_per_m",
+        "branch_id",
+        "residual_norm",
+    ] {
+        assert!(
+            header.split(',').any(|column| column == required),
+            "golden dispersion.csv header must contain {required}, got {header}"
+        );
     }
 }
 
@@ -1398,6 +1451,90 @@ fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
 }
 
 #[test]
+fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
+    let build_plan = |kx: f64| {
+        let mut mesh = cube_mesh(20.0);
+        mesh.mesh_name = format!(
+            "floquet_exchange_only_{}",
+            if kx >= 0.0 { "plus" } else { "minus" }
+        );
+        FemEigenPlanIR {
+            mesh_name: mesh.mesh_name.clone(),
+            mesh_source: None,
+            mesh,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 20e-9,
+            equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            material: fem_permalloy(),
+            operator: EigenOperatorConfigIR {
+                kind: EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 1,
+            target: EigenTargetIR::Lowest,
+            equilibrium: EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [kx, 0.0, 0.0],
+            }),
+            normalization: EigenNormalizationIR::UnitL2,
+            damping_policy: EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            external_field: Some([39_789.0, 0.0, 0.0]),
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                    boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            ),
+            demag_realization: None,
+            dmi_interface_normal: None,
+            mode_tracking: None,
+        }
+    };
+
+    let run_freq = |kx: f64| {
+        let plan = build_plan(kx);
+        let result = fullmag_runner::run_reference_fem_eigen(
+            &plan,
+            &[OutputIR::EigenSpectrum {
+                quantity: "eigenfrequency".to_string(),
+            }],
+        )
+        .expect("floquet exchange-only FEM eigen solve should execute");
+        let spectrum = result
+            .artifact_bytes("eigen/spectrum.json")
+            .expect("spectrum artifact must exist");
+        let value: serde_json::Value =
+            serde_json::from_slice(spectrum).expect("valid spectrum json");
+        value["modes"][0]["frequency_real_hz"]
+            .as_f64()
+            .expect("first mode frequency")
+    };
+
+    let f_plus = run_freq(5.0e7);
+    let f_minus = run_freq(-5.0e7);
+    let rel_diff = (f_plus - f_minus).abs() / f_plus.abs().max(f_minus.abs()).max(1.0);
+    assert!(
+        rel_diff < 1e-10,
+        "exchange-only Floquet spectrum should be reciprocal: f(+k)={f_plus:.9e}, f(-k)={f_minus:.9e}, rel_diff={rel_diff:.3e}"
+    );
+}
+
+#[test]
 fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
     let build_plan = |kx: f64| {
         let mut mesh = cube_mesh(20.0);
@@ -2052,4 +2189,203 @@ fn eigen_bc_periodic_k_zero_matches_free() {
         "Periodic at k=0 should match Free BC within 5%: \
          f_free={f_free:.3e} Hz, f_periodic={f_periodic:.3e} Hz (rel_diff={rel_diff:.3})"
     );
+}
+
+#[test]
+fn floquet_k0_equals_periodic() {
+    let make_plan = |kind: fullmag_ir::SpinWaveBoundaryKindIR| {
+        let mesh = cube_mesh(20.0);
+        FemEigenPlanIR {
+            mesh_name: format!("bc_{kind:?}_k0").to_lowercase(),
+            mesh_source: None,
+            mesh,
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+            domain_frame: None,
+            fe_order: 1,
+            hmax: 20e-9,
+            equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+            material: fem_permalloy(),
+            operator: EigenOperatorConfigIR {
+                kind: EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 2,
+            target: EigenTargetIR::Lowest,
+            equilibrium: EquilibriumSourceIR::Provided,
+            k_sampling: Some(KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            normalization: EigenNormalizationIR::UnitL2,
+            damping_policy: EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            external_field: Some([39_789.0, 0.0, 0.0]),
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+                fullmag_ir::SpinWaveBoundaryConfigIR {
+                    kind,
+                    boundary_pair_id: Some("x_faces".to_string()),
+                    pair_ids: Vec::new(),
+                    phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                    surface_anisotropy_ks: None,
+                    surface_anisotropy_axis: None,
+                },
+            ),
+            demag_realization: None,
+            dmi_interface_normal: None,
+            mode_tracking: None,
+        }
+    };
+
+    let outputs = [OutputIR::EigenSpectrum {
+        quantity: "eigenfrequency".to_string(),
+    }];
+    let periodic = fullmag_runner::run_reference_fem_eigen(
+        &make_plan(fullmag_ir::SpinWaveBoundaryKindIR::Periodic),
+        &outputs,
+    )
+    .expect("periodic k=0 solve should succeed");
+    let floquet = fullmag_runner::run_reference_fem_eigen(
+        &make_plan(fullmag_ir::SpinWaveBoundaryKindIR::Floquet),
+        &outputs,
+    )
+    .expect("Floquet k=0 solve should succeed");
+    let periodic_f =
+        extract_lowest_frequency(&periodic).expect("periodic spectrum should have frequencies");
+    let floquet_f =
+        extract_lowest_frequency(&floquet).expect("Floquet spectrum should have frequencies");
+
+    let rel_diff = (periodic_f - floquet_f).abs() / periodic_f.max(floquet_f);
+    assert!(
+        rel_diff < 1e-8,
+        "Floquet(k=0) must equal Periodic: periodic={periodic_f:.9e} Hz, \
+         floquet={floquet_f:.9e} Hz, rel_diff={rel_diff:.3e}"
+    );
+}
+
+#[test]
+fn fem_eigen_path_writes_v2_dispersion_artifacts() {
+    let mut mesh = cube_mesh(20.0);
+    mesh.mesh_name = "path_dispersion_cube".to_string();
+    let plan = FemEigenPlanIR {
+        mesh_name: "path_dispersion_cube".to_string(),
+        mesh_source: None,
+        mesh,
+        object_segments: Vec::new(),
+        mesh_parts: Vec::new(),
+        domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
+        domain_frame: None,
+        fe_order: 1,
+        hmax: 20e-9,
+        equilibrium_magnetization: vec![[1.0, 0.0, 0.0]; 8],
+        material: fem_permalloy(),
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 2,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Path {
+            points: vec![
+                KPointIR {
+                    label: Some("G".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                KPointIR {
+                    label: Some("X".to_string()),
+                    k_vector: [5.0e7, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![2],
+            closed: false,
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        enable_exchange: true,
+        enable_demag: false,
+        interfacial_dmi: None,
+        bulk_dmi: None,
+        external_field: Some([39_789.0, 0.0, 0.0]),
+        gyromagnetic_ratio: 2.211e5,
+        precision: ExecutionPrecision::Double,
+        exchange_bc: ExchangeBoundaryCondition::Neumann,
+        spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
+            fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: fullmag_ir::SpinWaveBoundaryKindIR::Floquet,
+                boundary_pair_id: Some("x_faces".to_string()),
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            },
+        ),
+        demag_realization: None,
+        dmi_interface_normal: None,
+        mode_tracking: Some(fullmag_ir::ModeTrackingIR::default()),
+    };
+
+    let result = fullmag_runner::run_reference_fem_eigen(
+        &plan,
+        &[OutputIR::EigenSpectrum {
+            quantity: "eigenfrequency".to_string(),
+        }],
+    )
+    .expect("path eigensolve should produce V2 artifacts");
+
+    let spectrum: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/spectrum.v2.json")
+            .expect("spectrum.v2 artifact should exist"),
+    )
+    .expect("spectrum.v2 should be valid json");
+    assert_eq!(
+        spectrum["schema_version"].as_str(),
+        Some("eigen_spectrum.v2")
+    );
+    assert_eq!(spectrum["samples"].as_array().map(Vec::len), Some(3));
+    assert_eq!(spectrum["samples"][2]["label"].as_str(), Some("X"));
+    assert!(spectrum["samples"][2]["path_s"].as_f64().unwrap_or(0.0) > 0.0);
+
+    let branches: serde_json::Value = serde_json::from_slice(
+        result
+            .artifact_bytes("eigen/branches.v2.json")
+            .expect("branches.v2 artifact should exist"),
+    )
+    .expect("branches.v2 should be valid json");
+    assert_eq!(
+        branches["schema_version"].as_str(),
+        Some("eigen_branches.v2")
+    );
+    assert!(branches["branches"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+
+    let csv = std::str::from_utf8(
+        result
+            .artifact_bytes("eigen/dispersion.csv")
+            .expect("dispersion.csv artifact should exist"),
+    )
+    .expect("dispersion.csv should be utf-8");
+    let header = csv.lines().next().unwrap_or_default();
+    for required in [
+        "sample_index",
+        "path_s_rad_per_m",
+        "kx_rad_per_m",
+        "ky_rad_per_m",
+        "kz_rad_per_m",
+        "branch_id",
+        "residual_norm",
+    ] {
+        assert!(
+            header.split(',').any(|column| column == required),
+            "dispersion.csv header must contain {required}, got {header}"
+        );
+    }
 }

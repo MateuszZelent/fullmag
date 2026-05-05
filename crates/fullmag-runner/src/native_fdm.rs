@@ -47,6 +47,14 @@ pub(crate) fn is_cuda_available() -> bool {
     }
 }
 
+#[cfg(feature = "cuda")]
+fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
+    plan.current_density.is_some()
+        && plan.stt_degree.is_some()
+        && plan.stt_spin_polarization.is_some()
+        && plan.stt_lambda.is_some()
+}
+
 /// Safe wrapper around the native FDM backend handle.
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
@@ -259,10 +267,13 @@ impl NativeFdmBackend {
             None
         };
 
-        // Apply fixed-layer-position sign convention: "bottom" flips current direction.
-        let current_sign: f64 = match plan.stt_fixed_layer_position.as_deref() {
-            Some("bottom") => -1.0,
-            _ => 1.0,
+        let current_sign: f64 = if has_slonczewski_stt(plan) {
+            match plan.stt_fixed_layer_position.as_deref() {
+                Some("bottom") => -1.0,
+                _ => 1.0,
+            }
+        } else {
+            1.0
         };
 
         let plan_desc = ffi::fullmag_fdm_plan_desc {
@@ -280,9 +291,9 @@ impl NativeFdmBackend {
             has_external_field: if plan.external_field.is_some() { 1 } else { 0 },
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
 
-            current_density_x: plan.current_density.map_or(0.0, |j| j[0] * current_sign),
-            current_density_y: plan.current_density.map_or(0.0, |j| j[1] * current_sign),
-            current_density_z: plan.current_density.map_or(0.0, |j| j[2] * current_sign),
+            current_density_x: plan.current_density.map_or(0.0, |j| j[0]),
+            current_density_y: plan.current_density.map_or(0.0, |j| j[1]),
+            current_density_z: plan.current_density.map_or(0.0, |j| j[2]),
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
 
@@ -292,6 +303,7 @@ impl NativeFdmBackend {
             stt_lambda: plan.stt_lambda.unwrap_or(0.0),
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
             stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
+            stt_current_sign: current_sign,
 
             has_sot: if plan.sot_current_density.is_some()
                 && plan.sot_sigma.is_some()
@@ -1350,8 +1362,9 @@ mod tests {
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
     };
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
+        AxisBoundary, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
+        FdmMaterialIR, FdmPeriodicityIR, FdmPlanIR, GridDimensions, IntegratorChoice,
+        RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
@@ -1905,6 +1918,41 @@ mod tests {
     }
 
     #[test]
+    fn native_fdm_slonczewski_matches_cpu_reference_without_zhang_li_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM Slonczewski parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.current_density = Some([1.4e11, 0.0, 0.0]);
+        plan.stt_degree = Some(0.62);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.8);
+        plan.stt_epsilon_prime = Some(0.03);
+
+        let expected = crate::cpu_reference::execute_reference_fdm(&plan, 2.5e-13, &[], None, None)
+            .expect("cpu reference slonczewski run");
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm slonczewski step");
+        let actual_m = backend
+            .copy_m(plan.initial_magnetization.len())
+            .expect("copy m");
+
+        assert_vector_field_close(
+            "m",
+            &actual_m,
+            &expected.result.final_magnetization,
+            5e-8,
+            1e-10,
+        );
+    }
+
+    #[test]
     fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_available() {
         if !is_cuda_available() {
             eprintln!(
@@ -2351,6 +2399,129 @@ mod tests {
             stats.e_total,
             expected_report.total_energy_joules,
             5e-4,
+            1e-21,
+        );
+    }
+
+    #[test]
+    fn native_fdm_periodic_truncated_demag_matches_cpu_reference_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM periodic demag parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_thin_film_demag_plan();
+        plan.periodicity = Some(FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+                AxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 2, 0]),
+        });
+        let cell_count = plan.initial_magnetization.len();
+        let (
+            expected_m,
+            _expected_h_ex,
+            expected_h_demag,
+            _expected_h_ext,
+            _expected_h_eff,
+            expected_report,
+        ) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_demag = backend.copy_h_demag(cell_count).expect("copy H_demag");
+
+        assert_vector_field_close("periodic_demag.m", &actual_m, &expected_m, 5e-6, 1e-8);
+        assert_vector_field_close(
+            "periodic_demag.H_demag",
+            &actual_h_demag,
+            &expected_h_demag,
+            1e-3,
+            1e-1,
+        );
+        assert_scalar_close(
+            "periodic_demag.demag_energy",
+            stats.e_demag,
+            expected_report.demag_energy_joules,
+            1e-3,
+            1e-21,
+        );
+    }
+
+    #[test]
+    fn native_fdm_periodic_exchange_matches_cpu_reference_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM periodic exchange parity test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_thin_film_demag_plan();
+        plan.enable_demag = false;
+        plan.periodicity = Some(FdmPeriodicityIR {
+            axes: [
+                AxisBoundary::Periodic,
+                AxisBoundary::Periodic,
+                AxisBoundary::Open,
+            ],
+            demag: FdmDemagPeriodicityIR::Open,
+            image_counts: None,
+        });
+        let cell_count = plan.initial_magnetization.len();
+        let (
+            expected_m,
+            expected_h_ex,
+            _expected_h_demag,
+            expected_h_ext,
+            expected_h_eff,
+            expected_report,
+        ) = cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        assert_vector_field_close("periodic_exchange.m", &actual_m, &expected_m, 5e-6, 1e-8);
+        assert_vector_field_close(
+            "periodic_exchange.H_ex",
+            &actual_h_ex,
+            &expected_h_ex,
+            5e-5,
+            5e-2,
+        );
+        assert_vector_field_close(
+            "periodic_exchange.H_ext",
+            &actual_h_ext,
+            &expected_h_ext,
+            1e-12,
+            1e-12,
+        );
+        assert_vector_field_close(
+            "periodic_exchange.H_eff",
+            &actual_h_eff,
+            &expected_h_eff,
+            5e-5,
+            5e-2,
+        );
+        assert_scalar_close(
+            "periodic_exchange.exchange_energy",
+            stats.e_ex,
+            expected_report.exchange_energy_joules,
+            5e-5,
             1e-21,
         );
     }

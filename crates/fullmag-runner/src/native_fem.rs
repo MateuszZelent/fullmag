@@ -33,6 +33,19 @@ const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
 #[cfg(feature = "fem-gpu")]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
 
+#[cfg(feature = "fem-gpu")]
+fn has_slonczewski_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.current_density.is_some()
+        && plan.stt_degree.is_some()
+        && plan.stt_spin_polarization.is_some()
+        && plan.stt_lambda.is_some()
+}
+
+#[cfg(feature = "fem-gpu")]
+fn has_zhang_li_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.current_density.is_some() && plan.stt_degree.is_some() && !has_slonczewski_stt(plan)
+}
+
 pub(crate) fn is_gpu_available() -> bool {
     #[cfg(feature = "fem-gpu")]
     {
@@ -163,18 +176,6 @@ impl NativeFemBackend {
                 message: single_precision_rejection(plan).to_string(),
             });
         }
-        if !plan.mesh.periodic_node_pairs.is_empty() {
-            return Err(RunError {
-                message: format!(
-                    "native FEM time-domain backend cannot execute mesh '{}' with {} \
-                     periodic_node_pairs: this path does not enforce periodic constraints. \
-                     Use the FEM eigen solver with spin_wave_bc='periodic'/'floquet' or provide \
-                     a non-periodic mesh.",
-                    plan.mesh.mesh_name,
-                    plan.mesh.periodic_node_pairs.len()
-                ),
-            });
-        }
         let nodes_flat: Vec<f64> = plan
             .mesh
             .nodes
@@ -193,6 +194,12 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
+        let periodic_pairs_flat: Vec<u32> = plan
+            .mesh
+            .periodic_node_pairs
+            .iter()
+            .flat_map(|pair| [pair.node_a, pair.node_b])
+            .collect();
         let m_flat: Vec<f64> = plan
             .initial_magnetization
             .iter()
@@ -208,6 +215,8 @@ impl NativeFemBackend {
             boundary_faces: boundary_flat.as_ptr(),
             n_boundary_faces: plan.mesh.boundary_faces.len() as u32,
             boundary_markers: plan.mesh.boundary_markers.as_ptr(),
+            periodic_node_pairs: periodic_pairs_flat.as_ptr(),
+            n_periodic_node_pairs: plan.mesh.periodic_node_pairs.len() as u32,
         };
 
         let material = ffi::fullmag_fem_material_desc {
@@ -560,41 +569,19 @@ impl NativeFemBackend {
                 .kc3_field
                 .as_ref()
                 .map_or(0, |v| v.len() as u64),
-            has_zhang_li_stt: if plan.current_density.is_some()
-                && plan.stt_degree.is_some()
-                && plan.stt_beta.is_some()
-            {
-                1
-            } else {
-                0
-            },
-            has_slonczewski_stt: if plan.current_density.is_some()
-                && plan.stt_degree.is_some()
-                && plan.stt_spin_polarization.is_some()
-                && plan.stt_lambda.is_some()
-            {
-                1
-            } else {
-                0
-            },
-            stt_current_density_am2: {
-                let current_sign: f64 = match plan.stt_fixed_layer_position.as_deref() {
-                    Some("bottom") => -1.0,
-                    _ => 1.0,
-                };
-                let j = plan.current_density.unwrap_or([0.0, 0.0, 0.0]);
-                [
-                    j[0] * current_sign,
-                    j[1] * current_sign,
-                    j[2] * current_sign,
-                ]
-            },
+            has_zhang_li_stt: if has_zhang_li_stt(plan) { 1 } else { 0 },
+            has_slonczewski_stt: if has_slonczewski_stt(plan) { 1 } else { 0 },
+            stt_current_density_am2: plan.current_density.unwrap_or([0.0, 0.0, 0.0]),
             stt_degree: plan.stt_degree.unwrap_or(0.0),
             stt_beta: plan.stt_beta.unwrap_or(0.0),
             stt_spin_polarization: plan.stt_spin_polarization.unwrap_or([0.0, 0.0, 1.0]),
             stt_lambda: plan.stt_lambda.unwrap_or(1.0),
             stt_epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
             stt_free_layer_thickness: plan.stt_thickness.unwrap_or(0.0),
+            stt_current_sign: match plan.stt_fixed_layer_position.as_deref() {
+                Some("bottom") if has_slonczewski_stt(plan) => -1.0,
+                _ => 1.0,
+            },
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -1352,7 +1339,7 @@ mod tests {
     use fullmag_engine::{EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator};
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FemPlanIR, IntegratorChoice, MaterialIR,
-        MeshIR,
+        MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
     };
 
     fn make_test_plan() -> FemPlanIR {
@@ -1453,6 +1440,75 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn native_fem_rejects_periodic_pairs_in_native_context() {
+        let mut plan = make_test_plan();
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.mesh.periodic_boundary_pairs = vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+
+        let err = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("native FEM time-domain must reject unenforced periodic pairs"),
+            Err(err) => err,
+        };
+        assert!(
+            err.message.contains("periodic_node_pairs")
+                && err
+                    .message
+                    .contains("exchange with optional uniform external field"),
+            "unexpected periodic rejection message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn native_fem_rejects_periodic_incompatible_per_node_material_class() {
+        let mut plan = make_test_plan();
+        plan.mesh.periodic_boundary_pairs = vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.material.ms_field = Some(vec![800e3, 700e3, 800e3, 800e3]);
+
+        let err = match NativeFemBackend::create(&plan) {
+            Ok(_) => panic!("native FEM must reject incompatible periodic material classes"),
+            Err(err) => err,
+        };
+        assert!(
+            err.message.contains("Ms_field") && err.message.contains("periodic node class"),
+            "unexpected material-class rejection message: {}",
+            err.message
+        );
     }
 
     fn make_exchange_only_plan() -> FemPlanIR {
@@ -1639,23 +1695,16 @@ mod tests {
                 cubic_anisotropy: None,
                 interfacial_dmi: None,
                 bulk_dmi: None,
-                zhang_li_stt: if plan.current_density.is_some()
-                    && plan.stt_degree.is_some()
-                    && plan.stt_beta.is_some()
-                {
+                zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
                         current_density: plan.current_density.expect("current density"),
                         spin_polarization: plan.stt_degree.expect("stt degree"),
-                        non_adiabaticity: plan.stt_beta.expect("stt beta"),
+                        non_adiabaticity: plan.stt_beta.unwrap_or(0.0),
                     })
                 } else {
                     None
                 },
-                slonczewski_stt: if plan.current_density.is_some()
-                    && plan.stt_degree.is_some()
-                    && plan.stt_spin_polarization.is_some()
-                    && plan.stt_lambda.is_some()
-                {
+                slonczewski_stt: if has_slonczewski_stt(plan) {
                     Some(fullmag_engine::SlonczewskiSttConfig {
                         current_density_magnitude: {
                             let j = plan.current_density.expect("current density");
@@ -1913,6 +1962,134 @@ mod tests {
             expected_report.max_rhs_amplitude,
             5e-8,
             1e-9,
+        );
+    }
+
+    #[test]
+    fn native_fem_periodic_exchange_only_matches_cpu_reference_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!(
+                "skipping native FEM periodic parity test: backend was built without MFEM; rebuild with FULLMAG_USE_MFEM_STACK=ON on an MFEM host"
+            );
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.mesh.periodic_boundary_pairs = vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 4,
+        }];
+
+        let (expected_m, expected_h_ex, expected_h_eff, expected_report) =
+            cpu_reference_single_step(&plan);
+
+        let mut backend = NativeFemBackend::create(&plan).expect("native periodic fem create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native periodic exchange-only fem step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(plan.mesh.nodes.len()).expect("copy H_ex");
+        let actual_h_eff = backend
+            .copy_h_eff(plan.mesh.nodes.len())
+            .expect("copy H_eff");
+
+        assert_vector_field_close("periodic m", &actual_m, &expected_m, 5e-8, 1e-10);
+        assert_vector_field_close("periodic H_ex", &actual_h_ex, &expected_h_ex, 5e-8, 1e-6);
+        assert_vector_field_close("periodic H_eff", &actual_h_eff, &expected_h_eff, 5e-8, 1e-6);
+        assert_vector_field_close(
+            "periodic pair m",
+            &actual_m[0..3],
+            &actual_m[12..15],
+            1e-12,
+            1e-12,
+        );
+        assert_vector_field_close(
+            "periodic pair H_ex",
+            &actual_h_ex[0..3],
+            &actual_h_ex[12..15],
+            1e-12,
+            1e-6,
+        );
+
+        assert_scalar_close(
+            "periodic time_seconds",
+            stats.time,
+            expected_report.time_seconds,
+            1e-12,
+            1e-18,
+        );
+        assert_scalar_close(
+            "periodic exchange_energy_joules",
+            stats.e_ex,
+            expected_report.exchange_energy_joules,
+            5e-8,
+            1e-18,
+        );
+    }
+
+    #[test]
+    fn native_fem_periodic_consistent_mass_exchange_steps_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!(
+                "skipping native FEM periodic consistent-mass test: backend was built without MFEM; rebuild with FULLMAG_USE_MFEM_STACK=ON on an MFEM host"
+            );
+            return;
+        }
+
+        let mut plan = make_exchange_only_plan();
+        plan.use_consistent_mass = Some(true);
+        plan.mesh.periodic_boundary_pairs = vec![MeshPeriodicBoundaryPairIR {
+            pair_id: "x_periodic".to_string(),
+            source_marker: Some("x_min".to_string()),
+            destination_marker: Some("x_max".to_string()),
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.mesh.periodic_node_pairs = vec![MeshPeriodicNodePairIR {
+            pair_id: "x_periodic".to_string(),
+            node_a: 0,
+            node_b: 4,
+        }];
+
+        let mut backend =
+            NativeFemBackend::create(&plan).expect("native periodic consistent fem create");
+        let _stats = backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native periodic consistent-mass exchange step");
+        let actual_m = backend.copy_m(plan.mesh.nodes.len()).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(plan.mesh.nodes.len()).expect("copy H_ex");
+
+        assert_vector_field_close(
+            "periodic consistent pair m",
+            &actual_m[0..3],
+            &actual_m[12..15],
+            1e-12,
+            1e-12,
+        );
+        assert_vector_field_close(
+            "periodic consistent pair H_ex",
+            &actual_h_ex[0..3],
+            &actual_h_ex[12..15],
+            1e-12,
+            1e-6,
         );
     }
 

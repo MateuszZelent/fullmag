@@ -1378,12 +1378,14 @@ pub fn run_reference_multilayer_fdm(
 /// Run a FEM eigenmode analysis on the CPU FEM baseline engine.
 ///
 /// Returns a [`types::FemEigenRunResult`] with the solver status and all artifact
-/// files (spectrum JSON, mode JSONs) produced during the solve.
+/// files produced during the solve. Path k-sampling is routed through the
+/// public CPU path orchestrator so callers receive the same V2 dispersion
+/// artifacts as the main dispatcher.
 pub fn run_reference_fem_eigen(
     plan: &fullmag_ir::FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<types::FemEigenRunResult, RunError> {
-    let executed = fem_eigen::execute_baseline_fem_eigen(plan, outputs)?;
+    let executed = dispatch::execute_fem_eigen(dispatch::FemEngine::CpuNative, plan, outputs)?;
     Ok(types::FemEigenRunResult {
         status: executed.result.status,
         artifacts: executed

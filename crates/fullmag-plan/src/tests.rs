@@ -781,7 +781,7 @@ fn fem_backend_with_mesh_asset_plans_successfully() {
 }
 
 #[test]
-fn fem_static_time_domain_rejects_periodic_mesh_pairs() {
+fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
@@ -847,13 +847,31 @@ fn fem_static_time_domain_rejects_periodic_mesh_pairs() {
     });
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
 
-    let err = plan(&ir).expect_err("FEM time-domain periodic mesh should be rejected");
+    let planned = plan(&ir).expect("exchange-only FEM static PBC should plan");
+    match planned.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            assert_eq!(fem.mesh.mesh_name, "periodic_strip");
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert!(fem.enable_exchange);
+            assert!(!fem.enable_demag);
+        }
+        other => panic!("expected FEM plan, got {:?}", other),
+    }
+
+    let mut demag_ir = ir.clone();
+    demag_ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::default(),
+        },
+    ];
+    let err = plan(&demag_ir).expect_err("periodic FEM static demag must stay rejected");
     assert!(
-        err.reasons
-            .iter()
-            .any(|reason| reason.contains("periodic_node_pairs")
-                && reason.contains("does not enforce periodic constraints")),
-        "error should reject unenforced FEM periodic mesh, got: {:?}",
+        err.reasons.iter().any(|reason| {
+            reason.contains("periodic_node_pairs")
+                && reason.contains("supports periodic constraints only for exchange")
+        }),
+        "unexpected error: {:?}",
         err.reasons
     );
 }

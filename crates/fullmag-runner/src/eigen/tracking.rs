@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn overlap_tracking_preserves_branches_when_frequency_order_swaps() {
+    fn branch_tracking_crossing_preserves_identity_over_frequency_order_swap() {
         let a = [Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
         let b = [Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)];
         let mut result = PathSolveResult {

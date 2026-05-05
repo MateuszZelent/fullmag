@@ -35,7 +35,11 @@ reference-vs-production solver identity.
 
 | Engine id | Meaning | Status |
 |---|---|---|
-| `fem_eigen_cpu_baseline` | current CPU FEM eigen baseline solver | public-executable / transitional |
+| `fem_eigen_dense_debug` | dense CPU materialization for small matrices and parity tests | public-executable / transitional |
+| `fem_eigen_floquet_dense_debug` | dense single-k or path Floquet reference path with periodic reduction | public-executable / transitional |
+| `fem_eigen_matrix_free` | future production sparse/matrix-free eigensolver | planned |
+| `fdm_eigen_fft_reference` | future FDM periodic/FFT eigen reference path | planned |
+| `fem_eigen_cpu_baseline` | current compatibility alias for the dense CPU FEM eigen solver | compatibility alias |
 | `fem_eigen_native_gpu` | current GPU FEM eigen solver | public-executable / transitional |
 
 ## Dispatch vocabulary

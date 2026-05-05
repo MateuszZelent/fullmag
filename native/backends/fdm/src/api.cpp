@@ -267,9 +267,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // Thermal noise
     ctx->temperature = plan->temperature;
 
+    // Shared spin-torque inputs
+    double px = plan->stt_p_x;
+    double py = plan->stt_p_y;
+    double pz = plan->stt_p_z;
+    double p_sq = px*px + py*py + pz*pz;
+
     // Zhang-Li STT
-    ctx->has_zhang_li_stt = (plan->current_density_x != 0 || plan->current_density_y != 0 || plan->current_density_z != 0) 
-                         && plan->stt_degree > 0;
+    ctx->has_zhang_li_stt = (plan->current_density_x != 0 || plan->current_density_y != 0 || plan->current_density_z != 0)
+                         && plan->stt_degree > 0
+                         && !(p_sq > 0.0 && plan->stt_lambda > 0.0);
     ctx->current_density_x = plan->current_density_x;
     ctx->current_density_y = plan->current_density_y;
     ctx->current_density_z = plan->current_density_z;
@@ -285,11 +292,6 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     }
 
     // Slonczewski STT (CPP / SOT)
-    double px = plan->stt_p_x;
-    double py = plan->stt_p_y;
-    double pz = plan->stt_p_z;
-    double p_sq = px*px + py*py + pz*pz;
-    
     ctx->has_slonczewski_stt = p_sq > 0.0 && plan->stt_lambda > 0.0 
                             && (plan->current_density_x != 0 || plan->current_density_y != 0 || plan->current_density_z != 0);
     ctx->stt_p_x = px;
@@ -302,14 +304,15 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         double hbar = 1.054571817e-34; // Reduced Planck constant (J s)
         double e = 1.60217662e-19;     // Elementary charge (C)
         double mu_0 = 4.0 * M_PI * 1e-7; // Vacuum permeability
-        double js = sqrt(ctx->current_density_x*ctx->current_density_x + 
-                         ctx->current_density_y*ctx->current_density_y + 
+        double js = sqrt(ctx->current_density_x*ctx->current_density_x +
+                         ctx->current_density_y*ctx->current_density_y +
                          ctx->current_density_z*ctx->current_density_z);
         // Standard prefactor: j * hbar / (2 * e * mu_0 * M_s * d)
         // Use explicit free layer thickness if provided, otherwise cell dz
         double d_free = plan->stt_free_layer_thickness > 0.0
                       ? plan->stt_free_layer_thickness : ctx->dz;
-        ctx->stt_cpp_pf = (js * hbar) / (2.0 * e * mu_0 * ctx->Ms * d_free);
+        double current_sign = plan->stt_current_sign == 0.0 ? 1.0 : plan->stt_current_sign;
+        ctx->stt_cpp_pf = current_sign * (js * hbar) / (2.0 * e * mu_0 * ctx->Ms * d_free);
     } else {
         ctx->stt_cpp_pf = 0.0;
     }

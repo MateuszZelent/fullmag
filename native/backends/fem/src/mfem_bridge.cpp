@@ -643,6 +643,21 @@ void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst)
     }
 }
 
+void project_static_periodic_aos(const Context &ctx, std::vector<double> &field_xyz) {
+    if (ctx.periodic_reduced_node.empty()) {
+        return;
+    }
+    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+        const uint32_t representative = ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        const size_t dst = static_cast<size_t>(node) * 3u;
+        const size_t src = static_cast<size_t>(representative) * 3u;
+        field_xyz[dst + 0u] = field_xyz[src + 0u];
+        field_xyz[dst + 1u] = field_xyz[src + 1u];
+        field_xyz[dst + 2u] = field_xyz[src + 2u];
+    }
+}
+
 void prepare_mass_lumping(
     mfem::BilinearForm &mass_form,
     mfem::Vector &ones,
@@ -668,6 +683,120 @@ void prepare_mass_lumping(
     copy_mfem_vector_to_host(lumped, host_lumped);
 }
 
+double dot_host_vectors(const std::vector<double> &a, const std::vector<double> &b) {
+    double value = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        value += a[i] * b[i];
+    }
+    return value;
+}
+
+bool apply_periodic_consistent_mass_component(
+    const Context &ctx,
+    mfem::BilinearForm &mass_form,
+    const mfem::Vector &rhs_full,
+    mfem::Vector &h_component,
+    std::vector<double> &h_component_host)
+{
+    const int ndofs = rhs_full.Size();
+    const uint32_t n_reduced = ctx.periodic_reduced_node_count;
+    if (n_reduced == 0 || ctx.periodic_reduced_node.size() != static_cast<size_t>(ndofs)) {
+        return false;
+    }
+
+    std::vector<double> rhs_reduced(static_cast<size_t>(n_reduced), 0.0);
+    const double *rhs_host = rhs_full.HostRead();
+    for (int i = 0; i < ndofs; ++i) {
+        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+        rhs_reduced[static_cast<size_t>(reduced)] += rhs_host[i];
+    }
+
+    auto multiply_reduced_mass =
+        [&](const std::vector<double> &x_reduced, std::vector<double> &out_reduced) {
+            mfem::Vector full_x(ndofs);
+            mfem::Vector full_y(ndofs);
+            full_x.UseDevice(true);
+            full_y.UseDevice(true);
+            double *x_host = full_x.HostWrite();
+            for (int i = 0; i < ndofs; ++i) {
+                const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+                x_host[i] = x_reduced[static_cast<size_t>(reduced)];
+            }
+
+            mass_form.Mult(full_x, full_y);
+            out_reduced.assign(static_cast<size_t>(n_reduced), 0.0);
+            const double *y_host = full_y.HostRead();
+            for (int i = 0; i < ndofs; ++i) {
+                const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+                out_reduced[static_cast<size_t>(reduced)] += y_host[i];
+            }
+        };
+
+    std::vector<double> solution(static_cast<size_t>(n_reduced), 0.0);
+    std::vector<double> residual = rhs_reduced;
+    std::vector<double> direction = residual;
+    std::vector<double> operator_direction;
+    double residual_norm_sq = dot_host_vectors(residual, residual);
+    const double rhs_norm = std::sqrt(residual_norm_sq);
+    if (rhs_norm <= 1e-30) {
+        h_component = 0.0;
+        copy_mfem_vector_to_host(h_component, h_component_host);
+        return true;
+    }
+    const double tolerance_sq = std::pow(std::max(1e-20, 1e-10 * rhs_norm), 2.0);
+    const int max_iter = std::max(200, static_cast<int>(n_reduced) * 10);
+    for (int iter = 0; iter < max_iter && residual_norm_sq > tolerance_sq; ++iter) {
+        multiply_reduced_mass(direction, operator_direction);
+        const double denom = dot_host_vectors(direction, operator_direction);
+        if (!std::isfinite(denom) || denom <= 0.0) {
+            return false;
+        }
+        const double alpha = residual_norm_sq / denom;
+        for (uint32_t i = 0; i < n_reduced; ++i) {
+            solution[static_cast<size_t>(i)] += alpha * direction[static_cast<size_t>(i)];
+            residual[static_cast<size_t>(i)] -= alpha * operator_direction[static_cast<size_t>(i)];
+        }
+        const double next_residual_norm_sq = dot_host_vectors(residual, residual);
+        if (!std::isfinite(next_residual_norm_sq)) {
+            return false;
+        }
+        if (next_residual_norm_sq <= tolerance_sq) {
+            residual_norm_sq = next_residual_norm_sq;
+            break;
+        }
+        const double beta = next_residual_norm_sq / residual_norm_sq;
+        for (uint32_t i = 0; i < n_reduced; ++i) {
+            direction[static_cast<size_t>(i)] =
+                residual[static_cast<size_t>(i)] + beta * direction[static_cast<size_t>(i)];
+        }
+        residual_norm_sq = next_residual_norm_sq;
+    }
+    if (residual_norm_sq > tolerance_sq) {
+        return false;
+    }
+
+    std::vector<double> reduced_ms(static_cast<size_t>(n_reduced), ctx.material.saturation_magnetisation);
+    for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
+        const uint32_t representative = ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
+            ctx.Ms_field,
+            static_cast<size_t>(representative),
+            ctx.material.saturation_magnetisation);
+    }
+    double *h_host = h_component.HostWrite();
+    for (int i = 0; i < ndofs; ++i) {
+        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(i)];
+        const double Ms = reduced_ms[static_cast<size_t>(reduced)];
+        if (Ms <= 0.0) {
+            h_host[i] = 0.0;
+        } else {
+            h_host[i] = -(2.0 / (kMu0 * Ms)) * solution[static_cast<size_t>(reduced)];
+        }
+    }
+    copy_mfem_vector_to_host(h_component, h_component_host);
+    return true;
+}
+
 bool apply_exchange_component_device(
     Context *ctx,
     bool allow_interrupt,
@@ -688,6 +817,63 @@ bool apply_exchange_component_device(
     }
 
     const int ndofs = tmp.Size();
+    if (ctx != nullptr && !ctx->periodic_reduced_node.empty()) {
+        if (ctx->mfem_lumped_mass.size() != static_cast<size_t>(ndofs)) {
+            return false;
+        }
+        if (ctx->use_consistent_mass) {
+            if (energy_out != nullptr) {
+                *energy_out = m_component * tmp;
+            }
+            return apply_periodic_consistent_mass_component(
+                *ctx,
+                mass_form,
+                tmp,
+                h_component,
+                h_component_host);
+        }
+        const uint32_t n_reduced = ctx->periodic_reduced_node_count;
+        std::vector<double> reduced_tmp(static_cast<size_t>(n_reduced), 0.0);
+        std::vector<double> reduced_mass(static_cast<size_t>(n_reduced), 0.0);
+        const double *tmp_host = tmp.HostRead();
+        for (int i = 0; i < ndofs; ++i) {
+            const uint32_t reduced =
+                ctx->periodic_reduced_node[static_cast<size_t>(i)];
+            reduced_tmp[static_cast<size_t>(reduced)] += tmp_host[i];
+            reduced_mass[static_cast<size_t>(reduced)] +=
+                ctx->mfem_lumped_mass[static_cast<size_t>(i)];
+        }
+
+        std::vector<double> reduced_ms(
+            static_cast<size_t>(n_reduced),
+            ctx->material.saturation_magnetisation);
+        for (uint32_t reduced = 0; reduced < n_reduced; ++reduced) {
+            const uint32_t representative =
+                ctx->periodic_representative_nodes[static_cast<size_t>(reduced)];
+            reduced_ms[static_cast<size_t>(reduced)] = scalar_field_value(
+                ctx->Ms_field,
+                static_cast<size_t>(representative),
+                ctx->material.saturation_magnetisation);
+        }
+        double *h_host = h_component.HostWrite();
+        for (int i = 0; i < ndofs; ++i) {
+            const uint32_t reduced =
+                ctx->periodic_reduced_node[static_cast<size_t>(i)];
+            const double mass = reduced_mass[static_cast<size_t>(reduced)];
+            const double Ms = reduced_ms[static_cast<size_t>(reduced)];
+            if (mass <= 0.0 || Ms <= 0.0) {
+                h_host[i] = 0.0;
+            } else {
+                h_host[i] = -(2.0 / (kMu0 * Ms)) *
+                    reduced_tmp[static_cast<size_t>(reduced)] / mass;
+            }
+        }
+        if (energy_out != nullptr) {
+            *energy_out = m_component * tmp;
+        }
+        copy_mfem_vector_to_host(h_component, h_component_host);
+        return true;
+    }
 
     if (use_consistent_mass) {
         // FND-013: Consistent-mass projection: solve M * raw_h = K * m via CG,
@@ -943,7 +1129,7 @@ void add_slonczewski_stt_rhs_aos(
             continue;
         }
         const double prefactor =
-            (j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
+            (ctx.stt_current_sign * j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
         const double m_dot_p = dot3(m, p);
         const double g = (degree * lambda_sq)
             / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
@@ -1535,7 +1721,15 @@ bool compute_bulk_dmi_field(
 
     std::vector<double> node_weight(n, 0.0);
 
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
+    const std::vector<double> *exchange_input = &m_xyz;
+    std::vector<double> projected_m_xyz;
+    if (!ctx.periodic_reduced_node.empty()) {
+        projected_m_xyz = m_xyz;
+        project_static_periodic_aos(ctx, projected_m_xyz);
+        exchange_input = &projected_m_xyz;
+    }
+
+    unpack_aos_to_existing_components(*exchange_input, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
 
     auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
     auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
@@ -3474,6 +3668,7 @@ bool context_step_exchange_heun_mfem(
         predicted[i] += dt_seconds * k1[i];
     }
     normalize_aos_field(predicted);
+    project_static_periodic_aos(ctx, predicted);
 
     std::vector<double> h_ex_pred;
     std::vector<double> h_demag_pred;
@@ -3522,6 +3717,7 @@ bool context_step_exchange_heun_mfem(
         corrected[i] += 0.5 * dt_seconds * (k1[i] + k2[i]);
     }
     normalize_aos_field(corrected);
+    project_static_periodic_aos(ctx, corrected);
 
     std::vector<double> h_ex_final;
     std::vector<double> h_demag_final;
@@ -3827,6 +4023,7 @@ bool context_step_explicit_rk_mfem(
                 ws.m_stage[i] = ws.m_backup[i] + dt * accum;
             }
             normalize_aos_field(ws.m_stage);
+            project_static_periodic_aos(ctx, ws.m_stage);
 
             double *stage_exchange_energy = nullptr;
             double *stage_demag_energy = nullptr;
@@ -3867,6 +4064,7 @@ bool context_step_explicit_rk_mfem(
             ctx.m_xyz[i] = ws.m_backup[i] + dt * accum;
         }
         normalize_aos_field(ctx.m_xyz);
+        project_static_periodic_aos(ctx, ctx.m_xyz);
         if (poll_interrupt(ctx)) {
             ctx.m_xyz = ws.m_backup;
             ws.fsal_valid = false;

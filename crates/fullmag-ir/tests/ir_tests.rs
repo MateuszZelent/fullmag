@@ -727,6 +727,70 @@ fn spin_torque_current_source_must_reference_current_transport() {
 }
 
 #[test]
+fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
+    for position in ["top", "bottom"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            current_density: Some([0.0, 0.0, 5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            lambda_asymmetry: 1.2,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.5e-9),
+            fixed_layer_position: Some(position.to_string()),
+        }];
+
+        ir.validate()
+            .unwrap_or_else(|errors| panic!("{position} should validate, got {errors:?}"));
+    }
+}
+
+#[test]
+fn slonczewski_rejects_invalid_fixed_layer_position() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        current_density: Some([0.0, 0.0, 5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 0.0, 1.0],
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: Some(1.5e-9),
+        fixed_layer_position: Some("side".to_string()),
+    }];
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid fixed_layer_position must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("fixed_layer_position must be 'top' or 'bottom'") }));
+}
+
+#[test]
+fn slonczewski_rejects_non_positive_free_layer_thickness() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        current_density: Some([0.0, 0.0, 5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 0.0, 1.0],
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: Some(0.0),
+        fixed_layer_position: Some("top".to_string()),
+    }];
+
+    let errors = ir
+        .validate()
+        .expect_err("non-positive free layer thickness must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| { error.contains("free_layer_thickness_m must be > 0") }));
+}
+
+#[test]
 fn excitation_analysis_source_must_reference_antenna_module() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.current_modules.push(CurrentModuleIR::CurrentTransport {

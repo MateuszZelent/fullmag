@@ -108,6 +108,8 @@ pub struct fullmag_fem_mesh_desc {
     pub boundary_faces: *const u32,
     pub n_boundary_faces: u32,
     pub boundary_markers: *const u32,
+    pub periodic_node_pairs: *const u32,
+    pub n_periodic_node_pairs: u32,
 }
 
 #[repr(C)]
@@ -232,6 +234,7 @@ pub struct fullmag_fem_plan_desc {
     pub stt_lambda: f64,
     pub stt_epsilon_prime: f64,
     pub stt_free_layer_thickness: f64,
+    pub stt_current_sign: f64,
     // Oersted field (cylindrical conductor)
     pub has_oersted_cylinder: i32,
     pub oersted_current: f64,
@@ -466,5 +469,14 @@ mod tests {
         let plan = std::mem::MaybeUninit::<fullmag_fem_plan_desc>::zeroed();
         let plan = unsafe { plan.assume_init() };
         assert_eq!(plan.use_consistent_mass, 0);
+    }
+
+    /// Verify mesh desc carries periodic node-pair metadata for native FEM PBC gates.
+    #[test]
+    fn mesh_desc_has_periodic_node_pair_fields() {
+        let mesh = std::mem::MaybeUninit::<fullmag_fem_mesh_desc>::zeroed();
+        let mesh = unsafe { mesh.assume_init() };
+        assert!(mesh.periodic_node_pairs.is_null());
+        assert_eq!(mesh.n_periodic_node_pairs, 0);
     }
 }

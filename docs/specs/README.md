@@ -28,9 +28,10 @@ When you need to understand Fullmag quickly, read in this order:
 13. `docs/specs/problem-ir-v0.md`
 14. `docs/specs/capability-matrix-v0.md`
 15. `docs/specs/mesh-roundtrip-semantics-v1.md`
-16. `docs/specs/viewport3d-contract-v1.md`
-17. the relevant `docs/physics/` notes
-18. the relevant `docs/plans/active/` plan
+16. `docs/specs/frequency-domain-artifacts-v2.md`
+17. `docs/specs/viewport3d-contract-v1.md`
+18. the relevant `docs/physics/` notes
+19. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -83,6 +84,7 @@ It is subordinate to the application architecture and should be read as:
 - `docs/specs/capability-matrix-v0.md`
 - `docs/specs/visualization-quantities-v1.md`
 - `docs/specs/mesh-roundtrip-semantics-v1.md`
+- `docs/specs/frequency-domain-artifacts-v2.md`
 - `docs/specs/viewport3d-contract-v1.md`
 
 These define shared contracts used across multiple subsystems.

@@ -195,6 +195,15 @@ pub(crate) fn validate_legacy_spin_torque_fields(problem: &ProblemIR, errors: &m
             errors.push("legacy STT stt_lambda must be >= 1".to_string());
         }
     }
+    if problem.stt_thickness.is_some_and(|value| value <= 0.0) {
+        errors.push("legacy STT stt_thickness must be > 0".to_string());
+    }
+    if let Some(position) = problem.stt_fixed_layer_position.as_deref() {
+        if !matches!(position, "top" | "bottom") {
+            errors
+                .push("legacy STT stt_fixed_layer_position must be 'top' or 'bottom'".to_string());
+        }
+    }
     if problem.stt_spin_polarization.is_some()
         && (problem.stt_beta.is_some() || problem.stt_lambda.is_none())
     {
@@ -247,6 +256,8 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 degree,
                 spin_polarization,
                 lambda_asymmetry,
+                free_layer_thickness_m,
+                fixed_layer_position,
                 ..
             } => {
                 validate_vector_binding(
@@ -270,6 +281,18 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski lambda_asymmetry must be >= 1"
                     ));
+                }
+                if free_layer_thickness_m.is_some_and(|value| value <= 0.0) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] slonczewski free_layer_thickness_m must be > 0"
+                    ));
+                }
+                if let Some(position) = fixed_layer_position.as_deref() {
+                    if !matches!(position, "top" | "bottom") {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] slonczewski fixed_layer_position must be 'top' or 'bottom'"
+                        ));
+                    }
                 }
             }
             SpinTorqueModuleIR::ZhangLi {

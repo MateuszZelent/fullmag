@@ -2508,7 +2508,8 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
-        fm.eigenmodes(count=4, include_demag=False)
+        study = fm.study()
+        study.eigenmodes(count=4, include_demag=False)
         """
 
         with TemporaryDirectory() as tmp_dir:
@@ -2535,7 +2536,7 @@ class ProblemApiTests(unittest.TestCase):
         )["rendered_source"]
 
         self.assertIn("k_sampling=fm.KPath", rewritten)
-        self.assertIn('fm.KPoint("Γ", (0, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("\\u0393", (0, 0, 0))', rewritten)
         self.assertIn('fm.KPoint("X", (31400000, 0, 0))', rewritten)
         self.assertIn("samples_per_segment=[41]", rewritten)
         self.assertIn('"pair_ids": ["x_periodic"]', rewritten)

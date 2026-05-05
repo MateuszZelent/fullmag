@@ -18,6 +18,7 @@ import { createContext, useContext } from "react";
 import type {
   CapabilityMap,
   GpuTelemetryDevice,
+  ResourceRevisionMap,
   VisualizationStatePatch,
 } from "@/src/api/types";
 import type {
@@ -301,6 +302,8 @@ export interface CommandContextValue {
 
 /* ── Model: structural/static model data ── */
 export interface ModelContextValue {
+  sceneResourceSessionKey: string | null;
+  resourceRevisions: ResourceRevisionMap | null;
   sceneDocument: SceneDocument | null;
   remoteSceneDocument: SceneDocument | null;
   modelBuilderGraph: ModelBuilderGraphV2 | null;

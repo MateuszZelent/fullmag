@@ -46,7 +46,7 @@ fn support_matrix_note(lane: SpinTorqueExecutableLane) -> &'static str {
         }
         SpinTorqueExecutableLane::Fem => {
             "support matrix: slonczewski=production_executable(cpu/gpu native), zhang_li=production_executable(cpu/gpu native), \
-             spin_orbit_torque=executable(cpu/gpu native), \
+             spin_orbit_torque=not_executable_yet, \
              interface_cpp=semantic_only, drift_diffusion=semantic_only"
         }
     }
@@ -73,7 +73,14 @@ fn ensure_legacy_matches(
             .is_some_and(|value| Some(value) != resolved.stt_lambda)
         || legacy
             .stt_epsilon_prime
-            .is_some_and(|value| Some(value) != resolved.stt_epsilon_prime);
+            .is_some_and(|value| Some(value) != resolved.stt_epsilon_prime)
+        || legacy
+            .stt_thickness
+            .is_some_and(|value| Some(value) != resolved.stt_thickness)
+        || legacy
+            .stt_fixed_layer_position
+            .as_ref()
+            .is_some_and(|value| Some(value) != resolved.stt_fixed_layer_position.as_ref());
     if mismatch {
         return Err(PlanError {
             reasons: vec![
@@ -180,11 +187,21 @@ pub(crate) fn resolve_legacy_spin_torque(
                 )],
             });
         }
-        SpinTorqueModuleIR::SpinOrbitTorque { .. } => {
-            // SOT uses its own dedicated plan fields (sot_*), not legacy STT fields.
-            // Return empty legacy fields; SOT resolution happens via resolve_sot_fields().
-            LegacySpinTorqueFields::default()
-        }
+        SpinTorqueModuleIR::SpinOrbitTorque { .. } => match lane {
+            SpinTorqueExecutableLane::Fdm => {
+                // SOT uses its own dedicated plan fields (sot_*), not legacy STT fields.
+                // Return empty legacy fields; SOT resolution happens via resolve_sot_fields().
+                LegacySpinTorqueFields::default()
+            }
+            SpinTorqueExecutableLane::Fem => {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "spin_torque_modules[0]=spin_orbit_torque is not executable on the FEM lane yet; {}",
+                        support_matrix_note(lane)
+                    )],
+                });
+            }
+        },
     };
 
     ensure_legacy_matches(&legacy, &resolved)?;
@@ -370,5 +387,53 @@ mod tests {
         .unwrap();
         assert_eq!(resolved.current_density, Some([0.0, 0.0, 5e10]));
         assert_eq!(resolved.stt_spin_polarization, Some([0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn legacy_match_checks_slonczewski_thickness_and_position() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.current_density = Some([0.0, 0.0, 5e10]);
+        problem.stt_degree = Some(0.4);
+        problem.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        problem.stt_lambda = Some(1.0);
+        problem.stt_thickness = Some(1.5e-9);
+        problem.stt_fixed_layer_position = Some("bottom".to_string());
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            current_density: Some([0.0, 0.0, 5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(2.0e-9),
+            fixed_layer_position: Some("top".to_string()),
+        }];
+
+        let err =
+            resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[]).unwrap_err();
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("legacy STT fields disagree")));
+    }
+
+    #[test]
+    fn rejects_spin_orbit_torque_for_fem_lane() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::SpinOrbitTorque {
+            charge_current_density_a_per_m2: Some(5.0e10),
+            current_source: None,
+            damping_like_efficiency: 0.12,
+            field_like_efficiency: 0.01,
+            spin_polarization: [0.0, 1.0, 0.0],
+            ferromagnet_thickness_m: 1.5e-9,
+        }];
+
+        let err =
+            resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fem, &[]).unwrap_err();
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("spin_orbit_torque is not executable on the FEM lane")));
     }
 }

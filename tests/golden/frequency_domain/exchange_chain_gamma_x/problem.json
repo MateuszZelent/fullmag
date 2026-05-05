@@ -1,0 +1,30 @@
+{
+  "schema_version": "frequency_domain_problem.golden.v1",
+  "name": "exchange_chain_gamma_x",
+  "description": "Minimal exchange-only Floquet path fixture for frequency-domain artifact contracts.",
+  "backend": "fem_eigen_floquet_dense_debug",
+  "physics": {
+    "terms": ["exchange", "zeeman"],
+    "demag": false,
+    "dmi": false,
+    "spin_wave_bc": {
+      "kind": "floquet",
+      "pair_ids": ["x_faces"],
+      "phase_convention": "exp_minus_i_k_dot_delta_r"
+    },
+    "k_sampling": {
+      "kind": "path",
+      "points": [
+        { "label": "G", "k_vector": [0.0, 0.0, 0.0] },
+        { "label": "X", "k_vector": [50000000.0, 0.0, 0.0] }
+      ],
+      "samples_per_segment": [1],
+      "closed": false
+    }
+  },
+  "acceptance": [
+    "spectrum.v2.json carries sample_index, path_s, k_vector and branch_id",
+    "branches.v2.json preserves branch identity independent of frequency sorting",
+    "dispersion.csv exposes path_s, k columns, branch_id and residual_norm"
+  ]
+}

@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
+import type { MeshPeriodicPairEntry } from "@/src/api/types";
+import { usePeriodicPairs } from "@/src/hooks/resources";
 import { fmtExp } from "@/lib/format";
 import { getFemElementCount, getFemNodeCount } from "@/lib/session/femTopology";
 import {
@@ -78,6 +80,41 @@ function patchEigenBcConfig(
     eigen_spin_wave_bc: String(next.kind ?? stage.eigen_spin_wave_bc ?? "free"),
     eigen_spin_wave_bc_config: next,
   };
+}
+
+function parsePairIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function formatPairIdsInput(value: unknown): string {
+  return parsePairIds(value).join(", ");
+}
+
+function isPeriodicPairOk(pair: MeshPeriodicPairEntry): boolean {
+  return pair.status.toLowerCase() === "ok";
+}
+
+function periodicPairTone(pair: MeshPeriodicPairEntry): "success" | "warn" | "default" {
+  if (isPeriodicPairOk(pair)) return "success";
+  return pair.unpaired_source_node_count > 0 || pair.unpaired_destination_node_count > 0
+    ? "warn"
+    : "default";
+}
+
+function formatPairResidual(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "—" : `${fmtExp(value)} m`;
+}
+
+function formatPairMarkers(pair: MeshPeriodicPairEntry): string {
+  const source = pair.source_marker || `marker ${pair.marker_a}`;
+  const destination = pair.destination_marker || `marker ${pair.marker_b}`;
+  return `${source} -> ${destination}`;
 }
 
 function findMaterializedEntry(
@@ -197,6 +234,12 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     effectiveDt: transport.effectiveDt,
     hasSolverTelemetry: transport.hasSolverTelemetry,
   };
+  const periodicPairsResource = usePeriodicPairs({
+    enabled: true,
+    sessionKey: ctx.sceneResourceSessionKey ?? ctx.session?.session_id ?? null,
+    revision: ctx.resourceRevisions?.mesh_revision ?? ctx.resourceRevisions?.mesh_build_revision ?? null,
+  });
+  const periodicPairs = periodicPairsResource.periodicPairs?.pairs ?? [];
   const studyNode = useMemo(
     () => parseStudyNodeContext(nodeId) ?? STUDY_ROOT_NODE,
     [nodeId],
@@ -487,6 +530,14 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
       if (node.node_kind !== "primitive" || node.stage_kind !== "eigenmodes") {
         return <StageSectionNote title="Equilibrium" body="This node is only meaningful for primitive Eigensolve stages." />;
       }
+      const bcConfig = eigenBcConfig(node.payload);
+      const bcKind = String(node.payload.eigen_spin_wave_bc ?? "free");
+      const isPeriodicBc = ["periodic", "floquet"].includes(bcKind);
+      const selectedPairIds = parsePairIds(bcConfig.pair_ids);
+      const okPairIds = periodicPairs.filter(isPeriodicPairOk).map((pair) => pair.pair_id);
+      const setPairIds = (pairIds: string[]) => {
+        patchSelectedNode(patchEigenBcConfig(node.payload, { pair_ids: pairIds }));
+      };
       return (
         <SidebarSection title="Equilibrium" icon="🧲" defaultOpen={true}>
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
@@ -502,14 +553,137 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
             />
             <TextField
               label="Spin-wave BC"
-              value={String(node.payload.eigen_spin_wave_bc ?? "free")}
+              value={bcKind}
               onchange={(event) =>
                 patchSelectedNode(
                   patchEigenBcConfig(node.payload, { kind: event.target.value }),
                 )
               }
             />
+            {isPeriodicBc ? (
+              <TextField
+                label="Periodic pair IDs"
+                value={formatPairIdsInput(bcConfig.pair_ids)}
+                onchange={(event) =>
+                  setPairIds(parsePairIds(event.target.value))
+                }
+                placeholder="x_periodic, y_periodic"
+                mono
+              />
+            ) : null}
+            {bcKind === "floquet" ? (
+              <TextField
+                label="Phase convention"
+                value={String(
+                  bcConfig.phase_convention
+                    ?? "exp_minus_i_k_dot_delta_r",
+                )}
+                onchange={(event) =>
+                  patchSelectedNode(
+                    patchEigenBcConfig(node.payload, {
+                      phase_convention: event.target.value,
+                    }),
+                  )
+                }
+                mono
+              />
+            ) : null}
           </div>
+          {isPeriodicBc ? (
+            <div className="mt-3 rounded-lg border border-border/10 bg-card/30 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[0.65rem] font-bold uppercase tracking-widest text-muted-foreground">
+                    Periodic Pair Diagnostics
+                  </div>
+                  <div className="mt-1 text-[0.72rem] text-muted-foreground">
+                    {selectedPairIds.length
+                      ? `Selected: ${selectedPairIds.join(", ")}`
+                      : "No periodic pair selected for this eigensolve stage."}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  onClick={() => void periodicPairsResource.refresh()}
+                >
+                  Refresh
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  type="button"
+                  disabled={okPairIds.length === 0}
+                  onClick={() => setPairIds(okPairIds)}
+                >
+                  Use OK pairs
+                </Button>
+              </div>
+              {periodicPairsResource.loading ? (
+                <div className="mt-3 text-[0.72rem] text-muted-foreground">
+                  Loading periodic pair artifact...
+                </div>
+              ) : periodicPairsResource.error ? (
+                <div className="mt-3 text-[0.72rem] text-warning">
+                  Failed to load periodic pair diagnostics.
+                </div>
+              ) : periodicPairs.length === 0 ? (
+                <div className="mt-3 text-[0.72rem] text-muted-foreground">
+                  No periodic_pairs.v1 artifact is available for the current mesh.
+                </div>
+              ) : (
+                <div className="mt-3 grid gap-2">
+                  {periodicPairs.map((pair) => {
+                    const selected = selectedPairIds.includes(pair.pair_id);
+                    return (
+                      <div
+                        key={pair.pair_id}
+                        className="rounded-md border border-border/10 bg-background/35 p-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs font-semibold text-foreground">
+                            {pair.pair_id}
+                          </span>
+                          <StatusBadge label={pair.status} tone={periodicPairTone(pair)} dot />
+                          {selected ? <StatusBadge label="selected" tone="accent" /> : null}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            type="button"
+                            className="ml-auto h-7 px-2 text-xs"
+                            onClick={() => setPairIds([pair.pair_id])}
+                          >
+                            Use
+                          </Button>
+                        </div>
+                        <div className="mt-2 grid grid-cols-1 gap-x-3 gap-y-1 text-[0.68rem] text-muted-foreground @[720px]:grid-cols-2">
+                          <div>
+                            <span className="font-semibold uppercase tracking-wider">Markers </span>
+                            <span className="font-mono">{formatPairMarkers(pair)}</span>
+                          </div>
+                          <div>
+                            <span className="font-semibold uppercase tracking-wider">Paired </span>
+                            <span className="font-mono">{pair.paired_node_count.toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="font-semibold uppercase tracking-wider">Unpaired </span>
+                            <span className="font-mono">
+                              {pair.unpaired_source_node_count.toLocaleString()} / {pair.unpaired_destination_node_count.toLocaleString()}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="font-semibold uppercase tracking-wider">Max residual </span>
+                            <span className="font-mono">{formatPairResidual(pair.max_residual_m)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
         </SidebarSection>
       );
     }

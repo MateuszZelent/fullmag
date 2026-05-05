@@ -1,0 +1,28 @@
+{
+  "schema_version": "eigen_branches.v2",
+  "solver_model": "fem_eigen_floquet_dense_debug",
+  "branches": [
+    {
+      "branch_id": 0,
+      "label": "acoustic",
+      "points": [
+        {
+          "sample_index": 0,
+          "raw_mode_index": 0,
+          "frequency_real_hz": 1400000000.0,
+          "frequency_imag_hz": 0.0,
+          "tracking_confidence": 1.0,
+          "overlap_prev": null
+        },
+        {
+          "sample_index": 1,
+          "raw_mode_index": 0,
+          "frequency_real_hz": 1450000000.0,
+          "frequency_imag_hz": 0.0,
+          "tracking_confidence": 0.99,
+          "overlap_prev": 0.99
+        }
+      ]
+    }
+  ]
+}

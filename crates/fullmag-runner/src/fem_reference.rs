@@ -120,12 +120,19 @@ pub(crate) fn fem_observables_for_magnetization(
 pub(crate) fn build_problem_and_state(
     plan: &FemPlanIR,
 ) -> Result<(FemLlgProblem, FemLlgState), RunError> {
-    if !plan.mesh.periodic_node_pairs.is_empty() {
+    if !plan.mesh.periodic_node_pairs.is_empty()
+        && (plan.enable_demag
+            || plan.interfacial_dmi.is_some()
+            || plan.bulk_dmi.is_some()
+            || has_time_varying_antenna(plan))
+    {
         return Err(RunError {
             message: format!(
-                "FEM reference runner cannot execute mesh '{}' with {} periodic_node_pairs: \
-                 this time-domain path does not enforce periodic constraints. Use the FEM eigen \
-                 runner with spin_wave_bc='periodic'/'floquet' or provide a non-periodic mesh.",
+                "FEM reference runner cannot execute mesh '{}' with {} periodic_node_pairs and \
+                 demag/DMI/per-node drive terms: this time-domain path currently supports \
+                 static periodic constraints only for exchange, uniform Zeeman field, and local \
+                 anisotropy terms. Use the FEM eigen runner with spin_wave_bc='periodic'/'floquet' \
+                 or disable the unsupported terms.",
                 plan.mesh.mesh_name,
                 plan.mesh.periodic_node_pairs.len()
             ),
@@ -295,6 +302,11 @@ pub(crate) fn build_problem_and_state(
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
     }
+    problem
+        .validate_reference_semantics()
+        .map_err(|e| RunError {
+            message: format!("FEM reference semantics: {}", e),
+        })?;
     let state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
@@ -1262,15 +1274,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reference_runner_rejects_periodic_mesh_pairs() {
-        let mut plan = make_test_plan(false);
+    fn add_periodic_pair(plan: &mut FemPlanIR) {
         plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_periodic".to_string(),
             source_marker: None,
             destination_marker: None,
             marker_a: 1,
-            marker_b: 2,
+            marker_b: 1,
             translation: Some([1.0, 0.0, 0.0]),
             tolerance: Some(1e-12),
             axis_hint: None,
@@ -1282,14 +1292,29 @@ mod tests {
             node_a: 0,
             node_b: 1,
         }];
+    }
+
+    #[test]
+    fn reference_runner_accepts_exchange_only_static_periodic_mesh_pairs() {
+        let mut plan = make_test_plan(false);
+        plan.initial_magnetization[1] = [0.0, 1.0, 0.0];
+        add_periodic_pair(&mut plan);
+
+        let (_problem, state) =
+            build_problem_and_state(&plan).expect("exchange-only static PBC should build");
+        assert_eq!(state.magnetization()[0], state.magnetization()[1]);
+    }
+
+    #[test]
+    fn reference_runner_rejects_periodic_demag_mesh_pairs() {
+        let mut plan = make_test_plan(true);
+        add_periodic_pair(&mut plan);
 
         let err = build_problem_and_state(&plan)
-            .expect_err("reference FEM runner must reject unenforced periodic pairs");
+            .expect_err("reference FEM runner must reject unreduced periodic demag");
         assert!(
             err.message.contains("periodic_node_pairs")
-                && err
-                    .message
-                    .contains("does not enforce periodic constraints"),
+                && err.message.contains("demag/DMI/per-node drive terms"),
             "unexpected error: {}",
             err.message
         );

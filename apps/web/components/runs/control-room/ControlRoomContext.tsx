@@ -1965,6 +1965,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   ]);
 
   const modelValue = useMemo<ModelContextValue>(() => ({
+    sceneResourceSessionKey,
+    resourceRevisions: runtimeResourceRevisions,
     sceneDocument: localBuilderDraft,
     remoteSceneDocument,
     modelBuilderGraph,
@@ -2067,6 +2069,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
+    sceneResourceSessionKey, runtimeResourceRevisions,
     localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan, effectiveViewportVisualizationState,
     meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
     femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,

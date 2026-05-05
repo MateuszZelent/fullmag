@@ -149,6 +149,7 @@ pub struct fullmag_fdm_plan_desc {
     pub stt_lambda: f64,
     pub stt_epsilon_prime: f64,
     pub stt_free_layer_thickness: f64,
+    pub stt_current_sign: f64,
 
     // Spin-Orbit Torque (SOT)
     pub has_sot: i32,

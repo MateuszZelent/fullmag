@@ -658,20 +658,10 @@ pub(crate) fn plan_fem(
         field_refresh,
     ) = planned_study_controls(problem, &mut errors);
 
-    // ── PBC capability gate (FEM static / time-domain) ───────────────────
-    // The static/time-domain FEM runner does not assemble periodic
-    // constraint rows; periodic_node_pairs are only wired in the eigen
-    // path.  Reject early so users get a clear diagnostic.
-    if let Some(ref pbc) = problem.pbc {
-        if pbc.has_any_periodic() {
-            errors.push(
-                "PBC not supported: FEM static/time-domain solver does not implement periodic \
-                 boundary conditions. Use the FEM eigen solver (spin_wave_bc='periodic') or \
-                 remove periodic axes."
-                    .to_string(),
-            );
-        }
-    }
+    let requested_static_pbc = problem
+        .pbc
+        .as_ref()
+        .is_some_and(|pbc| pbc.has_any_periodic());
 
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
@@ -745,13 +735,24 @@ pub(crate) fn plan_fem(
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
-    if !mesh.periodic_node_pairs.is_empty() {
+    if requested_static_pbc && mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![
+                "FEM static/time-domain PBC requires mesh.periodic_node_pairs metadata; provide a \
+                 periodic FEM mesh or use the FEM eigen solver with spin_wave_bc='periodic'/'floquet'."
+                    .to_string(),
+            ],
+        });
+    }
+    if !mesh.periodic_node_pairs.is_empty()
+        && (enable_demag || interfacial_dmi.is_some() || bulk_dmi.is_some())
+    {
         return Err(PlanError {
             reasons: vec![format!(
-                "PBC not supported: FEM static/time-domain mesh '{}' declares {} \
-                 periodic_node_pairs, but this solver path does not enforce periodic constraints. \
-                 Use the FEM eigen solver with spin_wave_bc='periodic'/'floquet' or provide a \
-                 non-periodic mesh.",
+                "PBC not supported for the requested FEM terms: mesh '{}' declares {} \
+                 periodic_node_pairs, but static/time-domain FEM currently supports periodic \
+                 constraints only for exchange, uniform Zeeman field, and local anisotropy terms. \
+                 Disable demag/DMI or use the FEM eigen solver with spin_wave_bc='periodic'/'floquet'.",
                 mesh_name,
                 mesh.periodic_node_pairs.len()
             )],

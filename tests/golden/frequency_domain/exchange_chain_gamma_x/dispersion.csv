@@ -1,0 +1,3 @@
+sample_index,path_s_rad_per_m,kx_rad_per_m,ky_rad_per_m,kz_rad_per_m,label,raw_mode_index,branch_id,frequency_hz,omega_rad_s,line_width_hz,residual_norm,overlap_score
+0,0,0,0,0,G,0,0,1400000000,8796459430.05142,0,0,1
+1,50000000,50000000,0,0,X,0,0,1450000000,9110618695.4104,0,0.000000001,0.99

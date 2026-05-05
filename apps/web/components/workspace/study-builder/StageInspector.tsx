@@ -389,6 +389,41 @@ export default function StageInspector({
                   />
                   <OptionHelp text={selectedSpinWaveBcDescription} />
                 </div>
+                {["periodic", "floquet"].includes(String(node.payload.eigen_spin_wave_bc ?? "free")) ? (
+                  <TextField
+                    label="Periodic pair IDs"
+                    value={String(eigenBcConfig(node.payload as EigenBcCarrier).pair_ids ?? "")}
+                    onchange={(event) =>
+                      onPatchConfig(
+                        patchEigenBcConfig(node.payload as EigenBcCarrier, {
+                          pair_ids: event.target.value
+                            .split(",")
+                            .map((value) => value.trim())
+                            .filter(Boolean),
+                        }),
+                      )
+                    }
+                    placeholder="x_periodic, y_periodic"
+                    mono
+                  />
+                ) : null}
+                {String(node.payload.eigen_spin_wave_bc ?? "free") === "floquet" ? (
+                  <TextField
+                    label="Phase convention"
+                    value={String(
+                      eigenBcConfig(node.payload as EigenBcCarrier).phase_convention
+                        ?? "exp_minus_i_k_dot_delta_r",
+                    )}
+                    onchange={(event) =>
+                      onPatchConfig(
+                        patchEigenBcConfig(node.payload as EigenBcCarrier, {
+                          phase_convention: event.target.value,
+                        }),
+                      )
+                    }
+                    mono
+                  />
+                ) : null}
                 <div className="md:col-span-2">
                   <ToggleRow
                     label="Include demag in eigenproblem"

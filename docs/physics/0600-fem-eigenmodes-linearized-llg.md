@@ -10,7 +10,7 @@ It is intentionally narrower than the long-term MFEM/SLEPc target:
 
 - equilibrium state `m0` is taken from the provided initial state, a saved artifact, or an internal overdamped relaxation pass,
 - the eigenproblem is solved on the merged FEM magnetic mesh,
-- the current executable path exports spectrum, mode fields, and a basic dispersion table,
+- the current executable path exports spectrum, mode fields, and V2 dispersion artifacts,
 - the solver is CPU reference quality, not the final production eigensolver.
 
 ## Physical model
@@ -115,6 +115,9 @@ The current circular polarization export is a tangent-basis reconstruction conve
 
 The runner writes:
 
+- `eigen/spectrum.v2.json`
+- `eigen/branches.v2.json` when branch tracking is available
+- `eigen/dispersion.csv`
 - `eigen/spectrum.json`
 - `eigen/modes/mode_XXXX.json`
 - `eigen/dispersion/branch_table.csv`
@@ -123,15 +126,17 @@ The runner writes:
 - `eigen/metadata/normalization.json`
 - `eigen/metadata/equilibrium_source.json`
 
-These artifacts are consumed by the Analyze UI and by the dedicated API endpoints under `/v1/live/current/eigen/*`.
+The V2 artifact contract is defined in
+`docs/specs/frequency-domain-artifacts-v2.md`. These artifacts are consumed by
+the Analyze UI and by the v2 API resources under
+`/v2/sessions/current/analysis/eigen/*`.
 
 ## Current limitations
 
 - CPU reference only (dense eigensolve, O(N³) scaling)
 - no residual / orthogonality / tangent leakage diagnostics exported yet
-- Floquet BC requires `k_sampling = Single{...}`; `Floquet + Path` not yet supported
+- nonzero-k Floquet demag is explicitly rejected until dynamic demag-k exists
 - no native MFEM/libCEED/hypre/SLEPc eigen backend yet
-- `mode_tracking` field is in IR but not yet used in the runner
 - interactive preview snapshots are not supported for FEM eigen plans
 
 ## Acceptance expectations for this phase

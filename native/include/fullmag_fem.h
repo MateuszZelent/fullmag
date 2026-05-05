@@ -92,6 +92,12 @@ typedef struct {
     const uint32_t *boundary_faces;
     uint32_t n_boundary_faces;
     const uint32_t *boundary_markers;
+
+    /* Static periodic node pairs as [node_a0,node_b0,node_a1,node_b1,...].
+       Native time-domain FEM currently validates and rejects these before
+       MFEM context creation until periodic constraint assembly is implemented. */
+    const uint32_t *periodic_node_pairs;
+    uint32_t n_periodic_node_pairs;
 } fullmag_fem_mesh_desc;
 
 typedef struct {
@@ -195,6 +201,7 @@ typedef struct {
     double                     stt_lambda;
     double                     stt_epsilon_prime;
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = geometry-derived */
+    double                     stt_current_sign;         /* +1 top, -1 bottom for Slonczewski */
 
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;

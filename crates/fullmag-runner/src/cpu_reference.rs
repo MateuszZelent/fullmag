@@ -67,7 +67,21 @@ fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
     })
 }
 
+fn has_slonczewski_stt(plan: &FdmPlanIR) -> bool {
+    plan.current_density.is_some()
+        && plan.stt_degree.is_some()
+        && plan.stt_spin_polarization.is_some()
+        && plan.stt_lambda.is_some()
+}
+
+fn has_zhang_li_stt(plan: &FdmPlanIR) -> bool {
+    plan.current_density.is_some() && plan.stt_degree.is_some() && !has_slonczewski_stt(plan)
+}
+
 fn build_zl_stt(plan: &FdmPlanIR) -> Option<ZhangLiSttConfig> {
+    if !has_zhang_li_stt(plan) {
+        return None;
+    }
     let j = plan.current_density?;
     let p = plan.stt_degree?;
     if j[0] == 0.0 && j[1] == 0.0 && j[2] == 0.0 || p <= 0.0 {
@@ -84,6 +98,9 @@ fn build_zl_stt(plan: &FdmPlanIR) -> Option<ZhangLiSttConfig> {
 /// `cell_dz` is the cell thickness in z used as the layer thickness when none is
 /// provided elsewhere.
 fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig> {
+    if !has_slonczewski_stt(plan) {
+        return None;
+    }
     let p_axis = plan.stt_spin_polarization?;
     let lam = plan.stt_lambda?;
     if lam <= 0.0 {
@@ -1411,6 +1428,41 @@ mod tests {
                     < 1e-12
             );
         }
+    }
+
+    #[test]
+    fn slonczewski_does_not_enable_zhang_li_builder() {
+        let mut plan = make_test_plan();
+        plan.current_density = Some([5.0e10, 0.0, 0.0]);
+        plan.stt_degree = Some(0.6);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.5);
+        plan.stt_epsilon_prime = Some(0.0);
+
+        assert!(build_zl_stt(&plan).is_none());
+        assert!(build_slon_stt(&plan, plan.cell_size[2]).is_some());
+    }
+
+    #[test]
+    fn slonczewski_bottom_flips_torque_direction() {
+        let mut plan_top = make_test_plan();
+        plan_top.current_density = Some([0.0, 0.0, 8.0e10]);
+        plan_top.stt_degree = Some(0.55);
+        plan_top.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan_top.stt_lambda = Some(1.4);
+        plan_top.stt_epsilon_prime = Some(0.0);
+        plan_top.stt_fixed_layer_position = Some("top".to_string());
+
+        let mut plan_bottom = plan_top.clone();
+        plan_bottom.stt_fixed_layer_position = Some("bottom".to_string());
+
+        let top = build_slon_stt(&plan_top, plan_top.cell_size[2])
+            .expect("top Slonczewski config should build");
+        let bottom = build_slon_stt(&plan_bottom, plan_bottom.cell_size[2])
+            .expect("bottom Slonczewski config should build");
+
+        assert_eq!(top.current_sign, 1.0);
+        assert_eq!(bottom.current_sign, -1.0);
     }
 
     #[test]

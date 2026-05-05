@@ -137,6 +137,10 @@ struct Context {
     std::vector<uint32_t> element_markers;
     std::vector<uint32_t> boundary_faces;
     std::vector<uint32_t> boundary_markers;
+    std::vector<uint32_t> periodic_node_pairs; // flat [node_a,node_b] pairs
+    std::vector<uint32_t> periodic_reduced_node; // full node -> reduced periodic class
+    std::vector<uint32_t> periodic_representative_nodes; // reduced class -> representative node
+    uint32_t periodic_reduced_node_count = 0;
 
     std::vector<uint8_t> magnetic_element_mask;
     std::vector<uint8_t> magnetic_node_mask;
@@ -178,6 +182,7 @@ struct Context {
     double stt_lambda = 1.0;
     double stt_epsilon_prime = 0.0;
     double stt_free_layer_thickness = 0.0; // 0 = geometry-derived
+    double stt_current_sign = 1.0;
 
     // ── Oersted field (cylindrical conductor) ──
     bool has_oersted_cylinder = false;

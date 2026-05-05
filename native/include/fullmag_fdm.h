@@ -156,6 +156,7 @@ typedef struct {
     double                     stt_lambda;             /* Lambda (asymmetry parameter) */
     double                     stt_epsilon_prime;      /* epsilon' (secondary spin-transfer term) */
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = use dz */
+    double                     stt_current_sign;       /* +1 top/default, -1 bottom fixed layer */
 
     /* Spin-Orbit Torque (SOT) — Manchon-Zhang damping-like + field-like model */
     int                        has_sot;                /* 1 = enabled */

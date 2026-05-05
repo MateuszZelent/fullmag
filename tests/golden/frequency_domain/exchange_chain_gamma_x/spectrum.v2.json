@@ -1,0 +1,53 @@
+{
+  "schema_version": "eigen_spectrum.v2",
+  "solver_model": "fem_eigen_floquet_dense_debug",
+  "sample_count": 2,
+  "samples": [
+    {
+      "sample_index": 0,
+      "label": "G",
+      "k_vector": [0.0, 0.0, 0.0],
+      "path_s": 0.0,
+      "segment_index": 0,
+      "t_in_segment": 0.0,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "branch_id": 0,
+          "frequency_real_hz": 1400000000.0,
+          "frequency_imag_hz": 0.0,
+          "angular_frequency_rad_per_s": 8796459430.05142,
+          "eigenvalue_real": 1.0,
+          "eigenvalue_imag": 0.0,
+          "norm": 1.0,
+          "max_amplitude": 1.0,
+          "dominant_polarization": "x",
+          "k_vector": [0.0, 0.0, 0.0]
+        }
+      ]
+    },
+    {
+      "sample_index": 1,
+      "label": "X",
+      "k_vector": [50000000.0, 0.0, 0.0],
+      "path_s": 50000000.0,
+      "segment_index": 0,
+      "t_in_segment": 1.0,
+      "modes": [
+        {
+          "raw_mode_index": 0,
+          "branch_id": 0,
+          "frequency_real_hz": 1450000000.0,
+          "frequency_imag_hz": 0.0,
+          "angular_frequency_rad_per_s": 9110618695.4104,
+          "eigenvalue_real": 1.04,
+          "eigenvalue_imag": 0.0,
+          "norm": 1.0,
+          "max_amplitude": 1.0,
+          "dominant_polarization": "x",
+          "k_vector": [50000000.0, 0.0, 0.0]
+        }
+      ]
+    }
+  ]
+}

@@ -816,7 +816,8 @@ fn build_reduction_map(
             active_nodes,
             node_map: mapping,
             node_phases,
-            complex_reduction: matches!(spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet),
+            complex_reduction: matches!(spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Floquet)
+                && !is_gamma_k_sampling(k_sampling),
         })
     } else {
         for (node_index, volume) in topology.magnetic_node_volumes.iter().enumerate() {
@@ -833,6 +834,14 @@ fn build_reduction_map(
             node_phases,
             complex_reduction: false,
         })
+    }
+}
+
+fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
+    match k_sampling {
+        None => true,
+        Some(KSamplingIR::Single { k_vector }) => k_vector.iter().all(|value| *value == 0.0),
+        Some(KSamplingIR::Path { .. }) => false,
     }
 }
 
@@ -1334,7 +1343,10 @@ fn regularize_periodic_mass_if_needed(
     mut mass: DMatrix<f64>,
     spin_wave_bc: &SpinWaveBoundaryConditionIR,
 ) -> DMatrix<f64> {
-    if !matches!(spin_wave_bc.kind(), SpinWaveBoundaryKindIR::Periodic) {
+    if !matches!(
+        spin_wave_bc.kind(),
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet
+    ) {
         return mass;
     }
     if mass.nrows() == 0 {
