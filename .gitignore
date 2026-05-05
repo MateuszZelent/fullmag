@@ -41,7 +41,10 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-external_solvers/
+# external_solvers: 5 repos managed as git submodules (see .gitmodules)
+# tetrax and BORIS kept local-only (no public git URL)
+external_solvers/tetrax/
+external_solvers/BORIS/
 
 # === Environment & secrets ===
 .env
