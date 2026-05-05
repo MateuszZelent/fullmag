@@ -1,0 +1,15 @@
+[submodule "external_solvers/3"]
+	path = external_solvers/3
+	url = https://github.com/mumax/3
+[submodule "external_solvers/plus"]
+	path = external_solvers/plus
+	url = https://github.com/mumax/plus
+[submodule "external_solvers/amumax"]
+	path = external_solvers/amumax
+	url = https://github.com/MathieuMoalic/amumax
+[submodule "external_solvers/tetmag"]
+	path = external_solvers/tetmag
+	url = https://github.com/R-Hertel/tetmag
+[submodule "external_solvers/oommf"]
+	path = external_solvers/oommf
+	url = https://github.com/fangohr/oommf
