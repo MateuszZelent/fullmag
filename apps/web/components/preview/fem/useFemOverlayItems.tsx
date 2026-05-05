@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { OrientationDebugSnapshot } from "../camera/cameraOrientation";
 import { glyphBudgetToMaxPoints } from "./vectorDensityBudget";
 import { colorLegendLabel, colorLegendGradient } from "./femColorUtils";
+import { FemViewportStatusBar } from "./FemViewportStatusBar";
 import { FemViewportToolbar } from "./FemViewportToolbar";
 import { FemRefineToolbar } from "./FemSelectionHUD";
 import { FieldLegend } from "../field/FieldLegend";
@@ -52,6 +53,16 @@ function colorLegendLengthLabel(args: {
     return "vector magnitude, arrow color = monochrome";
   }
   return `vector magnitude, arrow color = ${colorLegendLabel(args.arrowField, args.fieldLabel)}`;
+}
+
+function colorModeLabel(
+  mode: FemColorField | FemArrowColorMode,
+  fieldLabel?: string,
+): string {
+  if (mode === "monochrome") {
+    return "monochrome";
+  }
+  return colorLegendLabel(mode, fieldLabel);
 }
 
 export interface UseFemOverlayItemsArgs {
