@@ -3317,6 +3317,7 @@ fn select_output_base_field_from_observables(
         "H_ant" => observables.antenna_field.clone(),
         "H_ext" => observables.external_field.clone(),
         "H_eff" => observables.effective_field.clone(),
+        "torque" => observables.torque_field.clone(),
         other => {
             return Err(RunError {
                 message: format!("unsupported interactive output field snapshot '{}'", other),
@@ -3478,6 +3479,11 @@ fn copy_native_fem_base_field_values(
         "H_demag" => backend.copy_h_demag(node_count),
         "H_ext" => backend.copy_h_ext(node_count),
         "H_eff" => backend.copy_h_eff(node_count),
+        "torque" => {
+            let magnetization = backend.copy_m(node_count)?;
+            let effective_field = backend.copy_h_eff(node_count)?;
+            Ok(crate::derived_fields::compute_torque_field(&magnetization, &effective_field))
+        }
         other => Err(RunError {
             message: format!(
                 "unsupported interactive FEM output field snapshot '{}'",
@@ -3640,6 +3646,11 @@ fn copy_cuda_base_field_values(
         "H_demag" => backend.copy_h_demag(cell_count),
         "H_ext" => backend.copy_h_ext(cell_count),
         "H_eff" => backend.copy_h_eff(cell_count),
+        "torque" => {
+            let magnetization = backend.copy_m(cell_count)?;
+            let effective_field = backend.copy_h_eff(cell_count)?;
+            Ok(crate::derived_fields::compute_torque_field(&magnetization, &effective_field))
+        }
         other => Err(RunError {
             message: format!(
                 "unsupported interactive CUDA output field snapshot '{}'",

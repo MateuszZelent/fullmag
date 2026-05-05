@@ -8,6 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -16,6 +17,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    SinWaveguide,
     Translate,
     Union,
 )
@@ -360,34 +362,71 @@ class VoxelMaskData:
 # ---------------------------------------------------------------------------
 # Bounding box computation
 # ---------------------------------------------------------------------------
-def _bounding_box(geometry: Geometry) -> tuple[float, float, float]:
-    """Return (sx, sy, sz) that fully contains the geometry, centered at origin."""
+def _geometry_bounds(
+    geometry: Geometry,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     if isinstance(geometry, Box):
-        return geometry.size
+        sx, sy, sz = geometry.size
+        return (-sx / 2.0, -sy / 2.0, -sz / 2.0), (sx / 2.0, sy / 2.0, sz / 2.0)
     if isinstance(geometry, Cylinder):
         d = 2.0 * geometry.radius
-        return (d, d, geometry.height)
+        return (
+            (-d / 2.0, -d / 2.0, -geometry.height / 2.0),
+            (d / 2.0, d / 2.0, geometry.height / 2.0),
+        )
+    if isinstance(geometry, SinWaveguide):
+        half_length = geometry.length / 2.0
+        half_width = geometry.width / 2.0
+        half_height = geometry.height / 2.0
+        z_margin = abs(geometry.amplitude) + half_height
+        return (
+            -half_length,
+            -half_width,
+            geometry.z0 - z_margin,
+        ), (
+            half_length,
+            half_width,
+            geometry.z0 + z_margin,
+        )
+    if isinstance(geometry, ArchWaveguide):
+        half_length = geometry.length / 2.0
+        half_width = geometry.width / 2.0
+        half_height = geometry.height / 2.0
+        z_min = min(geometry.z0, geometry.z0 + geometry.arch_height) - half_height
+        z_max = max(geometry.z0, geometry.z0 + geometry.arch_height) + half_height
+        return (-half_length, -half_width, z_min), (half_length, half_width, z_max)
     if isinstance(geometry, Ellipsoid):
-        return (2.0 * geometry.rx, 2.0 * geometry.ry, 2.0 * geometry.rz)
+        return (-geometry.rx, -geometry.ry, -geometry.rz), (geometry.rx, geometry.ry, geometry.rz)
     if isinstance(geometry, Ellipse):
-        return (2.0 * geometry.rx, 2.0 * geometry.ry, geometry.height)
+        half_height = geometry.height / 2.0
+        return (-geometry.rx, -geometry.ry, -half_height), (geometry.rx, geometry.ry, half_height)
     if isinstance(geometry, Difference):
-        return _bounding_box(geometry.base)
+        return _geometry_bounds(geometry.base)
     if isinstance(geometry, Union):
-        ba = _bounding_box(geometry.a)
-        bb = _bounding_box(geometry.b)
-        return (max(ba[0], bb[0]), max(ba[1], bb[1]), max(ba[2], bb[2]))
+        a_min, a_max = _geometry_bounds(geometry.a)
+        b_min, b_max = _geometry_bounds(geometry.b)
+        return (
+            tuple(min(a_min[i], b_min[i]) for i in range(3)),
+            tuple(max(a_max[i], b_max[i]) for i in range(3)),
+        )
     if isinstance(geometry, Intersection):
-        ba = _bounding_box(geometry.a)
-        bb = _bounding_box(geometry.b)
-        return (min(ba[0], bb[0]), min(ba[1], bb[1]), min(ba[2], bb[2]))
+        a_min, a_max = _geometry_bounds(geometry.a)
+        b_min, b_max = _geometry_bounds(geometry.b)
+        return (
+            tuple(max(a_min[i], b_min[i]) for i in range(3)),
+            tuple(min(a_max[i], b_max[i]) for i in range(3)),
+        )
     if isinstance(geometry, Translate):
-        inner = _bounding_box(geometry.geometry)
+        inner_min, inner_max = _geometry_bounds(geometry.geometry)
         ox, oy, oz = geometry.offset
         return (
-            inner[0] + 2.0 * abs(ox),
-            inner[1] + 2.0 * abs(oy),
-            inner[2] + 2.0 * abs(oz),
+            inner_min[0] + ox,
+            inner_min[1] + oy,
+            inner_min[2] + oz,
+        ), (
+            inner_max[0] + ox,
+            inner_max[1] + oy,
+            inner_max[2] + oz,
         )
     if isinstance(geometry, ImportedGeometry):
         raise TypeError(
@@ -422,6 +461,37 @@ def _contains(
         r = geometry.radius
         h = geometry.height
         return (xx * xx + yy * yy <= r * r) & (np.abs(zz) <= h / 2.0)
+
+    if isinstance(geometry, SinWaveguide):
+        half_length = geometry.length / 2.0
+        half_width = geometry.width / 2.0
+        half_height = geometry.height / 2.0
+        z_center = geometry.z0 + geometry.amplitude * np.sin(
+            (2.0 * np.pi / geometry.period) * xx + geometry.phase
+        )
+        return (
+            (xx >= -half_length)
+            & (xx <= half_length)
+            & (yy >= -half_width)
+            & (yy <= half_width)
+            & (zz >= z_center - half_height)
+            & (zz < z_center + half_height)
+        )
+
+    if isinstance(geometry, ArchWaveguide):
+        half_length = geometry.length / 2.0
+        half_width = geometry.width / 2.0
+        half_height = geometry.height / 2.0
+        t = (xx + half_length) / geometry.length
+        z_center = geometry.z0 + geometry.arch_height * np.sin(np.pi * t)
+        return (
+            (xx >= -half_length)
+            & (xx <= half_length)
+            & (yy >= -half_width)
+            & (yy <= half_width)
+            & (zz >= z_center - half_height)
+            & (zz < z_center + half_height)
+        )
 
     if isinstance(geometry, Ellipsoid):
         rx, ry, rz = geometry.rx, geometry.ry, geometry.rz
@@ -465,16 +535,19 @@ def voxelize_geometry(
         return _voxelize_imported_geometry(geometry.source, cell_size, scale=geometry.scale)
 
     # Compute bounding box and grid
-    sx, sy, sz = _bounding_box(geometry)
+    bounds_min, bounds_max = _geometry_bounds(geometry)
+    sx = bounds_max[0] - bounds_min[0]
+    sy = bounds_max[1] - bounds_min[1]
+    sz = bounds_max[2] - bounds_min[2]
     dx, dy, dz = cell_size
     nx = max(1, int(round(sx / dx)))
     ny = max(1, int(round(sy / dy)))
     nz = max(1, int(round(sz / dz)))
 
     # Cell center coordinates
-    xs = -sx / 2.0 + (np.arange(nx, dtype=np.float64) + 0.5) * dx
-    ys = -sy / 2.0 + (np.arange(ny, dtype=np.float64) + 0.5) * dy
-    zs = -sz / 2.0 + (np.arange(nz, dtype=np.float64) + 0.5) * dz
+    xs = bounds_min[0] + (np.arange(nx, dtype=np.float64) + 0.5) * dx
+    ys = bounds_min[1] + (np.arange(ny, dtype=np.float64) + 0.5) * dy
+    zs = bounds_min[2] + (np.arange(nz, dtype=np.float64) + 0.5) * dz
 
     # 3D meshgrid: xx[iz, iy, ix], yy[iz, iy, ix], zz[iz, iy, ix]
     xx_2d, yy_2d = np.meshgrid(xs, ys, indexing="xy")
@@ -489,7 +562,7 @@ def voxelize_geometry(
     return VoxelMaskData(
         mask=mask,
         cell_size=cell_size,
-        origin=(-sx / 2.0, -sy / 2.0, -sz / 2.0),
+        origin=bounds_min,
     )
 
 

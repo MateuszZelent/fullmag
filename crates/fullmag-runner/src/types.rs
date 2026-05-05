@@ -886,6 +886,7 @@ pub(crate) struct LiveStepConsumer<'a> {
 #[allow(non_snake_case)]
 pub(crate) struct StateObservables {
     pub magnetization: Vec<[f64; 3]>,
+    pub torque_field: Vec<[f64; 3]>,
     pub exchange_field: Vec<[f64; 3]>,
     pub demag_field: Vec<[f64; 3]>,
     pub external_field: Vec<[f64; 3]>,

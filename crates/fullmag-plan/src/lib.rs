@@ -1,6 +1,6 @@
 //! Execution planning: lowers `ProblemIR` into backend-specific `ExecutionPlanIR`.
 //!
-//! Phase 1 scope: `Box/Cylinder/(ImportedGeometry + precomputed grid asset) +
+//! Phase 1 scope: `Box/Cylinder/SinWaveguide/ArchWaveguide/(ImportedGeometry + precomputed grid asset) +
 //! (Exchange | Demag | Zeeman combinations) + fdm/strict`
 //! is the legal executable path.
 //! Additionally, `backend='fem'` produces an executable `FemPlanIR`
@@ -37,7 +37,7 @@ pub use util::generate_random_unit_vectors;
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
 ///
 /// Current planner coverage:
-/// - executable FDM: `Box | Cylinder | ImportedGeometry + precomputed active_mask`
+/// - executable FDM: `Box | Cylinder | SinWaveguide | ArchWaveguide | ImportedGeometry + precomputed active_mask`
 ///   with the narrow interaction subset,
 /// - executable multilayer FDM for stacked multi-body cases,
 /// - executable FEM / FEM eigen with precomputed mesh assets.

@@ -213,7 +213,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HEff, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe, HTherm,
+        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe, HTherm,
         ModeReal, ModeImag, // Second wave (QB-17)
         DmDt, TorqueStt, TorqueSot,
     ] {
@@ -256,12 +256,12 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_32() {
+    fn standard_providers_register_all_33() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 15 vector + 3 torque/dmdt + 2 mode vectors + 8 spatial-scalars + 6 global scalars = 32
-        // (but grouped: 18 vector + 8 spatial-scalar + 6 global = 32)
-        assert_eq!(reg.len(), 32);
+        // 16 base vectors + torque + 3 torque/dmdt + 2 mode vectors + 8 spatial-scalars + 6 global scalars = 33
+        // (but grouped: 19 vector + 8 spatial-scalar + 6 global = 33)
+        assert_eq!(reg.len(), 33);
     }
 
     #[test]

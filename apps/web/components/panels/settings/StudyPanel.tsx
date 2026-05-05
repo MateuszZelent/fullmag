@@ -504,6 +504,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
         stageExecutionRecord: stageRecord,
         stageStatus,
         scalarRows: ctx.scalarRows,
+        liveState: transport.liveState,
       });
       return (
         <SidebarSection title="Stop Criteria" icon="🎯" defaultOpen={true}>
@@ -527,7 +528,11 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <div className="grid grid-cols-1 gap-3 @[720px]:grid-cols-2">
             <MetricTile
               label={relaxRuntime.overviewLabel}
-              value={relaxRuntime.overviewValue}
+              value={
+                relaxRuntime.overviewAuxValue
+                  ? `${relaxRuntime.overviewValue} · ${relaxRuntime.overviewAuxValue}`
+                  : relaxRuntime.overviewValue
+              }
               detail={relaxRuntime.overviewDetail}
               progress={relaxRuntime.overviewProgress ?? undefined}
               tone={relaxRuntime.overviewTone}

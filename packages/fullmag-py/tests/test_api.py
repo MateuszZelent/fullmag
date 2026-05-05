@@ -121,6 +121,78 @@ class ProblemApiTests(unittest.TestCase):
             ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"], "auto"
         )
 
+    def test_waveguide_geometries_export_canonical_ir(self) -> None:
+        sin_geometry = fm.SinWaveguide(
+            length=400e-9,
+            width=40e-9,
+            height=10e-9,
+            period=100e-9,
+            amplitude=20e-9,
+            phase=0.25,
+            z0=-5e-9,
+            name="sinus",
+        )
+        arch_geometry = fm.ArchWaveguide(
+            length=400e-9,
+            width=40e-9,
+            height=10e-9,
+            arch_height=-80e-9,
+            z0=10e-9,
+            name="arch",
+        )
+
+        self.assertEqual(
+            sin_geometry.to_ir(),
+            {
+                "name": "sinus",
+                "kind": "sin_waveguide",
+                "length": 400e-9,
+                "width": 40e-9,
+                "height": 10e-9,
+                "period": 100e-9,
+                "amplitude": 20e-9,
+                "phase": 0.25,
+                "z0": -5e-9,
+            },
+        )
+        self.assertEqual(
+            arch_geometry.to_ir(),
+            {
+                "name": "arch",
+                "kind": "arch_waveguide",
+                "length": 400e-9,
+                "width": 40e-9,
+                "height": 10e-9,
+                "arch_height": -80e-9,
+                "z0": 10e-9,
+            },
+        )
+
+    def test_waveguide_geometry_validation_rejects_invalid_dimensions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "length"):
+            fm.SinWaveguide(
+                length=0.0,
+                width=40e-9,
+                height=10e-9,
+                period=100e-9,
+                amplitude=20e-9,
+            )
+        with self.assertRaisesRegex(ValueError, "period"):
+            fm.SinWaveguide(
+                length=1.0,
+                width=1.0,
+                height=1.0,
+                period=0.0,
+                amplitude=0.0,
+            )
+        with self.assertRaisesRegex(ValueError, "width"):
+            fm.ArchWaveguide(
+                length=1.0,
+                width=0.0,
+                height=1.0,
+                arch_height=0.0,
+            )
+
     def test_problem_to_ir_serializes_fdm_pbc_truncated_images(self) -> None:
         problem = replace(
             self._build_problem(),
@@ -3385,6 +3457,47 @@ class ProblemApiTests(unittest.TestCase):
         for actual, expected in zip(geometry["bounds_min"], [0.0, -12e-9, -14e-9], strict=True):
             self.assertAlmostEqual(actual, expected)
         for actual, expected in zip(geometry["bounds_max"], [10e-9, 8e-9, 16e-9], strict=True):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_builder_draft_exports_geometry_bounds_for_translated_sin_waveguide(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("bounds_sin_waveguide")
+        study.engine("fdm")
+        study.cell(5e-9, 5e-9, 5e-9)
+
+        body = study.geometry(
+            fm.SinWaveguide(
+                length=10e-9,
+                width=4e-9,
+                height=2e-9,
+                period=8e-9,
+                amplitude=3e-9,
+                z0=1e-9,
+                name="sinus",
+            ).translate((5e-9, -2e-9, 4e-9)),
+            name="sinus",
+        )
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+
+        study.run(1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_builder_bounds_sin_waveguide.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path)
+
+        draft = export_builder_draft(loaded)
+        geometry = draft["geometries"][0]
+        self.assertEqual(geometry["geometry_params"]["translation"], [5e-09, -2e-09, 4e-09])
+        for actual, expected in zip(geometry["bounds_min"], [0.0, -4e-9, 1e-9], strict=True):
+            self.assertAlmostEqual(actual, expected)
+        for actual, expected in zip(geometry["bounds_max"], [10e-9, 0.0, 9e-9], strict=True):
             self.assertAlmostEqual(actual, expected)
 
     def test_builder_draft_exports_relative_imported_geometry_bounds_without_trimesh(self) -> None:

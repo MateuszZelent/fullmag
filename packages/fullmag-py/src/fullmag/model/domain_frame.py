@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -10,6 +11,7 @@ from fullmag.model.geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    SinWaveguide,
     Translate,
     Union,
 )
@@ -79,6 +81,27 @@ def geometry_bounds(
         radius = geometry.radius
         half_height = 0.5 * geometry.height
         return (-radius, -radius, -half_height), (radius, radius, half_height)
+    if isinstance(geometry, SinWaveguide):
+        half_length = 0.5 * geometry.length
+        half_width = 0.5 * geometry.width
+        half_height = 0.5 * geometry.height
+        z_margin = abs(geometry.amplitude) + half_height
+        return (
+            -half_length,
+            -half_width,
+            geometry.z0 - z_margin,
+        ), (
+            half_length,
+            half_width,
+            geometry.z0 + z_margin,
+        )
+    if isinstance(geometry, ArchWaveguide):
+        half_length = 0.5 * geometry.length
+        half_width = 0.5 * geometry.width
+        half_height = 0.5 * geometry.height
+        z_min = min(geometry.z0, geometry.z0 + geometry.arch_height) - half_height
+        z_max = max(geometry.z0, geometry.z0 + geometry.arch_height) + half_height
+        return (-half_length, -half_width, z_min), (half_length, half_width, z_max)
     if isinstance(geometry, Ellipsoid):
         return (-geometry.rx, -geometry.ry, -geometry.rz), (
             geometry.rx,

@@ -21,6 +21,7 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::derived_fields::compute_torque_field;
 use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
@@ -1424,8 +1425,11 @@ fn observe_multilayer_cuda(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
+    let torque_field = compute_torque_field(&magnetization, &effective_field);
+
     Ok(StateObservables {
         magnetization,
+        torque_field,
         exchange_field,
         demag_field,
         external_field,
@@ -1715,8 +1719,11 @@ fn observe_multilayer_cuda_single(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
+    let torque_field = compute_torque_field(&magnetization, &effective_field);
+
     Ok(StateObservables {
         magnetization,
+        torque_field,
         exchange_field,
         demag_field,
         external_field,
@@ -2032,13 +2039,18 @@ fn observe_native_stacked_cuda(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
+    let magnetization = extract_native_stacked_field(&magnetization_full, native);
+    let effective_field = extract_native_stacked_field(&effective_full, native);
+    let torque_field = compute_torque_field(&magnetization, &effective_field);
+
     Ok(StateObservables {
-        magnetization: extract_native_stacked_field(&magnetization_full, native),
+        magnetization,
+        torque_field,
         exchange_field: extract_native_stacked_field(&exchange_full, native),
         demag_field: extract_native_stacked_field(&demag_full, native),
         external_field: extract_native_stacked_field(&external_full, native),
         antenna_field: vec![[0.0, 0.0, 0.0]; cell_count],
-        effective_field: extract_native_stacked_field(&effective_full, native),
+        effective_field,
         anisotropy_field: Vec::new(),
         dmi_field: Vec::new(),
         magnetoelastic_field: Vec::new(),
@@ -2199,6 +2211,7 @@ fn select_base_field(
         "H_demag" => observables.demag_field.clone(),
         "H_ext" => observables.external_field.clone(),
         "H_eff" => observables.effective_field.clone(),
+        "torque" => observables.torque_field.clone(),
         other => {
             return Err(RunError {
                 message: format!("unsupported multilayer field snapshot '{}'", other),

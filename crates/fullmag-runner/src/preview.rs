@@ -30,6 +30,7 @@ pub(crate) fn select_observables<'a>(
         QuantityId::HExt => Ok(observables.external_field.as_slice()),
         QuantityId::HEff => Ok(observables.effective_field.as_slice()),
         QuantityId::M => Ok(observables.magnetization.as_slice()),
+        QuantityId::Torque => Ok(observables.torque_field.as_slice()),
         // PH-02: extended vector observables
         QuantityId::HAni => Ok(observables.anisotropy_field.as_slice()),
         QuantityId::HDmi => Ok(observables.dmi_field.as_slice()),

@@ -212,6 +212,80 @@ fn analytic_geometry_must_have_positive_dimensions() {
 }
 
 #[test]
+fn waveguide_geometry_round_trips_through_serde() {
+    let sin = GeometryEntryIR::SinWaveguide {
+        name: "sinus".to_string(),
+        length: 400e-9,
+        width: 40e-9,
+        height: 10e-9,
+        period: 100e-9,
+        amplitude: 20e-9,
+        phase: 0.25,
+        z0: -5e-9,
+    };
+    let arch = GeometryEntryIR::ArchWaveguide {
+        name: "arch".to_string(),
+        length: 400e-9,
+        width: 40e-9,
+        height: 10e-9,
+        arch_height: -80e-9,
+        z0: 10e-9,
+    };
+
+    let sin_json = serde_json::to_string(&sin).expect("sin waveguide should serialize");
+    let arch_json = serde_json::to_string(&arch).expect("arch waveguide should serialize");
+
+    let sin_decoded: GeometryEntryIR =
+        serde_json::from_str(&sin_json).expect("sin waveguide should deserialize");
+    let arch_decoded: GeometryEntryIR =
+        serde_json::from_str(&arch_json).expect("arch waveguide should deserialize");
+
+    assert_eq!(sin_decoded, sin);
+    assert_eq!(arch_decoded, arch);
+}
+
+#[test]
+fn waveguide_geometry_validates_finite_and_positive_fields() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries[0] = GeometryEntryIR::SinWaveguide {
+        name: "sinus".to_string(),
+        length: 400e-9,
+        width: 40e-9,
+        height: 10e-9,
+        period: 0.0,
+        amplitude: f64::NAN,
+        phase: 0.0,
+        z0: 0.0,
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid sin waveguide must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("sin_waveguide geometry 'sinus' period must be positive")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("sin_waveguide geometry 'sinus' amplitude must be finite")));
+
+    ir.geometry.entries[0] = GeometryEntryIR::ArchWaveguide {
+        name: "arch".to_string(),
+        length: 400e-9,
+        width: 40e-9,
+        height: 10e-9,
+        arch_height: f64::INFINITY,
+        z0: 0.0,
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid arch waveguide must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("arch_waveguide geometry 'arch' arch_height must be finite")
+    }));
+}
+
+#[test]
 fn execution_plan_ir_serializes() {
     let plan = ExecutionPlanIR {
         common: CommonPlanMeta {

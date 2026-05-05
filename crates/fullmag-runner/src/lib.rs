@@ -15,6 +15,7 @@ pub mod artifact_pipeline;
 mod artifacts;
 pub mod capabilities;
 mod cpu_reference;
+mod derived_fields;
 mod dispatch;
 pub mod eigen;
 #[path = "fem_reference.rs"]

@@ -684,4 +684,36 @@ mod tests {
             true,
         ));
     }
+
+    #[test]
+    fn relaxation_convergence_uses_apm_reconstructed_from_dm_dt_for_overdamped_llg() {
+        let control = RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: None,
+                max_pseudotime_s: None,
+                max_physical_time_s: None,
+            },
+        };
+        let gyromagnetic_ratio = 2.211e5;
+        let damping = 1.0;
+        let expected_torque_apm = 5e-5;
+        let stats = StepStats {
+            max_torque_Apm: 0.0,
+            max_dm_dt: expected_torque_apm * gyromagnetic_ratio * damping / (1.0 + damping * damping),
+            ..StepStats::default()
+        };
+
+        assert!(relaxation_converged(
+            &control,
+            &stats,
+            Some(1.0),
+            gyromagnetic_ratio,
+            damping,
+            true,
+        ));
+        assert!((effective_max_torque_apm(&stats, gyromagnetic_ratio, damping, true) - expected_torque_apm).abs() < 1e-12);
+    }
 }

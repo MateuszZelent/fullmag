@@ -30,6 +30,7 @@ export type QuantityId =
   | "H_ext"
   | "H_ant"
   | "H_eff"
+  | "torque"
   | "H_ani"
   | "H_dmi"
   | "H_mel"

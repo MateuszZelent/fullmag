@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 32] = [
+const CATALOG: [QuantitySpec; 33] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -130,6 +130,27 @@ const CATALOG: [QuantitySpec; 32] = [
         supports_preview_3d: true,
         supports_history: false,
         supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::Torque,
+        label: "Torque",
+        description: "Micromagnetic torque residual m × H_eff",
+        shape: QuantityShape::VectorField,
+        unit: "A/m",
+        interactive_preview: true,
+        cached_preview: true,
+        quick_access_label: Some("τ"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: false,
     },
     QuantitySpec {
         id: QuantityId::HAni,

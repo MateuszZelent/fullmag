@@ -927,6 +927,37 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(geometry.geometry_name, "nanoflower_left_geom")
 
+    def test_geometry_from_ir_reconstructs_waveguide_kinds(self) -> None:
+        sin_geometry = _geometry_from_ir(
+            {
+                "kind": "sin_waveguide",
+                "name": "sinus",
+                "length": 10.0,
+                "width": 2.0,
+                "height": 1.0,
+                "period": 8.0,
+                "amplitude": 3.0,
+                "phase": 0.5,
+                "z0": -1.0,
+            }
+        )
+        arch_geometry = _geometry_from_ir(
+            {
+                "kind": "arch_waveguide",
+                "name": "arch",
+                "length": 10.0,
+                "width": 2.0,
+                "height": 1.0,
+                "arch_height": -4.0,
+                "z0": 2.0,
+            }
+        )
+
+        self.assertIsInstance(sin_geometry, fm.SinWaveguide)
+        self.assertEqual(sin_geometry.geometry_name, "sinus")
+        self.assertIsInstance(arch_geometry, fm.ArchWaveguide)
+        self.assertEqual(arch_geometry.geometry_name, "arch")
+
     def test_resolve_mesh_size_controls_supports_comsol_like_presets(self) -> None:
         resolved = resolve_mesh_size_controls(MeshOptions(size_preset="finer"))
 
@@ -1283,6 +1314,38 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(ir["geometry_name"], "pillar")
         self.assertEqual(ir["cells"], [voxels.shape[2], voxels.shape[1], voxels.shape[0]])
         self.assertEqual(len(ir["active_mask"]), int(np.prod(voxels.shape)))
+
+    def test_sin_waveguide_voxelization_uses_half_open_vertical_interval(self) -> None:
+        geometry = fm.SinWaveguide(
+            length=8.0,
+            width=2.0,
+            height=2.0,
+            period=8.0,
+            amplitude=1.0,
+        )
+
+        voxels = voxelize_geometry(geometry, (1.0, 1.0, 1.0))
+
+        self.assertEqual(voxels.origin, (-4.0, -1.0, -2.0))
+        self.assertEqual(voxels.shape, (4, 2, 8))
+        self.assertTrue(bool(voxels.mask[2, 0, 3]))
+        self.assertFalse(bool(voxels.mask[3, 0, 3]))
+
+    def test_arch_waveguide_voxelization_tracks_arch_height_and_z0(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=8.0,
+            width=2.0,
+            height=2.0,
+            arch_height=2.0,
+            z0=1.0,
+        )
+
+        voxels = voxelize_geometry(geometry, (1.0, 1.0, 1.0))
+
+        self.assertEqual(voxels.origin, (-4.0, -1.0, 0.0))
+        self.assertEqual(voxels.shape, (4, 2, 8))
+        self.assertTrue(bool(voxels.mask[2, 0, 0]))
+        self.assertFalse(bool(voxels.mask[3, 0, 0]))
 
     def test_voxel_mask_load_transposes_xyz_assets_to_canonical_zyx(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

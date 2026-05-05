@@ -102,6 +102,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HEx
                 | QuantityId::HDemag
                 | QuantityId::HExt
+                | QuantityId::Torque
                 | QuantityId::HEff
         ),
         FdmEngine::CudaFdm => matches!(
@@ -110,6 +111,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HEx
                 | QuantityId::HDemag
                 | QuantityId::HExt
+                | QuantityId::Torque
                 | QuantityId::HEff
                 | QuantityId::HOe
         ),
@@ -119,7 +121,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
 
 fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
     match id {
-        QuantityId::M | QuantityId::HEff => true,
+        QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
@@ -164,6 +166,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HDemag
                 | QuantityId::HExt
                 | QuantityId::HAnt
+                | QuantityId::Torque
                 | QuantityId::HEff
         ),
         FemEngine::NativeGpu => matches!(
@@ -173,6 +176,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::HDemag
                 | QuantityId::HExt
                 | QuantityId::HAnt
+                | QuantityId::Torque
                 | QuantityId::HEff
                 | QuantityId::HAni
                 | QuantityId::HDmi
@@ -188,7 +192,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
 
 fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
     match id {
-        QuantityId::M | QuantityId::HEff => true,
+        QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
@@ -368,11 +372,11 @@ mod tests {
     #[test]
     fn fdm_cached_quantities_follow_active_terms_and_engine_observables() {
         let mut plan = fdm_plan();
-        let quantities = ["m", "H_ex", "H_demag", "H_ext", "H_ani", "H_eff", "H_oe"];
+        let quantities = ["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_oe"];
 
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
-            vec!["m", "H_ex", "H_eff"]
+            vec!["m", "H_ex", "torque", "H_eff"]
         );
 
         plan.enable_demag = true;
@@ -382,22 +386,22 @@ mod tests {
 
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "H_eff", "H_oe"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff", "H_oe"]
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
         );
     }
 
     #[test]
     fn fem_cached_quantities_follow_active_terms() {
         let mut plan = fem_plan();
-        let quantities = ["m", "H_ex", "H_demag", "H_ext", "H_ani", "H_eff", "H_mel"];
+        let quantities = ["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_mel"];
 
         assert_eq!(
             active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
-            vec!["m", "H_ex", "H_eff"]
+            vec!["m", "H_ex", "torque", "H_eff"]
         );
 
         plan.enable_demag = true;
@@ -406,11 +410,11 @@ mod tests {
 
         assert_eq!(
             active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "H_ani", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff"]
         );
         assert_eq!(
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_eff"]
         );
     }
 }

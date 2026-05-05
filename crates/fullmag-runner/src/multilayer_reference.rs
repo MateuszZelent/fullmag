@@ -16,6 +16,7 @@ use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::derived_fields::compute_torque_field;
 use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
@@ -584,8 +585,11 @@ fn observe_multilayer(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
+    let torque_field = compute_torque_field(&magnetization, &effective_field);
+
     Ok(StateObservables {
         magnetization,
+        torque_field,
         exchange_field,
         demag_field,
         external_field,
@@ -830,6 +834,7 @@ fn select_base_field(
         "H_demag" => observables.demag_field.clone(),
         "H_ext" => observables.external_field.clone(),
         "H_eff" => observables.effective_field.clone(),
+        "torque" => observables.torque_field.clone(),
         other => {
             return Err(RunError {
                 message: format!("unsupported multilayer field snapshot '{}'", other),

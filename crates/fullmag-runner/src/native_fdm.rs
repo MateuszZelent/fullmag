@@ -12,6 +12,8 @@
 use fullmag_fdm_sys as ffi;
 
 #[cfg(feature = "cuda")]
+use crate::derived_fields::compute_torque_field;
+#[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
 };
@@ -855,53 +857,64 @@ impl NativeFdmBackend {
             });
         }
 
-        let observable = match quantity {
-            "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
-            "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
-            "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
-            "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
-            "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
-            _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
-        };
-        let len = preview_count * 3;
-        let flat = if self.precision == fullmag_ir::ExecutionPrecision::Single {
-            let mut flat = vec![0.0f32; len];
-            let rc = unsafe {
-                ffi::fullmag_fdm_backend_copy_field_preview_f32(
-                    self.handle as *mut _,
-                    observable,
-                    plan.preview_grid[0],
-                    plan.preview_grid[1],
-                    plan.preview_grid[2],
-                    plan.z_origin,
-                    plan.applied_layer_stride,
-                    flat.as_mut_ptr(),
-                    len as u64,
-                )
-            };
-            if rc != ffi::FULLMAG_FDM_OK {
-                return Err(self.last_error_or("copy_field_preview_f32 failed"));
-            }
-            flat.into_iter().map(f64::from).collect()
+        let flat = if quantity == "torque" {
+            let cell_count = (original_grid[0] as usize)
+                * (original_grid[1] as usize)
+                * (original_grid[2] as usize);
+            let magnetization = self.copy_m(cell_count)?;
+            let effective_field = self.copy_h_eff(cell_count)?;
+            let torque = compute_torque_field(&magnetization, &effective_field);
+            let sampled = crate::preview::resample_grid_vectors(&torque, &plan);
+            crate::preview::flatten_vectors(&sampled)
         } else {
-            let mut flat = vec![0.0f64; len];
-            let rc = unsafe {
-                ffi::fullmag_fdm_backend_copy_field_preview_f64(
-                    self.handle as *mut _,
-                    observable,
-                    plan.preview_grid[0],
-                    plan.preview_grid[1],
-                    plan.preview_grid[2],
-                    plan.z_origin,
-                    plan.applied_layer_stride,
-                    flat.as_mut_ptr(),
-                    len as u64,
-                )
+            let observable = match quantity {
+                "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+                "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
+                "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
+                "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
+                "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+                _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
             };
-            if rc != ffi::FULLMAG_FDM_OK {
-                return Err(self.last_error_or("copy_field_preview failed"));
+            let len = preview_count * 3;
+            if self.precision == fullmag_ir::ExecutionPrecision::Single {
+                let mut flat = vec![0.0f32; len];
+                let rc = unsafe {
+                    ffi::fullmag_fdm_backend_copy_field_preview_f32(
+                        self.handle as *mut _,
+                        observable,
+                        plan.preview_grid[0],
+                        plan.preview_grid[1],
+                        plan.preview_grid[2],
+                        plan.z_origin,
+                        plan.applied_layer_stride,
+                        flat.as_mut_ptr(),
+                        len as u64,
+                    )
+                };
+                if rc != ffi::FULLMAG_FDM_OK {
+                    return Err(self.last_error_or("copy_field_preview_f32 failed"));
+                }
+                flat.into_iter().map(f64::from).collect()
+            } else {
+                let mut flat = vec![0.0f64; len];
+                let rc = unsafe {
+                    ffi::fullmag_fdm_backend_copy_field_preview_f64(
+                        self.handle as *mut _,
+                        observable,
+                        plan.preview_grid[0],
+                        plan.preview_grid[1],
+                        plan.preview_grid[2],
+                        plan.z_origin,
+                        plan.applied_layer_stride,
+                        flat.as_mut_ptr(),
+                        len as u64,
+                    )
+                };
+                if rc != ffi::FULLMAG_FDM_OK {
+                    return Err(self.last_error_or("copy_field_preview failed"));
+                }
+                flat
             }
-            flat
         };
         Ok(build_grid_preview_field_from_flat_plan(
             request,

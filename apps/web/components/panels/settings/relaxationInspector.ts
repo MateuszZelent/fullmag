@@ -1,6 +1,6 @@
 "use client";
 
-import type { ScalarRow, StageExecutionRecord, StageStopReason } from "@/lib/session/types";
+import type { LiveState, ScalarRow, StageExecutionRecord, StageStopReason } from "@/lib/session/types";
 
 type Tone = "default" | "accent" | "info" | "warn" | "danger";
 
@@ -17,6 +17,7 @@ export interface RelaxationInspectorState {
   overviewLabel: string;
   overviewValue: string;
   overviewDetail: string;
+  overviewAuxValue: string | null;
   overviewProgress: number | null;
   overviewTone: Tone;
   semantics: string;
@@ -83,7 +84,7 @@ function stopReasonLabel(reason: StageStopReason | null): string {
 }
 
 function stopReasonDetail(record: StageExecutionRecord | null): string {
-  if (!record) return "No runtime stop record for this stage yet.";
+  if (!record) return "Runtime publishes the stop record only after this stage exits.";
   if (record.reason == null) return "Runtime has not published a stop reason yet.";
   if (record.metric_name && record.metric_value != null && record.threshold != null) {
     return `${record.metric_name}: ${formatCompact(record.metric_value)} / ${formatCompact(record.threshold)}`;
@@ -96,6 +97,7 @@ export function buildRelaxationInspectorState(args: {
   stageExecutionRecord: StageExecutionRecord | null;
   stageStatus: string | null;
   scalarRows: ScalarRow[];
+  liveState?: LiveState | null;
 }): RelaxationInspectorState {
   const torqueTolerance = parseOptionalNumber(args.payload.torque_tolerance);
   const energyTolerance = parseOptionalNumber(args.payload.energy_tolerance);
@@ -105,11 +107,11 @@ export function buildRelaxationInspectorState(args: {
 
   const latest = args.scalarRows.length > 0 ? args.scalarRows[args.scalarRows.length - 1] : null;
   const previous = args.scalarRows.length > 1 ? args.scalarRows[args.scalarRows.length - 2] : null;
-  const torqueNow = latest?.max_torque_Apm ?? null;
+  const torqueNow = latest?.max_torque_Apm ?? args.liveState?.max_torque_Apm ?? null;
   const energyDeltaNow =
     latest && previous ? Math.abs(latest.e_total - previous.e_total) : null;
-  const stepsNow = latest?.step ?? null;
-  const timeNow = latest?.time ?? null;
+  const stepsNow = latest?.step ?? args.liveState?.step ?? null;
+  const timeNow = latest?.time ?? args.liveState?.time ?? null;
 
   const metrics: RelaxationProgressMetric[] = [];
   const convergenceProgress: number[] = [];
@@ -190,6 +192,10 @@ export function buildRelaxationInspectorState(args: {
     args.stageStatus === "completed" || args.stageStatus === "done" || args.stageExecutionRecord?.reason != null;
   const convergenceProgressValue =
     convergenceProgress.length > 0 ? Math.min(...convergenceProgress) : null;
+  const torqueSummary =
+    torqueTolerance != null
+      ? `${formatCompact(torqueNow, " A/m")} / ${formatCompact(torqueTolerance, " A/m")}`
+      : null;
 
   const overviewLabel = finishedByRuntime ? "Final stop" : "Convergence";
   const overviewValue = finishedByRuntime
@@ -200,7 +206,9 @@ export function buildRelaxationInspectorState(args: {
   const overviewDetail = finishedByRuntime
     ? stopReasonDetail(args.stageExecutionRecord)
     : convergenceProgressValue != null
-      ? "All enabled convergence criteria must be satisfied at the same time."
+      ? torqueSummary != null
+        ? `Max torque ${torqueSummary}. All enabled convergence criteria must be satisfied at the same time.`
+        : "All enabled convergence criteria must be satisfied at the same time."
       : "Run the relax stage to evaluate live convergence against the configured criteria.";
   const overviewTone: Tone = finishedByRuntime
     ? args.stageExecutionRecord?.reason === "backend_error"
@@ -218,6 +226,7 @@ export function buildRelaxationInspectorState(args: {
     overviewLabel,
     overviewValue,
     overviewDetail,
+    overviewAuxValue: finishedByRuntime ? null : torqueSummary,
     overviewProgress: finishedByRuntime ? 100 : convergenceProgressValue,
     overviewTone,
     semantics,

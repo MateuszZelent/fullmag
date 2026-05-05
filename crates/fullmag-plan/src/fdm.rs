@@ -896,7 +896,8 @@ pub(crate) fn plan_fdm_multilayer(
                 }
                 (bbox, Some(asset.active_mask.clone()), asset.cells, origin)
             } else {
-                let (bbox, mask, cells) = voxelize_shape(&placed.shape, cell_size, &mut errors);
+                let (bbox, mask, cells, local_origin) =
+                    voxelize_shape(&placed.shape, cell_size, &mut errors);
                 validate_realized_grid(
                     &format!("geometry '{}'", geometry_name),
                     bbox,
@@ -905,9 +906,9 @@ pub(crate) fn plan_fdm_multilayer(
                     &mut errors,
                 );
                 let origin = [
-                    placed.translation[0] - bbox[0] * 0.5,
-                    placed.translation[1] - bbox[1] * 0.5,
-                    placed.translation[2] - bbox[2] * 0.5,
+                    placed.translation[0] + local_origin[0],
+                    placed.translation[1] + local_origin[1],
+                    placed.translation[2] + local_origin[2],
                 ];
                 (bbox, mask, cells, origin)
             };

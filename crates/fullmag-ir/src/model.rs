@@ -53,6 +53,27 @@ pub enum GeometryEntryIR {
         radius: f64,
         height: f64,
     },
+    SinWaveguide {
+        name: String,
+        length: f64,
+        width: f64,
+        height: f64,
+        period: f64,
+        amplitude: f64,
+        #[serde(default)]
+        phase: f64,
+        #[serde(default)]
+        z0: f64,
+    },
+    ArchWaveguide {
+        name: String,
+        length: f64,
+        width: f64,
+        height: f64,
+        arch_height: f64,
+        #[serde(default)]
+        z0: f64,
+    },
     Ellipsoid {
         name: String,
         radii: [f64; 3],
@@ -94,6 +115,8 @@ impl GeometryEntryIR {
             Self::ImportedGeometry { name, .. }
             | Self::Box { name, .. }
             | Self::Cylinder { name, .. }
+            | Self::SinWaveguide { name, .. }
+            | Self::ArchWaveguide { name, .. }
             | Self::Ellipsoid { name, .. }
             | Self::Sphere { name, .. }
             | Self::Ellipse { name, .. }

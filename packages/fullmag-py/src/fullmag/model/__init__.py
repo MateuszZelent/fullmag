@@ -41,6 +41,7 @@ from .mechanics import (
     MechanicalLoad,
 )
 from .geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -48,6 +49,7 @@ from .geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    SinWaveguide,
     Sphere,
     Translate,
     Union,
@@ -83,6 +85,7 @@ __all__ = [
     "UniaxialAnisotropy",
     "AdaptiveTimestep",
     "AntennaFieldSource",
+    "ArchWaveguide",
     "Box",
     "BulkDMI",
     "CPWAntenna",
@@ -148,6 +151,7 @@ __all__ = [
     "SaveScalar",
     "SaveSpectrum",
     "SaveEigenDiagnostics",
+    "SinWaveguide",
     "Sinusoidal",
     "Snapshot",
     "Sphere",

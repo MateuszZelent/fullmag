@@ -23,6 +23,7 @@ use crate::antenna_fields::{
     combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::derived_fields::compute_torque_field;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, flatten_vectors, mesh_quantity_active_mask,
@@ -1025,8 +1026,11 @@ pub(crate) fn observe_state(
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("FEM engine observables: {}", e),
     })?;
+    let torque_field = compute_torque_field(&observables.magnetization, &observables.effective_field);
+
     Ok(StateObservables {
         magnetization: observables.magnetization,
+        torque_field,
         exchange_field: observables.exchange_field,
         demag_field: observables.demag_field,
         external_field: observables.external_field,
@@ -1156,6 +1160,7 @@ fn select_base_field(
         "H_ant" => Ok(observables.antenna_field.clone()),
         "H_ext" => Ok(observables.external_field.clone()),
         "H_eff" => Ok(observables.effective_field.clone()),
+        "torque" => Ok(observables.torque_field.clone()),
         other => Err(RunError {
             message: format!(
                 "CPU FEM snapshot: field '{}' is not available in this execution path \

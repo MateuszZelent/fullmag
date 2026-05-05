@@ -44,6 +44,8 @@ describe("buildRelaxationInspectorState", () => {
 
     expect(state.overviewLabel).toBe("Convergence");
     expect(state.overviewValue).toBe("50% ready");
+    expect(state.overviewAuxValue).toBe("2.000e-4 A/m / 1.000e-4 A/m");
+    expect(state.overviewDetail).toContain("Max torque 2.000e-4 A/m / 1.000e-4 A/m.");
     expect(state.overviewProgress).toBeCloseTo(50);
     expect(state.metrics.map((metric) => metric.key)).toEqual(["torque", "energy"]);
   });
@@ -71,6 +73,7 @@ describe("buildRelaxationInspectorState", () => {
 
     expect(state.overviewLabel).toBe("Final stop");
     expect(state.overviewValue).toBe("Stopped by energy delta threshold");
+    expect(state.overviewAuxValue).toBeNull();
     expect(state.overviewProgress).toBe(100);
     expect(state.lastStopDetail).toContain("energy_delta_j");
   });
@@ -91,5 +94,66 @@ describe("buildRelaxationInspectorState", () => {
       key: "max_steps",
       progress: 25,
     });
+  });
+
+  it("falls back to live telemetry when the latest scalar row has no torque yet", () => {
+    const state = buildRelaxationInspectorState({
+      payload: {
+        torque_tolerance: "1e-4",
+        max_steps: "50000",
+      },
+      stageExecutionRecord: null,
+      stageStatus: "running",
+      scalarRows: [row({ step: 11, time: 1.1e-9, max_torque_Apm: undefined, max_torque_T: undefined })],
+      liveState: {
+        status: "running",
+        updated_at_unix_ms: 0,
+        step: 11,
+        time: 1.1e-9,
+        dt: 1e-13,
+        e_ex: 0,
+        e_demag: 0,
+        e_ext: 0,
+        e_ani: 0,
+        e_dmi: 0,
+        e_total: 0,
+        max_dm_dt: 0,
+        max_h_eff: 0,
+        max_h_demag: 0,
+        max_torque_Apm: 2e-4,
+        max_torque_T: 2e-4,
+        wall_time_ns: 0,
+        grid: [0, 0, 0],
+        preview_grid: null,
+        preview_data_points_count: null,
+        preview_max_points: null,
+        preview_auto_downscaled: false,
+        preview_auto_downscale_message: null,
+        fem_mesh: null,
+        magnetization: null,
+        finished: false,
+      },
+    });
+
+    expect(state.overviewValue).toBe("50% ready");
+    expect(state.overviewAuxValue).toBe("2.000e-4 A/m / 1.000e-4 A/m");
+    expect(state.metrics[0]).toMatchObject({
+      key: "torque",
+      value: "2.000e-4 A/m / 1.000e-4 A/m",
+      progress: 50,
+    });
+  });
+
+  it("explains that stop records appear after the stage exits", () => {
+    const state = buildRelaxationInspectorState({
+      payload: {
+        torque_tolerance: "1e-4",
+      },
+      stageExecutionRecord: null,
+      stageStatus: "running",
+      scalarRows: [],
+    });
+
+    expect(state.lastStopDetail).toBe("Runtime publishes the stop record only after this stage exits.");
   });
 });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Literal, TypeAlias
 
 from fullmag._validation import (
@@ -37,6 +38,13 @@ def _format_translation_component(value: float) -> str:
 def _derived_translate_name(base_name: str, offset: tuple[float, float, float]) -> str:
     components = "_".join(_format_translation_component(component) for component in offset)
     return f"{base_name}__translate_{components}"
+
+
+def _require_finite(value: float, field: str) -> float:
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field} must be finite")
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +215,98 @@ class Cylinder(_GeometryOps):
             "kind": "cylinder",
             "radius": self.radius,
             "height": self.height,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SinWaveguide(_GeometryOps):
+    length: float
+    width: float
+    height: float
+    period: float
+    amplitude: float
+    phase: float = 0.0
+    z0: float = 0.0
+    name: str = "sin_waveguide"
+
+    def __init__(
+        self,
+        length: float,
+        width: float,
+        height: float,
+        period: float,
+        amplitude: float,
+        *,
+        phase: float = 0.0,
+        z0: float = 0.0,
+        name: str = "sin_waveguide",
+    ) -> None:
+        object.__setattr__(self, "length", require_positive(length, "length"))
+        object.__setattr__(self, "width", require_positive(width, "width"))
+        object.__setattr__(self, "height", require_positive(height, "height"))
+        object.__setattr__(self, "period", require_positive(period, "period"))
+        object.__setattr__(self, "amplitude", _require_finite(amplitude, "amplitude"))
+        object.__setattr__(self, "phase", _require_finite(phase, "phase"))
+        object.__setattr__(self, "z0", _require_finite(z0, "z0"))
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "sin_waveguide",
+            "length": self.length,
+            "width": self.width,
+            "height": self.height,
+            "period": self.period,
+            "amplitude": self.amplitude,
+            "phase": self.phase,
+            "z0": self.z0,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArchWaveguide(_GeometryOps):
+    length: float
+    width: float
+    height: float
+    arch_height: float
+    z0: float = 0.0
+    name: str = "arch_waveguide"
+
+    def __init__(
+        self,
+        length: float,
+        width: float,
+        height: float,
+        arch_height: float,
+        *,
+        z0: float = 0.0,
+        name: str = "arch_waveguide",
+    ) -> None:
+        object.__setattr__(self, "length", require_positive(length, "length"))
+        object.__setattr__(self, "width", require_positive(width, "width"))
+        object.__setattr__(self, "height", require_positive(height, "height"))
+        object.__setattr__(self, "arch_height", _require_finite(arch_height, "arch_height"))
+        object.__setattr__(self, "z0", _require_finite(z0, "z0"))
+        object.__setattr__(self, "name", require_non_empty(name, "name"))
+
+    @property
+    def geometry_name(self) -> str:
+        return self.name
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "arch_waveguide",
+            "length": self.length,
+            "width": self.width,
+            "height": self.height,
+            "arch_height": self.arch_height,
+            "z0": self.z0,
         }
 
 
@@ -446,6 +546,8 @@ Geometry: TypeAlias = (
     ImportedGeometry
     | Box
     | Cylinder
+    | SinWaveguide
+    | ArchWaveguide
     | Ellipsoid
     | Ellipse
     | Difference

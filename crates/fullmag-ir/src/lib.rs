@@ -859,6 +859,104 @@ impl ProblemIR {
                         ));
                     }
                 }
+                GeometryEntryIR::SinWaveguide {
+                    name,
+                    length,
+                    width,
+                    height,
+                    period,
+                    amplitude,
+                    phase,
+                    z0,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("sin_waveguide geometry name must not be empty".to_string());
+                    }
+                    if *length <= 0.0 {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' length must be positive",
+                            name
+                        ));
+                    }
+                    if *width <= 0.0 {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' width must be positive",
+                            name
+                        ));
+                    }
+                    if *height <= 0.0 {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' height must be positive",
+                            name
+                        ));
+                    }
+                    if *period <= 0.0 {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' period must be positive",
+                            name
+                        ));
+                    }
+                    if !amplitude.is_finite() {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' amplitude must be finite",
+                            name
+                        ));
+                    }
+                    if !phase.is_finite() {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' phase must be finite",
+                            name
+                        ));
+                    }
+                    if !z0.is_finite() {
+                        errors.push(format!(
+                            "sin_waveguide geometry '{}' z0 must be finite",
+                            name
+                        ));
+                    }
+                }
+                GeometryEntryIR::ArchWaveguide {
+                    name,
+                    length,
+                    width,
+                    height,
+                    arch_height,
+                    z0,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("arch_waveguide geometry name must not be empty".to_string());
+                    }
+                    if *length <= 0.0 {
+                        errors.push(format!(
+                            "arch_waveguide geometry '{}' length must be positive",
+                            name
+                        ));
+                    }
+                    if *width <= 0.0 {
+                        errors.push(format!(
+                            "arch_waveguide geometry '{}' width must be positive",
+                            name
+                        ));
+                    }
+                    if *height <= 0.0 {
+                        errors.push(format!(
+                            "arch_waveguide geometry '{}' height must be positive",
+                            name
+                        ));
+                    }
+                    if !arch_height.is_finite() {
+                        errors.push(format!(
+                            "arch_waveguide geometry '{}' arch_height must be finite",
+                            name
+                        ));
+                    }
+                    if !z0.is_finite() {
+                        errors.push(format!(
+                            "arch_waveguide geometry '{}' z0 must be finite",
+                            name
+                        ));
+                    }
+                }
                 GeometryEntryIR::Difference { name, base, tool } => {
                     if name.trim().is_empty() {
                         errors.push("difference geometry name must not be empty".to_string());

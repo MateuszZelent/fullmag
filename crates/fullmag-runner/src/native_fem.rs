@@ -10,6 +10,8 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
+use crate::derived_fields::compute_torque_field;
+#[cfg(feature = "fem-gpu")]
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
@@ -1088,6 +1090,11 @@ impl NativeFemBackend {
             QuantityId::HDemag => self.copy_h_demag(node_count)?,
             QuantityId::HExt => self.copy_h_ext(node_count)?,
             QuantityId::HEff => self.copy_h_eff(node_count)?,
+            QuantityId::Torque => {
+                let magnetization = self.copy_m(node_count)?;
+                let effective_field = self.copy_h_eff(node_count)?;
+                compute_torque_field(&magnetization, &effective_field)
+            }
             QuantityId::HAni => self.copy_h_ani(node_count)?,
             QuantityId::HDmi => self.copy_h_dmi(node_count)?,
             QuantityId::HMel => self.copy_h_mel(node_count)?,

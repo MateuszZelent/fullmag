@@ -15,6 +15,7 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
+use crate::derived_fields::compute_torque_field;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{build_grid_preview_field, flatten_vectors, select_observables};
 use crate::quantities::normalized_quantity_name;
@@ -995,8 +996,11 @@ pub(crate) fn observe_state(
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
 
+    let torque_field = compute_torque_field(&observables.magnetization, &observables.effective_field);
+
     Ok(StateObservables {
         magnetization: observables.magnetization,
+        torque_field,
         exchange_field: observables.exchange_field,
         demag_field: observables.demag_field,
         external_field: uniform_external,
@@ -1093,6 +1097,7 @@ fn select_base_field(
         "H_ext" => Ok(observables.external_field.clone()),
         "H_OE" => Ok(observables.oersted_field.clone()),
         "H_eff" => Ok(observables.effective_field.clone()),
+        "torque" => Ok(observables.torque_field.clone()),
         other => Err(RunError {
             message: format!(
                 "CPU FDM snapshot: field '{}' is not available in this execution path \

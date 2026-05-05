@@ -33,6 +33,7 @@ from fullmag.meshing.gmsh_bridge import (
 )
 from fullmag.model.discretization import FEM
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -40,6 +41,7 @@ from fullmag.model.geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    SinWaveguide,
     Translate,
     Union,
 )
@@ -54,6 +56,26 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
         return Box(size[0], size[1], size[2], name=entry.get("name", "box"))
     if kind == "cylinder":
         return Cylinder(entry["radius"], entry["height"], name=entry.get("name", "cylinder"))
+    if kind == "sin_waveguide":
+        return SinWaveguide(
+            entry["length"],
+            entry["width"],
+            entry["height"],
+            entry["period"],
+            entry["amplitude"],
+            phase=entry.get("phase", 0.0),
+            z0=entry.get("z0", 0.0),
+            name=entry.get("name", "sin_waveguide"),
+        )
+    if kind == "arch_waveguide":
+        return ArchWaveguide(
+            entry["length"],
+            entry["width"],
+            entry["height"],
+            entry["arch_height"],
+            z0=entry.get("z0", 0.0),
+            name=entry.get("name", "arch_waveguide"),
+        )
     if kind == "ellipsoid":
         radii = entry["radii"]
         return Ellipsoid(radii[0], radii[1], radii[2], name=entry.get("name", "ellipsoid"))
