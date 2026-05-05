@@ -13,3 +13,6 @@
 [submodule "external_solvers/oommf"]
 	path = external_solvers/oommf
 	url = https://github.com/fangohr/oommf
+[submodule "external_solvers/neuralmag"]
+	path = external_solvers/neuralmag
+	url = https://gitlab.com/neuralmag/neuralmag
