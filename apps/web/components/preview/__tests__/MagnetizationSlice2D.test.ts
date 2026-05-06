@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSlice2DChartTopologyKey,
   resolveHeatmapTooltipValue,
-} from "../MagnetizationSlice2D";
+} from "../magnetizationSliceUtils";
 
 describe("resolveHeatmapTooltipValue", () => {
   it("accepts direct heatmap tooltip values", () => {

@@ -372,7 +372,9 @@ mod tests {
     #[test]
     fn fdm_cached_quantities_follow_active_terms_and_engine_observables() {
         let mut plan = fdm_plan();
-        let quantities = ["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_oe"];
+        let quantities = [
+            "m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_oe",
+        ];
 
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
@@ -397,7 +399,9 @@ mod tests {
     #[test]
     fn fem_cached_quantities_follow_active_terms() {
         let mut plan = fem_plan();
-        let quantities = ["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_mel"];
+        let quantities = [
+            "m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_eff", "H_mel",
+        ];
 
         assert_eq!(
             active_fem_preview_quantities(FemEngine::NativeGpu, &plan, &quantities),

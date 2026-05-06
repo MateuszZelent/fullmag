@@ -53,6 +53,16 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshShowArrows).not.toHaveBeenCalled();
   });
 
+  it("dispatches viewport fit-all through the camera fit callback", () => {
+    const onRequestViewportCameraFit = vi.fn();
+    const ctx = context({ onRequestViewportCameraFit });
+
+    expect(canExecuteRibbonCommand(ctx, { id: "viewport.fit-all" })).toBe(true);
+    executeRibbonCommand(ctx, { id: "viewport.fit-all" });
+
+    expect(onRequestViewportCameraFit).toHaveBeenCalledTimes(1);
+  });
+
   it("maps view ribbon quantity controls to visualization state patches", () => {
     expect(
       visualizationPatchFromRibbonCommand({
@@ -203,6 +213,67 @@ describe("ribbon viewport commands", () => {
       slice: { airbox_render_mode: "points" },
     });
     expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
+  });
+
+  it("does not change global FEM clip state from slice axis patches", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({
+      isFemBackend: true,
+      onPatchVisualizationState,
+      onSetSlice2DToolbar,
+    });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-slice-axis",
+      axis: "y",
+    });
+
+    expect(onPatchVisualizationState).toHaveBeenCalledWith({
+      slice: { axis: "y" },
+    });
+    expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
+  });
+
+  it("does not change global FEM clip state from slice position patches", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({
+      isFemBackend: true,
+      onPatchVisualizationState,
+      onSetSlice2DToolbar,
+    });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-slice-position",
+      positionPercent: 35,
+    });
+
+    expect(onPatchVisualizationState).toHaveBeenCalledWith({
+      slice: { position_percent: 35 },
+    });
+    expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
+  });
+
+  it("keeps projection controls local to the 2D slice toolbar", () => {
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({ onSetSlice2DToolbar });
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-slice-projection-reduction",
+      reduction: "thickness_integral",
+    });
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-slice-projection-air-zero",
+      enabled: true,
+    });
+
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, {
+      projectionReduction: "thickness_integral",
+    });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, {
+      projectionIncludeAirAsZero: true,
+    });
   });
 
   it("keeps vector color changes independent from vector visibility", () => {

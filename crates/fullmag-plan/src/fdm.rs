@@ -166,25 +166,24 @@ pub(crate) fn plan_fdm(
             .find(|asset| asset.geometry_name == geometry.name())
     });
 
-    let (bounding_size, active_mask, grid_cells, used_precomputed_asset) = if let Some(asset) =
-        provided_grid_asset
-    {
-        validate_grid_asset_cell_size(asset, cell_size, &mut errors);
-        (
-            [
-                asset.cells[0] as f64 * asset.cell_size[0],
-                asset.cells[1] as f64 * asset.cell_size[1],
-                asset.cells[2] as f64 * asset.cell_size[2],
-            ],
-            Some(asset.active_mask.clone()),
-            asset.cells,
-            true,
-        )
-    } else {
-        let (bounding_size, active_mask, grid_cells, _origin) =
-            voxelize_shape(&shape, cell_size, &mut errors);
-        (bounding_size, active_mask, grid_cells, false)
-    };
+    let (bounding_size, active_mask, grid_cells, used_precomputed_asset) =
+        if let Some(asset) = provided_grid_asset {
+            validate_grid_asset_cell_size(asset, cell_size, &mut errors);
+            (
+                [
+                    asset.cells[0] as f64 * asset.cell_size[0],
+                    asset.cells[1] as f64 * asset.cell_size[1],
+                    asset.cells[2] as f64 * asset.cell_size[2],
+                ],
+                Some(asset.active_mask.clone()),
+                asset.cells,
+                true,
+            )
+        } else {
+            let (bounding_size, active_mask, grid_cells, _origin) =
+                voxelize_shape(&shape, cell_size, &mut errors);
+            (bounding_size, active_mask, grid_cells, false)
+        };
 
     if !used_precomputed_asset {
         validate_realized_grid(

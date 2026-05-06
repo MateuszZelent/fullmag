@@ -229,11 +229,25 @@ export function useMeshCommandPipeline({
       typeof payload.kind === "string" ? payload.kind.toUpperCase() : "COMMAND";
     appendFrontendTrace("info", `TX: ${commandKind} ${JSON.stringify(payload)}`);
     try {
+      if (payload.kind === "solve") {
+        const realization = await getLiveSessionClient().scene.createGeometryRealization({});
+        if (realization.status === "blocked") {
+          const reason =
+            realization.diagnostics.find((diagnostic) =>
+              diagnostic.blocks.includes("run_solver"),
+            )?.message ?? "Geometry realization is blocked.";
+          throw new Error(reason);
+        }
+        appendFrontendTrace(
+          "system",
+          `RX: geometry realization ${realization.status} scene_rev=${realization.source_scene_revision}`,
+        );
+      }
       await liveApi.queueCommand(payload);
       appendFrontendTrace("system", `RX: HTTP accepted ${commandKind}`);
     } catch (e) {
       appendFrontendTrace(
-        "error",
+        "warn",
         `RX: HTTP rejected ${commandKind} — ${e instanceof Error ? e.message : "Failed to queue command"}`,
       );
       setCommandErrorMessage(e instanceof Error ? e.message : "Failed to queue command");

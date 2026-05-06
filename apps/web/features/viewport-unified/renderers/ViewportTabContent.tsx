@@ -72,6 +72,7 @@ export function ViewportTabContent({
 }: ViewportTabContentProps) {
   const ctx = bridge.ctx;
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
+  const cameraFitRequestSeed = ctx.cameraFitRequestSeed > 0 ? ctx.cameraFitRequestSeed : null;
   const handleMeshRenderModeChange = React.useCallback(
     (renderMode: React.SetStateAction<typeof ctx.meshRenderMode>) => {
       const resolvedRenderMode =
@@ -334,6 +335,7 @@ export function ViewportTabContent({
             onViewportHealthChange={onViewportHealthChange}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
+            cameraFitRequestSeed={cameraFitRequestSeed}
             quantityId={ctx.requestedPreviewQuantity}
             quantityOptions={bridge.femQuantityOptions}
             colorField={bridge.femColorFieldForRender}
@@ -465,6 +467,7 @@ export function ViewportTabContent({
               onViewportHealthChange={onViewportHealthChange}
               selectedSidebarNodeId={ctx.selectedSidebarNodeId}
               viewportFitSeed={bridge.viewportFitSeed}
+              cameraFitRequestSeed={cameraFitRequestSeed}
               fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
               liveRenderDebugData={bridge.femLiveRenderDebugData}
               quantityId={ctx.requestedPreviewQuantity}
@@ -612,6 +615,7 @@ export function ViewportTabContent({
             onViewportHealthChange={onViewportHealthChange}
             selectedSidebarNodeId={ctx.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
+            cameraFitRequestSeed={cameraFitRequestSeed}
             colorField="none"
             toolbarMode={bridge.femToolbarMode}
             viewportDocumentId={bridge.graphActiveViewportDocumentId}

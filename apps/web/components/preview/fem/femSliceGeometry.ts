@@ -639,3 +639,330 @@ export function collectSegments(
   );
   return sampleSliceField(meshData, plane, component, topology);
 }
+
+// ── Projection (Z-averaged) slice ────────────────────────────────
+
+/** Result of a projection (thickness-averaged) slice computation. */
+export interface ProjectionResult {
+  /** Row-major raster: values[iy * xRes + ix]. NaN = no data. */
+  values: Float64Array;
+  xRes: number;
+  yRes: number;
+  bounds: { uMin: number; uMax: number; vMin: number; vMax: number };
+  valueRange: { min: number; max: number };
+  normalLabel: string;
+  uLabel: string;
+  vLabel: string;
+  /** Number of Z-planes actually sampled. */
+  nPlanesSampled: number;
+}
+
+export interface ProjectionOptions {
+  /** Number of planes to sample along the normal axis. Default: 20. */
+  nPlanes?: number;
+  /** Grid resolution (pixels per axis). Default: 128. */
+  resolution?: number;
+  /** Maximum number of tetrahedra sampled per projection plane. Default: all visible elements. */
+  maxElements?: number;
+  /** Reduction used when multiple 3D samples project into one 2D pixel. */
+  reduction?: ProjectionReduction;
+  /** Treat empty sampled columns as explicit zero-valued pixels. */
+  includeAirAsZero?: boolean;
+}
+
+export type ProjectionReduction =
+  | "mean_occupied"
+  | "sum"
+  | "thickness_integral"
+  | "area_weighted_mean"
+  | "min"
+  | "max"
+  | "rms"
+  | "stddev"
+  | "abs_max";
+
+function limitProjectionVisibility(
+  meshData: FemMeshData,
+  visibility: SliceVisibilityState | null,
+  maxElements: number,
+): SliceVisibilityState | null {
+  const nElements = meshData.nElements || Math.floor(meshData.elements.length / 4);
+  if (maxElements <= 0 || nElements <= maxElements) {
+    return visibility;
+  }
+
+  const visibleElements = new Uint8Array(nElements);
+  const sourceMask = visibility?.visibleElements ?? null;
+  const visibleCount = sourceMask
+    ? sourceMask.reduce((count, value) => count + (value === 1 ? 1 : 0), 0)
+    : nElements;
+  if (visibleCount <= maxElements) {
+    return visibility;
+  }
+
+  const stride = Math.max(1, Math.ceil(visibleCount / maxElements));
+  let seenVisible = 0;
+  for (let elementIndex = 0; elementIndex < nElements; elementIndex += 1) {
+    if (sourceMask && sourceMask[elementIndex] !== 1) continue;
+    if (seenVisible % stride === 0) {
+      visibleElements[elementIndex] = 1;
+    }
+    seenVisible += 1;
+  }
+
+  if (visibility) {
+    return {
+      ...visibility,
+      visibleElements,
+    };
+  }
+
+  return {
+    visibleElements,
+    visibleBoundaryFaces: null,
+    elementPartIds: [],
+    boundaryFacePartIds: [],
+    partById: new Map(),
+    visiblePartIds: new Set(),
+  };
+}
+
+/**
+ * Compute a thickness-averaged (projection) slice.
+ *
+ * Samples `nPlanes` evenly-spaced planes along the normal axis,
+ * rasterizes polygon values from each plane onto a common regular grid
+ * using centroid-in-cell assignment, and averages the accumulated values.
+ *
+ * This is the engine behind the "All layers" / COMSOL-style top-down view.
+ */
+export function computeProjectionSlice(
+  meshData: FemMeshData,
+  plane: SlicePlane,
+  component: VectorComponent,
+  visibility: SliceVisibilityState | null,
+  boundsStrategy: SliceBoundsStrategy = "visible-context",
+  options?: ProjectionOptions,
+): ProjectionResult {
+  const nPlanes = Math.max(1, Math.min(512, Math.round(options?.nPlanes ?? 20)));
+  const resolution = Math.max(1, Math.min(2048, Math.round(options?.resolution ?? 128)));
+  const maxElements = Math.max(0, Math.round(options?.maxElements ?? 0));
+  const reduction = options?.reduction ?? "mean_occupied";
+  const includeAirAsZero = options?.includeAirAsZero ?? false;
+  const projectionVisibility = limitProjectionVisibility(meshData, visibility, maxElements);
+  const { normal, u, v } = axisIndices(plane);
+
+  // ── 1. Determine normal-axis extent from visible mesh nodes ────
+  const flatNodes = meshData.nodes;
+  const numNodes = flatNodes.length / 3;
+  let normalMin = Number.POSITIVE_INFINITY;
+  let normalMax = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < numNodes; i++) {
+    const val = flatNodes[i * 3 + normal];
+    if (val < normalMin) normalMin = val;
+    if (val > normalMax) normalMax = val;
+  }
+  if (!Number.isFinite(normalMin) || !Number.isFinite(normalMax) || normalMin >= normalMax) {
+    return emptyProjectionResult(plane, resolution);
+  }
+
+  // ── 2. Determine in-plane bounds from first slice ──────────────
+  // Sample the midpoint to get a representative bounds estimate.
+  const midCoord = (normalMin + normalMax) / 2;
+  const probeSlice = collectSegments(
+    meshData, plane, component, midCoord, projectionVisibility, boundsStrategy,
+  );
+  const bounds = probeSlice.bounds;
+  const uRange = bounds.uMax - bounds.uMin;
+  const vRange = bounds.vMax - bounds.vMin;
+  if (uRange <= 0 || vRange <= 0) {
+    return emptyProjectionResult(plane, resolution);
+  }
+
+  // ── 3. Determine grid resolution (preserve aspect ratio) ──────
+  let xRes: number;
+  let yRes: number;
+  if (uRange >= vRange) {
+    xRes = resolution;
+    yRes = Math.max(1, Math.round(resolution * (vRange / uRange)));
+  } else {
+    yRes = resolution;
+    xRes = Math.max(1, Math.round(resolution * (uRange / vRange)));
+  }
+
+  const cellWidth = uRange / xRes;
+  const cellHeight = vRange / yRes;
+
+  // ── 4. Accumulation buffers ───────────────────────────────────
+  const totalCells = xRes * yRes;
+  const sumBuf = new Float64Array(totalCells); // accumulated values
+  const cntBuf = new Float64Array(totalCells); // sample count per cell
+  const sumSqBuf = new Float64Array(totalCells);
+  const minBuf = new Float64Array(totalCells);
+  const maxBuf = new Float64Array(totalCells);
+  const weightedSumBuf = new Float64Array(totalCells);
+  const weightBuf = new Float64Array(totalCells);
+  minBuf.fill(Number.POSITIVE_INFINITY);
+  maxBuf.fill(Number.NEGATIVE_INFINITY);
+
+  // ── 5. Sample N planes and rasterize ──────────────────────────
+  const step = (normalMax - normalMin) / (nPlanes + 1);
+  let planesSampled = 0;
+
+  for (let pi = 1; pi <= nPlanes; pi++) {
+    const planeCoord = normalMin + step * pi;
+    const slice = collectSegments(
+      meshData, plane, component, planeCoord, projectionVisibility, boundsStrategy,
+    );
+
+    // Rasterize polygon centroids into the grid
+    for (const polygon of slice.polygons) {
+      if (polygon.points.length < 3) continue;
+
+      // Compute centroid in 2D
+      let cu = 0;
+      let cv = 0;
+      for (const [pu, pv] of polygon.points) {
+        cu += pu;
+        cv += pv;
+      }
+      cu /= polygon.points.length;
+      cv /= polygon.points.length;
+
+      // Map to grid cell
+      const ix = Math.floor((cu - bounds.uMin) / cellWidth);
+      const iy = Math.floor((cv - bounds.vMin) / cellHeight);
+      if (ix < 0 || ix >= xRes || iy < 0 || iy >= yRes) continue;
+
+      const cellIndex = iy * xRes + ix;
+      const area = Math.max(1e-30, polygonArea2D(polygon.points));
+      sumBuf[cellIndex] += polygon.value;
+      cntBuf[cellIndex] += 1;
+      sumSqBuf[cellIndex] += polygon.value * polygon.value;
+      minBuf[cellIndex] = Math.min(minBuf[cellIndex], polygon.value);
+      maxBuf[cellIndex] = Math.max(maxBuf[cellIndex], polygon.value);
+      weightedSumBuf[cellIndex] += polygon.value * area;
+      weightBuf[cellIndex] += area;
+    }
+
+    planesSampled++;
+  }
+
+  // ── 6. Average and compute value range ────────────────────────
+  const values = new Float64Array(totalCells);
+  let vMin = Number.POSITIVE_INFINITY;
+  let vMax = Number.NEGATIVE_INFINITY;
+
+  for (let i = 0; i < totalCells; i++) {
+    if (cntBuf[i] > 0) {
+      const value = reduceProjectionCell({
+        reduction,
+        sum: sumBuf[i],
+        sumSq: sumSqBuf[i],
+        count: cntBuf[i],
+        min: minBuf[i],
+        max: maxBuf[i],
+        weightedSum: weightedSumBuf[i],
+        weight: weightBuf[i],
+        normalStep: step,
+        nPlanes,
+        includeAirAsZero,
+      });
+      values[i] = value;
+      if (value < vMin) vMin = value;
+      if (value > vMax) vMax = value;
+    } else if (includeAirAsZero) {
+      values[i] = 0;
+      vMin = Math.min(vMin, 0);
+      vMax = Math.max(vMax, 0);
+    } else {
+      values[i] = NaN;
+    }
+  }
+
+  if (!Number.isFinite(vMin)) vMin = 0;
+  if (!Number.isFinite(vMax)) vMax = 0;
+
+  return {
+    values,
+    xRes,
+    yRes,
+    bounds,
+    valueRange: finalizeRange(vMin, vMax, component),
+    normalLabel: axisLabel(normal),
+    uLabel: axisLabel(u),
+    vLabel: axisLabel(v),
+    nPlanesSampled: planesSampled,
+  };
+}
+
+function polygonArea2D(points: Point2[]): number {
+  if (points.length < 3) return 0;
+  let twiceArea = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    twiceArea += a[0] * b[1] - b[0] * a[1];
+  }
+  return Math.abs(twiceArea) / 2;
+}
+
+function reduceProjectionCell(args: {
+  reduction: ProjectionReduction;
+  sum: number;
+  sumSq: number;
+  count: number;
+  min: number;
+  max: number;
+  weightedSum: number;
+  weight: number;
+  normalStep: number;
+  nPlanes: number;
+  includeAirAsZero: boolean;
+}): number {
+  switch (args.reduction) {
+    case "sum":
+      return args.sum;
+    case "min":
+      return args.min;
+    case "max":
+      return args.max;
+    case "rms":
+      return args.count > 0 ? Math.sqrt(args.sumSq / args.count) : 0;
+    case "stddev": {
+      if (args.count <= 0) return 0;
+      const mean = args.sum / args.count;
+      const variance = Math.max(0, args.sumSq / args.count - mean * mean);
+      return Math.sqrt(variance);
+    }
+    case "abs_max":
+      return Math.abs(args.min) >= Math.abs(args.max) ? args.min : args.max;
+    case "thickness_integral":
+      return args.sum * args.normalStep;
+    case "area_weighted_mean":
+      if (args.weight > 0) return args.weightedSum / args.weight;
+      return 0;
+    case "mean_occupied":
+    default: {
+      const denominator = args.includeAirAsZero
+        ? Math.max(args.nPlanes, args.count)
+        : args.count;
+      return denominator > 0 ? args.sum / denominator : 0;
+    }
+  }
+}
+
+function emptyProjectionResult(plane: SlicePlane, resolution: number): ProjectionResult {
+  const { normal, u, v } = axisIndices(plane);
+  return {
+    values: new Float64Array(0),
+    xRes: 0,
+    yRes: 0,
+    bounds: { uMin: 0, uMax: 1, vMin: 0, vMax: 1 },
+    valueRange: { min: 0, max: 0 },
+    normalLabel: axisLabel(normal),
+    uLabel: axisLabel(u),
+    vLabel: axisLabel(v),
+    nPlanesSampled: 0,
+  };
+}

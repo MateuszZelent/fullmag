@@ -32,6 +32,7 @@ from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as sh
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
 from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -39,6 +40,7 @@ from fullmag.model.geometry import (
     Ellipsoid,
     ImportedGeometry,
     Intersection,
+    SinWaveguide,
     Translate,
     Union,
 )
@@ -2033,6 +2035,26 @@ def _render_geometry_expr_from_override(
             f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
             f"name={_py_repr(name)})"
         )
+    elif kind == "ArchWaveguide":
+        expr = (
+            f"fm.ArchWaveguide(length={_py_number(float(str(params.get('length', 1e-9))))}, "
+            f"width={_py_number(float(str(params.get('width', 1e-9))))}, "
+            f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
+            f"arch_height={_py_number(float(str(params.get('arch_height', 0.0))))}, "
+            f"z0={_py_number(float(str(params.get('z0', 0.0))))}, "
+            f"name={_py_repr(name)})"
+        )
+    elif kind == "SinWaveguide":
+        expr = (
+            f"fm.SinWaveguide(length={_py_number(float(str(params.get('length', 1e-9))))}, "
+            f"width={_py_number(float(str(params.get('width', 1e-9))))}, "
+            f"height={_py_number(float(str(params.get('height', 1e-9))))}, "
+            f"period={_py_number(float(str(params.get('period', 1e-9))))}, "
+            f"amplitude={_py_number(float(str(params.get('amplitude', 0.0))))}, "
+            f"phase={_py_number(float(str(params.get('phase', 0.0))))}, "
+            f"z0={_py_number(float(str(params.get('z0', 0.0))))}, "
+            f"name={_py_repr(name)})"
+        )
     elif kind == "Ellipsoid":
         expr = (
             f"fm.Ellipsoid({_py_number(float(str(params.get('rx', 1e-9))))}, "
@@ -2130,6 +2152,25 @@ def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Pa
         if geometry.name in {"cylinder", f"{magnet_name}_geom"}:
             return f"fm.Cylinder({args})"
         return f"fm.Cylinder({args}, name={_py_repr(geometry.name)})"
+    if isinstance(geometry, ArchWaveguide):
+        args = (
+            f"length={_py_number(geometry.length)}, width={_py_number(geometry.width)}, "
+            f"height={_py_number(geometry.height)}, arch_height={_py_number(geometry.arch_height)}, "
+            f"z0={_py_number(geometry.z0)}"
+        )
+        if geometry.name in {"arch_waveguide", f"{magnet_name}_geom"}:
+            return f"fm.ArchWaveguide({args})"
+        return f"fm.ArchWaveguide({args}, name={_py_repr(geometry.name)})"
+    if isinstance(geometry, SinWaveguide):
+        args = (
+            f"length={_py_number(geometry.length)}, width={_py_number(geometry.width)}, "
+            f"height={_py_number(geometry.height)}, period={_py_number(geometry.period)}, "
+            f"amplitude={_py_number(geometry.amplitude)}, phase={_py_number(geometry.phase)}, "
+            f"z0={_py_number(geometry.z0)}"
+        )
+        if geometry.name in {"sin_waveguide", f"{magnet_name}_geom"}:
+            return f"fm.SinWaveguide({args})"
+        return f"fm.SinWaveguide({args}, name={_py_repr(geometry.name)})"
     if isinstance(geometry, Ellipsoid):
         args = f"{_py_number(geometry.rx)}, {_py_number(geometry.ry)}, {_py_number(geometry.rz)}"
         if geometry.name in {"ellipsoid", f"{magnet_name}_geom"}:
@@ -2664,6 +2705,30 @@ def _export_geometry_descriptor(
         return {
             "geometry_kind": "Ellipse",
             "geometry_params": {"rx": geom.rx, "ry": geom.ry, "height": geom.height},
+        }
+    if isinstance(geom, ArchWaveguide):
+        return {
+            "geometry_kind": "ArchWaveguide",
+            "geometry_params": {
+                "length": geom.length,
+                "width": geom.width,
+                "height": geom.height,
+                "arch_height": geom.arch_height,
+                "z0": geom.z0,
+            },
+        }
+    if isinstance(geom, SinWaveguide):
+        return {
+            "geometry_kind": "SinWaveguide",
+            "geometry_params": {
+                "length": geom.length,
+                "width": geom.width,
+                "height": geom.height,
+                "period": geom.period,
+                "amplitude": geom.amplitude,
+                "phase": geom.phase,
+                "z0": geom.z0,
+            },
         }
     if isinstance(geom, Translate):
         if flatten_translation:

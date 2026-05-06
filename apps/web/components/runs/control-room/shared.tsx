@@ -498,6 +498,23 @@ export function extractGeometryBoundsFromParams(
       boundsMin = [-radius, -radius, -0.5 * height];
       boundsMax = [radius, radius, 0.5 * height];
     }
+  } else if (geometry.geometry_kind === "ArchWaveguide") {
+    const length = Number(params.length);
+    const width = Number(params.width);
+    const height = Number(params.height);
+    const archHeight = Number(params.arch_height);
+    const z0 = params.z0 == null ? 0 : Number(params.z0);
+    if (
+      [length, width, height].every((value) => Number.isFinite(value) && value > 0) &&
+      Number.isFinite(archHeight) &&
+      Number.isFinite(z0)
+    ) {
+      const halfLength = 0.5 * length;
+      const halfWidth = 0.5 * width;
+      const halfHeight = 0.5 * height;
+      boundsMin = [-halfLength, -halfWidth, Math.min(z0, z0 + archHeight) - halfHeight];
+      boundsMax = [halfLength, halfWidth, Math.max(z0, z0 + archHeight) + halfHeight];
+    }
   } else if (geometry.geometry_kind === "Ellipsoid") {
     const rx = Number(params.rx);
     const ry = Number(params.ry);

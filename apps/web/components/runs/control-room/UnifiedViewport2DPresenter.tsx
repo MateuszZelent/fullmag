@@ -35,7 +35,7 @@ function ViewportModuleLoading({ label }: { label: string }) {
   );
 }
 
-const FemMeshSlice2D = dynamic(() => import("@/components/preview/FemMeshSlice2DPlotly"), {
+const FemMeshSlice2D = dynamic(() => import("@/components/preview/FemMeshSlice2DECharts"), {
   ssr: false,
   loading: () => <ViewportModuleLoading label="Loading FEM slice viewport..." />,
 });
@@ -144,7 +144,11 @@ export default function UnifiedViewport2DPresenter({
     : toolbar?.showQuantity ?? showQuantity;
   const effectiveShowPrimitives = toolbar?.showPrimitives ?? showPrimitives;
   const effectiveShowArrows =
-    toolbar?.showAirboxVectors || (toolbar?.showVectors ?? showArrows);
+    toolbar
+      ? Boolean(toolbar.showAirboxVectors || toolbar.showVectors)
+      : showArrows;
+  const effectiveClipAxis = toolbar?.axis ?? clipAxis;
+  const effectiveClipPos = toolbar?.positionPercent ?? clipPos;
   const effectiveAirboxVisible = toolbar?.showAirbox ?? airSegmentVisible;
   const effectiveVectorDomainFilter: FemVectorDomainFilter =
     toolbar?.showAirboxVectors && effectiveAirboxVisible
@@ -189,12 +193,17 @@ export default function UnifiedViewport2DPresenter({
         objectViewMode={objectViewMode}
         visibleObjectIds={visibleObjectIds}
         vectorDomainFilter={effectiveVectorDomainFilter}
-        clipAxis={clipAxis}
-        clipPos={clipPos}
+        clipAxis={effectiveClipAxis}
+        clipPos={effectiveClipPos}
         antennaOverlays={antennaOverlays}
         selectedAntennaId={selectedAntennaId}
         showArrows={effectiveShowArrows}
         previewMaxPoints={previewMaxPoints}
+        sliceMode={toolbar?.mode ?? "single"}
+        projectionReduction={toolbar?.projectionReduction}
+        projectionIncludeAirAsZero={toolbar?.projectionIncludeAirAsZero}
+        projectionSamples={toolbar?.projectionSamples}
+        projectionResolution={toolbar?.projectionResolution}
         onQuantityChange={onQuantityChange}
         onComponentChange={onComponentChange}
         onPlaneChange={onPlaneChange}

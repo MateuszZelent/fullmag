@@ -48,6 +48,7 @@ type ControlRoomOwnedRibbonProps =
   | "objectViewMode"
   | "sceneObjectCount"
   | "onRequestObjectFocus"
+  | "onRequestViewportCameraFit"
   | "onSetObjectViewMode"
   | "canSyncScriptBuilder"
   | "scriptSyncBusy"
@@ -146,6 +147,10 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       objectViewMode={model.objectViewMode}
       sceneObjectCount={model.sceneDocument?.objects.length ?? 0}
       onRequestObjectFocus={model.requestFocusObject}
+      onRequestViewportCameraFit={() => {
+        viewport.handleViewModeChange("3D");
+        model.requestViewportCameraFit();
+      }}
       onSetObjectViewMode={model.setObjectViewMode}
       canSyncScriptBuilder={Boolean(command.sessionFooter.scriptPath)}
       scriptSyncBusy={command.scriptSyncBusy}

@@ -16,8 +16,8 @@ import {
 import { useSlice2DModel } from "@/src/hooks/resources/useSliceResource";
 import { useSlice2DToolbarStore } from "@/src/features/slice2d";
 import {
+  planeFromSliceAxis,
   positionPercentFromSliceIndex,
-  resolveEffectiveSlicePlane,
   resolveSliceAxisSelection,
   sliceIndexFromPositionPercent,
   sliceAxisFromPlane,
@@ -313,11 +313,6 @@ export function useViewportDataBridge() {
 
   /* ── FEM discretization ── */
   const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
-  const effectiveSlicePlane = resolveEffectiveSlicePlane({
-    plane: ctx.plane,
-    clipAxis: ctx.meshClipAxis,
-    preferClipAxis: Boolean(femDiscretization),
-  });
 
   /* ── Mesh workspace resource ── */
   const meshWorkspaceResource = useMeshWorkspaceModel({
@@ -716,6 +711,9 @@ export function useViewportDataBridge() {
   ]);
 
   const renderPlan = ctx.resolvedRenderPlan;
+  const effectiveSlicePlane = renderPlan?.slice
+    ? planeFromSliceAxis(renderPlan.slice.axis)
+    : ctx.plane;
 
   /* ── FEM layer state ── */
   const femLayerState = renderPlan?.layers.femLayers ?? ctx.femViewportLayers;
@@ -738,7 +736,6 @@ export function useViewportDataBridge() {
     },
     [
       ctx.objectOverlays,
-      ctx.visibleMagneticObjectIds,
       femDiscretization,
       geometryAuthoringShowPrimitives,
       visibleObjectIds,
@@ -1229,6 +1226,23 @@ export function useViewportDataBridge() {
   });
 
   const slice2DModel = useMemo<Slice2DModel>(() => {
+    const localProjectionPatch: Partial<Slice2DModel["toolbar"]> = {};
+    if (slice2DToolbarPatch.projectionReduction) {
+      localProjectionPatch.projectionReduction = slice2DToolbarPatch.projectionReduction;
+    }
+    if (typeof slice2DToolbarPatch.projectionIncludeAirAsZero === "boolean") {
+      localProjectionPatch.projectionIncludeAirAsZero =
+        slice2DToolbarPatch.projectionIncludeAirAsZero;
+    }
+    if (typeof slice2DToolbarPatch.projectionSamples === "number") {
+      localProjectionPatch.projectionSamples = slice2DToolbarPatch.projectionSamples;
+    }
+    if (typeof slice2DToolbarPatch.projectionResolution === "number") {
+      localProjectionPatch.projectionResolution = slice2DToolbarPatch.projectionResolution;
+    }
+    if (typeof slice2DToolbarPatch.positionPercent === "number") {
+      localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
+    }
     const layerControlledToolbar = femDiscretization
         ? {
           ...slice2DBaseModel.toolbar,
@@ -1241,7 +1255,9 @@ export function useViewportDataBridge() {
           showQuantity: ctx.femViewportLayers.showQuantity,
         }
       : slice2DBaseModel.toolbar;
-    const toolbar = renderPlan?.slice ?? { ...layerControlledToolbar, ...slice2DToolbarPatch };
+    const toolbar = renderPlan?.slice
+      ? { ...renderPlan.slice, ...localProjectionPatch }
+      : { ...layerControlledToolbar, ...slice2DToolbarPatch };
     return {
       ...slice2DBaseModel,
       toolbar,
@@ -1260,7 +1276,7 @@ export function useViewportDataBridge() {
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,
     shouldUseSliceApi2D ? sliceFieldRevision : null,
-    0,
+    runtimeResourceRevisions?.domain_generation_id ?? 0,
     sliceQuery,
   );
 

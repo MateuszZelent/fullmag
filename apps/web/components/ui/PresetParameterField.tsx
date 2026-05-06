@@ -7,6 +7,7 @@ export interface BasePresetParameterDescriptor {
   label: string;
   type: string;
   unit?: string;
+  min?: number;
   options?: Array<{ value: string | number; label: string }>;
 }
 
@@ -69,6 +70,12 @@ export function PresetParameterField({ parameter, value, onChange }: PresetParam
           ? Number.parseInt(event.target.value, 10)
           : Number.parseFloat(event.target.value);
         if (!Number.isFinite(parsed)) return;
+        if (
+          typeof parameter.min === "number" &&
+          (parsed < parameter.min || (parameter.min === 0 && parsed === 0))
+        ) {
+          return;
+        }
         onChange(parsed);
       }}
       unit={parameter.unit}

@@ -356,6 +356,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_empty_mask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/meta": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_profile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/scalar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_scalar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/arrows": {
         parameters: {
             query?: never;
@@ -1994,6 +2058,85 @@ export interface components {
             quantity_id: string;
             stats?: null | components["schemas"]["FieldStats"];
             unit: string;
+        };
+        FieldProjectionMaskDescriptor: {
+            available: boolean;
+            etag?: string | null;
+            href?: string | null;
+            /** Format: int32 */
+            point_count: number;
+        };
+        FieldProjectionMeta: {
+            bounds?: null | components["schemas"]["FieldSliceBounds"];
+            component: string;
+            /** Format: int64 */
+            domain_generation_id: number;
+            /** Format: int32 */
+            empty_count: number;
+            empty_mask: components["schemas"]["FieldProjectionMaskDescriptor"];
+            /** Format: double */
+            error_estimate?: number | null;
+            error_method?: string | null;
+            etag: string;
+            /** Format: int64 */
+            field_revision: number;
+            grid: components["schemas"]["FieldSliceGrid"];
+            include_air_as_zero: boolean;
+            /** Format: int32 */
+            occupied_count: number;
+            /** Format: double */
+            occupied_measure: number;
+            plane: string;
+            projection_revision: string;
+            quantity_id: string;
+            reduction: string;
+            /** Format: int32 */
+            samples: number;
+            sampling_method: string;
+            scalar: components["schemas"]["FieldSliceBinaryDescriptor"];
+            /** Format: int32 */
+            x_pixels: number;
+            /** Format: int32 */
+            y_pixels: number;
+        };
+        FieldProjectionProfile: {
+            bounds?: null | components["schemas"]["FieldSliceBounds"];
+            component: string;
+            /** Format: int64 */
+            domain_generation_id: number;
+            /** Format: int64 */
+            field_revision: number;
+            /** Format: int32 */
+            pixel_x: number;
+            /** Format: int32 */
+            pixel_y: number;
+            plane: string;
+            quantity_id: string;
+            /** Format: int32 */
+            sample_count: number;
+            samples: components["schemas"]["FieldProjectionProfileSample"][];
+            sampling_method: string;
+            truncated: boolean;
+            /** Format: double */
+            u: number;
+            /** Format: double */
+            v: number;
+            /** Format: int32 */
+            x_pixels: number;
+            /** Format: int32 */
+            y_pixels: number;
+        };
+        FieldProjectionProfileSample: {
+            /** Format: int32 */
+            element_index: number;
+            /** Format: int32 */
+            marker: number;
+            /** Format: double */
+            measure: number;
+            /** Format: double */
+            normal_coord: number;
+            /** Format: double */
+            value: number;
         };
         FieldSliceBinaryDescriptor: {
             available: boolean;
@@ -3916,6 +4059,280 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FieldMeta"];
                 };
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_projection_empty_mask: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                /** @description Component selection. Defaults to magnitude for vector fields. */
+                component?: string;
+                /** @description Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max. */
+                reduction?: string;
+                /** @description Treat empty columns as zero. Structured-grid projection currently has no void mask. */
+                include_air_as_zero?: boolean;
+                /** @description Number of normal-axis layers to sample. */
+                samples?: number;
+                /** @description Enable automatic coarse-to-fine sampling for preview/fallback projections. */
+                adaptive?: boolean;
+                /** @description Stop adaptive sampling when the max absolute coarse/fine delta is below this value. */
+                error_tolerance?: number;
+                /** @description Initial sample count for adaptive sampling. */
+                min_samples?: number;
+                /** @description Output grid width. */
+                x_size?: number;
+                /** @description Output grid height. */
+                y_size?: number;
+                /** @description Hard safety cap on `x_size * y_size`. */
+                max_points?: number;
+                /** @description Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`. */
+                tile_x?: number;
+                /** @description Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`. */
+                tile_y?: number;
+                /** @description Tile edge size in pixels for progressive raster fetches. */
+                tile_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary projected empty-column mask, one byte per raster cell */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_projection_meta: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                /** @description Component selection. Defaults to magnitude for vector fields. */
+                component?: string;
+                /** @description Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max. */
+                reduction?: string;
+                /** @description Treat empty columns as zero. Structured-grid projection currently has no void mask. */
+                include_air_as_zero?: boolean;
+                /** @description Number of normal-axis layers to sample. */
+                samples?: number;
+                /** @description Enable automatic coarse-to-fine sampling for preview/fallback projections. */
+                adaptive?: boolean;
+                /** @description Stop adaptive sampling when the max absolute coarse/fine delta is below this value. */
+                error_tolerance?: number;
+                /** @description Initial sample count for adaptive sampling. */
+                min_samples?: number;
+                /** @description Output grid width. */
+                x_size?: number;
+                /** @description Output grid height. */
+                y_size?: number;
+                /** @description Hard safety cap on `x_size * y_size`. */
+                max_points?: number;
+                /** @description Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`. */
+                tile_x?: number;
+                /** @description Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`. */
+                tile_y?: number;
+                /** @description Tile edge size in pixels for progressive raster fetches. */
+                tile_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projection metadata with binary scalar URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldProjectionMeta"];
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_projection_profile: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                /** @description Component selection. Defaults to magnitude for vector fields. */
+                component?: string;
+                /** @description Full projection grid width. */
+                x_size?: number;
+                /** @description Full projection grid height. */
+                y_size?: number;
+                /** @description Pixel column to probe. */
+                pixel_x: number;
+                /** @description Pixel row to probe. */
+                pixel_y: number;
+                /** @description Maximum profile samples returned after depth sorting. */
+                max_samples?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Depth-resolved FEM projection profile for one raster pixel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldProjectionProfile"];
+                };
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Projection profile requires nodal FEM field and tetrahedral mesh */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_projection_scalar: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                /** @description Component selection. Defaults to magnitude for vector fields. */
+                component?: string;
+                /** @description Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max. */
+                reduction?: string;
+                /** @description Treat empty columns as zero. Structured-grid projection currently has no void mask. */
+                include_air_as_zero?: boolean;
+                /** @description Number of normal-axis layers to sample. */
+                samples?: number;
+                /** @description Enable automatic coarse-to-fine sampling for preview/fallback projections. */
+                adaptive?: boolean;
+                /** @description Stop adaptive sampling when the max absolute coarse/fine delta is below this value. */
+                error_tolerance?: number;
+                /** @description Initial sample count for adaptive sampling. */
+                min_samples?: number;
+                /** @description Output grid width. */
+                x_size?: number;
+                /** @description Output grid height. */
+                y_size?: number;
+                /** @description Hard safety cap on `x_size * y_size`. */
+                max_points?: number;
+                /** @description Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`. */
+                tile_x?: number;
+                /** @description Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`. */
+                tile_y?: number;
+                /** @description Tile edge size in pixels for progressive raster fetches. */
+                tile_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary FMVP v2 projected scalar raster */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Field not found */
             404: {

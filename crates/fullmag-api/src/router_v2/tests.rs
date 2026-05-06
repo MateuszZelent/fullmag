@@ -1552,8 +1552,11 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
     assert_eq!(json["slice"]["quantity_id"], json["active_quantity_id"]);
+    assert_eq!(json["slice"]["axis"], "z");
     assert_eq!(json["slice"]["mode"], "single");
     assert_eq!(json["slice"]["airbox_render_mode"], "wireframe");
+    assert_eq!(json["slice"]["show_vectors"], false);
+    assert_eq!(json["slice"]["render_mode"], "heatmap");
     assert!(json["overrides"].as_array().is_some());
     assert!(json["diagnostics"]["warnings"].as_array().is_some());
 }
@@ -3878,6 +3881,11 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
         .expect("primitive capabilities")
         .iter()
         .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
     assert!(json["csg_capabilities"]
         .as_array()
         .expect("csg capabilities")
@@ -4787,6 +4795,80 @@ async fn commands_endpoint_enqueues_compute_fields_command() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_rejects_solve_when_authoring_geometry_is_invalid() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].geometry.geometry_kind = "ArchWaveguide".to_string();
+    scene.objects[0].geometry.geometry_params = serde_json::json!({});
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_bytes(response).await;
+    assert!(
+        String::from_utf8_lossy(&body).contains("Geometry parameter 'length'"),
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_accepts_solve_with_valid_arch_waveguide_geometry() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].geometry.geometry_kind = "ArchWaveguide".to_string();
+    scene.objects[0].geometry.geometry_params = serde_json::json!({
+        "length": 2.5e-6,
+        "width": 1.0e-6,
+        "height": 2e-9,
+        "arch_height": 50e-9,
+        "z0": -25e-9
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "kind": "solve" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue.front().map(|command| command.kind.as_str()),
+        Some("solve")
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_reuses_response_for_same_request_id() {
     let state = test_app_state_with_live_session().await;
     let app = build_v2_router().with_state(state.clone());
@@ -5616,6 +5698,29 @@ async fn test_router_with_mock_field() -> axum::Router {
     build_v2_router().with_state(state)
 }
 
+async fn test_router_with_fem_nodal_field() -> axum::Router {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 17;
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [2.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0],
+                    [2.0, 0.0, 0.0]
+                ],
+                "layout": {
+                    "grid_cells": [4, 1, 1]
+                }
+            }
+        }))
+        .expect("mock FEM latest_fields should deserialize");
+    }
+    build_v2_router().with_state(state)
+}
+
 async fn test_router_with_live_magnetization() -> axum::Router {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -6419,6 +6524,14 @@ async fn slice_meta_xy_plane_returns_json() {
     assert!(json["etag"].is_string(), "slice/meta should include etag");
     assert!(json["x_pixels"].is_number());
     assert!(json["y_pixels"].is_number());
+    assert!(
+        json["scalar"]["href"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("/v2/sessions/current/data/fields/m/samples/slice/scalar?"),
+        "slice scalar href should use the v2 resource path: {}",
+        json["scalar"]["href"]
+    );
 }
 
 #[tokio::test]
@@ -6449,6 +6562,210 @@ async fn slice_scalar_xy_returns_binary() {
     assert!(
         !bytes.is_empty(),
         "slice/scalar binary payload must not be empty"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_meta_returns_json_with_binary_href() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/meta?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["plane"], "xy");
+    assert_eq!(json["component"], "c0");
+    assert_eq!(json["reduction"], "sum");
+    assert_eq!(json["sampling_method"], "fdm_layer_projection_nearest");
+    assert!(json["occupied_count"].is_number());
+    assert!(
+        json["scalar"]["href"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("/v2/sessions/current/data/fields/m/projection/scalar?"),
+        "projection scalar href should use the v2 resource path: {}",
+        json["scalar"]["href"]
+    );
+    assert!(
+        json["empty_mask"]["href"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("/v2/sessions/current/data/fields/m/projection/empty-mask?"),
+        "projection empty mask href should use the v2 resource path: {}",
+        json["empty_mask"]["href"]
+    );
+}
+
+#[tokio::test]
+async fn field_projection_meta_reports_adaptive_error_estimate_for_sampled_fallback() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/meta?plane=xy&component=x&reduction=sum&adaptive=true&min_samples=1&error_tolerance=0.0&samples=2&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["sampling_method"],
+        "fdm_layer_projection_adaptive_nearest"
+    );
+    assert_eq!(json["error_method"], "coarse_fine_sample_delta_max_abs");
+    assert!(json["error_estimate"].is_number());
+}
+
+#[tokio::test]
+async fn field_projection_meta_uses_exact_fem_tetra_path_when_nodal_field_matches_mesh() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/meta?plane=xy&component=x&reduction=mean_occupied&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["sampling_method"],
+        "fem_tetra_volume_projection_conservative"
+    );
+    assert_eq!(json["error_estimate"], 0.0);
+    assert_eq!(json["error_method"], "exact_tetra_volume");
+    assert_eq!(json["occupied_count"], 3);
+    assert_eq!(json["empty_count"], 1);
+    assert!(
+        json["occupied_measure"].as_f64().unwrap() > 0.0,
+        "exact FEM projection should report accumulated tetrahedral volume"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_profile_returns_depth_samples_for_fem_pixel() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/profile?plane=xy&component=magnitude_squared&x_size=2&y_size=2&pixel_x=0&pixel_y=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["sampling_method"], "fem_tetra_depth_profile");
+    assert_eq!(json["component"], "magnitude_squared");
+    assert_eq!(json["sample_count"], 1);
+    assert_eq!(json["samples"][0]["element_index"], 0);
+    assert_eq!(json["samples"][0]["marker"], 7);
+    assert_eq!(json["samples"][0]["value"], 4.0);
+    assert!(
+        json["samples"][0]["measure"].as_f64().unwrap() > 0.0,
+        "profile sample should include the contributing tetrahedral volume"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_scalar_returns_binary() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/scalar?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("octet-stream"),
+        "projection/scalar content-type should be octet-stream, got: {ct}"
+    );
+    let bytes = body_bytes(response).await;
+    assert!(
+        !bytes.is_empty(),
+        "projection/scalar binary payload must not be empty"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_empty_mask_returns_binary() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/empty-mask?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("octet-stream"),
+        "projection/empty-mask content-type should be octet-stream, got: {ct}"
+    );
+    let bytes = body_bytes(response).await;
+    assert_eq!(
+        bytes.len(),
+        4,
+        "2x2 projection mask should contain four bytes"
+    );
+    assert!(
+        bytes.iter().all(|value| *value == 0),
+        "structured mock projection should not contain empty columns"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_scalar_tile_returns_smaller_binary() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/scalar?plane=xy&component=x&reduction=sum&samples=1&x_size=4&y_size=4&tile_x=1&tile_y=1&tile_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(
+        bytes.len(),
+        48 + 4 * 8,
+        "2x2 scalar projection tile should use FMVP header plus four f64 values"
     );
 }
 
@@ -6647,6 +6964,18 @@ fn openapi_contains_field_slice_paths() {
         paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/arrows"),
         "OpenAPI missing /slice/arrows path"
     );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/meta"),
+        "OpenAPI missing /projection/meta path"
+    );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/scalar"),
+        "OpenAPI missing /projection/scalar path"
+    );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask"),
+        "OpenAPI missing /projection/empty-mask path"
+    );
 }
 
 #[test]
@@ -6704,6 +7033,14 @@ fn openapi_contains_field_slice_contract() {
     assert!(
         components.contains_key("FieldSliceMeta"),
         "OpenAPI missing FieldSliceMeta schema"
+    );
+    assert!(
+        components.contains_key("FieldProjectionMeta"),
+        "OpenAPI missing FieldProjectionMeta schema"
+    );
+    assert!(
+        components.contains_key("FieldProjectionMaskDescriptor"),
+        "OpenAPI missing FieldProjectionMaskDescriptor schema"
     );
     assert!(
         components.contains_key("FieldSliceGrid"),

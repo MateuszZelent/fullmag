@@ -51,6 +51,10 @@ export function slice2DToolbarFromDisplay(
     showQuantity: true,
     showVectors: display.vector_glyphs,
     renderMode: display.vector_glyphs ? "vectors" : DEFAULT_RENDER_MODE,
+    projectionReduction: "mean_occupied",
+    projectionIncludeAirAsZero: false,
+    projectionSamples: 20,
+    projectionResolution: 128,
   };
 }
 

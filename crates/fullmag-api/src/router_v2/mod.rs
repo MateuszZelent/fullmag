@@ -298,6 +298,22 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_field_vector),
         )
         .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/meta",
+            get(handlers::data::get_field_projection_meta),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/scalar",
+            get(handlers::data::get_field_projection_scalar),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/empty-mask",
+            get(handlers::data::get_field_projection_empty_mask),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/profile",
+            get(handlers::data::get_field_projection_profile),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/samples/slice/meta",
             get(handlers::data::get_field_slice_meta),
         )

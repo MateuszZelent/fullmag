@@ -161,7 +161,11 @@ pub fn project_vector_field_by_periodic_classes(
         let c = full_to_reduced[i];
         let n = class_count[c] as f64;
         if n > 0.0 {
-            *v = [class_sum[c][0] / n, class_sum[c][1] / n, class_sum[c][2] / n];
+            *v = [
+                class_sum[c][0] / n,
+                class_sum[c][1] / n,
+                class_sum[c][2] / n,
+            ];
         }
     }
 }
@@ -289,16 +293,14 @@ mod tests {
         let full_to_reduced = vec![0, 1, 0];
         let representative_nodes = vec![0, 1];
         let field = vec![2.0, 3.0, 2.0]; // nodes 0,2 in class 0 both have 2.0
-        assert!(
-            validate_periodic_scalar_field_classes(
-                &full_to_reduced,
-                &representative_nodes,
-                &field,
-                "test_field",
-                1e-12
-            )
-            .is_ok()
-        );
+        assert!(validate_periodic_scalar_field_classes(
+            &full_to_reduced,
+            &representative_nodes,
+            &field,
+            "test_field",
+            1e-12
+        )
+        .is_ok());
     }
 
     #[test]
@@ -306,16 +308,14 @@ mod tests {
         let full_to_reduced = vec![0, 1, 0];
         let representative_nodes = vec![0, 1];
         let field = vec![2.0, 3.0, 5.0]; // nodes 0,2 in class 0 differ
-        assert!(
-            validate_periodic_scalar_field_classes(
-                &full_to_reduced,
-                &representative_nodes,
-                &field,
-                "test_field",
-                1e-12
-            )
-            .is_err()
-        );
+        assert!(validate_periodic_scalar_field_classes(
+            &full_to_reduced,
+            &representative_nodes,
+            &field,
+            "test_field",
+            1e-12
+        )
+        .is_err());
     }
 
     #[test]

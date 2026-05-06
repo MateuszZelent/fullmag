@@ -12,6 +12,7 @@
 
 import type { FemSliceQuery } from "./femSliceQuery";
 import type {
+  ProjectionResult,
   SliceCollection,
   SliceTopologyCollection,
 } from "./femSliceGeometry";
@@ -62,6 +63,8 @@ const MAX_TOPOLOGY_CACHE_ENTRIES = 18;
 const MAX_FIELD_CACHE_ENTRIES = 48;
 const MAX_TOPOLOGY_CACHE_BYTES = 64 * 1024 * 1024;
 const MAX_FIELD_CACHE_BYTES = 128 * 1024 * 1024;
+const MAX_PROJECTION_CACHE_ENTRIES = 24;
+const MAX_PROJECTION_CACHE_BYTES = 96 * 1024 * 1024;
 
 function getLruValue<T>(cache: Map<string, T>, key: string): T | null {
   const existing = cache.get(key);
@@ -96,6 +99,7 @@ function setLruValue<T>(
 
 const sliceTopologyCache = new Map<string, SliceTopologyCollection>();
 const sliceFieldCache = new Map<string, SliceCollection>();
+const projectionCache = new Map<string, ProjectionResult>();
 
 function estimateTopologyBytes(value: SliceTopologyCollection): number {
   let bytes = 0;
@@ -122,6 +126,10 @@ function estimateFieldBytes(value: SliceCollection): number {
   return bytes;
 }
 
+function estimateProjectionBytes(value: ProjectionResult): number {
+  return value.values.byteLength + 8 * 8 + 64;
+}
+
 function totalTopologyCacheBytes(): number {
   let bytes = 0;
   for (const value of sliceTopologyCache.values()) {
@@ -134,6 +142,14 @@ function totalFieldCacheBytes(): number {
   let bytes = 0;
   for (const value of sliceFieldCache.values()) {
     bytes += estimateFieldBytes(value);
+  }
+  return bytes;
+}
+
+function totalProjectionCacheBytes(): number {
+  let bytes = 0;
+  for (const value of projectionCache.values()) {
+    bytes += estimateProjectionBytes(value);
   }
   return bytes;
 }
@@ -152,6 +168,13 @@ function publishSliceCacheBuckets(): void {
     entries: sliceFieldCache.size,
     estimatedBytes: totalFieldCacheBytes(),
     capacity: MAX_FIELD_CACHE_BYTES,
+  });
+  updateFrontendResourceBucket({
+    id: "slice-projection-cache",
+    label: "Slice projection cache",
+    entries: projectionCache.size,
+    estimatedBytes: totalProjectionCacheBytes(),
+    capacity: MAX_PROJECTION_CACHE_BYTES,
   });
 }
 
@@ -187,6 +210,22 @@ export function writeSliceFieldCache(key: string, value: SliceCollection): void 
   publishSliceCacheBuckets();
 }
 
+export function readProjectionCache(key: string): ProjectionResult | null {
+  return getLruValue(projectionCache, key);
+}
+
+export function writeProjectionCache(key: string, value: ProjectionResult): void {
+  setLruValue(
+    projectionCache,
+    key,
+    value,
+    MAX_PROJECTION_CACHE_ENTRIES,
+    totalProjectionCacheBytes,
+    MAX_PROJECTION_CACHE_BYTES,
+  );
+  publishSliceCacheBuckets();
+}
+
 export function getSliceTopologyCached(
   key: string,
   compute: () => SliceTopologyCollection,
@@ -216,22 +255,30 @@ export function getSliceFieldCached(
 export function getSliceCacheSnapshot(): {
   topologyEntries: number;
   fieldEntries: number;
+  projectionEntries: number;
   topologyCapacity: number;
   fieldCapacity: number;
+  projectionCapacity: number;
   topologyMaxBytes: number;
   fieldMaxBytes: number;
+  projectionMaxBytes: number;
   topologyEstimatedBytes: number;
   fieldEstimatedBytes: number;
+  projectionEstimatedBytes: number;
 } {
   return {
     topologyEntries: sliceTopologyCache.size,
     fieldEntries: sliceFieldCache.size,
+    projectionEntries: projectionCache.size,
     topologyCapacity: MAX_TOPOLOGY_CACHE_ENTRIES,
     fieldCapacity: MAX_FIELD_CACHE_ENTRIES,
+    projectionCapacity: MAX_PROJECTION_CACHE_ENTRIES,
     topologyMaxBytes: MAX_TOPOLOGY_CACHE_BYTES,
     fieldMaxBytes: MAX_FIELD_CACHE_BYTES,
+    projectionMaxBytes: MAX_PROJECTION_CACHE_BYTES,
     topologyEstimatedBytes: totalTopologyCacheBytes(),
     fieldEstimatedBytes: totalFieldCacheBytes(),
+    projectionEstimatedBytes: totalProjectionCacheBytes(),
   };
 }
 
@@ -278,6 +325,53 @@ export function fieldCacheKey(
     objectIdentity(context.fieldZ ?? null),
     context.fieldRevision ?? "none",
     context.fieldNComp ?? "none",
+  ].join(":");
+}
+
+export function projectionCacheKey(args: {
+  orientation: string;
+  component: string;
+  reduction: string;
+  includeAirAsZero: boolean;
+  samples: number;
+  resolution: number;
+  maxElements?: number;
+  boundsStrategy?: string;
+  meshNodes?: object | null;
+  meshElements?: object | null;
+  meshBoundaryFaces?: object | null;
+  visibleElements?: object | null;
+  visibleBoundaryFaces?: object | null;
+  visiblePartIds?: Iterable<string>;
+  fieldX?: object | null;
+  fieldY?: object | null;
+  fieldZ?: object | null;
+  fieldRevision?: string | number | null;
+  fieldNComp?: number | null;
+  quantityId?: string | null;
+}): string {
+  return [
+    "projection",
+    args.orientation,
+    args.component,
+    args.reduction,
+    args.includeAirAsZero ? "air0" : "occupied",
+    Math.round(args.samples),
+    Math.round(args.resolution),
+    Math.round(args.maxElements ?? 0),
+    args.boundsStrategy ?? "visible-context",
+    objectIdentity(args.meshNodes ?? null),
+    objectIdentity(args.meshElements ?? null),
+    objectIdentity(args.meshBoundaryFaces ?? null),
+    objectIdentity(args.visibleElements ?? null),
+    objectIdentity(args.visibleBoundaryFaces ?? null),
+    visiblePartsFingerprint(args.visiblePartIds),
+    args.quantityId ?? "m",
+    objectIdentity(args.fieldX ?? null),
+    objectIdentity(args.fieldY ?? null),
+    objectIdentity(args.fieldZ ?? null),
+    args.fieldRevision ?? "none",
+    args.fieldNComp ?? "none",
   ].join(":");
 }
 

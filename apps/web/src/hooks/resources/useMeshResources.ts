@@ -83,9 +83,17 @@ function useMeshJsonResource<T>(
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
   const lastFetchKeyRef = useRef<string | null>(null);
+  const inFlightFetchKeyRef = useRef<string | null>(null);
+  const fetcherRef = useRef(fetcher);
+  const responseFetcherRef = useRef(responseFetcher);
   const fetchKey = `${sessionKey ?? "no-session"}:${resourceName}:${revision ?? "no-revision"}`;
   const cacheKey = `mesh-json:${fetchKey}`;
   const cacheRevision = revision ?? 0;
+
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+    responseFetcherRef.current = responseFetcher;
+  }, [fetcher, responseFetcher]);
 
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -94,9 +102,14 @@ function useMeshJsonResource<T>(
         setError(null);
         setLoading(false);
       }
+      inFlightFetchKeyRef.current = null;
+      return;
+    }
+    if (inFlightFetchKeyRef.current === fetchKey) {
       return;
     }
 
+    inFlightFetchKeyRef.current = fetchKey;
     setLoading(true);
     try {
       const client = getLiveSessionClient();
@@ -110,6 +123,7 @@ function useMeshJsonResource<T>(
       }
 
       let nextData: T;
+      const responseFetcher = responseFetcherRef.current;
       if (responseFetcher) {
         const response = await responseFetcher({
           cache: "default",
@@ -125,7 +139,7 @@ function useMeshJsonResource<T>(
             ? cached.data
             : (response.data as T);
         if (response.data == null && !(response.status === 304 && cached)) {
-          nextData = await fetcher();
+          nextData = await fetcherRef.current();
         }
         if (response.status !== 304 && response.data != null) {
           client.getCache().set(
@@ -137,9 +151,9 @@ function useMeshJsonResource<T>(
           );
         }
       } else {
-        nextData = await fetcher();
+        nextData = await fetcherRef.current();
       }
-      if (!mountedRef.current) {
+      if (!mountedRef.current || inFlightFetchKeyRef.current !== fetchKey) {
         return;
       }
       lastFetchKeyRef.current = fetchKey;
@@ -147,7 +161,7 @@ function useMeshJsonResource<T>(
       setError(null);
       setLoading(false);
     } catch (err) {
-      if (!mountedRef.current) {
+      if (!mountedRef.current || inFlightFetchKeyRef.current !== fetchKey) {
         return;
       }
       const apiError =
@@ -163,13 +177,18 @@ function useMeshJsonResource<T>(
       }
       setError(apiError);
       setLoading(false);
+    } finally {
+      if (inFlightFetchKeyRef.current === fetchKey) {
+        inFlightFetchKeyRef.current = null;
+      }
     }
-  }, [cacheKey, cacheRevision, enabled, fetchKey, fetcher, resourceName, responseFetcher, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, resourceName, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
+      inFlightFetchKeyRef.current = null;
       setData((current) => (current === null ? current : null));
       setError((current) => (current === null ? current : null));
       setLoading((current) => (current ? false : current));
@@ -178,7 +197,7 @@ function useMeshJsonResource<T>(
       };
     }
 
-    if (lastFetchKeyRef.current !== fetchKey) {
+    if (lastFetchKeyRef.current !== fetchKey && inFlightFetchKeyRef.current !== fetchKey) {
       void refresh();
     }
 
@@ -203,9 +222,15 @@ function useMeshBinaryResource(
   const [error, setError] = useState<LiveApiError | null>(null);
   const mountedRef = useRef(true);
   const lastFetchKeyRef = useRef<string | null>(null);
+  const inFlightFetchKeyRef = useRef<string | null>(null);
+  const fetcherRef = useRef(fetcher);
   const fetchKey = `${sessionKey ?? "no-session"}:${resourceName}:${revision ?? "no-revision"}`;
   const cacheKey = `mesh-binary:${fetchKey}`;
   const cacheRevision = revision ?? 0;
+
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  }, [fetcher]);
 
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
@@ -214,9 +239,14 @@ function useMeshBinaryResource(
         setError(null);
         setLoading(false);
       }
+      inFlightFetchKeyRef.current = null;
+      return;
+    }
+    if (inFlightFetchKeyRef.current === fetchKey) {
       return;
     }
 
+    inFlightFetchKeyRef.current = fetchKey;
     setLoading(true);
     try {
       const client = getLiveSessionClient();
@@ -229,7 +259,7 @@ function useMeshBinaryResource(
         return;
       }
 
-      const response = await fetcher({
+      const response = await fetcherRef.current({
         cache: "default",
         headers:
           cached?.eTag != null
@@ -249,7 +279,7 @@ function useMeshBinaryResource(
           response.headers.get("etag"),
         );
       }
-      if (!mountedRef.current) {
+      if (!mountedRef.current || inFlightFetchKeyRef.current !== fetchKey) {
         return;
       }
       lastFetchKeyRef.current = fetchKey;
@@ -257,7 +287,7 @@ function useMeshBinaryResource(
       setError(null);
       setLoading(false);
     } catch (err) {
-      if (!mountedRef.current) {
+      if (!mountedRef.current || inFlightFetchKeyRef.current !== fetchKey) {
         return;
       }
       const apiError =
@@ -273,13 +303,18 @@ function useMeshBinaryResource(
       }
       setError(apiError);
       setLoading(false);
+    } finally {
+      if (inFlightFetchKeyRef.current === fetchKey) {
+        inFlightFetchKeyRef.current = null;
+      }
     }
-  }, [cacheKey, cacheRevision, enabled, fetchKey, fetcher, resourceName, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, resourceName, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
+      inFlightFetchKeyRef.current = null;
       setData((current) => (current === null ? current : null));
       setError((current) => (current === null ? current : null));
       setLoading((current) => (current ? false : current));
@@ -288,7 +323,7 @@ function useMeshBinaryResource(
       };
     }
 
-    if (lastFetchKeyRef.current !== fetchKey) {
+    if (lastFetchKeyRef.current !== fetchKey && inFlightFetchKeyRef.current !== fetchKey) {
       void refresh();
     }
 
@@ -398,7 +433,7 @@ export function useMeshBuilds(options?: {
 
   const refresh = useCallback(async () => {
     await Promise.all([active.refresh(), history.refresh(), lastSuccess.refresh()]);
-  }, [active, history, lastSuccess]);
+  }, [active.refresh, history.refresh, lastSuccess.refresh]);
 
   return {
     activeBuild: active.data,
@@ -781,7 +816,13 @@ export function useMeshWorkspaceResourceState(options?: {
       sharedDomainReport.refresh(),
       builds.refresh(),
     ]);
-  }, [builds, capabilities, manifest, sharedDomainReport, summary]);
+  }, [
+    builds.refresh,
+    capabilities.refresh,
+    manifest.refresh,
+    sharedDomainReport.refresh,
+    summary.refresh,
+  ]);
 
   return {
     meshWorkspace,
@@ -876,7 +917,13 @@ export function useMeshWorkspaceModel(options?: {
       manifest.refresh(),
       builds.refresh(),
     ]);
-  }, [builds, capabilities, manifest, semantics, summary]);
+  }, [
+    builds.refresh,
+    capabilities.refresh,
+    manifest.refresh,
+    semantics.refresh,
+    summary.refresh,
+  ]);
 
   return {
     model,

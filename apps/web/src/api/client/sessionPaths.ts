@@ -64,6 +64,14 @@ export const sessionApiPaths = {
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldVector: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/vector").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionMeta: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionScalar: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/scalar").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionEmptyMask: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionProfile: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/profile").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldSliceMeta: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldSliceScalar: (quantityId: string) =>

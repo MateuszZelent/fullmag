@@ -24,6 +24,10 @@ const slice2DToolbar: Slice2DToolbarState = {
   showQuantity: true,
   showVectors: true,
   renderMode: "heatmap",
+  projectionReduction: "mean_occupied",
+  projectionIncludeAirAsZero: false,
+  projectionSamples: 20,
+  projectionResolution: 128,
 };
 
 function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildContext {
@@ -144,6 +148,23 @@ describe("View ribbon contribution", () => {
     ]);
   });
 
+  it("routes Camera / Frame all through the viewport camera fit command", () => {
+    const run = vi.fn();
+    const display = buildViewRibbonGroups(baseContext({ run }))[5];
+    const camera = display.actions.find((action) => action.id === "view-camera");
+    const frameAll = findNode(camera?.menu ?? [], "camera:frame-all");
+
+    expect(frameAll).toMatchObject({
+      type: "item",
+      label: "Frame all",
+      disabled: false,
+    });
+    if (frameAll?.type === "item") {
+      frameAll.action?.();
+    }
+    expect(run).toHaveBeenCalledWith({ id: "viewport.fit-all" });
+  });
+
   it("exposes 2D slice controls through the View ribbon", () => {
     const run = vi.fn();
     const sliceGroup = buildViewRibbonGroups(
@@ -182,6 +203,32 @@ describe("View ribbon contribution", () => {
 
     axis?.onValueChange?.("x");
     expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-axis", axis: "x" });
+  });
+
+  it("lets all-layer projection sliders reach their configured maximum", () => {
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        slice2DEnabled: true,
+        slice2DToolbar: { ...slice2DToolbar, mode: "all_layers", projectionResolution: 384, positionPercent: 100 },
+      }),
+    )[1];
+    const menu = sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [];
+
+    expect(findNode(menu, "slice:plane:projection-samples")).toMatchObject({
+      type: "slider",
+      max: 100,
+    });
+    expect(findNode(menu, "slice:plane:projection-resolution")).toMatchObject({
+      type: "slider",
+      value: 384,
+      max: 384,
+    });
+    expect(findNode(menu, "slice:plane:position")).toMatchObject({
+      type: "slider",
+      value: 100,
+      max: 100,
+    });
   });
 
   it("keeps 2D airbox controls off the 3D airbox command path", () => {

@@ -18,3 +18,4 @@ import "./study";
 import "./results";
 import "./automation";
 import "./contextual";
+import "@/features/plots2d/contributions/plots2dRibbon";

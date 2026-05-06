@@ -150,6 +150,10 @@ import {
   isQuantitySelectable,
   vectorHead,
 } from "./controlRoomContextHelpers";
+import {
+  planeFromSliceAxis,
+  sliceIndexFromPositionPercent,
+} from "@/src/features/slice2d/axisMapping";
 
 /* Context interfaces, hooks, and React context objects are in context-hooks.tsx */
 export {
@@ -385,6 +389,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [viewportScope, setViewportScope] = useState<ViewportScope>("universe");
   const [focusObjectRequest, setFocusObjectRequest] = useState<FocusObjectRequest | null>(null);
+  const [cameraFitRequestSeed, setCameraFitRequestSeed] = useState(0);
+  const requestViewportCameraFit = useCallback(() => {
+    setCameraFitRequestSeed((seed) => seed + 1);
+  }, []);
   const [objectViewMode, setObjectViewMode] = useState<ObjectViewMode>("context");
   const [activeTransformScope, setActiveTransformScope] = useState<"object" | "texture" | null>(null);
   const [meshEntityViewState, setMeshEntityViewState] = useState<MeshEntityViewStateMap>({});
@@ -434,8 +442,18 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const stickyViewportObjectIdRef = useRef<string | null>(null);
   const lastFieldDataRevisionRef = useRef<string | null>(null);
   const fieldDataTimestampRef = useRef<number | null>(null);
+  const previewGridRef = useRef<[number, number, number]>([1, 1, 1]);
   const applyVisualizationStateResource = useCallback((state: VisualizationStateResource) => {
     const plan = resolveRenderPlanFromVisualizationState(state, femViewportLayers);
+    const nextPlane = planeFromSliceAxis(plan.slice.axis);
+    const nextSliceIndex =
+      typeof plan.slice.layerIndex === "number"
+        ? Math.max(0, Math.trunc(plan.slice.layerIndex))
+        : sliceIndexFromPositionPercent({
+            grid: previewGridRef.current,
+            plane: nextPlane,
+            positionPercent: plan.slice.positionPercent,
+          });
 
     setSelectedQuantity((previous) =>
       previous === plan.quantity.activeQuantityId
@@ -447,6 +465,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         ? previous
         : plan.quantity.fieldComponent,
     );
+    setPlane((previous) => (previous === nextPlane ? previous : nextPlane));
+    setSliceIndex((previous) => (previous === nextSliceIndex ? previous : nextSliceIndex));
     setViewportVisualizationState((previous) =>
       projectResolvedRenderPlanToViewportState(plan, previous),
     );
@@ -1413,6 +1433,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     runtimeStatus,
     isWaitingForCompute,
   });
+  previewGridRef.current = previewGrid;
 
   const {
     activeFemGenerationSignature,
@@ -2040,6 +2061,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     viewportSelectedObjectId,
     viewportScope,
     focusObjectRequest,
+    cameraFitRequestSeed,
     objectViewMode,
     activeTransformScope,
     airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
@@ -2065,7 +2087,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setViewportVisualizationState, setFemTextureDownsampleCells, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
     setViewportLegendVisible,
     setViewportAxesScope, setUniverseWireframeVisible,
-    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, requestViewportCameraFit, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
@@ -2085,7 +2107,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshSummary, meshName, meshSource, meshExtent, meshBoundsMin, meshBoundsMax, meshFeOrder, liveMeshName,
     domainFrame, worldExtent, worldCenter, worldExtentSource, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
-    selectedSidebarNodeId, selectedObjectId, viewportSelectedObjectId, viewportScope, focusObjectRequest, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject,
+    selectedSidebarNodeId, selectedObjectId, viewportSelectedObjectId, viewportScope, focusObjectRequest, cameraFitRequestSeed, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject, requestViewportCameraFit,
     setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,

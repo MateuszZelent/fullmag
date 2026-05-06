@@ -29,7 +29,7 @@ const CENTER_TABS: CenterTab[] = [
   { id: "3d-view",      label: "3D View",    icon: <Box size={12} />,     mode: "3D" },
   { id: "2d-slice",     label: "2D Slice",   icon: <ScanLine size={12} />, mode: "2D" },
   { id: "analysis",     label: "Analysis",   icon: <BarChart3 size={12} />, mode: "Analyze" },
-  { id: "charts",       label: "Charts",     icon: <Activity size={12} />, mode: null, disabled: true },
+  { id: "charts",       label: "2D Plots",   icon: <Activity size={12} />, mode: null },
   { id: "diagnostics",  label: "Diagnostics",icon: <Cpu size={12} />,      mode: null, disabled: true },
 ];
 
@@ -99,7 +99,15 @@ export const ViewportTabBar = memo(function ViewportTabBar() {
   const activeTabId = viewModeToTabId(effectiveViewMode);
 
   const handleTabClick = (tab: CenterTab) => {
-    if (tab.disabled || tab.mode === null) return;
+    if (tab.disabled) return;
+    // "2D Plots" has mode=null — activate via workspace docking
+    if (tab.id === "charts" && tab.mode === null) {
+      const { useWorkspaceStore } = require("@/lib/workspace/workspace-store");
+      const store = useWorkspaceStore.getState();
+      store.activateTab(store.currentStage, "core:charts");
+      return;
+    }
+    if (tab.mode === null) return;
     viewport.handleViewModeChange(tab.mode);
   };
 

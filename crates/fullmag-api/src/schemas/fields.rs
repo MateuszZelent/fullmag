@@ -126,3 +126,66 @@ pub struct FieldSliceBinaryDescriptor {
     pub etag: Option<String>,
     pub href: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FieldProjectionMeta {
+    pub quantity_id: String,
+    pub component: String,
+    pub plane: String,
+    pub reduction: String,
+    pub include_air_as_zero: bool,
+    pub samples: u32,
+    pub field_revision: u64,
+    pub domain_generation_id: u64,
+    pub sampling_method: String,
+    pub etag: String,
+    pub projection_revision: String,
+    pub x_pixels: u32,
+    pub y_pixels: u32,
+    pub grid: FieldSliceGrid,
+    pub bounds: Option<FieldSliceBounds>,
+    pub occupied_count: u32,
+    pub occupied_measure: f64,
+    pub empty_count: u32,
+    pub error_estimate: Option<f64>,
+    pub error_method: Option<String>,
+    pub scalar: FieldSliceBinaryDescriptor,
+    pub empty_mask: FieldProjectionMaskDescriptor,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FieldProjectionMaskDescriptor {
+    pub available: bool,
+    pub point_count: u32,
+    pub etag: Option<String>,
+    pub href: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FieldProjectionProfile {
+    pub quantity_id: String,
+    pub component: String,
+    pub plane: String,
+    pub field_revision: u64,
+    pub domain_generation_id: u64,
+    pub sampling_method: String,
+    pub pixel_x: u32,
+    pub pixel_y: u32,
+    pub x_pixels: u32,
+    pub y_pixels: u32,
+    pub u: f64,
+    pub v: f64,
+    pub bounds: Option<FieldSliceBounds>,
+    pub sample_count: u32,
+    pub truncated: bool,
+    pub samples: Vec<FieldProjectionProfileSample>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FieldProjectionProfileSample {
+    pub element_index: u32,
+    pub marker: u32,
+    pub normal_coord: f64,
+    pub value: f64,
+    pub measure: f64,
+}

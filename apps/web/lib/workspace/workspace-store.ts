@@ -121,11 +121,11 @@ function defaultCoreTabs(): WorkspaceTab[] {
       id: "core:charts",
       key: "core:charts",
       kind: "viewport-charts",
-      title: "Charts",
+      title: "2D Plots",
       closable: false,
       pinned: true,
       mountPolicy: "active-only",
-      payload: { viewMode: "Analyze" },
+      payload: {},
     },
   ];
 }

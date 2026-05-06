@@ -974,7 +974,8 @@ impl NativeFemBackend {
 
         let magnetization = self.copy_m(node_count)?;
         let effective_field = self.copy_h_eff(node_count)?;
-        let torque_t = max_torque_t_from_field(&magnetization, &effective_field, self.damping, true);
+        let torque_t =
+            max_torque_t_from_field(&magnetization, &effective_field, self.damping, true);
         let torque_apm = max_torque_apm_from_torque_t(torque_t);
         let mut step_stats = StepStats {
             step: stats.step,

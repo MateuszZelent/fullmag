@@ -177,6 +177,7 @@ interface Props {
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
   focusObjectRequest?: FocusObjectRequest | null;
+  cameraFitRequestSeed?: string | number | null;
   worldExtent?: [number, number, number] | null;
   worldCenter?: [number, number, number] | null;
   onAntennaTranslate?: (id: string, dx: number, dy: number, dz: number) => void;
@@ -278,6 +279,7 @@ function FemMeshView3DInner({
   viewportAxesScope = "universe",
   universeWireframeVisible = true,
   focusObjectRequest = null,
+  cameraFitRequestSeed = null,
   worldExtent = null,
   worldCenter = null,
   onAntennaTranslate,
@@ -766,7 +768,15 @@ function FemMeshView3DInner({
     worldExtent,
     worldCenter,
     viewportAxesScope,
-    viewportFitSeed,
+    viewportFitSeed: expectedViewportContent
+      ? [
+          viewportFitSeed ?? "no-fit-seed",
+          "ready",
+          renderableGeometryLayerCount,
+          effectiveShowArrows ? "vectors" : "no-vectors",
+        ].join(":")
+      : null,
+    cameraFitRequestSeed: expectedViewportContent ? cameraFitRequestSeed : null,
     viewCubeSceneRef,
     canvasRef,
     qualityProfileRef,
@@ -984,12 +994,26 @@ function FemMeshView3DInner({
   // P-20: Capture initial geometry center as a stable value and never update it reactively.
   // Drei's OrbitControls/TrackballControls synchronise the `target` prop to controls.target via
   // useEffect, so passing a reactive dynamicGeomCenter here causes the orbit center to snap back
-  // to the geometry centroid every time the mesh loads or part visibility changes \u2014 overriding
-  // the user\u2019s panning. Subsequent camera adjustments go through CameraAutoFit and
+  // to the geometry centroid every time the mesh loads or part visibility changes — overriding
+  // the user's panning. Subsequent camera adjustments go through CameraAutoFit and
   // restoreViewportCameraState which update controls.target directly via the controls ref.
-  const [shellTarget] = useState<[number, number, number]>(
+  //
+  // P-20b: Allow a single update when the initial value was [0,0,0] (empty mesh at mount time)
+  // and real geometry data arrives. After the first real geometry center is captured, lock the
+  // value to prevent the snapback described above.
+  const [shellTarget, setShellTarget] = useState<[number, number, number]>(
     () => [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z],
   );
+  const shellTargetLockedRef = useRef(dynamicMaxDim > 0);
+  useEffect(() => {
+    if (shellTargetLockedRef.current) {
+      return;
+    }
+    if (dynamicMaxDim > 0) {
+      setShellTarget([dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z]);
+      shellTargetLockedRef.current = true;
+    }
+  }, [dynamicGeomCenter.x, dynamicGeomCenter.y, dynamicGeomCenter.z, dynamicMaxDim]);
   const {
     overlayItems,
     hoveredFaceInfo,
@@ -1152,8 +1176,7 @@ function FemMeshView3DInner({
         {!missingExactScopeSegment ? (
           <>
           {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit &&
-          wrapperFlags.enableCameraFitEffect &&
-          !persistedCameraState ? (
+          wrapperFlags.enableCameraFitEffect ? (
             <CameraAutoFit
               maxDim={dynamicMaxDim}
               generation={cameraFitGeneration}

@@ -45,6 +45,21 @@ describe("resolveViewportCameraFitDecision", () => {
     });
   });
 
+  it("allows explicit fit requests to override a persisted camera", () => {
+    expect(
+      resolveViewportCameraFitDecision({
+        enabled: true,
+        persistedCameraAvailable: true,
+        previousFitSignature: "topology:2",
+        viewportFitSeed: "topology:2",
+        forceFitSeed: 1,
+      }),
+    ).toEqual({
+      nextFitSignature: "force:1",
+      shouldAdvanceGeneration: true,
+    });
+  });
+
   it("keeps disabled fit effects inert", () => {
     expect(
       resolveViewportCameraFitDecision({

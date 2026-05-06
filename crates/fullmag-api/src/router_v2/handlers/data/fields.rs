@@ -12,11 +12,16 @@ use crate::field_projection::{
     component_etag_token, parse_component, project_values, ComponentSelection,
 };
 use crate::field_slice::{
-    fdm_slice, fem_slice_fallback, resolve_slice_query, slice_etag_token, FdmField, FieldSliceQuery,
+    fdm_projection, fdm_slice, fem_projection_exact, fem_projection_profile, fem_slice_fallback,
+    resolve_projection_profile_query, resolve_projection_query, resolve_slice_query,
+    slice_etag_token, FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery,
+    FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery,
 };
 use crate::field_store::serialize_field_vector_binary_v2;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
-use crate::quantity_data_plane::slice_cache_key;
+use crate::quantity_data_plane::{
+    projection_empty_mask_cache_key, scalar_projection_cache_key, slice_cache_key,
+};
 use crate::schemas::fields::*;
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
@@ -68,6 +73,8 @@ fn insert_field_headers(
     let comp_str = match component {
         ComponentSelection::Full => "full".to_string(),
         ComponentSelection::Magnitude => "magnitude".to_string(),
+        ComponentSelection::MagnitudeSquared => "magnitude_squared".to_string(),
+        ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),
     };
     insert_str(
@@ -685,6 +692,8 @@ pub async fn get_field_vector(
     let comp_key = match &component {
         ComponentSelection::Full => "full".to_string(),
         ComponentSelection::Magnitude => "magnitude".to_string(),
+        ComponentSelection::MagnitudeSquared => "magnitude_squared".to_string(),
+        ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),
     };
     let cache_key = crate::quantity_data_plane::projection_cache_key(
@@ -819,6 +828,91 @@ fn extract_fdm_field(
     None
 }
 
+fn extract_raw_field_values(
+    snapshot: &crate::types::SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+) -> Option<Vec<f64>> {
+    if quantity_id == "m" {
+        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
+            return Some(values);
+        }
+    }
+    if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
+        return Some(flatten_json_field_values(raw));
+    }
+    snapshot
+        .preview_cache
+        .get(quantity_id)
+        .map(|field| field.vector_field_values.clone())
+        .filter(|values| n_comp == 0 || values.len() % n_comp == 0)
+}
+
+fn extract_fem_field(
+    snapshot: &crate::types::SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+) -> Option<FemField> {
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    if mesh.nodes.is_empty() || mesh.elements.is_empty() {
+        return None;
+    }
+    let values = extract_raw_field_values(snapshot, quantity_id, n_comp)?;
+    if n_comp == 0 || values.len() / n_comp != mesh.nodes.len() {
+        return None;
+    }
+    Some(FemField {
+        n_comp,
+        nodes: mesh.nodes.clone(),
+        elements: mesh.elements.clone(),
+        element_markers: mesh.element_markers.clone(),
+        values,
+    })
+}
+
+fn compute_projection(
+    fdm_field: &FdmField,
+    fem_field: Option<&FemField>,
+    resolved: &ResolvedProjectionQuery,
+) -> Result<ProjectionResult, ApiError> {
+    match fem_field {
+        Some(field) => fem_projection_exact(field, resolved),
+        None => fdm_projection(fdm_field, resolved),
+    }
+}
+
+fn projection_error_estimate(
+    fdm_field: &FdmField,
+    fem_field: Option<&FemField>,
+    resolved: &ResolvedProjectionQuery,
+    projection: &ProjectionResult,
+) -> Result<(Option<f64>, Option<String>), ApiError> {
+    if fem_field.is_some() {
+        return Ok((Some(0.0), Some("exact_tetra_volume".to_string())));
+    }
+    if resolved.samples <= 1 {
+        return Ok((None, None));
+    }
+    let mut coarse_query = resolved.clone();
+    coarse_query.adaptive = false;
+    coarse_query.samples = (resolved.samples / 2).max(1);
+    let coarse = fdm_projection(fdm_field, &coarse_query)?;
+    let mut max_abs_diff = 0.0f64;
+    for (fine, coarse) in projection
+        .scalar_values
+        .iter()
+        .zip(coarse.scalar_values.iter())
+    {
+        if fine.is_finite() && coarse.is_finite() {
+            max_abs_diff = max_abs_diff.max((fine - coarse).abs());
+        }
+    }
+    Ok((
+        Some(max_abs_diff),
+        Some("coarse_fine_sample_delta_max_abs".to_string()),
+    ))
+}
+
 fn is_fem_runtime(snapshot: &crate::types::SessionStateResponse) -> bool {
     matches!(
         snapshot.capabilities.as_ref().map(|cap| cap.engine_id),
@@ -841,8 +935,478 @@ fn component_label(c: &ComponentSelection) -> String {
     match c {
         ComponentSelection::Full => "full".into(),
         ComponentSelection::Magnitude => "magnitude".into(),
+        ComponentSelection::MagnitudeSquared => "magnitude_squared".into(),
+        ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),
     }
+}
+
+fn projection_etag_token(
+    quantity_id: &str,
+    field_revision: u64,
+    domain_generation_id: u64,
+    q: &crate::field_slice::ResolvedProjectionQuery,
+    sampling_method: &str,
+) -> String {
+    format!(
+        "fmpr:{quantity_id}:{field_revision}:{domain_generation_id}:method={sampling_method}:{}:{}x{}:{}:{}:air={}:samples={}:adaptive={}:tol={}:min_samples={}:tile={},{},{}:v3",
+        q.plane.as_str(),
+        q.full_x_size,
+        q.full_y_size,
+        component_label(&q.component),
+        q.reduction.as_str(),
+        u8::from(q.include_air_as_zero),
+        q.samples,
+        u8::from(q.adaptive),
+        q.error_tolerance
+            .map(|value| value.to_bits().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        q.min_samples,
+        q.tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        q.tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        q.tile_size.map_or_else(|| "full".to_string(), |value| value.to_string()),
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/meta",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldProjectionQuery,
+    ),
+    responses(
+        (status = 200, description = "Projection metadata with binary scalar URL", body = FieldProjectionMeta),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_meta(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldProjectionQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let spec = quantity_spec(&quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let resolved = resolve_projection_query(&query, n_comp)?;
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
+        .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
+    drop(guard);
+
+    let projection = compute_projection(&fdm_field, fem_field.as_ref(), &resolved)?;
+    let (error_estimate, error_method) =
+        projection_error_estimate(&fdm_field, fem_field.as_ref(), &resolved, &projection)?;
+    let etag_token = projection_etag_token(
+        &quantity_id,
+        field_revision,
+        gen_id,
+        &resolved,
+        projection.sampling_method,
+    );
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
+    let mask_etag_token = format!("empty-mask:{etag_token}");
+    let mask_etag = crate::router_v2::handlers::shared::stable_strong_etag(&mask_etag_token);
+    let comp_label = component_label(&resolved.component);
+    let tile_query = match (resolved.tile_x, resolved.tile_y, resolved.tile_size) {
+        (Some(tile_x), Some(tile_y), Some(tile_size)) => {
+            format!("&tile_x={tile_x}&tile_y={tile_y}&tile_size={tile_size}")
+        }
+        _ => String::new(),
+    };
+    let adaptive_query = if resolved.adaptive {
+        format!(
+            "&adaptive=true&min_samples={}{}",
+            resolved.min_samples,
+            resolved
+                .error_tolerance
+                .map(|value| format!("&error_tolerance={value}"))
+                .unwrap_or_default()
+        )
+    } else {
+        String::new()
+    };
+    let scalar_href = format!(
+        "/v2/sessions/current/data/fields/{}/projection/scalar?plane={}&component={}&reduction={}&include_air_as_zero={}&samples={}&x_size={}&y_size={}{}{}",
+        urlencoding(&quantity_id),
+        urlencoding(resolved.plane.as_str()),
+        urlencoding(&comp_label),
+        urlencoding(resolved.reduction.as_str()),
+        resolved.include_air_as_zero,
+        resolved.samples,
+        resolved.full_x_size,
+        resolved.full_y_size,
+        adaptive_query,
+        tile_query,
+    );
+    let empty_mask_href = format!(
+        "/v2/sessions/current/data/fields/{}/projection/empty-mask?plane={}&component={}&reduction={}&include_air_as_zero={}&samples={}&x_size={}&y_size={}{}{}",
+        urlencoding(&quantity_id),
+        urlencoding(resolved.plane.as_str()),
+        urlencoding(&comp_label),
+        urlencoding(resolved.reduction.as_str()),
+        resolved.include_air_as_zero,
+        resolved.samples,
+        resolved.full_x_size,
+        resolved.full_y_size,
+        adaptive_query,
+        tile_query,
+    );
+    let meta = FieldProjectionMeta {
+        quantity_id: quantity_id.clone(),
+        component: comp_label,
+        plane: resolved.plane.as_str().to_string(),
+        reduction: resolved.reduction.as_str().to_string(),
+        include_air_as_zero: resolved.include_air_as_zero,
+        samples: projection.samples,
+        field_revision,
+        domain_generation_id: gen_id,
+        sampling_method: projection.sampling_method.to_string(),
+        etag: etag.clone(),
+        projection_revision: etag_token,
+        x_pixels: projection.x_size,
+        y_pixels: projection.y_size,
+        grid: FieldSliceGrid {
+            x_size: projection.x_size,
+            y_size: projection.y_size,
+            point_count: projection.x_size * projection.y_size,
+        },
+        bounds: Some(FieldSliceBounds {
+            u_min: projection.u_min,
+            u_max: projection.u_max,
+            v_min: projection.v_min,
+            v_max: projection.v_max,
+        }),
+        occupied_count: projection.occupied_count,
+        occupied_measure: projection.occupied_measure,
+        empty_count: projection.empty_count,
+        error_estimate,
+        error_method,
+        scalar: FieldSliceBinaryDescriptor {
+            available: true,
+            n_comp: 1,
+            point_count: projection.x_size * projection.y_size,
+            min: Some(projection.min),
+            max: Some(projection.max),
+            etag: Some(etag.clone()),
+            href: Some(scalar_href),
+        },
+        empty_mask: FieldProjectionMaskDescriptor {
+            available: true,
+            point_count: projection.x_size * projection.y_size,
+            etag: Some(mask_etag),
+            href: Some(empty_mask_href),
+        },
+    };
+
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &meta))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/scalar",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldProjectionQuery,
+    ),
+    responses(
+        (status = 200, description = "Binary FMVP v2 projected scalar raster", content_type = "application/octet-stream"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_scalar(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldProjectionQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let spec = quantity_spec(&quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let resolved = resolve_projection_query(&query, n_comp)?;
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
+        .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
+    let sampling_method = if fem_field.is_some() {
+        "fem_tetra_volume_projection_conservative"
+    } else if resolved.adaptive {
+        "fdm_layer_projection_adaptive_nearest"
+    } else {
+        "fdm_layer_projection_nearest"
+    };
+    let component = component_label(&resolved.component);
+    let component_cache_token = format!(
+        "{component}:method={sampling_method}:tol={}:min={}",
+        resolved
+            .error_tolerance
+            .map(|value| value.to_bits().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        resolved.min_samples
+    );
+    let cache_key = scalar_projection_cache_key(
+        &quantity_id,
+        field_revision,
+        gen_id,
+        resolved.plane.as_str(),
+        resolved.x_size,
+        resolved.y_size,
+        &component_cache_token,
+        resolved.reduction.as_str(),
+        resolved.include_air_as_zero,
+        resolved.samples,
+        resolved.tile_x,
+        resolved.tile_y,
+        resolved.tile_size,
+    );
+    let etag_token = projection_etag_token(
+        &quantity_id,
+        field_revision,
+        gen_id,
+        &resolved,
+        sampling_method,
+    );
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
+    drop(guard);
+
+    {
+        let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            return Ok(
+                crate::router_v2::handlers::shared::conditional_binary_response(
+                    &headers,
+                    &cached.etag,
+                    cached.bytes.clone(),
+                ),
+            );
+        }
+    }
+
+    let projection = compute_projection(&fdm_field, fem_field.as_ref(), &resolved)?;
+    let binary = serialize_field_vector_binary_v2(
+        &quantity_id,
+        1,
+        [projection.x_size, projection.y_size, 1],
+        &projection.scalar_values,
+    );
+    {
+        let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
+        cache.insert(cache_key, binary.clone(), etag.clone());
+    }
+
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/profile",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldProjectionProfileQuery,
+    ),
+    responses(
+        (status = 200, description = "Depth-resolved FEM projection profile for one raster pixel", body = FieldProjectionProfile),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+        (status = 409, description = "Projection profile requires nodal FEM field and tetrahedral mesh"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_profile(
+    State(state): State<Arc<AppState>>,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldProjectionProfileQuery>,
+) -> Result<Json<FieldProjectionProfile>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let spec = quantity_spec(&quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let resolved = resolve_projection_profile_query(&query, n_comp)?;
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp).ok_or_else(|| {
+        ApiError::conflict(
+            "projection profile requires a nodal FEM field matching the current mesh",
+        )
+    })?;
+    drop(guard);
+
+    let profile = fem_projection_profile(&fem_field, &resolved)?;
+    let sample_count = profile.samples.len() as u32;
+    let truncated = sample_count >= resolved.max_samples;
+    Ok(Json(FieldProjectionProfile {
+        quantity_id: quantity_id.clone(),
+        component: component_label(&resolved.component),
+        plane: resolved.plane.as_str().to_string(),
+        field_revision,
+        domain_generation_id: gen_id,
+        sampling_method: profile.sampling_method.to_string(),
+        pixel_x: resolved.pixel_x,
+        pixel_y: resolved.pixel_y,
+        x_pixels: resolved.x_size,
+        y_pixels: resolved.y_size,
+        u: profile.u,
+        v: profile.v,
+        bounds: Some(FieldSliceBounds {
+            u_min: profile.u_min,
+            u_max: profile.u_max,
+            v_min: profile.v_min,
+            v_max: profile.v_max,
+        }),
+        sample_count,
+        truncated,
+        samples: profile
+            .samples
+            .into_iter()
+            .map(|sample| FieldProjectionProfileSample {
+                element_index: sample.element_index,
+                marker: sample.marker,
+                normal_coord: sample.normal_coord,
+                value: sample.value,
+                measure: sample.measure,
+            })
+            .collect(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldProjectionQuery,
+    ),
+    responses(
+        (status = 200, description = "Binary projected empty-column mask, one byte per raster cell", content_type = "application/octet-stream"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_empty_mask(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldProjectionQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let spec = quantity_spec(&quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let resolved = resolve_projection_query(&query, n_comp)?;
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
+        .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
+    let sampling_method = if fem_field.is_some() {
+        "fem_tetra_volume_projection_conservative"
+    } else if resolved.adaptive {
+        "fdm_layer_projection_adaptive_nearest"
+    } else {
+        "fdm_layer_projection_nearest"
+    };
+    let component = component_label(&resolved.component);
+    let component_cache_token = format!(
+        "{component}:method={sampling_method}:tol={}:min={}",
+        resolved
+            .error_tolerance
+            .map(|value| value.to_bits().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        resolved.min_samples
+    );
+    let cache_key = projection_empty_mask_cache_key(
+        &quantity_id,
+        field_revision,
+        gen_id,
+        resolved.plane.as_str(),
+        resolved.x_size,
+        resolved.y_size,
+        &component_cache_token,
+        resolved.reduction.as_str(),
+        resolved.include_air_as_zero,
+        resolved.samples,
+        resolved.tile_x,
+        resolved.tile_y,
+        resolved.tile_size,
+    );
+    let etag_token = projection_etag_token(
+        &quantity_id,
+        field_revision,
+        gen_id,
+        &resolved,
+        sampling_method,
+    );
+    let etag =
+        crate::router_v2::handlers::shared::stable_strong_etag(&format!("empty-mask:{etag_token}"));
+    drop(guard);
+
+    {
+        let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            return Ok(
+                crate::router_v2::handlers::shared::conditional_binary_response(
+                    &headers,
+                    &cached.etag,
+                    cached.bytes.clone(),
+                ),
+            );
+        }
+    }
+
+    let projection = compute_projection(&fdm_field, fem_field.as_ref(), &resolved)?;
+    let binary = projection.empty_mask;
+    {
+        let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
+        cache.insert(cache_key, binary.clone(), etag.clone());
+    }
+
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, binary))
 }
 
 #[utoipa::path(
@@ -933,7 +1497,7 @@ pub async fn get_field_slice_meta(
     let size_param = format!("x_size={}&y_size={}", resolved.x_size, resolved.y_size);
 
     let scalar_href = format!(
-        "/v1/live/current/fields/{}/slice/scalar?plane={}&component={}&{}&{}",
+        "/v2/sessions/current/data/fields/{}/samples/slice/scalar?plane={}&component={}&{}&{}",
         urlencoding(&quantity_id),
         plane_param,
         comp_param,
@@ -942,7 +1506,7 @@ pub async fn get_field_slice_meta(
     );
     let arrows_href = if resolved.include_arrows {
         Some(format!(
-            "/v1/live/current/fields/{}/slice/arrows?plane={}&component=full&{}&{}&arrow_every={}&max_arrows={}",
+            "/v2/sessions/current/data/fields/{}/samples/slice/arrows?plane={}&component=full&{}&{}&arrow_every={}&max_arrows={}",
             urlencoding(&quantity_id),
             plane_param,
             cut_param,

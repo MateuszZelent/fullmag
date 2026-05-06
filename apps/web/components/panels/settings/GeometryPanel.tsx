@@ -39,10 +39,25 @@ import { GEOMETRY_PRESET_CATALOG, evaluateGeometryPreset, type GeometryPresetKin
 import GeometryPresetLibraryPanel from "../GeometryPresetLibraryPanel";
 import { PresetParameterField } from "../../ui/PresetParameterField";
 
+const POSITIVE_LENGTH_PARAM_KEYS = new Set([
+  "height",
+  "inner_radius",
+  "length",
+  "outer_radius",
+  "radius",
+  "rx",
+  "ry",
+  "rz",
+  "thickness",
+  "width",
+]);
+
 function defaultGeometryParams(kind: string, name: string): Record<string, unknown> {
   switch (kind) {
     case "Cylinder":
       return { radius: 10e-9, height: 20e-9, name };
+    case "ArchWaveguide":
+      return { length: 400e-9, width: 40e-9, height: 10e-9, arch_height: -80e-9, z0: 10e-9, name };
     case "Ellipsoid":
       return { rx: 10e-9, ry: 10e-9, rz: 20e-9, name };
     case "Ellipse":
@@ -218,6 +233,9 @@ function describeGeometryDescriptor(raw: unknown): string {
   if (kind === "Cylinder") {
     return `Cylinder r=${((Number(params.radius ?? 0)) * 1e9).toFixed(1)}nm h=${((Number(params.height ?? 0)) * 1e9).toFixed(1)}nm`;
   }
+  if (kind === "ArchWaveguide") {
+    return `ArchWaveguide L=${((Number(params.length ?? 0)) * 1e9).toFixed(1)}nm W=${((Number(params.width ?? 0)) * 1e9).toFixed(1)}nm H=${((Number(params.height ?? 0)) * 1e9).toFixed(1)}nm arch=${((Number(params.arch_height ?? 0)) * 1e9).toFixed(1)}nm`;
+  }
   if (kind === "Ellipsoid") {
     return `Ellipsoid ${["rx", "ry", "rz"].map((key) => `${key}=${((Number(params[key] ?? 0)) * 1e9).toFixed(1)}nm`).join(" ")}`;
   }
@@ -315,7 +333,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
   const handleBoxSize = (idx: number, valStr: string) => {
     const val = parseFloat(valStr);
-    if (isNaN(val)) return;
+    if (!Number.isFinite(val) || val <= 0) return;
     updateObject((object) => {
       const size = Array.isArray(object.geometry.geometry_params.size)
         ? [...object.geometry.geometry_params.size]
@@ -333,7 +351,8 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
 
   const handleParamNum = (key: string, valStr: string) => {
     const val = parseFloat(valStr);
-    if (isNaN(val)) return;
+    if (!Number.isFinite(val)) return;
+    if (POSITIVE_LENGTH_PARAM_KEYS.has(key) && val <= 0) return;
     updateObject((object) => ({
       ...object,
       geometry: {
@@ -425,6 +444,12 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
   const updateGeometryPresetParam = (key: string, value: unknown) => {
     updateObject((object) => {
       if (!object.geometry.preset_kind || !object.geometry.preset_params) return object;
+      if (
+        POSITIVE_LENGTH_PARAM_KEYS.has(key) &&
+        (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+      ) {
+        return object;
+      }
       const nextParams = { ...object.geometry.preset_params, [key]: value };
       const evaluated = evaluateGeometryPreset(object.geometry.preset_kind as GeometryPresetKind, nextParams);
       return {
@@ -745,6 +770,7 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                 options={[
                   { label: "Box", value: "Box" },
                   { label: "Cylinder", value: "Cylinder" },
+                  { label: "Arch Waveguide", value: "ArchWaveguide" },
                   { label: "Ellipsoid", value: "Ellipsoid" },
                   { label: "Ellipse", value: "Ellipse" },
                   { label: "Imported Mesh", value: "ImportedGeometry" },
@@ -789,6 +815,15 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
             <div className="grid grid-cols-2 gap-3">
               <TextField key={`${geo.name}-radius`} label="Radius" defaultValue={p.radius ? (Number(p.radius) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("radius", e.target.value)} unit="nm" mono />
               <TextField key={`${geo.name}-height`} label="Height" defaultValue={p.height ? (Number(p.height) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("height", e.target.value)} unit="nm" mono />
+            </div>
+          )}
+          {geo.geometry_kind === "ArchWaveguide" && (
+            <div className="grid grid-cols-2 gap-3">
+              <TextField key={`${geo.name}-arch-length`} label="Length" defaultValue={p.length ? (Number(p.length) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("length", e.target.value)} unit="nm" mono />
+              <TextField key={`${geo.name}-arch-width`} label="Width" defaultValue={p.width ? (Number(p.width) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("width", e.target.value)} unit="nm" mono />
+              <TextField key={`${geo.name}-arch-height`} label="Height" defaultValue={p.height ? (Number(p.height) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("height", e.target.value)} unit="nm" mono />
+              <TextField key={`${geo.name}-arch-arch-height`} label="Arch Height" defaultValue={p.arch_height != null ? (Number(p.arch_height) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("arch_height", e.target.value)} unit="nm" mono />
+              <TextField key={`${geo.name}-arch-z0`} label="Z0" defaultValue={p.z0 != null ? (Number(p.z0) * 1e9).toFixed(1) : ""} onBlur={(e) => handleParamNum("z0", e.target.value)} unit="nm" mono />
             </div>
           )}
           {geo.geometry_kind === "Ellipsoid" && (

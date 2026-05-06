@@ -715,6 +715,117 @@ Contract rules:
 - slice `component` requests must remain component-aware and must not silently
   fetch full vectors as a hidden fallback path.
 
+### 7.5.4 `GET /v2/sessions/current/data/fields/:quantity_id/projection/meta`
+
+- Status: `canonical-preview`
+- Purpose: metadata envelope for a resolved all-layer 2D projection read path
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldProjectionQuery` (`plane`, scalar `component`,
+  `reduction`, `include_air_as_zero`, `samples`, `adaptive`,
+  `error_tolerance`, `min_samples`, `x_size`, `y_size`)
+- Response body: `FieldProjectionMeta`
+
+Contract rules:
+
+- `projection_revision` is component-aware, reduction-aware, sample-aware, and
+  grid-size-aware,
+- supported reductions are `mean_occupied`, `sum`, `thickness_integral`,
+  `area_weighted_mean`, `min`, `max`, `rms`, `stddev`, and `abs_max`,
+- scalar `component` accepts ordinary components plus derived scalar aliases
+  `magnitude_squared` / `expr:m2` and `abs_x`, `abs_y`, `abs_z`,
+- progressive tile reads use optional `tile_x`, `tile_y`, and `tile_size`
+  query parameters on the binary projection resources,
+- the descriptor exposes the binary scalar raster link,
+- the descriptor exposes the binary empty-column mask sidecar link,
+- metadata exposes `error_estimate` and `error_method`; exact FEM reports
+  `exact_tetra_volume`, sampled fallback reports
+  `coarse_fine_sample_delta_max_abs` when enough samples exist,
+- sampled fallback can use `adaptive=true`; `samples` is then the maximum
+  normal-sample budget, `min_samples` is the starting point, and
+  `error_tolerance` is the coarse/fine max absolute delta target,
+- `sampling_method` must state whether the resource is an exact FEM operator or
+  a preview/fallback projection.
+
+Current honesty note:
+
+- structured preview/cache fields use `fdm_layer_projection_nearest`,
+- nodal FEM fields that match the current `FemMeshPayload` use
+  `fem_tetra_volume_projection_conservative`,
+- nodal FEM fields also expose a depth-resolved pixel profile resource,
+- general algebraic expression parsing remains a future extension beyond the
+  current derived scalar aliases.
+
+### 7.5.5 `GET /v2/sessions/current/data/fields/:quantity_id/projection/scalar`
+
+- Status: `canonical-preview`
+- Purpose: binary scalar raster for a resolved all-layer projection
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldProjectionQuery`
+- Response body:
+  - `200 application/octet-stream` with FMVP v2 payload,
+  - `304` when `If-None-Match` matches,
+  - `400` for unsupported reduction/component combinations,
+  - `404` when the field is unavailable.
+
+### 7.5.6 `GET /v2/sessions/current/data/fields/:quantity_id/projection/empty-mask`
+
+- Status: `canonical-preview`
+- Purpose: binary sidecar marking empty projected raster columns
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldProjectionQuery`
+- Response body:
+  - `200 application/octet-stream` with one byte per raster cell,
+  - `304` when `If-None-Match` matches,
+  - `400` for unsupported reduction/component combinations,
+  - `404` when the field is unavailable.
+
+Mask semantics:
+
+- `0` means the projected cell has at least one contributing sample,
+- `1` means the projected cell is empty/no-data.
+
+### 7.5.7 `GET /v2/sessions/current/data/fields/:quantity_id/projection/profile`
+
+- Status: `canonical-preview`
+- Purpose: depth-resolved profile for one all-layer projection pixel
+- Path parameters:
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `quantity_id` | `string` | Quantity identifier |
+
+- Query parameters: `FieldProjectionProfileQuery` (`plane`, scalar
+  `component`, `x_size`, `y_size`, `pixel_x`, `pixel_y`, optional
+  `max_samples`)
+- Response body: `FieldProjectionProfile`
+
+Contract rules:
+
+- this resource is intentionally on-demand and is not embedded in projection
+  meta,
+- current exact profile support requires a nodal FEM field whose sample count
+  matches `FemMeshPayload.nodes`,
+- samples are sorted by projection-normal coordinate,
+- each sample carries the contributing tetrahedron index, marker,
+  `normal_coord`, scalar value, and tetrahedral volume measure,
+- unsupported preview/cache-only fields return a clear conflict instead of
+  inventing a fake depth profile.
+
 ### 7.6 `GET /v1/live/current/scalars`
 
 - Status: `canonical`

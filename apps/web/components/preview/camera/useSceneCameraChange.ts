@@ -85,7 +85,11 @@ export function useSceneCameraChange(
 
       syncFromCamera();
 
-      pollTimer = window.setTimeout(attachWhenReady, CONTROLS_ATTACH_POLL_MS);
+      // Only keep polling while controls are not yet attached.
+      // Once attached, event listeners handle all subsequent changes.
+      if (!attachedControls) {
+        pollTimer = window.setTimeout(attachWhenReady, CONTROLS_ATTACH_POLL_MS);
+      }
     };
 
     attachWhenReady();

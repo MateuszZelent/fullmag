@@ -1150,7 +1150,11 @@ fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDecision {
     if plan.current_density.is_some() || plan.stt_spin_polarization.is_some() {
         unsupported.push("stt".to_string());
     }
-    if plan.has_oersted_cylinder || plan.oersted_field_xyz.as_ref().map_or(false, |v| !v.is_empty())
+    if plan.has_oersted_cylinder
+        || plan
+            .oersted_field_xyz
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
     {
         unsupported.push("oersted".to_string());
     }
@@ -1198,11 +1202,31 @@ fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDecision {
         || plan.material.cubic_anisotropy_kc1.is_some()
         || plan.material.cubic_anisotropy_kc2.is_some()
         || plan.material.cubic_anisotropy_kc3.is_some()
-        || plan.material.ku_field.as_ref().map_or(false, |v| !v.is_empty())
-        || plan.material.ku2_field.as_ref().map_or(false, |v| !v.is_empty())
-        || plan.material.kc1_field.as_ref().map_or(false, |v| !v.is_empty())
-        || plan.material.kc2_field.as_ref().map_or(false, |v| !v.is_empty())
-        || plan.material.kc3_field.as_ref().map_or(false, |v| !v.is_empty());
+        || plan
+            .material
+            .ku_field
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        || plan
+            .material
+            .ku2_field
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        || plan
+            .material
+            .kc1_field
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        || plan
+            .material
+            .kc2_field
+            .as_ref()
+            .map_or(false, |v| !v.is_empty())
+        || plan
+            .material
+            .kc3_field
+            .as_ref()
+            .map_or(false, |v| !v.is_empty());
 
     if has_anisotropy {
         // Native FEM supports local anisotropy PBC.

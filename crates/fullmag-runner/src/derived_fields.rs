@@ -27,11 +27,7 @@ pub(crate) fn compute_torque_field(
                     scale * (mx_b[2] + damping * mx_mx_b[2]),
                 ]
             } else {
-                [
-                    -mx_mx_b[0],
-                    -mx_mx_b[1],
-                    -mx_mx_b[2],
-                ]
+                [-mx_mx_b[0], -mx_mx_b[1], -mx_mx_b[2]]
             }
         })
         .collect()

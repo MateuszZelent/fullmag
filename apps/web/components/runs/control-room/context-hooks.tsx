@@ -391,6 +391,7 @@ export interface ModelContextValue {
   viewportSelectedObjectId: string | null;
   viewportScope: ViewportScope;
   focusObjectRequest: FocusObjectRequest | null;
+  cameraFitRequestSeed: number;
   objectViewMode: ObjectViewMode;
   activeTransformScope: "object" | "texture" | null;
   airMeshVisible: boolean;
@@ -484,6 +485,7 @@ export interface ModelContextValue {
   closeWorkspaceTab: (stage: WorkspaceStageMode, tabId: string) => void;
   pinWorkspaceTab: (stage: WorkspaceStageMode, tabId: string, pinned: boolean) => void;
   requestFocusObject: (objectId: string) => void;
+  requestViewportCameraFit: () => void;
   handleStudyDomainMeshGenerate: (meshReason?: string) => Promise<void>;
   handleAirboxMeshGenerate: () => Promise<void>;
   handleObjectMeshOverrideRebuild: (objectId?: string | null) => Promise<void>;

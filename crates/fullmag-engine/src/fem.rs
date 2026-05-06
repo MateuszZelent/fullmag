@@ -616,17 +616,9 @@ fn build_open_boundary_mass_csr(
         .boundary_faces
         .iter()
         .copied()
-        .filter(|face| {
-            !face
-                .iter()
-                .all(|node| periodic_node_set.contains(node))
-        })
+        .filter(|face| !face.iter().all(|node| periodic_node_set.contains(node)))
         .collect();
-    CsrMatrix::from_boundary_mass_assembly(
-        topology.n_nodes,
-        &open_faces,
-        &topology.coords,
-    )
+    CsrMatrix::from_boundary_mass_assembly(topology.n_nodes, &open_faces, &topology.coords)
 }
 
 /// Build the `PeriodicDemagReduced` from a `MeshTopology` and `PeriodicDofMap`.
@@ -659,9 +651,7 @@ fn build_periodic_demag_reduced(
 
     // Build full_to_reduced map.
     let full_n = dof_map.full_node_count;
-    let full_to_reduced: Vec<usize> = (0..full_n)
-        .map(|i| dof_map.reduced_node(i))
-        .collect();
+    let full_to_reduced: Vec<usize> = (0..full_n).map(|i| dof_map.reduced_node(i)).collect();
     let reduced_n = dof_map.reduced_node_count;
 
     // Reduce the operator.
@@ -1361,16 +1351,14 @@ impl FemLlgProblem {
         let n_nodes = topology.n_nodes;
         let demag_inv_diag = compute_jacobi_inv_diag(&demag_csr);
         let static_periodic_dof_map = static_periodic_dof_map_or_none(&topology);
-        let periodic_demag_reduced = static_periodic_dof_map
-            .as_ref()
-            .map(|dof_map| {
-                build_periodic_demag_reduced(
-                    &topology,
-                    dof_map,
-                    dirichlet_boundary,
-                    robin_beta_factor.map(|factor| factor * topology.robin_beta),
-                )
-            });
+        let periodic_demag_reduced = static_periodic_dof_map.as_ref().map(|dof_map| {
+            build_periodic_demag_reduced(
+                &topology,
+                dof_map,
+                dirichlet_boundary,
+                robin_beta_factor.map(|factor| factor * topology.robin_beta),
+            )
+        });
         Self {
             topology,
             material,
@@ -2554,8 +2542,10 @@ impl FemLlgProblem {
             } else {
                 0.0
             };
-        let uniaxial_anisotropy_energy_joules = self.uniaxial_anisotropy_energy_from_vectors(magnetization);
-        let cubic_anisotropy_energy_joules = self.cubic_anisotropy_energy_from_vectors(magnetization);
+        let uniaxial_anisotropy_energy_joules =
+            self.uniaxial_anisotropy_energy_from_vectors(magnetization);
+        let cubic_anisotropy_energy_joules =
+            self.cubic_anisotropy_energy_from_vectors(magnetization);
         let total_energy_joules = exchange_energy_joules
             + demag_energy_joules
             + external_energy_joules
@@ -2621,8 +2611,10 @@ impl FemLlgProblem {
             } else {
                 0.0
             };
-        let uniaxial_anisotropy_energy_joules = self.uniaxial_anisotropy_energy_from_vectors(magnetization);
-        let cubic_anisotropy_energy_joules = self.cubic_anisotropy_energy_from_vectors(magnetization);
+        let uniaxial_anisotropy_energy_joules =
+            self.uniaxial_anisotropy_energy_from_vectors(magnetization);
+        let cubic_anisotropy_energy_joules =
+            self.cubic_anisotropy_energy_from_vectors(magnetization);
         let total_energy_joules = exchange_energy_joules
             + demag_energy_joules
             + external_energy_joules
@@ -2806,8 +2798,8 @@ impl FemLlgProblem {
                 }
                 let m_dot_u = dot(*m, u);
                 // E = -K_u1*(m·u)^2 - K_u2*(m·u)^4
-                let energy_density = -uni.ku1 * m_dot_u * m_dot_u
-                    - uni.ku2 * m_dot_u * m_dot_u * m_dot_u * m_dot_u;
+                let energy_density =
+                    -uni.ku1 * m_dot_u * m_dot_u - uni.ku2 * m_dot_u * m_dot_u * m_dot_u * m_dot_u;
                 energy_density * vol
             })
             .sum()
@@ -2838,7 +2830,8 @@ impl FemLlgProblem {
                 let m2 = dot(*m, c2);
                 let m3 = dot(*m, c3);
                 // E = K_c1*(m1²m2² + m2²m3² + m3²m1²) + K_c2*(m1²m2²m3²)
-                let energy_density = cub.kc1 * (m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m3 * m3 * m1 * m1)
+                let energy_density = cub.kc1
+                    * (m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m3 * m3 * m1 * m1)
                     + cub.kc2 * m1 * m1 * m2 * m2 * m3 * m3;
                 energy_density * vol
             })
@@ -3335,8 +3328,9 @@ impl FemLlgProblem {
         // Project fields onto periodic equivalence classes so that all nodes
         // in the same class carry the same (class-averaged) DMI field.
         if let Some(dof_map) = &self.static_periodic_dof_map {
-            let full_to_red: Vec<usize> =
-                (0..dof_map.full_node_count).map(|i| dof_map.reduced_node(i)).collect();
+            let full_to_red: Vec<usize> = (0..dof_map.full_node_count)
+                .map(|i| dof_map.reduced_node(i))
+                .collect();
             let reduced_n = dof_map.reduced_node_count;
             if interfacial_pf.is_some() {
                 project_vector_field_by_periodic_classes(
@@ -3346,11 +3340,7 @@ impl FemLlgProblem {
                 );
             }
             if bulk_pf.is_some() {
-                project_vector_field_by_periodic_classes(
-                    &mut bulk_field,
-                    &full_to_red,
-                    reduced_n,
-                );
+                project_vector_field_by_periodic_classes(&mut bulk_field, &full_to_red, reduced_n);
             }
         }
 
@@ -3456,8 +3446,9 @@ impl FemLlgProblem {
 
         // Normalise by lumped mass, project to periodic classes, add to h_eff.
         let (full_to_red, reduced_n) = if let Some(dof_map) = &self.static_periodic_dof_map {
-            let f2r: Vec<usize> =
-                (0..dof_map.full_node_count).map(|i| dof_map.reduced_node(i)).collect();
+            let f2r: Vec<usize> = (0..dof_map.full_node_count)
+                .map(|i| dof_map.reduced_node(i))
+                .collect();
             let rn = dof_map.reduced_node_count;
             (Some(f2r), rn)
         } else {

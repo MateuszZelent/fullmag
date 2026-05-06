@@ -109,12 +109,20 @@ function CanvasVisualActivityProbe({
   const { gl } = useThree();
   const lastActiveRef = useRef<boolean | null>(null);
   const sampleScheduledRef = useRef(false);
+  const frameCounterRef = useRef(0);
+  const pixelBufRef = useRef<Uint8Array | null>(null);
   const background = useMemo(() => backgroundRgb(backgroundColor), [backgroundColor]);
 
   useFrame(() => {
     if (!onVisualActivityChange) {
       return;
     }
+    // Throttle: only probe every 30th frame to avoid GPU→CPU readPixels stall
+    frameCounterRef.current += 1;
+    if (frameCounterRef.current < 30) {
+      return;
+    }
+    frameCounterRef.current = 0;
     if (sampleScheduledRef.current) {
       return;
     }
@@ -131,7 +139,10 @@ function CanvasVisualActivityProbe({
         }
         return;
       }
-      const pixel = new Uint8Array(4);
+      if (!pixelBufRef.current) {
+        pixelBufRef.current = new Uint8Array(4);
+      }
+      const pixel = pixelBufRef.current;
       let activeSamples = 0;
       try {
         for (const [xFactor, yFactor] of VISUAL_ACTIVITY_SAMPLE_POINTS) {

@@ -40,13 +40,13 @@ study.interactive(True)
 study.wait_for_solve(True)
 study.universe(
     mode="auto",
-    size=(2.7e-6, 1.2e-6, 2.5e-7),
+    size=(3.0e-6, 1.2e-6, 2.5e-7),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
     maximum_element_size=100e-9,
-    minimum_element_size=5e-9,
+    minimum_element_size=50e-9,
     growth_rate=1.25,
     grading="geometric",
 )
@@ -68,10 +68,10 @@ waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
-waveguide.m = fm.texture.uniform(1.0, 0.0, 0.0)
+waveguide.m = fm.texture.uniform(0.0, 0.0, 1.0)
 waveguide.mesh(
-    maximum_element_size=20e-9,
-    minimum_element_size=1e-9,
+    maximum_element_size=50e-9,
+    minimum_element_size=25e-9,
     order=1,
     algorithm_2d=6,
     algorithm_3d=1,

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Use `FemMeshSlice2DECharts.tsx` instead.
+ * This Plotly-based 2D FEM slice renderer is retained for rollback safety.
+ * Remove after production sign-off of the ECharts migration.
+ */
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -61,6 +66,8 @@ interface Props {
   selectedAntennaId?: string | null;
   showArrows?: boolean;
   previewMaxPoints?: number;
+  /** Slice toolbar mode — "all_layers" triggers Z-projection averaging. */
+  sliceMode?: "single" | "slab" | "all_layers";
   onQuantityChange?: (quantityId: string) => void;
   onComponentChange?: (component: VectorComponent) => void;
   onPlaneChange?: (plane: SlicePlane) => void;
@@ -373,6 +380,7 @@ export default function FemMeshSlice2DPlotly({
   selectedAntennaId,
   showArrows,
   previewMaxPoints = PREVIEW_MAX_POINTS_DEFAULT,
+  sliceMode = "single",
   onComponentChange,
 }: Props) {
   const [hoverProbe, setHoverProbe] = useState<SliceProbe | null>(null);

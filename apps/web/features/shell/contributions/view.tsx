@@ -902,6 +902,12 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const airboxRenderMode = toolbar?.airboxRenderMode ?? "wireframe";
   const position = toolbar?.positionPercent ?? ctx.meshClipPos ?? 50;
   const autoScale = toolbar?.autoContrast ?? Boolean(ctx.requestedPreviewAutoScale ?? true);
+  const projectionReduction = toolbar?.projectionReduction ?? "mean_occupied";
+  const projectionIncludeAirAsZero = toolbar?.projectionIncludeAirAsZero ?? false;
+  const projectionSamples = toolbar?.projectionSamples ?? 20;
+  const projectionResolution = toolbar?.projectionResolution ?? 128;
+  const projectionDisabled = slice.disabled || mode !== "all_layers";
+  const projectionDisabledReason = slice.reason ?? (mode !== "all_layers" ? "Select All layers mode first" : null);
   return {
     id: "view-slice-2d",
     title: "2D Slice",
@@ -1185,6 +1191,72 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
               { value: "slab", label: "Slab" },
               { value: "all_layers", label: "All layers" },
             ],
+          },
+          {
+            type: "radio-group",
+            id: "slice:plane:projection-reduction",
+            label: "Projection",
+            value: projectionReduction,
+            disabled: projectionDisabled,
+            disabledReason: projectionDisabledReason,
+            onValueChange: (reduction) =>
+              ctx.run({
+                id: "viewport.set-slice-projection-reduction",
+                reduction: reduction as typeof projectionReduction,
+              }),
+            items: [
+              { value: "mean_occupied", label: "Mean occupied" },
+              { value: "area_weighted_mean", label: "Area weighted mean" },
+              { value: "sum", label: "Sum" },
+              { value: "thickness_integral", label: "Thickness integral" },
+              { value: "min", label: "Min" },
+              { value: "max", label: "Max" },
+              { value: "rms", label: "RMS" },
+              { value: "stddev", label: "Std dev" },
+              { value: "abs_max", label: "Abs max" },
+            ],
+          },
+          {
+            type: "checkbox",
+            id: "slice:plane:projection-air-zero",
+            label: "Air as zero",
+            checked: projectionIncludeAirAsZero,
+            disabled: projectionDisabled,
+            disabledReason: projectionDisabledReason,
+            onCheckedChange: (enabled) =>
+              ctx.run({ id: "viewport.set-slice-projection-air-zero", enabled }),
+          },
+          {
+            type: "slider",
+            id: "slice:plane:projection-samples",
+            label: "Samples",
+            value: projectionSamples,
+            min: 4,
+            max: 100,
+            step: 1,
+            disabled: projectionDisabled,
+            disabledReason: projectionDisabledReason,
+            formatValue: (value) => `${Math.round(value)}`,
+            onValueCommit: (samples) =>
+              ctx.run({ id: "viewport.set-slice-projection-samples", samples: Math.round(samples) }),
+            onValueChange: (samples) =>
+              ctx.run({ id: "viewport.set-slice-projection-samples", samples: Math.round(samples) }),
+          },
+          {
+            type: "slider",
+            id: "slice:plane:projection-resolution",
+            label: "Resolution",
+            value: projectionResolution,
+            min: 32,
+            max: 384,
+            step: 16,
+            disabled: projectionDisabled,
+            disabledReason: projectionDisabledReason,
+            formatValue: (value) => `${Math.round(value)} px`,
+            onValueCommit: (resolution) =>
+              ctx.run({ id: "viewport.set-slice-projection-resolution", resolution: Math.round(resolution) }),
+            onValueChange: (resolution) =>
+              ctx.run({ id: "viewport.set-slice-projection-resolution", resolution: Math.round(resolution) }),
           },
           {
             type: "slider",
@@ -1482,7 +1554,7 @@ function buildDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
         iconColor: "text-sky-300",
         menu: [
           { type: "item", id: "camera:focus", label: "Focus selected", disabled: !ctx.can({ id: "viewport.focus-selected-object" }), action: () => ctx.run({ id: "viewport.focus-selected-object" }) },
-          { type: "item", id: "camera:frame-all", label: "Frame all", disabled: !ctx.can({ id: "builder.frame-all" }), action: () => ctx.run({ id: "builder.frame-all" }) },
+          { type: "item", id: "camera:frame-all", label: "Frame all", disabled: !ctx.can({ id: "viewport.fit-all" }), action: () => ctx.run({ id: "viewport.fit-all" }) },
           { type: "item", id: "camera:trackball", label: "Trackball navigation", disabled: true, disabledReason: "Navigation profile persistence is pending viewport settings state" },
           { type: "item", id: "camera:orbit", label: "Orbit navigation", disabled: true, disabledReason: "Navigation profile persistence is pending viewport settings state" },
         ],

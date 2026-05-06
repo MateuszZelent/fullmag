@@ -204,6 +204,7 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
             primitive("pillar", "Pillar", "mumax", true, true, true, true, GeometrySupportStatus::Production),
             primitive("nanowire", "Nanowire", "mumax", true, true, true, true, GeometrySupportStatus::Production),
             primitive("ring", "Ring", "mumax", true, true, true, true, GeometrySupportStatus::Production),
+            primitive("arch_waveguide", "Arch Waveguide", "core", true, true, true, false, GeometrySupportStatus::Production),
             primitive("triangular_prism", "Triangular Prism", "core", false, false, false, true, GeometrySupportStatus::Preview),
             primitive("cone", "Cone", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
             primitive("capsule", "Capsule", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
@@ -613,6 +614,43 @@ fn validate_geometry_node(
                 diagnostics,
             );
         }
+        "ArchWaveguide" => {
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "length",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "width",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_positive_number_param(
+                &geometry.geometry_params,
+                "height",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_finite_number_param(
+                &geometry.geometry_params,
+                "arch_height",
+                object_id,
+                path,
+                diagnostics,
+            );
+            validate_optional_finite_number_param(
+                &geometry.geometry_params,
+                "z0",
+                object_id,
+                path,
+                diagnostics,
+            );
+        }
         "Difference" => validate_difference_node(
             &geometry.geometry_params,
             backend_target,
@@ -788,6 +826,33 @@ fn derive_geometry_bounds(geometry: &SceneGeometry) -> Option<([f64; 3], [f64; 3
                 [radius, radius, height / 2.0],
             ))
         }
+        "ArchWaveguide" => {
+            let length = number_param(&geometry.geometry_params, "length")?;
+            let width = number_param(&geometry.geometry_params, "width")?;
+            let height = number_param(&geometry.geometry_params, "height")?;
+            let arch_height = number_param(&geometry.geometry_params, "arch_height")?;
+            let z0 = number_param(&geometry.geometry_params, "z0").unwrap_or(0.0);
+            if !(length.is_finite()
+                && length > 0.0
+                && width.is_finite()
+                && width > 0.0
+                && height.is_finite()
+                && height > 0.0
+                && arch_height.is_finite()
+                && z0.is_finite())
+            {
+                return None;
+            }
+            let half_length = 0.5 * length;
+            let half_width = 0.5 * width;
+            let half_height = 0.5 * height;
+            let z_min = z0.min(z0 + arch_height) - half_height;
+            let z_max = z0.max(z0 + arch_height) + half_height;
+            Some((
+                [-half_length, -half_width, z_min],
+                [half_length, half_width, z_max],
+            ))
+        }
         "Ellipsoid" => {
             let rx = number_param(&geometry.geometry_params, "rx")?;
             let ry = number_param(&geometry.geometry_params, "ry")?;
@@ -851,6 +916,38 @@ fn validate_positive_number_param(
             &["realize_geometry", "build_mesh", "run_solver"],
         )),
     }
+}
+
+fn validate_finite_number_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    match number_param(params, key) {
+        Some(value) if value.is_finite() => {}
+        _ => diagnostics.push(error(
+            "GEOMETRY_PARAM_INVALID",
+            format!("Geometry parameter '{key}' must be a finite number."),
+            Some(object_id.to_string()),
+            Some(path.to_string()),
+            &["realize_geometry", "build_mesh", "run_solver"],
+        )),
+    }
+}
+
+fn validate_optional_finite_number_param(
+    params: &Value,
+    key: &str,
+    object_id: &str,
+    path: &str,
+    diagnostics: &mut Vec<GeometryDiagnostic>,
+) {
+    if params.get(key).is_none() {
+        return;
+    }
+    validate_finite_number_param(params, key, object_id, path, diagnostics);
 }
 
 fn number_param(params: &Value, key: &str) -> Option<f64> {
@@ -1174,6 +1271,40 @@ mod tests {
         assert_eq!(snapshot.source_scene_revision, 7);
         assert_eq!(snapshot.bodies[0].bounds_min, [-0.5, -1.0, -1.5]);
         assert_eq!(snapshot.bodies[0].bounds_max, [0.5, 1.0, 1.5]);
+    }
+
+    #[test]
+    fn arch_waveguide_scene_realizes_with_python_ir_bounds() {
+        let scene = scene_with_object(SceneGeometry {
+            geometry_kind: "ArchWaveguide".to_string(),
+            geometry_params: json!({
+                "length": 400e-9,
+                "width": 40e-9,
+                "height": 10e-9,
+                "arch_height": -80e-9,
+                "z0": 10e-9,
+            }),
+            bounds_min: None,
+            bounds_max: None,
+        });
+
+        let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert_eq!(validation.status, "ready");
+        let mut clean_scene = scene.clone();
+        clean_scene.objects[0].tags.clear();
+        assert_eq!(
+            geometry_blocks_solver_run(&clean_scene, GeometryBackendTarget::Fem),
+            None
+        );
+        let snapshot = realize_geometry_scene(&scene, GeometryBackendTarget::Fem);
+        assert_eq!(snapshot.status, "ready");
+        assert_eq!(snapshot.bodies[0].geometry_kind, "ArchWaveguide");
+        assert!((snapshot.bodies[0].bounds_min[0] + 200e-9).abs() < 1e-18);
+        assert!((snapshot.bodies[0].bounds_min[1] + 20e-9).abs() < 1e-18);
+        assert!((snapshot.bodies[0].bounds_min[2] + 75e-9).abs() < 1e-18);
+        assert!((snapshot.bodies[0].bounds_max[0] - 200e-9).abs() < 1e-18);
+        assert!((snapshot.bodies[0].bounds_max[1] - 20e-9).abs() < 1e-18);
+        assert!((snapshot.bodies[0].bounds_max[2] - 15e-9).abs() < 1e-18);
     }
 
     #[test]

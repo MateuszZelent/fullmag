@@ -702,7 +702,8 @@ mod tests {
         let expected_torque_apm = 5e-5;
         let stats = StepStats {
             max_torque_Apm: 0.0,
-            max_dm_dt: expected_torque_apm * gyromagnetic_ratio * damping / (1.0 + damping * damping),
+            max_dm_dt: expected_torque_apm * gyromagnetic_ratio * damping
+                / (1.0 + damping * damping),
             ..StepStats::default()
         };
 
@@ -714,6 +715,11 @@ mod tests {
             damping,
             true,
         ));
-        assert!((effective_max_torque_apm(&stats, gyromagnetic_ratio, damping, true) - expected_torque_apm).abs() < 1e-12);
+        assert!(
+            (effective_max_torque_apm(&stats, gyromagnetic_ratio, damping, true)
+                - expected_torque_apm)
+                .abs()
+                < 1e-12
+        );
     }
 }

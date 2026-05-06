@@ -13,6 +13,8 @@ use crate::error::ApiError;
 /// Wire aliases:
 /// - `"full"` or absent → [`ComponentSelection::Full`]
 /// - `"magnitude"` → [`ComponentSelection::Magnitude`]
+/// - `"magnitude_squared"` → derived scalar |v|²
+/// - `"abs_x"`, `"abs_y"`, `"abs_z"` → derived scalar absolute component
 /// - `"x"`, `"y"`, `"z"` → [`ComponentSelection::Index`] (0, 1, 2 respectively)
 /// - `"cN"` (N ≥ 0) → [`ComponentSelection::Index(N)`]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +23,10 @@ pub enum ComponentSelection {
     Full,
     /// Return per-point L2 magnitude (scalar, `nComp=1`).
     Magnitude,
+    /// Return per-point squared L2 magnitude (scalar, `nComp=1`).
+    MagnitudeSquared,
+    /// Return the absolute value of a component by zero-based index.
+    AbsIndex(usize),
     /// Return a single component by zero-based index (scalar, `nComp=1`).
     Index(usize),
 }
@@ -37,6 +43,12 @@ pub fn parse_component(input: Option<&str>, n_comp: usize) -> Result<ComponentSe
 
     match raw {
         "magnitude" => Ok(ComponentSelection::Magnitude),
+        "magnitude_squared" | "expr:magnitude_squared" | "expr:m2" => {
+            Ok(ComponentSelection::MagnitudeSquared)
+        }
+        "abs_x" | "expr:abs_x" => validate_abs_index(0, n_comp),
+        "abs_y" | "expr:abs_y" => validate_abs_index(1, n_comp),
+        "abs_z" | "expr:abs_z" => validate_abs_index(2, n_comp),
         "x" => validate_index(0, n_comp),
         "y" => validate_index(1, n_comp),
         "z" => validate_index(2, n_comp),
@@ -55,6 +67,10 @@ pub fn parse_component(input: Option<&str>, n_comp: usize) -> Result<ComponentSe
             other
         ))),
     }
+}
+
+fn validate_abs_index(idx: usize, n_comp: usize) -> Result<ComponentSelection, ApiError> {
+    validate_index(idx, n_comp).map(|_| ComponentSelection::AbsIndex(idx))
 }
 
 fn validate_index(idx: usize, n_comp: usize) -> Result<ComponentSelection, ApiError> {
@@ -100,7 +116,23 @@ pub fn project_values(
             let projected: Vec<f64> = values.iter().skip(*idx).step_by(n_comp).copied().collect();
             Ok((1, projected))
         }
+        ComponentSelection::AbsIndex(idx) => {
+            let projected: Vec<f64> = values
+                .iter()
+                .skip(*idx)
+                .step_by(n_comp)
+                .map(|value| value.abs())
+                .collect();
+            Ok((1, projected))
+        }
         ComponentSelection::Magnitude => Ok((1, magnitude(values, n_comp))),
+        ComponentSelection::MagnitudeSquared => Ok((
+            1,
+            values
+                .chunks_exact(n_comp)
+                .map(|chunk| chunk.iter().map(|v| v * v).sum::<f64>())
+                .collect(),
+        )),
     }
 }
 
@@ -129,6 +161,8 @@ pub fn component_etag_token(
     let comp_str = match component {
         ComponentSelection::Full => "full".to_string(),
         ComponentSelection::Magnitude => "magnitude".to_string(),
+        ComponentSelection::MagnitudeSquared => "magnitude_squared".to_string(),
+        ComponentSelection::AbsIndex(i) => format!("abs_c{}", i),
         ComponentSelection::Index(i) => format!("c{}", i),
     };
     format!("fmvp:{quantity_id}:{field_revision}:{domain_generation_id}:{comp_str}:v2")
@@ -167,6 +201,22 @@ mod tests {
     fn parse_magnitude() {
         let sel = parse_component(Some("magnitude"), 3).unwrap();
         assert_eq!(sel, ComponentSelection::Magnitude);
+    }
+
+    #[test]
+    fn parse_derived_component_aliases() {
+        assert_eq!(
+            parse_component(Some("magnitude_squared"), 3).unwrap(),
+            ComponentSelection::MagnitudeSquared
+        );
+        assert_eq!(
+            parse_component(Some("expr:m2"), 3).unwrap(),
+            ComponentSelection::MagnitudeSquared
+        );
+        assert_eq!(
+            parse_component(Some("abs_y"), 3).unwrap(),
+            ComponentSelection::AbsIndex(1)
+        );
     }
 
     #[test]
@@ -262,6 +312,18 @@ mod tests {
         assert!((out[1] - 1.0).abs() < 1e-12);
         assert!((out[2] - 1.0).abs() < 1e-12);
         assert!((out[3] - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn project_derived_components() {
+        let vals = mock_values();
+        let (n, out) = project_values(&vals, 3, &ComponentSelection::MagnitudeSquared).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(out, vec![1.0, 1.0, 1.0, 9.0]);
+
+        let (n, out) = project_values(&vals, 3, &ComponentSelection::AbsIndex(1)).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(out, vec![0.0, 1.0, 0.0, 2.0]);
     }
 
     #[test]

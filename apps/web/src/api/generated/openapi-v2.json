@@ -1850,6 +1850,286 @@
         ],
         "type": "object"
       },
+      "FieldProjectionMaskDescriptor": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "etag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "href": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "point_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available",
+          "point_count"
+        ],
+        "type": "object"
+      },
+      "FieldProjectionMeta": {
+        "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldSliceBounds"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "empty_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "empty_mask": {
+            "$ref": "#/components/schemas/FieldProjectionMaskDescriptor"
+          },
+          "error_estimate": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "error_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "etag": {
+            "type": "string"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "grid": {
+            "$ref": "#/components/schemas/FieldSliceGrid"
+          },
+          "include_air_as_zero": {
+            "type": "boolean"
+          },
+          "occupied_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "occupied_measure": {
+            "format": "double",
+            "type": "number"
+          },
+          "plane": {
+            "type": "string"
+          },
+          "projection_revision": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "reduction": {
+            "type": "string"
+          },
+          "samples": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sampling_method": {
+            "type": "string"
+          },
+          "scalar": {
+            "$ref": "#/components/schemas/FieldSliceBinaryDescriptor"
+          },
+          "x_pixels": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y_pixels": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quantity_id",
+          "component",
+          "plane",
+          "reduction",
+          "include_air_as_zero",
+          "samples",
+          "field_revision",
+          "domain_generation_id",
+          "sampling_method",
+          "etag",
+          "projection_revision",
+          "x_pixels",
+          "y_pixels",
+          "grid",
+          "occupied_count",
+          "occupied_measure",
+          "empty_count",
+          "scalar",
+          "empty_mask"
+        ],
+        "type": "object"
+      },
+      "FieldProjectionProfile": {
+        "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldSliceBounds"
+              }
+            ]
+          },
+          "component": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pixel_x": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pixel_y": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plane": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/FieldProjectionProfileSample"
+            },
+            "type": "array"
+          },
+          "sampling_method": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "u": {
+            "format": "double",
+            "type": "number"
+          },
+          "v": {
+            "format": "double",
+            "type": "number"
+          },
+          "x_pixels": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y_pixels": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quantity_id",
+          "component",
+          "plane",
+          "field_revision",
+          "domain_generation_id",
+          "sampling_method",
+          "pixel_x",
+          "pixel_y",
+          "x_pixels",
+          "y_pixels",
+          "u",
+          "v",
+          "sample_count",
+          "truncated",
+          "samples"
+        ],
+        "type": "object"
+      },
+      "FieldProjectionProfileSample": {
+        "properties": {
+          "element_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "measure": {
+            "format": "double",
+            "type": "number"
+          },
+          "normal_coord": {
+            "format": "double",
+            "type": "number"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "element_index",
+          "marker",
+          "normal_coord",
+          "value",
+          "measure"
+        ],
+        "type": "object"
+      },
       "FieldSliceBinaryDescriptor": {
         "properties": {
           "available": {
@@ -7496,6 +7776,656 @@
               }
             },
             "description": "Field metadata"
+          },
+          "404": {
+            "description": "Field not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_empty_mask",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "description": "Component selection. Defaults to magnitude for vector fields.",
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max.",
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Treat empty columns as zero. Structured-grid projection currently has no void mask.",
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Number of normal-axis layers to sample.",
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Enable automatic coarse-to-fine sampling for preview/fallback projections.",
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Stop adaptive sampling when the max absolute coarse/fine delta is below this value.",
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Initial sample count for adaptive sampling.",
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid width.",
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid height.",
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Hard safety cap on `x_size * y_size`.",
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`.",
+            "in": "query",
+            "name": "tile_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`.",
+            "in": "query",
+            "name": "tile_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile edge size in pixels for progressive raster fetches.",
+            "in": "query",
+            "name": "tile_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary projected empty-column mask, one byte per raster cell"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/meta": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_meta",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "description": "Component selection. Defaults to magnitude for vector fields.",
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max.",
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Treat empty columns as zero. Structured-grid projection currently has no void mask.",
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Number of normal-axis layers to sample.",
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Enable automatic coarse-to-fine sampling for preview/fallback projections.",
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Stop adaptive sampling when the max absolute coarse/fine delta is below this value.",
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Initial sample count for adaptive sampling.",
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid width.",
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid height.",
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Hard safety cap on `x_size * y_size`.",
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`.",
+            "in": "query",
+            "name": "tile_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`.",
+            "in": "query",
+            "name": "tile_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile edge size in pixels for progressive raster fetches.",
+            "in": "query",
+            "name": "tile_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldProjectionMeta"
+                }
+              }
+            },
+            "description": "Projection metadata with binary scalar URL"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/profile": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_profile",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "description": "Component selection. Defaults to magnitude for vector fields.",
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Full projection grid width.",
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Full projection grid height.",
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pixel column to probe.",
+            "in": "query",
+            "name": "pixel_x",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pixel row to probe.",
+            "in": "query",
+            "name": "pixel_y",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Maximum profile samples returned after depth sorting.",
+            "in": "query",
+            "name": "max_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldProjectionProfile"
+                }
+              }
+            },
+            "description": "Depth-resolved FEM projection profile for one raster pixel"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          },
+          "409": {
+            "description": "Projection profile requires nodal FEM field and tetrahedral mesh"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/scalar": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_scalar",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "description": "Component selection. Defaults to magnitude for vector fields.",
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Reduction across layers: mean_occupied, sum, thickness_integral, area_weighted_mean, min, max, rms, stddev, abs_max.",
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Treat empty columns as zero. Structured-grid projection currently has no void mask.",
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Number of normal-axis layers to sample.",
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Enable automatic coarse-to-fine sampling for preview/fallback projections.",
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Stop adaptive sampling when the max absolute coarse/fine delta is below this value.",
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Initial sample count for adaptive sampling.",
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid width.",
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Output grid height.",
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Hard safety cap on `x_size * y_size`.",
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile column for progressive raster fetches. Requires `tile_y` and `tile_size`.",
+            "in": "query",
+            "name": "tile_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile row for progressive raster fetches. Requires `tile_x` and `tile_size`.",
+            "in": "query",
+            "name": "tile_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tile edge size in pixels for progressive raster fetches.",
+            "in": "query",
+            "name": "tile_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary FMVP v2 projected scalar raster"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
           },
           "404": {
             "description": "Field not found"

@@ -79,6 +79,7 @@ export interface RibbonCommandContext {
   onSetViewportAxesScope?: (scope: "universe" | "object") => void;
   onToggleUniverseWireframe?: () => void;
   onToggleViewportLegend?: () => void;
+  onRequestViewportCameraFit?: () => void;
   onRestoreWorkspacePanel?: (panel: WorkspacePanelId) => void;
   onHideWorkspacePanel?: (panel: WorkspacePanelId) => void;
   onSimAction?: (action: string) => void;
@@ -515,6 +516,7 @@ export type RibbonCommand =
       }>;
     }
   | { id: "viewport.set-airbox-display"; patch: AirboxDisplayPatch }
+  | { id: "viewport.fit-all" }
   | { id: "viewport.set-global-render-mode"; renderMode: ViewportMeshRenderMode }
   | { id: "viewport.set-global-opacity"; opacity: number }
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
@@ -529,6 +531,10 @@ export type RibbonCommand =
   | { id: "viewport.set-slice-airbox"; visible: boolean }
   | { id: "viewport.set-slice-airbox-render-mode"; renderMode: Slice2DToolbarState["airboxRenderMode"] }
   | { id: "viewport.set-slice-airbox-vectors"; visible: boolean }
+  | { id: "viewport.set-slice-projection-reduction"; reduction: Slice2DToolbarState["projectionReduction"] }
+  | { id: "viewport.set-slice-projection-air-zero"; enabled: boolean }
+  | { id: "viewport.set-slice-projection-samples"; samples: number }
+  | { id: "viewport.set-slice-projection-resolution"; resolution: number }
   | { id: "viewport.toggle-selected-texture"; visible: boolean }
   | { id: "viewport.set-selected-opacity"; opacity: number }
   | { id: "viewport.set-selected-render-mode"; renderMode: ViewportMeshRenderMode | "inherit" }
@@ -626,6 +632,8 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onToggleUniverseWireframe === "function";
     case "viewport.toggle-legend":
       return typeof ctx.onToggleViewportLegend === "function";
+    case "viewport.fit-all":
+      return typeof ctx.onRequestViewportCameraFit === "function";
     case "visualization.create-preset":
       return typeof ctx.onCreateVisualizationPreset === "function";
     case "viewport.toggle-sidebar":
@@ -697,6 +705,10 @@ export function canExecuteRibbonCommand(
     case "viewport.set-slice-airbox":
     case "viewport.set-slice-airbox-render-mode":
     case "viewport.set-slice-airbox-vectors":
+    case "viewport.set-slice-projection-reduction":
+    case "viewport.set-slice-projection-air-zero":
+    case "viewport.set-slice-projection-samples":
+    case "viewport.set-slice-projection-resolution":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function";
     case "viewport.toggle-selected-texture":
       return Boolean(ctx.selectedObjectId)
@@ -849,6 +861,9 @@ export function executeRibbonCommand(
     case "viewport.toggle-legend":
       ctx.onToggleViewportLegend?.();
       return;
+    case "viewport.fit-all":
+      ctx.onRequestViewportCameraFit?.();
+      return;
     case "visualization.create-preset":
       ctx.onCreateVisualizationPreset?.();
       return;
@@ -981,6 +996,18 @@ export function executeRibbonCommand(
         showAirboxVectors: command.visible,
         renderMode: command.visible ? "vectors" : "heatmap",
       });
+      return;
+    case "viewport.set-slice-projection-reduction":
+      ctx.onSetSlice2DToolbar?.({ projectionReduction: command.reduction });
+      return;
+    case "viewport.set-slice-projection-air-zero":
+      ctx.onSetSlice2DToolbar?.({ projectionIncludeAirAsZero: command.enabled });
+      return;
+    case "viewport.set-slice-projection-samples":
+      ctx.onSetSlice2DToolbar?.({ projectionSamples: command.samples });
+      return;
+    case "viewport.set-slice-projection-resolution":
+      ctx.onSetSlice2DToolbar?.({ projectionResolution: command.resolution });
       return;
     case "viewport.toggle-selected-texture":
       ctx.onSetSelectedObjectTextureVisible?.(command.visible);

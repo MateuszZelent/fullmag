@@ -35,7 +35,8 @@ interface UseFemSceneGeometryArgs {
   enableScreenshotCapture: boolean;
   suppressInitialCameraFit?: boolean;
   activeTextureTransform: TextureTransform3D | null;
-  viewportFitSeed?: string | number;
+  viewportFitSeed?: string | number | null;
+  cameraFitRequestSeed?: string | number | null;
   selectedObjectOverlay: BuilderObjectOverlay | null;
   objectOverlays: BuilderObjectOverlay[];
   focusObjectRequest: FocusObjectRequest | null;
@@ -140,6 +141,7 @@ export function useFemSceneGeometry({
   worldCenter = null,
   viewportAxesScope = "universe",
   viewportFitSeed,
+  cameraFitRequestSeed = null,
   viewCubeSceneRef,
   canvasRef,
   qualityProfileRef,
@@ -395,6 +397,7 @@ export function useFemSceneGeometry({
       persistedCameraAvailable: suppressInitialCameraFit,
       previousFitSignature: lastFittedGeomRef.current,
       viewportFitSeed,
+      forceFitSeed: cameraFitRequestSeed,
     });
     lastFittedGeomRef.current = decision.nextFitSignature;
     if (decision.shouldAdvanceGeneration) {
@@ -404,6 +407,7 @@ export function useFemSceneGeometry({
     enableCameraFitEffect,
     suppressInitialCameraFit,
     setCameraFitGeneration,
+    cameraFitRequestSeed,
     viewportFitSeed,
   ]);
 

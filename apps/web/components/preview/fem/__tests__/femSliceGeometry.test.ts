@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectSegments,
   collectSliceTopology,
+  computeProjectionSlice,
   sampleSliceField,
   type SlicePlane,
 } from "../femSliceGeometry";
@@ -246,5 +247,117 @@ describe("collectSegments", () => {
         (polygon) => polygon.partId,
       ),
     ).toEqual(["mag", "air"]);
+  });
+
+  it("supports explicit all-layer projection reductions", () => {
+    const meshData = makeMeshData();
+    const mean = computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      nPlanes: 2,
+      resolution: 1,
+      reduction: "mean_occupied",
+    });
+    const sum = computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      nPlanes: 2,
+      resolution: 1,
+      reduction: "sum",
+    });
+    const integral = computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      nPlanes: 2,
+      resolution: 1,
+      reduction: "thickness_integral",
+    });
+
+    expect(mean.values[0]).toBeCloseTo(1);
+    expect(sum.values[0]).toBeCloseTo(2);
+    expect(integral.values[0]).toBeCloseTo(2 / 3);
+  });
+
+  it("limits projection element sampling when a preview budget is set", () => {
+    const meshData: FemMeshData = {
+      nodes: [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+      ],
+      elements: [0, 1, 2, 3, 4, 5, 6, 7],
+      boundaryFaces: [],
+      nNodes: 8,
+      nElements: 2,
+      fieldNComp: 3,
+      fieldData: {
+        x: [1, 1, 1, 1, 3, 3, 3, 3],
+        y: [0, 0, 0, 0, 0, 0, 0, 0],
+        z: [0, 0, 0, 0, 0, 0, 0, 0],
+      },
+      quantityDomain: "magnetic_only",
+    };
+
+    const full = computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      nPlanes: 1,
+      resolution: 1,
+      reduction: "sum",
+    });
+    const budgeted = computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      nPlanes: 1,
+      resolution: 1,
+      maxElements: 1,
+      reduction: "sum",
+    });
+
+    expect(full.values[0]).toBeCloseTo(4);
+    expect(budgeted.values[0]).toBeCloseTo(1);
+  });
+
+  it("supports extrema and statistical all-layer projection reductions", () => {
+    const meshData: FemMeshData = {
+      nodes: [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+      ],
+      elements: [0, 1, 2, 3, 4, 5, 6, 7],
+      boundaryFaces: [],
+      nNodes: 8,
+      nElements: 2,
+      fieldNComp: 3,
+      fieldData: {
+        x: [1, 1, 1, 1, 3, 3, 3, 3],
+        y: [0, 0, 0, 0, 0, 0, 0, 0],
+        z: [0, 0, 0, 0, 0, 0, 0, 0],
+      },
+      quantityDomain: "magnetic_only",
+    };
+    const options = { nPlanes: 1, resolution: 1 } as const;
+
+    expect(computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      ...options,
+      reduction: "min",
+    }).values[0]).toBeCloseTo(1);
+    expect(computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      ...options,
+      reduction: "max",
+    }).values[0]).toBeCloseTo(3);
+    expect(computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      ...options,
+      reduction: "rms",
+    }).values[0]).toBeCloseTo(Math.sqrt(5));
+    expect(computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      ...options,
+      reduction: "stddev",
+    }).values[0]).toBeCloseTo(1);
+    expect(computeProjectionSlice(meshData, "xy", "x", null, "visible-context", {
+      ...options,
+      reduction: "abs_max",
+    }).values[0]).toBeCloseTo(3);
   });
 });

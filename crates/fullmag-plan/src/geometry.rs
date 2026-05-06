@@ -292,7 +292,12 @@ pub(crate) fn voxelize_shape(
                     }
                 }
             }
-            (bbox, Some(mask), [nx, ny, nz], [-diameter * 0.5, -diameter * 0.5, -height * 0.5])
+            (
+                bbox,
+                Some(mask),
+                [nx, ny, nz],
+                [-diameter * 0.5, -diameter * 0.5, -height * 0.5],
+            )
         }
         GeometryShape::SinWaveguide {
             length,
@@ -355,7 +360,14 @@ pub(crate) fn voxelize_shape(
                         let pz = bounds_min[2] + (iz as f64 + 0.5) * cell_size[2];
                         let idx = (ix + nx * (iy + ny * iz)) as usize;
                         mask[idx] = contains_arch_waveguide(
-                            px, py, pz, *length, *width, *height, *arch_height, *z0,
+                            px,
+                            py,
+                            pz,
+                            *length,
+                            *width,
+                            *height,
+                            *arch_height,
+                            *z0,
                         );
                     }
                 }
@@ -379,7 +391,10 @@ pub(crate) fn voxelize_shape(
                 bounds_max[1] - bounds_min[1],
                 bounds_max[2] - bounds_min[2],
             ];
-            if !matches!(base.as_ref(), GeometryShape::Box { .. } | GeometryShape::Cylinder { .. }) {
+            if !matches!(
+                base.as_ref(),
+                GeometryShape::Box { .. } | GeometryShape::Cylinder { .. }
+            ) {
                 errors.push("CSG Difference: base must be a Box or Cylinder".to_string());
             }
             let nx = (bbox[0] / cell_size[0]).round().max(1.0) as u32;

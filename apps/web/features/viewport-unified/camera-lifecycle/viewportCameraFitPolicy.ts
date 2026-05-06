@@ -25,6 +25,7 @@ export function resolveViewportCameraFitDecision(args: {
   persistedCameraAvailable: boolean;
   previousFitSignature: string | null;
   viewportFitSeed: string | number | null | undefined;
+  forceFitSeed?: string | number | null | undefined;
 }): ViewportCameraFitDecision {
   if (!args.enabled) {
     return {
@@ -33,7 +34,17 @@ export function resolveViewportCameraFitDecision(args: {
     };
   }
 
-  const nextFitSignature = args.viewportFitSeed == null ? "initial" : String(args.viewportFitSeed);
+  const forceFitSignature = args.forceFitSeed == null ? null : `force:${String(args.forceFitSeed)}`;
+  const nextFitSignature =
+    forceFitSignature ??
+    (args.viewportFitSeed == null ? "initial" : String(args.viewportFitSeed));
+
+  if (forceFitSignature) {
+    return {
+      nextFitSignature,
+      shouldAdvanceGeneration: args.previousFitSignature !== nextFitSignature,
+    };
+  }
 
   if (args.persistedCameraAvailable) {
     return {

@@ -19,6 +19,17 @@ export type SliceAirboxRenderMode =
   | "surface+edges"
   | "points";
 
+export type SliceProjectionReduction =
+  | "mean_occupied"
+  | "sum"
+  | "thickness_integral"
+  | "area_weighted_mean"
+  | "min"
+  | "max"
+  | "rms"
+  | "stddev"
+  | "abs_max";
+
 export type Slice2DInteractionMode =
   | "pan_zoom"
   | "select"
@@ -45,6 +56,10 @@ export interface Slice2DToolbarState {
   showQuantity: boolean;
   showVectors: boolean;
   renderMode: SliceRenderMode;
+  projectionReduction: SliceProjectionReduction;
+  projectionIncludeAirAsZero: boolean;
+  projectionSamples: number;
+  projectionResolution: number;
 }
 
 export interface Slice2DCapabilities {

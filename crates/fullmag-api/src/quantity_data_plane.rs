@@ -171,6 +171,56 @@ pub(crate) fn projection_cache_key(
     format!("fmvp-proj:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2")
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scalar_projection_cache_key(
+    quantity_id: &str,
+    field_revision: u64,
+    domain_generation_id: u64,
+    plane: &str,
+    x_size: u32,
+    y_size: u32,
+    component: &str,
+    reduction: &str,
+    include_air_as_zero: bool,
+    samples: u32,
+    tile_x: Option<u32>,
+    tile_y: Option<u32>,
+    tile_size: Option<u32>,
+) -> String {
+    format!(
+        "fmvp-proj-scalar:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        air = u8::from(include_air_as_zero),
+        tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        ts = tile_size.map_or_else(|| "full".to_string(), |value| value.to_string()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn projection_empty_mask_cache_key(
+    quantity_id: &str,
+    field_revision: u64,
+    domain_generation_id: u64,
+    plane: &str,
+    x_size: u32,
+    y_size: u32,
+    component: &str,
+    reduction: &str,
+    include_air_as_zero: bool,
+    samples: u32,
+    tile_x: Option<u32>,
+    tile_y: Option<u32>,
+    tile_size: Option<u32>,
+) -> String {
+    format!(
+        "fmvp-proj-empty-mask:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        air = u8::from(include_air_as_zero),
+        tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        ts = tile_size.map_or_else(|| "full".to_string(), |value| value.to_string()),
+    )
+}
+
 /// Slice cache key.
 ///
 /// Format: `fmvp-slice:{quantity_id}:{field_revision}:{domain_gen}:{plane}:{cut_norm_x1e6}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2`

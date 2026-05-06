@@ -131,8 +131,31 @@ export function useRibbonVisualizationActions({
       showQuantity: model.femViewportLayers.showQuantity,
       showVectors: Boolean(model.meshShowArrows),
       renderMode: model.meshShowArrows ? "vectors" : "heatmap",
+      projectionReduction: "mean_occupied",
+      projectionIncludeAirAsZero: false,
+      projectionSamples: 20,
+      projectionResolution: 128,
     };
-    return canonicalSliceToolbar ?? { ...fallbackToolbar, ...slice2DToolbarPatch };
+    const localProjectionPatch: Partial<Slice2DToolbarState> = {};
+    if (slice2DToolbarPatch.projectionReduction) {
+      localProjectionPatch.projectionReduction = slice2DToolbarPatch.projectionReduction;
+    }
+    if (typeof slice2DToolbarPatch.projectionIncludeAirAsZero === "boolean") {
+      localProjectionPatch.projectionIncludeAirAsZero =
+        slice2DToolbarPatch.projectionIncludeAirAsZero;
+    }
+    if (typeof slice2DToolbarPatch.projectionSamples === "number") {
+      localProjectionPatch.projectionSamples = slice2DToolbarPatch.projectionSamples;
+    }
+    if (typeof slice2DToolbarPatch.projectionResolution === "number") {
+      localProjectionPatch.projectionResolution = slice2DToolbarPatch.projectionResolution;
+    }
+    if (typeof slice2DToolbarPatch.positionPercent === "number") {
+      localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
+    }
+    return canonicalSliceToolbar
+      ? { ...canonicalSliceToolbar, ...localProjectionPatch }
+      : { ...fallbackToolbar, ...slice2DToolbarPatch };
   }, [
     canonicalSliceToolbar,
     effectiveSlicePlane,

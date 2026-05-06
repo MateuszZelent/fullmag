@@ -12,6 +12,7 @@ const FEM_R3F_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
+const CAMERA_AUTO_FIT_SETTLE_FRAMES = 3;
 
 /** Manage WebGL clipping planes for mesh cross-section view. */
 export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; flip?: boolean; geomSize: [number, number, number] }) {
@@ -83,9 +84,16 @@ export function CameraAutoFit({
 
     let raf = 0;
     let disposed = false;
+    let settledFrames = 0;
 
     const syncFit = () => {
       if (disposed) {
+        return;
+      }
+      const controlsReady = controlsRef ? Boolean(controlsRef.current) : true;
+      if (!controlsReady || settledFrames < CAMERA_AUTO_FIT_SETTLE_FRAMES) {
+        settledFrames += controlsReady ? 1 : 0;
+        raf = window.requestAnimationFrame(syncFit);
         return;
       }
 
@@ -106,10 +114,6 @@ export function CameraAutoFit({
         });
       }
       invalidate();
-
-      if (!controlsRef?.current) {
-        raf = window.requestAnimationFrame(syncFit);
-      }
     };
 
     syncFit();

@@ -451,12 +451,8 @@ fn default_slice_visualization_for_presentation(
         airbox_render_mode: SliceAirboxRenderMode::Wireframe,
         show_airbox_vectors: false,
         show_quantity: layers.quantity_overlay.visible,
-        show_vectors: presentation.vector_glyphs,
-        render_mode: if presentation.vector_glyphs {
-            SliceRenderMode::Vectors
-        } else {
-            SliceRenderMode::Heatmap
-        },
+        show_vectors: false,
+        render_mode: SliceRenderMode::Heatmap,
     }
 }
 

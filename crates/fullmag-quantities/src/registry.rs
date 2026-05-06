@@ -213,8 +213,8 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe, HTherm,
-        ModeReal, ModeImag, // Second wave (QB-17)
+        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe,
+        HTherm, ModeReal, ModeImag, // Second wave (QB-17)
         DmDt, TorqueStt, TorqueSot,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));

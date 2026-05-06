@@ -637,6 +637,89 @@ class ProblemApiTests(unittest.TestCase):
             self.assertIn("body.m = fm.texture.random(seed=1)", rewritten)
             self.assertNotIn("random_seeded", rewritten)
 
+    def test_script_builder_rewrites_arch_waveguide_geometry(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "arch_builder.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("arch_builder")
+                    study.engine("fdm")
+                    study.cell(5e-9, 5e-9, 5e-9)
+
+                    body = study.geometry(
+                        fm.ArchWaveguide(
+                            length=400e-9,
+                            width=40e-9,
+                            height=10e-9,
+                            arch_height=-80e-9,
+                            z0=10e-9,
+                            name="arch_waveguide",
+                        ),
+                        name="arch_waveguide",
+                    )
+                    body.Ms = 800e3
+                    body.Aex = 13e-12
+                    body.alpha = 0.2
+                    body.m = fm.texture.uniform(1, 0, 0)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+            self.assertIn("fm.ArchWaveguide(", rewritten)
+            self.assertIn("arch_height=-8e-08", rewritten)
+            self.assertNotIn("unsupported geometry kind", rewritten)
+
+    def test_arch_waveguide_scene_document_exports_geometry_params(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            script_path = Path(tmp_dir) / "arch_scene.py"
+            script_path.write_text(
+                textwrap.dedent(
+                    """
+                    import fullmag as fm
+
+                    study = fm.study("arch_scene")
+                    study.engine("fem")
+                    body = study.geometry(
+                        fm.ArchWaveguide(
+                            length=2.5e-6,
+                            width=1.0e-6,
+                            height=2e-9,
+                            arch_height=50e-9,
+                            z0=-25e-9,
+                            name="arch_waveguide",
+                        ),
+                        name="arch_waveguide",
+                    )
+                    body.Ms = 956e3
+                    body.Aex = 10e-12
+                    body.alpha = 0.1
+                    body.m = fm.texture.uniform(1, 0, 0)
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = load_problem_from_script(script_path, lightweight_assets=True)
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            params = scene["objects"][0]["geometry"]["geometry_params"]
+
+            self.assertEqual(scene["objects"][0]["geometry"]["geometry_kind"], "ArchWaveguide")
+            self.assertEqual(params["length"], 2.5e-6)
+            self.assertEqual(params["width"], 1.0e-6)
+            self.assertEqual(params["height"], 2e-9)
+            self.assertEqual(params["arch_height"], 50e-9)
+            self.assertEqual(params["z0"], -25e-9)
+
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
         study = fm.study("study_builder_metadata")

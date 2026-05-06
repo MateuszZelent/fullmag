@@ -419,6 +419,10 @@ export interface MetricsSummary {
 export type FieldComponent =
   | "full"
   | "magnitude"
+  | "magnitude_squared"
+  | "abs_x"
+  | "abs_y"
+  | "abs_z"
   | "x"
   | "y"
   | "z"
@@ -458,6 +462,44 @@ export interface FieldSliceQuery {
   max_arrows?: number;
 }
 
+export type FieldProjectionReduction =
+  | "mean_occupied"
+  | "sum"
+  | "thickness_integral"
+  | "area_weighted_mean"
+  | "min"
+  | "max"
+  | "rms"
+  | "stddev"
+  | "abs_max";
+
+export interface FieldProjectionQuery {
+  plane: SlicePlane;
+  component?: Exclude<FieldComponent, "full"> | "full";
+  reduction?: FieldProjectionReduction;
+  include_air_as_zero?: boolean;
+  samples?: number;
+  adaptive?: boolean;
+  error_tolerance?: number;
+  min_samples?: number;
+  x_size?: number;
+  y_size?: number;
+  max_points?: number;
+  tile_x?: number;
+  tile_y?: number;
+  tile_size?: number;
+}
+
+export interface FieldProjectionProfileQuery {
+  plane: SlicePlane;
+  component?: Exclude<FieldComponent, "full"> | "full";
+  x_size?: number;
+  y_size?: number;
+  pixel_x: number;
+  pixel_y: number;
+  max_samples?: number;
+}
+
 /** JSON metadata returned from `/fields/{id}/slice/meta`. */
 export interface FieldSliceMeta {
   quantity_id: string;
@@ -477,6 +519,65 @@ export interface FieldSliceMeta {
   bounds: FieldSliceBounds | null;
   scalar: FieldSliceBinaryDescriptor;
   arrows: FieldSliceBinaryDescriptor;
+}
+
+export interface FieldProjectionMeta {
+  quantity_id: string;
+  plane: SlicePlane;
+  component: string;
+  reduction: FieldProjectionReduction;
+  include_air_as_zero: boolean;
+  samples: number;
+  field_revision: number;
+  domain_generation_id: number;
+  sampling_method: string;
+  etag: string;
+  projection_revision: string;
+  x_pixels: number;
+  y_pixels: number;
+  grid: FieldSliceGrid;
+  bounds: FieldSliceBounds | null;
+  occupied_count: number;
+  occupied_measure: number;
+  empty_count: number;
+  error_estimate: number | null;
+  error_method: string | null;
+  scalar: FieldSliceBinaryDescriptor;
+  empty_mask: FieldProjectionMaskDescriptor;
+}
+
+export interface FieldProjectionMaskDescriptor {
+  available: boolean;
+  point_count: number;
+  etag: string | null;
+  href: string | null;
+}
+
+export interface FieldProjectionProfile {
+  quantity_id: string;
+  plane: SlicePlane;
+  component: string;
+  field_revision: number;
+  domain_generation_id: number;
+  sampling_method: string;
+  pixel_x: number;
+  pixel_y: number;
+  x_pixels: number;
+  y_pixels: number;
+  u: number;
+  v: number;
+  bounds: FieldSliceBounds | null;
+  sample_count: number;
+  truncated: boolean;
+  samples: FieldProjectionProfileSample[];
+}
+
+export interface FieldProjectionProfileSample {
+  element_index: number;
+  marker: number;
+  normal_coord: number;
+  value: number;
+  measure: number;
 }
 
 export interface FieldSliceGrid {

@@ -1,6 +1,10 @@
 import type { BinaryResourceResponse } from "../../types";
 import type {
   FieldBinaryResponse,
+  FieldProjectionMeta,
+  FieldProjectionProfile,
+  FieldProjectionProfileQuery,
+  FieldProjectionQuery,
   FieldSliceMeta,
   FieldSliceQuery,
   FieldVectorOptions,
@@ -134,6 +138,54 @@ export class FieldsModule {
     return this._binaryWithEtag(path, etag, opts);
   }
 
+  // ── Projection (all-layer 2-D) ─────────────────────────────────
+
+  async getProjectionMeta(
+    quantityId: string,
+    query: FieldProjectionQuery,
+    opts?: RequestOptions,
+  ): Promise<FieldProjectionMeta> {
+    const params = buildProjectionParams(query);
+    return this.client.get<FieldProjectionMeta>(
+      `${sessionApiPaths.data.fieldProjectionMeta(quantityId)}?${params}`,
+      opts,
+    );
+  }
+
+  async getProjectionScalarResponse(
+    quantityId: string,
+    query: FieldProjectionQuery,
+    etag?: string,
+    opts?: RequestOptions,
+  ): Promise<FieldBinaryResponse> {
+    const params = buildProjectionParams(query);
+    const path = `${sessionApiPaths.data.fieldProjectionScalar(quantityId)}?${params}`;
+    return this._binaryWithEtag(path, etag, opts);
+  }
+
+  async getProjectionEmptyMaskResponse(
+    quantityId: string,
+    query: FieldProjectionQuery,
+    etag?: string,
+    opts?: RequestOptions,
+  ): Promise<FieldBinaryResponse> {
+    const params = buildProjectionParams(query);
+    const path = `${sessionApiPaths.data.fieldProjectionEmptyMask(quantityId)}?${params}`;
+    return this._binaryWithEtag(path, etag, opts);
+  }
+
+  async getProjectionProfile(
+    quantityId: string,
+    query: FieldProjectionProfileQuery,
+    opts?: RequestOptions,
+  ): Promise<FieldProjectionProfile> {
+    const params = buildProjectionProfileParams(query);
+    return this.client.get<FieldProjectionProfile>(
+      `${sessionApiPaths.data.fieldProjectionProfile(quantityId)}?${params}`,
+      opts,
+    );
+  }
+
   private async _binaryWithEtag(
     path: string,
     etag: string | undefined,
@@ -169,5 +221,38 @@ function buildSliceParams(
   if (extra?.arrows || q.include_arrows) p.set("include_arrows", "true");
   if (q.arrow_every !== undefined) p.set("arrow_every", String(q.arrow_every));
   if (q.max_arrows !== undefined) p.set("max_arrows", String(q.max_arrows));
+  return p;
+}
+
+function buildProjectionParams(q: FieldProjectionQuery): URLSearchParams {
+  const p = new URLSearchParams({ plane: q.plane });
+  if (q.component && q.component !== "full") p.set("component", q.component);
+  if (q.reduction !== undefined) p.set("reduction", q.reduction);
+  if (q.include_air_as_zero !== undefined) {
+    p.set("include_air_as_zero", String(q.include_air_as_zero));
+  }
+  if (q.samples !== undefined) p.set("samples", String(q.samples));
+  if (q.adaptive !== undefined) p.set("adaptive", String(q.adaptive));
+  if (q.error_tolerance !== undefined) p.set("error_tolerance", String(q.error_tolerance));
+  if (q.min_samples !== undefined) p.set("min_samples", String(q.min_samples));
+  if (q.x_size !== undefined) p.set("x_size", String(q.x_size));
+  if (q.y_size !== undefined) p.set("y_size", String(q.y_size));
+  if (q.max_points !== undefined) p.set("max_points", String(q.max_points));
+  if (q.tile_x !== undefined) p.set("tile_x", String(q.tile_x));
+  if (q.tile_y !== undefined) p.set("tile_y", String(q.tile_y));
+  if (q.tile_size !== undefined) p.set("tile_size", String(q.tile_size));
+  return p;
+}
+
+function buildProjectionProfileParams(q: FieldProjectionProfileQuery): URLSearchParams {
+  const p = new URLSearchParams({
+    plane: q.plane,
+    pixel_x: String(q.pixel_x),
+    pixel_y: String(q.pixel_y),
+  });
+  if (q.component && q.component !== "full") p.set("component", q.component);
+  if (q.x_size !== undefined) p.set("x_size", String(q.x_size));
+  if (q.y_size !== undefined) p.set("y_size", String(q.y_size));
+  if (q.max_samples !== undefined) p.set("max_samples", String(q.max_samples));
   return p;
 }
