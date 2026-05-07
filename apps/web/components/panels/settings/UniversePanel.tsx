@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { GitCommitHorizontal, Layers, MemoryStick, Triangle } from "lucide-react";
 
 import { useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
+import { useSelectionActions, useSelectionState } from "@/features/selection";
+import { useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
 import { defaultMeshEntityViewState, type ScriptBuilderUniverseState } from "../../../lib/session/types";
 import { fmtSI } from "@/lib/format";
 import SelectField from "../../ui/SelectField";
@@ -92,9 +94,14 @@ export default function UniversePanel() {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const selection = useSelectionState();
+  const selectionActions = useSelectionActions();
+  const viz = useViewportRenderState();
   /* Compose a backward-compatible ctx alias from granular hooks */
   const ctx = {
     ...model,
+    ...selection,
+    ...selectionActions,
     setViewMode: viewport.setViewMode,
     handleViewModeChange: viewport.handleViewModeChange,
     metadata: cmd.metadata,
@@ -485,9 +492,9 @@ export default function UniversePanel() {
                   tooltip="Current tetrahedron count in the airbox partition of the realized shared-domain mesh."
                 />
                 <TextField
-                  key={`airbox-opacity-${ctx.airMeshOpacity}`}
+                  key={`airbox-opacity-${viz.airMeshOpacity}`}
                   label="Airbox Opacity (%)"
-                  defaultValue={formatPercent(ctx.airMeshOpacity)}
+                  defaultValue={formatPercent(viz.airMeshOpacity)}
                   onBlur={(event) => {
                     const parsed = Number(event.target.value);
                     if (!Number.isFinite(parsed)) return;
@@ -504,7 +511,7 @@ export default function UniversePanel() {
               </div>
               <ToggleRow
                 label="Show Airbox Mesh"
-                checked={ctx.airMeshVisible}
+                checked={viz.airMeshVisible}
                 onChange={(visible) => {
                   void viewport.patchDisplay({
                     layers: {

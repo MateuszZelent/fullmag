@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import type { ViewportMeshRenderMode } from "@/components/shell/ribbon/command-registry";
+import { useSelectedObjectId } from "@/features/selection";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 import type { ModelContextValue } from "./context-hooks";
 
@@ -8,18 +9,18 @@ export function useSelectedObjectRibbonDisplay(
     ModelContextValue,
     | "meshEntityViewState"
     | "meshParts"
-    | "selectedObjectId"
     | "setMeshEntityViewState"
   >,
 ) {
+  const selectedObjectId = useSelectedObjectId();
   const selectedObjectPartIds = useMemo(
     () =>
-      model.selectedObjectId
+      selectedObjectId
         ? model.meshParts
-            .filter((part) => part.object_id === model.selectedObjectId || part.geometry_id === model.selectedObjectId)
+            .filter((part) => part.object_id === selectedObjectId || part.geometry_id === selectedObjectId)
             .map((part) => part.id)
         : [],
-    [model.meshParts, model.selectedObjectId],
+    [model.meshParts, selectedObjectId],
   );
   const selectedObjectRepresentativePart = selectedObjectPartIds[0]
     ? model.meshParts.find((part) => part.id === selectedObjectPartIds[0]) ?? null

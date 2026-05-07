@@ -55,12 +55,12 @@ describe("workspace docking store", () => {
   });
 
   it("openTab deduplicates by key and activates existing tab", () => {
-    const firstId = useWorkspaceStore.getState().openTab("analyze", {
+    const firstId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:fft",
       kind: "result-vortex-frequency",
       title: "Vortex FFT",
     });
-    const secondId = useWorkspaceStore.getState().openTab("analyze", {
+    const secondId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:fft",
       kind: "result-vortex-frequency",
       title: "Vortex FFT",
@@ -69,30 +69,30 @@ describe("workspace docking store", () => {
     expect(secondId).toBe(firstId);
     const tabs = useWorkspaceStore
       .getState()
-      .workspaceTabsByStage.analyze.filter((tab) => tab.key === "manual:fft");
+      .workspaceTabsByStage.study.filter((tab) => tab.key === "manual:fft");
     expect(tabs).toHaveLength(1);
-    expect(useWorkspaceStore.getState().activeWorkspaceTabByStage.analyze).toBe(firstId);
+    expect(useWorkspaceStore.getState().activeWorkspaceTabByStage.study).toBe(firstId);
   });
 
   it("syncTabsFromArtifacts creates auto eigen tabs", () => {
-    useWorkspaceStore.getState().syncTabsFromArtifacts("analyze", [
+    useWorkspaceStore.getState().syncTabsFromArtifacts("study", [
       "eigen/spectrum.json",
       "eigen/dispersion.json",
       "eigen/modes/mode_0007.json",
     ]);
 
-    const tabs = useWorkspaceStore.getState().workspaceTabsByStage.analyze;
+    const tabs = useWorkspaceStore.getState().workspaceTabsByStage.study;
     expect(tabs.some((tab) => tab.key === "auto:eigen:spectrum")).toBe(true);
     expect(tabs.some((tab) => tab.key === "auto:eigen:dispersion")).toBe(true);
     expect(tabs.some((tab) => tab.key === "auto:eigen:modes")).toBe(true);
   });
 
   it("closeTab does not close pinned/non-closable tabs", () => {
-    useWorkspaceStore.getState().closeTab("analyze", "core:3d");
-    const tabsAfterProtectedClose = useWorkspaceStore.getState().workspaceTabsByStage.analyze;
+    useWorkspaceStore.getState().closeTab("study", "core:3d");
+    const tabsAfterProtectedClose = useWorkspaceStore.getState().workspaceTabsByStage.study;
     expect(tabsAfterProtectedClose.some((tab) => tab.id === "core:3d")).toBe(true);
 
-    const userTabId = useWorkspaceStore.getState().openTab("analyze", {
+    const userTabId = useWorkspaceStore.getState().openTab("study", {
       key: "manual:dispersion",
       kind: "result-dispersion",
       title: "Dispersion",
@@ -100,8 +100,8 @@ describe("workspace docking store", () => {
       pinned: false,
     });
 
-    useWorkspaceStore.getState().closeTab("analyze", userTabId);
-    const tabsAfterUserClose = useWorkspaceStore.getState().workspaceTabsByStage.analyze;
+    useWorkspaceStore.getState().closeTab("study", userTabId);
+    const tabsAfterUserClose = useWorkspaceStore.getState().workspaceTabsByStage.study;
     expect(tabsAfterUserClose.some((tab) => tab.id === userTabId)).toBe(false);
   });
 
@@ -150,13 +150,10 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().currentStage).toBe("study");
   });
 
-  it("normalizes legacy analyze stage writes to study", () => {
-    useWorkspaceStore.getState().setCurrentStage("build");
-    expect(useWorkspaceStore.getState().currentStage).toBe("build");
-
-    useWorkspaceStore.getState().setCurrentStage("analyze");
-
-    expect(useWorkspaceStore.getState().currentStage).toBe("study");
+  it("does not expose analyze as a workspace stage", () => {
+    expect(Object.keys(getDefaultWorkspaceTabsByStage())).toEqual(["build", "study"]);
+    expect(Object.keys(getDefaultActiveWorkspaceTabByStage())).toEqual(["build", "study"]);
+    expect(Object.keys(getDefaultDockingLayoutByPreset())).toEqual(["build", "study"]);
   });
 
   it("keeps core viewport tabs active-only", () => {
@@ -170,7 +167,7 @@ describe("workspace docking store", () => {
 
   it("normalizes persisted legacy core charts warm lifecycle back to active-only", () => {
     const tabs = getDefaultWorkspaceTabsByStage();
-    for (const stage of ["build", "study", "analyze"] as const) {
+    for (const stage of ["build", "study"] as const) {
       tabs[stage] = tabs[stage].map((tab) =>
         tab.id === "core:charts" ? { ...tab, keepAlive: true, lifecycle: "warm" } : tab,
       ) as typeof tabs[typeof stage];

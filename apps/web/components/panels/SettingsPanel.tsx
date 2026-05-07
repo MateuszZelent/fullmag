@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useViewport, useCommand, useModel } from "../runs/control-room/context-hooks";
+import { useSelectedObjectId, useSelectionActions } from "@/features/selection";
 import { Button } from "../ui/button";
 import MeshSettingsPanel from "./MeshSettingsPanel";
 import MeshStatisticsPanel from "./settings/MeshStatisticsPanel";
@@ -136,19 +137,21 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const selectedObjectId = useSelectedObjectId();
+  const { requestFocusObject, setFocusedEntityId, setSelectedEntityId } = useSelectionActions();
   const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
   // studyNodeContext removed — routing now via inspectorRegistry
   const showSolverTelemetrySection = false;
   const showEnergySection = false;
-  const selectedObjectNodeId = model.selectedObjectId ? `geo-${model.selectedObjectId}` : undefined;
-  const selectedObjectMeshNodeId = model.selectedObjectId ? `geo-${model.selectedObjectId}-mesh` : undefined;
+  const selectedObjectNodeId = selectedObjectId ? `geo-${selectedObjectId}` : undefined;
+  const selectedObjectMeshNodeId = selectedObjectId ? `geo-${selectedObjectId}-mesh` : undefined;
   const airboxSelected =
     nodeId === "universe-airbox" || nodeId === "universe-airbox-mesh";
   const selectedObjectPartId =
-    model.selectedObjectId
+    selectedObjectId
       ? model.meshParts.find(
           (part) =>
-            part.role === "magnetic_object" && part.object_id === model.selectedObjectId,
+            part.role === "magnetic_object" && part.object_id === selectedObjectId,
         )?.id ?? null
       : null;
 
@@ -167,7 +170,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   };
 
   const isolateSelectedObject = () => {
-    if (!model.selectedObjectId) return;
+    if (!selectedObjectId) return;
     viewport.handleViewModeChange("3D");
     model.setObjectViewMode("isolate");
     model.setMeshEntityViewState((prev) => {
@@ -178,21 +181,21 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
         next[part.id] = {
           ...current,
           visible:
-            part.role === "magnetic_object" && part.object_id === model.selectedObjectId,
+            part.role === "magnetic_object" && part.object_id === selectedObjectId,
         };
       }
       return next;
     });
-    model.setSelectedEntityId(selectedObjectPartId);
-    model.setFocusedEntityId(selectedObjectPartId);
+    setSelectedEntityId(selectedObjectPartId);
+    setFocusedEntityId(selectedObjectPartId);
   };
 
   const isolateAirbox = () => {
     const airPartId = model.airPart?.id ?? null;
     viewport.handleViewModeChange("3D");
     model.setObjectViewMode("isolate");
-    model.setSelectedEntityId(airPartId);
-    model.setFocusedEntityId(airPartId);
+    setSelectedEntityId(airPartId);
+    setFocusedEntityId(airPartId);
     model.setMeshEntityViewState((prev) => {
       const next = { ...prev };
       for (const part of model.meshParts) {
@@ -225,7 +228,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
     return (
       <InspectorRegistryHost
         nodeId={nodeId}
-        selectedObjectId={model.selectedObjectId}
+        selectedObjectId={selectedObjectId}
         selectedObjectNodeId={selectedObjectNodeId}
         selectedObjectMeshNodeId={selectedObjectMeshNodeId}
       >
@@ -284,7 +287,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   return (
     <div className="flex flex-col gap-1 pb-6">
       {/* ── Object Actions (only when an object is selected) ── */}
-      {model.selectedObjectId ? (
+      {selectedObjectId ? (
         <section className="rounded-xl border border-border/40 bg-gradient-to-b from-card/50 to-card/20 px-4 py-3 shadow-[0_2px_12px_rgba(0,0,0,0.15)] backdrop-blur-xl mb-1">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -292,7 +295,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
                 Inspecting
               </div>
               <div className="truncate font-mono text-sm font-semibold text-foreground mt-0.5">
-                {model.selectedObjectId}
+                {selectedObjectId}
               </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -302,7 +305,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
                   type="button"
                   onClick={() => {
                   viewport.handleViewModeChange("3D");
-                  model.requestFocusObject(model.selectedObjectId!);
+                  requestFocusObject(selectedObjectId);
                 }}
               >
                 Focus 3D

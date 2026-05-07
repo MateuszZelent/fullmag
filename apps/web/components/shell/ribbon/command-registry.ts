@@ -314,6 +314,12 @@ export function visualizationPatchFromRibbonCommand(
       };
     case "viewport.set-slice-axis":
       return { slice: { axis: command.axis } };
+    case "viewport.set-slice-component":
+      return {
+        view_mode: "2d",
+        slice: { component: command.component },
+        quantity: { field_component: command.component },
+      };
     case "viewport.set-slice-mode":
       return {
         slice: { mode: command.mode },
@@ -522,6 +528,7 @@ export type RibbonCommand =
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
   | { id: "viewport.set-object-view"; mode: "context" | "isolate" }
   | { id: "viewport.set-slice-axis"; axis: Slice2DToolbarState["axis"] }
+  | { id: "viewport.set-slice-component"; component: Slice2DToolbarState["component"] }
   | { id: "viewport.set-slice-mode"; mode: Slice2DToolbarState["mode"] }
   | { id: "viewport.set-slice-position"; positionPercent: number }
   | { id: "viewport.set-slice-render-mode"; renderMode: Slice2DToolbarState["renderMode"] }
@@ -696,6 +703,7 @@ export function canExecuteRibbonCommand(
     case "viewport.set-object-view":
       return typeof ctx.onSetObjectViewMode === "function";
     case "viewport.set-slice-axis":
+    case "viewport.set-slice-component":
     case "viewport.set-slice-mode":
     case "viewport.set-slice-position":
     case "viewport.set-slice-render-mode":
@@ -952,6 +960,9 @@ export function executeRibbonCommand(
       return;
     case "viewport.set-slice-axis":
       ctx.onSetSlice2DToolbar?.({ axis: command.axis });
+      return;
+    case "viewport.set-slice-component":
+      ctx.onSetSlice2DToolbar?.({ component: command.component });
       return;
     case "viewport.set-slice-mode":
       ctx.onSetSlice2DToolbar?.({ mode: command.mode });

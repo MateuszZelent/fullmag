@@ -38,7 +38,7 @@ export function DockCenterTabContent({
 
   if (tab.kind === "viewport-charts") {
     if (!flags.enableChartsViewport) {
-      return <DisabledPanel label="ChartsViewport disabled by diagnostic flag" />;
+      return <DisabledPanel label="2D Plots disabled by diagnostic flag" />;
     }
     return <ChartsTabPanel disabled={chartsDisabled} />;
   }

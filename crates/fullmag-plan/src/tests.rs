@@ -131,7 +131,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
         geometry_name: "free_geom".to_string(),
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_kind: "vortex".to_string(),
-            params: std::collections::BTreeMap::from([
+            preset_params: std::collections::BTreeMap::from([
                 ("circulation".to_string(), serde_json::json!(1)),
                 ("core_polarity".to_string(), serde_json::json!(1)),
                 ("core_radius".to_string(), serde_json::json!(1e-12)),

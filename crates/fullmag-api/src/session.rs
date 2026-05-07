@@ -243,6 +243,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
     }
@@ -396,7 +397,9 @@ pub(crate) fn apply_current_live_snapshot(
         apply_fem_mesh_update(current, fem_mesh);
     }
     if let Some(row) = req.latest_scalar_row {
-        upsert_scalar_row(&mut current.scalar_rows, row);
+        if upsert_scalar_row(&mut current.scalar_rows, row) {
+            current.scalar_revision = next_revision(current.scalar_revision);
+        }
     }
     if let Some(latest_fields) = req.latest_fields {
         merge_latest_fields(&mut current.latest_fields, latest_fields);
@@ -478,7 +481,9 @@ pub(crate) fn apply_current_live_scalar_frame(
     frame: CurrentLiveScalarFrameRequest,
 ) -> Result<(), ApiError> {
     if let Some(row) = frame.latest_scalar_row {
-        upsert_scalar_row(&mut current.scalar_rows, row);
+        if upsert_scalar_row(&mut current.scalar_rows, row) {
+            current.scalar_revision = next_revision(current.scalar_revision);
+        }
     }
 
     finalize_current_live_apply(
@@ -543,10 +548,17 @@ pub(crate) fn read_artifacts_from_dir(
     Ok(artifacts)
 }
 
-pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) {
+pub(crate) fn upsert_scalar_row(rows: &mut Vec<ScalarRow>, row: ScalarRow) -> bool {
     match rows.last_mut() {
-        Some(last) if last.step == row.step => *last = row,
-        _ => rows.push(row),
+        Some(last) if row.step < last.step => false,
+        Some(last) if row.step == last.step => {
+            *last = row;
+            true
+        }
+        _ => {
+            rows.push(row);
+            true
+        }
     }
 }
 
@@ -568,4 +580,108 @@ pub(crate) fn unix_time_millis_now() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar_row(step: u64, e_total: f64) -> ScalarRow {
+        ScalarRow {
+            step,
+            time: step as f64 * 1e-12,
+            solver_dt: 1e-12,
+            mx: 0.0,
+            my: 0.0,
+            mz: 1.0,
+            e_ex: 0.0,
+            e_demag: 0.0,
+            e_ext: 0.0,
+            e_ani: 0.0,
+            e_dmi: 0.0,
+            e_total,
+            max_dm_dt: 0.0,
+            max_h_eff: 0.0,
+            max_h_demag: 0.0,
+            max_torque_Apm: 0.0,
+            max_torque_T: 0.0,
+        }
+    }
+
+    #[test]
+    fn upsert_scalar_row_replaces_latest_sample() {
+        let mut rows = vec![scalar_row(1, 1.0), scalar_row(2, 2.0)];
+
+        assert!(upsert_scalar_row(&mut rows, scalar_row(2, 3.0)));
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].step, 2);
+        assert_eq!(rows[1].e_total, 3.0);
+    }
+
+    #[test]
+    fn upsert_scalar_row_rejects_older_samples() {
+        let mut rows = vec![scalar_row(1, 1.0), scalar_row(3, 3.0)];
+
+        assert!(!upsert_scalar_row(&mut rows, scalar_row(2, 2.0)));
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].step, 1);
+        assert_eq!(rows[1].step, 3);
+    }
+
+    #[test]
+    fn scalar_frame_revisions_track_latest_replacements_not_stale_rows() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        });
+
+        apply_current_live_scalar_frame(
+            &mut current,
+            CurrentLiveScalarFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_scalar_row: Some(scalar_row(2, 2.0)),
+            },
+        )
+        .expect("first scalar frame should apply");
+        assert_eq!(current.scalar_revision, 1);
+        assert_eq!(current.scalar_rows.len(), 1);
+
+        apply_current_live_scalar_frame(
+            &mut current,
+            CurrentLiveScalarFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_scalar_row: Some(scalar_row(2, 3.0)),
+            },
+        )
+        .expect("latest scalar replacement should apply");
+        assert_eq!(current.scalar_revision, 2);
+        assert_eq!(current.scalar_rows.len(), 1);
+        assert_eq!(current.scalar_rows[0].e_total, 3.0);
+
+        apply_current_live_scalar_frame(
+            &mut current,
+            CurrentLiveScalarFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_scalar_row: Some(scalar_row(1, 1.0)),
+            },
+        )
+        .expect("stale scalar frame should be ignored without failing");
+        assert_eq!(current.scalar_revision, 2);
+        assert_eq!(current.scalar_rows.len(), 1);
+        assert_eq!(current.scalar_rows[0].step, 2);
+    }
 }

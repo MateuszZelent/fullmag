@@ -194,7 +194,6 @@ function defaultTabForMode(mode: WorkspaceMode | undefined): RibbonTab {
   switch (mode) {
     case "build": return "Geometry";
     case "study": return "Study";
-    case "analyze":
     default: return "Results";
   }
 }

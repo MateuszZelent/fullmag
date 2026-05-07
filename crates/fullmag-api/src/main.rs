@@ -128,7 +128,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             artifact_revision,
             command_completion_revision,
             fields_revision: snapshot.state_version,
-            scalars_revision: snapshot.scalar_rows.len() as u64,
+            scalars_revision: snapshot.scalar_revision,
             domain_generation_id,
             artifacts_revision: snapshot.artifacts.len() as u64,
             engine_log_revision: snapshot.engine_log.len() as u64,

@@ -11,7 +11,7 @@ import type { LaunchIntent } from "./launch-intent";
 import { resolveWorkspaceTabMountPolicy } from "./workspace-tab-policy";
 
 export type WorkspaceStage = "build" | "study";
-export type WorkspaceMode = WorkspaceStage | "analyze";
+export type WorkspaceMode = WorkspaceStage;
 export type RightInspectorTab = "properties" | "selected-submeshes" | "tools" | "console";
 export type WorkspaceTabMountPolicy = "active-only" | "hidden-mounted";
 type LegacyWorkspaceTabLifecycle = "unmount-on-hide" | "warm";
@@ -78,12 +78,8 @@ interface StageLayoutState {
   bottomDock: string | null;
 }
 
-const STAGES: WorkspaceMode[] = ["build", "study", "analyze"];
+const STAGES: WorkspaceMode[] = ["build", "study"];
 const DOCKING_STORAGE_KEY = "fullmag.workspace.docking.v4";
-
-function normalizeRuntimeWorkspaceStage(stage: WorkspaceMode): WorkspaceStage {
-  return stage === "build" ? "build" : "study";
-}
 
 function defaultCoreTabs(): WorkspaceTab[] {
   return [
@@ -101,7 +97,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       id: "core:2d",
       key: "core:2d",
       kind: "viewport-2d",
-      title: "2D Slice",
+      title: "2D Slice 3",
       closable: false,
       pinned: true,
       mountPolicy: "active-only",
@@ -134,7 +130,6 @@ function cloneTabsByStage(input: Record<WorkspaceMode, WorkspaceTab[]>): Record<
   return {
     build: input.build.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
     study: input.study.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
-    analyze: input.analyze.map((tab) => ({ ...tab, payload: tab.payload ? { ...tab.payload } : undefined })),
   };
 }
 
@@ -174,24 +169,16 @@ const DEFAULT_STAGE_LAYOUTS: Record<WorkspaceMode, StageLayoutState> = {
     rightDock: "solver",
     bottomDock: "jobs",
   },
-  analyze: {
-    leftDock: "results-tree",
-    centerDock: "plots",
-    rightDock: "display",
-    bottomDock: "charts",
-  },
 };
 
 const DEFAULT_WORKSPACE_TABS: Record<WorkspaceMode, WorkspaceTab[]> = {
   build: defaultCoreTabs(),
   study: defaultCoreTabs(),
-  analyze: defaultCoreTabs(),
 };
 
 const DEFAULT_ACTIVE_WORKSPACE_TAB: Record<WorkspaceMode, string | null> = {
   build: "core:3d",
   study: "core:3d",
-  analyze: "core:analyze",
 };
 
 function cloneJson<T>(value: T): T {
@@ -210,7 +197,6 @@ function cloneDockingStateByPresetMapByStage(
   return {
     build: cloneDockLayoutByPreset(value.build),
     study: cloneDockLayoutByPreset(value.study),
-    analyze: cloneDockLayoutByPreset(value.analyze),
   };
 }
 
@@ -246,10 +232,19 @@ function parsePersistedDockingState(raw: string | null): PersistedDockingState |
       return null;
     }
 
+    const buildTabs = Array.isArray(tabs.build) ? (tabs.build as WorkspaceTab[]) : defaultCoreTabs();
+    const studyTabs = Array.isArray(tabs.study) ? (tabs.study as WorkspaceTab[]) : defaultCoreTabs();
+    const legacyAnalyzeTabs = Array.isArray(tabs.analyze) ? (tabs.analyze as WorkspaceTab[]) : [];
+    const studyTabsById = new Map(studyTabs.map((tab) => [tab.id, tab]));
+    for (const tab of legacyAnalyzeTabs) {
+      if (!studyTabsById.has(tab.id)) {
+        studyTabsById.set(tab.id, tab);
+      }
+    }
+
     const workspaceTabsByStage: Record<WorkspaceMode, WorkspaceTab[]> = {
-      build: Array.isArray(tabs.build) ? (tabs.build as WorkspaceTab[]) : defaultCoreTabs(),
-      study: Array.isArray(tabs.study) ? (tabs.study as WorkspaceTab[]) : defaultCoreTabs(),
-      analyze: Array.isArray(tabs.analyze) ? (tabs.analyze as WorkspaceTab[]) : defaultCoreTabs(),
+      build: buildTabs,
+      study: Array.from(studyTabsById.values()),
     };
 
     const activeWorkspaceTabByStage: Record<WorkspaceMode, string | null> = {
@@ -260,23 +255,18 @@ function parsePersistedDockingState(raw: string | null): PersistedDockingState |
             ? (active.build as string)
             : DEFAULT_ACTIVE_WORKSPACE_TAB.build,
       study:
-        active.study === "core:mesh"
+        active.study === "core:mesh" || active.analyze === "core:mesh"
           ? "core:3d"
           : typeof active.study === "string"
             ? (active.study as string)
-            : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
-      analyze:
-        active.analyze === "core:mesh"
-          ? "core:3d"
-          : typeof active.analyze === "string"
-            ? (active.analyze as string)
-            : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
+            : typeof active.analyze === "string"
+              ? (active.analyze as string)
+              : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
     };
 
     const dockLayoutByStage: Record<WorkspaceMode, DockLayoutByPreset> = {
       build: parseDockLayoutByPreset(dock.build),
       study: parseDockLayoutByPreset(dock.study),
-      analyze: parseDockLayoutByPreset(dock.analyze),
     };
 
     return {
@@ -421,7 +411,6 @@ function mergedDockingStateFromDefaults(): PersistedDockingState {
   const workspaceTabsByStage: Record<WorkspaceMode, WorkspaceTab[]> = {
     build: ensureCoreTabsForStage(persistedTabs?.build ?? DEFAULT_WORKSPACE_TABS.build),
     study: ensureCoreTabsForStage(persistedTabs?.study ?? DEFAULT_WORKSPACE_TABS.study),
-    analyze: ensureCoreTabsForStage(persistedTabs?.analyze ?? DEFAULT_WORKSPACE_TABS.analyze),
   };
   const persistedActive: Partial<Record<WorkspaceMode, string | null>> =
     persistedDockingState?.activeWorkspaceTabByStage ?? {};
@@ -436,11 +425,6 @@ function mergedDockingStateFromDefaults(): PersistedDockingState {
       workspaceTabsByStage.study.some((tab) => tab.id === persistedActive.study)
         ? persistedActive.study
         : DEFAULT_ACTIVE_WORKSPACE_TAB.study,
-    analyze:
-      persistedActive.analyze &&
-      workspaceTabsByStage.analyze.some((tab) => tab.id === persistedActive.analyze)
-        ? persistedActive.analyze
-        : DEFAULT_ACTIVE_WORKSPACE_TAB.analyze,
   };
   return {
     workspaceTabsByStage,
@@ -448,7 +432,6 @@ function mergedDockingStateFromDefaults(): PersistedDockingState {
     dockLayoutByStage: {
       build: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.build),
       study: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.study),
-      analyze: parseDockLayoutByPreset(persistedDockingState?.dockLayoutByStage.analyze),
     },
   };
 }
@@ -477,8 +460,7 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
 
     setCurrentStage: (currentStage) =>
       set((state) => {
-        const nextStage = normalizeRuntimeWorkspaceStage(currentStage);
-        return state.currentStage === nextStage ? state : { currentStage: nextStage };
+        return state.currentStage === currentStage ? state : { currentStage };
       }),
     setActiveCoreTab: (activeCoreTab) =>
       set((state) => (state.activeCoreTab === activeCoreTab ? state : { activeCoreTab })),
@@ -767,7 +749,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           dockLayoutByStage: {
             build: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
             study: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
-            analyze: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
           },
         };
         persistDockingFromState({ ...state, ...nextState });
@@ -783,7 +764,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           dockLayoutByStage: {
             build: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
             study: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
-            analyze: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
           },
         };
         persistDockingFromState({ ...state, ...nextState });
@@ -840,7 +820,6 @@ export const useWorkspaceStore = create<WorkspaceStoreState>((set, get) => {
           workspaceTabsByStage: {
             build: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.build),
             study: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.study),
-            analyze: ensureCoreTabsForStage(persistedDockingState.workspaceTabsByStage.analyze),
           },
           activeWorkspaceTabByStage: { ...persistedDockingState.activeWorkspaceTabByStage },
           currentStage,
@@ -886,7 +865,6 @@ export function getDefaultDockingLayoutByPreset(): Record<WorkspaceMode, DockLay
   return {
     build: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
     study: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
-    analyze: cloneDockLayoutByPreset(DEFAULT_DOCK_LAYOUT_BY_PRESET),
   };
 }
 

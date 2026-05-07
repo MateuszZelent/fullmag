@@ -24,6 +24,9 @@ import {
   visualizationPatchForRenderMode,
   visualizationPatchForVectorStyle,
 } from "@/components/runs/control-room/visualizationStateSync";
+import { useVectorState, useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
+import { useVisualizationStore } from "@/features/visualization/store/useVisualizationStore";
+import { useSelectionActions, useSelectionState } from "@/features/selection";
 import type { ViewportDataBridge } from "@/features/viewport-unified/hooks/useViewportDataBridge";
 
 /* ── Dynamic imports ── */
@@ -71,28 +74,32 @@ export function ViewportTabContent({
   onViewportHealthChange,
 }: ViewportTabContentProps) {
   const ctx = bridge.ctx;
+  const viz = useViewportRenderState();
+  const vectorViz = useVectorState();
+  const selection = useSelectionState();
+  const selectionActions = useSelectionActions();
   const workspaceSyncState = DEFAULT_WORKSPACE_SYNC_STATE;
   const cameraFitRequestSeed = ctx.cameraFitRequestSeed > 0 ? ctx.cameraFitRequestSeed : null;
   const handleMeshRenderModeChange = React.useCallback(
-    (renderMode: React.SetStateAction<typeof ctx.meshRenderMode>) => {
+    (renderMode: React.SetStateAction<typeof viz.meshRenderMode>) => {
       const resolvedRenderMode =
-        typeof renderMode === "function" ? renderMode(ctx.meshRenderMode) : renderMode;
+        typeof renderMode === "function" ? renderMode(viz.meshRenderMode) : renderMode;
       void ctx.patchDisplay(visualizationPatchForRenderMode(resolvedRenderMode));
     },
-    [ctx],
+    [ctx, viz.meshRenderMode],
   );
   const handleMeshOpacityChange = React.useCallback(
-    (opacity: React.SetStateAction<typeof ctx.meshOpacity>) => {
+    (opacity: React.SetStateAction<typeof viz.meshOpacity>) => {
       const resolvedOpacity =
-        typeof opacity === "function" ? opacity(ctx.meshOpacity) : opacity;
+        typeof opacity === "function" ? opacity(viz.meshOpacity) : opacity;
       void ctx.patchDisplay(visualizationPatchForOpacity(resolvedOpacity));
     },
-    [ctx],
+    [ctx, viz.meshOpacity],
   );
   const handleShowArrowsChange = React.useCallback(
-    (visible: React.SetStateAction<typeof ctx.meshShowArrows>) => {
+    (visible: React.SetStateAction<typeof vectorViz.showArrows>) => {
       const resolvedVisible =
-        typeof visible === "function" ? visible(ctx.meshShowArrows) : visible;
+        typeof visible === "function" ? visible(vectorViz.showArrows) : visible;
       void ctx.patchDisplay({
         layers: {
           vectors: {
@@ -101,12 +108,12 @@ export function ViewportTabContent({
         },
       });
     },
-    [ctx],
+    [ctx, vectorViz.showArrows],
   );
   const handleVectorDomainFilterChange = React.useCallback(
-    (domain: React.SetStateAction<typeof ctx.femVectorDomainFilter>) => {
+    (domain: React.SetStateAction<typeof vectorViz.domainFilter>) => {
       const resolvedDomain =
-        typeof domain === "function" ? domain(ctx.femVectorDomainFilter) : domain;
+        typeof domain === "function" ? domain(vectorViz.domainFilter) : domain;
       void ctx.patchDisplay({
         layers: {
           vectors: {
@@ -115,88 +122,88 @@ export function ViewportTabContent({
         },
       });
     },
-    [ctx],
+    [ctx, vectorViz.domainFilter],
   );
   const handleClipEnabledChange = React.useCallback(
-    (enabled: React.SetStateAction<typeof ctx.meshClipEnabled>) => {
+    (enabled: React.SetStateAction<typeof viz.meshClipEnabled>) => {
       const resolvedEnabled =
-        typeof enabled === "function" ? enabled(ctx.meshClipEnabled) : enabled;
+        typeof enabled === "function" ? enabled(viz.meshClipEnabled) : enabled;
       void ctx.patchDisplay(visualizationPatchForClip({ enabled: resolvedEnabled }));
     },
-    [ctx],
+    [ctx, viz.meshClipEnabled],
   );
   const handleClipAxisChange = React.useCallback(
-    (axis: React.SetStateAction<typeof ctx.meshClipAxis>) => {
-      const resolvedAxis = typeof axis === "function" ? axis(ctx.meshClipAxis) : axis;
+    (axis: React.SetStateAction<typeof viz.meshClipAxis>) => {
+      const resolvedAxis = typeof axis === "function" ? axis(viz.meshClipAxis) : axis;
       void ctx.patchDisplay(visualizationPatchForClip({ axis: resolvedAxis }));
     },
-    [ctx],
+    [ctx, viz.meshClipAxis],
   );
   const handleClipPosChange = React.useCallback(
-    (positionPercent: React.SetStateAction<typeof ctx.meshClipPos>) => {
+    (positionPercent: React.SetStateAction<typeof viz.meshClipPos>) => {
       const resolvedPosition =
         typeof positionPercent === "function"
-          ? positionPercent(ctx.meshClipPos)
+          ? positionPercent(viz.meshClipPos)
           : positionPercent;
       void ctx.patchDisplay(visualizationPatchForClip({ positionPercent: resolvedPosition }));
     },
-    [ctx],
+    [ctx, viz.meshClipPos],
   );
   const handleClipFlipChange = React.useCallback(
-    (flipped: React.SetStateAction<typeof ctx.meshClipFlip>) => {
+    (flipped: React.SetStateAction<typeof viz.meshClipFlip>) => {
       const resolvedFlipped =
-        typeof flipped === "function" ? flipped(ctx.meshClipFlip) : flipped;
+        typeof flipped === "function" ? flipped(viz.meshClipFlip) : flipped;
       void ctx.patchDisplay(visualizationPatchForClip({ flipped: resolvedFlipped }));
     },
-    [ctx],
+    [ctx, viz.meshClipFlip],
   );
   const handleArrowColorModeChange = React.useCallback(
-    (colorMode: React.SetStateAction<typeof ctx.femArrowColorMode>) => {
+    (colorMode: React.SetStateAction<typeof vectorViz.colorMode>) => {
       const resolvedColorMode =
-        typeof colorMode === "function" ? colorMode(ctx.femArrowColorMode) : colorMode;
+        typeof colorMode === "function" ? colorMode(vectorViz.colorMode) : colorMode;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ colorMode: resolvedColorMode }));
     },
-    [ctx],
+    [ctx, vectorViz.colorMode],
   );
   const handleArrowMonoColorChange = React.useCallback(
-    (monoColor: React.SetStateAction<typeof ctx.femArrowMonoColor>) => {
+    (monoColor: React.SetStateAction<typeof vectorViz.monoColor>) => {
       const resolvedMonoColor =
-        typeof monoColor === "function" ? monoColor(ctx.femArrowMonoColor) : monoColor;
+        typeof monoColor === "function" ? monoColor(vectorViz.monoColor) : monoColor;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ monoColor: resolvedMonoColor }));
     },
-    [ctx],
+    [ctx, vectorViz.monoColor],
   );
   const handleArrowAlphaChange = React.useCallback(
-    (alpha: React.SetStateAction<typeof ctx.femArrowAlpha>) => {
+    (alpha: React.SetStateAction<typeof vectorViz.alpha>) => {
       const resolvedAlpha =
-        typeof alpha === "function" ? alpha(ctx.femArrowAlpha) : alpha;
+        typeof alpha === "function" ? alpha(vectorViz.alpha) : alpha;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ alpha: resolvedAlpha }));
     },
-    [ctx],
+    [ctx, vectorViz.alpha],
   );
   const handleArrowLengthScaleChange = React.useCallback(
-    (lengthScale: React.SetStateAction<typeof ctx.femArrowLengthScale>) => {
+    (lengthScale: React.SetStateAction<typeof vectorViz.lengthScale>) => {
       const resolvedLengthScale =
-        typeof lengthScale === "function" ? lengthScale(ctx.femArrowLengthScale) : lengthScale;
+        typeof lengthScale === "function" ? lengthScale(vectorViz.lengthScale) : lengthScale;
       void ctx.patchDisplay(
         visualizationPatchForVectorStyle({ lengthScale: resolvedLengthScale }),
       );
     },
-    [ctx],
+    [ctx, vectorViz.lengthScale],
   );
   const handleArrowThicknessChange = React.useCallback(
-    (thickness: React.SetStateAction<typeof ctx.femArrowThickness>) => {
+    (thickness: React.SetStateAction<typeof vectorViz.thickness>) => {
       const resolvedThickness =
-        typeof thickness === "function" ? thickness(ctx.femArrowThickness) : thickness;
+        typeof thickness === "function" ? thickness(vectorViz.thickness) : thickness;
       void ctx.patchDisplay(visualizationPatchForVectorStyle({ thickness: resolvedThickness }));
     },
-    [ctx],
+    [ctx, vectorViz.thickness],
   );
   const handleFerromagnetVisibilityModeChange = React.useCallback(
-    (ferromagnetVisibility: React.SetStateAction<typeof ctx.femFerromagnetVisibilityMode>) => {
+    (ferromagnetVisibility: React.SetStateAction<typeof vectorViz.ferromagnetVisibilityMode>) => {
       const resolvedFerromagnetVisibility =
         typeof ferromagnetVisibility === "function"
-          ? ferromagnetVisibility(ctx.femFerromagnetVisibilityMode)
+          ? ferromagnetVisibility(vectorViz.ferromagnetVisibilityMode)
           : ferromagnetVisibility;
       void ctx.patchDisplay(
         visualizationPatchForVectorStyle({
@@ -204,8 +211,11 @@ export function ViewportTabContent({
         }),
       );
     },
-    [ctx],
+    [ctx, vectorViz.ferromagnetVisibilityMode],
   );
+  const handleLegendOpenChange = React.useCallback((open: boolean) => {
+    useVisualizationStore.getState().setViewportLegendVisible(open);
+  }, []);
   const viewportSelectedObjectId = bridge.viewportSelectedObjectId;
   const geometryViewportPresetActive = bridge.geometryViewportPresetActive;
 
@@ -230,14 +240,14 @@ export function ViewportTabContent({
             objectOverlays: bridge.femObjectOverlaysForRender,
             selectedObjectId: bridge.selectedFemObjectId,
             universeCenter: ctx.worldCenter,
-            focusObjectRequest: ctx.focusObjectRequest,
+            focusObjectRequest: selection.focusObjectRequest,
             objectViewMode: ctx.objectViewMode,
             viewportDocumentId: bridge.graphActiveViewportDocumentId,
             persistedCameraState: bridge.graphActiveViewportCameraState,
             onPersistCameraState: bridge.persistViewportCameraState,
             onCameraInteractionChange: bridge.setViewportCameraInteractionActive,
-            viewportAxesScope: ctx.viewportAxesScope,
-            universeWireframeVisible: ctx.universeWireframeVisible,
+            viewportAxesScope: viz.viewportAxesScope,
+            universeWireframeVisible: viz.universeWireframeVisible,
             onRequestObjectSelect: bridge.handleRequestObjectSelect,
             viewport3DModel: bridge.hostedFemBoundsViewportModel,
             toolbarMode: bridge.vectorToolbarMode,
@@ -280,16 +290,16 @@ export function ViewportTabContent({
       femComponent={ctx.effectiveVectorComponent}
       meshParts={ctx.meshParts}
       meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
-      meshRenderMode={ctx.meshRenderMode}
+      meshRenderMode={viz.meshRenderMode}
       showPrimitives={bridge.femLayerState.showPrimitives}
       showMesh={bridge.femLayerState.showMesh}
       showQuantity={bridge.femLayerState.showQuantity}
-      airSegmentVisible={ctx.airMeshVisible}
+      airSegmentVisible={viz.airMeshVisible}
       objectViewMode={ctx.objectViewMode}
       visibleObjectIds={bridge.visibleObjectIds}
-      vectorDomainFilter={ctx.femVectorDomainFilter}
-      clipAxis={ctx.meshClipAxis}
-      clipPos={ctx.meshClipPos}
+      vectorDomainFilter={vectorViz.domainFilter}
+      clipAxis={viz.meshClipAxis}
+      clipPos={viz.meshClipPos}
       antennaOverlays={ctx.antennaOverlays}
       selectedAntennaId={bridge.selectedAntennaName}
       showArrows={bridge.femShowArrowsForRender}
@@ -333,7 +343,7 @@ export function ViewportTabContent({
             meshData={bridge.renderFemMeshData!}
             viewportVisible={viewportVisible}
             onViewportHealthChange={onViewportHealthChange}
-            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+            selectedSidebarNodeId={selection.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             cameraFitRequestSeed={cameraFitRequestSeed}
             quantityId={ctx.requestedPreviewQuantity}
@@ -350,7 +360,7 @@ export function ViewportTabContent({
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
-                : ctx.meshRenderMode
+                : viz.meshRenderMode
             }
             renderPasses={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
@@ -366,13 +376,13 @@ export function ViewportTabContent({
             clipEnabled={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                 ? false
-                : ctx.meshClipEnabled
+                : viz.meshClipEnabled
             }
-            clipAxis={ctx.meshClipAxis}
-            clipPos={ctx.meshClipPos}
-            clipFlip={ctx.meshClipFlip}
+            clipAxis={viz.meshClipAxis}
+            clipPos={viz.meshClipPos}
+            clipFlip={viz.meshClipFlip}
             previewMaxPoints={ctx.requestedPreviewMaxPoints}
-            femVectorGlyphBudget={ctx.femVectorGlyphBudget}
+            femVectorGlyphBudget={vectorViz.glyphBudget}
             onRenderModeChange={handleMeshRenderModeChange}
             onOpacityChange={handleMeshOpacityChange}
             onClipEnabledChange={handleClipEnabledChange}
@@ -383,13 +393,13 @@ export function ViewportTabContent({
             onSelectionChange={ctx.setMeshSelection}
             onRefine={ctx.handleLassoRefine}
             showArrowsRequested={bridge.femShowArrowsForRender}
-            arrowColorMode={ctx.femArrowColorMode}
-            arrowMonoColor={ctx.femArrowMonoColor}
-            arrowAlpha={ctx.femArrowAlpha}
-            arrowLengthScale={ctx.femArrowLengthScale}
-            arrowThickness={ctx.femArrowThickness}
-            vectorDomainFilter={ctx.femVectorDomainFilter}
-            ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
+            arrowColorMode={vectorViz.colorMode}
+            arrowMonoColor={vectorViz.monoColor}
+            arrowAlpha={vectorViz.alpha}
+            arrowLengthScale={vectorViz.lengthScale}
+            arrowThickness={vectorViz.thickness}
+            vectorDomainFilter={vectorViz.domainFilter}
+            ferromagnetVisibilityMode={vectorViz.ferromagnetVisibilityMode}
             antennaOverlays={ctx.antennaOverlays}
             selectedAntennaId={bridge.selectedAntennaName}
             objectOverlays={
@@ -398,8 +408,8 @@ export function ViewportTabContent({
                 : bridge.femObjectOverlaysForRender
             }
             selectedObjectId={bridge.selectedFemObjectId}
-            selectedEntityId={ctx.selectedEntityId}
-            focusedEntityId={ctx.focusedEntityId}
+            selectedEntityId={selection.selectedEntityId}
+            focusedEntityId={selection.focusedEntityId}
             objectViewMode={ctx.objectViewMode}
             objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
             meshParts={ctx.meshParts}
@@ -408,18 +418,18 @@ export function ViewportTabContent({
             meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
             onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
             visibleObjectIds={bridge.visibleObjectIds}
-            airSegmentVisible={ctx.airMeshVisible}
-            airSegmentOpacity={ctx.airMeshOpacity}
-            viewportAxesScope={ctx.viewportAxesScope}
-            universeWireframeVisible={ctx.universeWireframeVisible}
-            focusObjectRequest={ctx.focusObjectRequest}
+            airSegmentVisible={viz.airMeshVisible}
+            airSegmentOpacity={viz.airMeshOpacity}
+            viewportAxesScope={viz.viewportAxesScope}
+            universeWireframeVisible={viz.universeWireframeVisible}
+            focusObjectRequest={selection.focusObjectRequest}
             onAntennaTranslate={ctx.applyAntennaTranslation}
             onGeometryTranslate={ctx.applyGeometryTranslation}
             onRequestObjectSelect={bridge.handleRequestObjectSelect}
             worldExtent={ctx.worldExtent}
             worldCenter={ctx.worldCenter}
-            onEntitySelect={ctx.setSelectedEntityId}
-            onEntityFocus={ctx.setFocusedEntityId}
+            onEntitySelect={selectionActions.setSelectedEntityId}
+            onEntityFocus={selectionActions.setFocusedEntityId}
             onQuantityChange={ctx.requestDisplayQuantity}
             activeTextureTransform={bridge.activeTextureTransform}
             textureGizmoMode={bridge.activeTextureGizmoMode}
@@ -429,8 +439,8 @@ export function ViewportTabContent({
             onTextureTransformCommit={bridge.applyTextureTransform}
             partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
             onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
-            legendOpen={ctx.viewportLegendVisible}
-            onLegendOpenChange={ctx.setViewportLegendVisible}
+            legendOpen={viz.viewportLegendVisible}
+            onLegendOpenChange={handleLegendOpenChange}
             onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
           />
         </ViewportErrorBoundary>
@@ -465,7 +475,7 @@ export function ViewportTabContent({
               meshData={bridge.renderFemMeshData!}
               viewportVisible={viewportVisible}
               onViewportHealthChange={onViewportHealthChange}
-              selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+              selectedSidebarNodeId={selection.selectedSidebarNodeId}
               viewportFitSeed={bridge.viewportFitSeed}
               cameraFitRequestSeed={cameraFitRequestSeed}
               fieldLabel={ctx.quantityDescriptor?.label ?? ctx.selectedQuantity}
@@ -482,7 +492,7 @@ export function ViewportTabContent({
               renderMode={
                 FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                   ? "wireframe"
-                  : ctx.meshRenderMode
+                  : viz.meshRenderMode
               }
               renderPasses={
                 FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
@@ -498,21 +508,21 @@ export function ViewportTabContent({
               clipEnabled={
                 FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                   ? false
-                  : ctx.meshClipEnabled
+                  : viz.meshClipEnabled
               }
-              clipAxis={ctx.meshClipAxis}
-              clipPos={ctx.meshClipPos}
-              clipFlip={ctx.meshClipFlip}
+              clipAxis={viz.meshClipAxis}
+              clipPos={viz.meshClipPos}
+              clipFlip={viz.meshClipFlip}
               showArrowsRequested={bridge.femShowArrowsForRender}
-              arrowColorMode={ctx.femArrowColorMode}
-              arrowMonoColor={ctx.femArrowMonoColor}
-              arrowAlpha={ctx.femArrowAlpha}
-              arrowLengthScale={ctx.femArrowLengthScale}
-              arrowThickness={ctx.femArrowThickness}
-              vectorDomainFilter={ctx.femVectorDomainFilter}
-              ferromagnetVisibilityMode={ctx.femFerromagnetVisibilityMode}
+              arrowColorMode={vectorViz.colorMode}
+              arrowMonoColor={vectorViz.monoColor}
+              arrowAlpha={vectorViz.alpha}
+              arrowLengthScale={vectorViz.lengthScale}
+              arrowThickness={vectorViz.thickness}
+              vectorDomainFilter={vectorViz.domainFilter}
+              ferromagnetVisibilityMode={vectorViz.ferromagnetVisibilityMode}
               previewMaxPoints={ctx.requestedPreviewMaxPoints}
-              femVectorGlyphBudget={ctx.femVectorGlyphBudget}
+              femVectorGlyphBudget={vectorViz.glyphBudget}
               onRenderModeChange={handleMeshRenderModeChange}
               onOpacityChange={handleMeshOpacityChange}
               onClipEnabledChange={handleClipEnabledChange}
@@ -537,8 +547,8 @@ export function ViewportTabContent({
                   : bridge.femObjectOverlaysForRender
               }
               selectedObjectId={bridge.selectedFemObjectId}
-              selectedEntityId={ctx.selectedEntityId}
-              focusedEntityId={ctx.focusedEntityId}
+              selectedEntityId={selection.selectedEntityId}
+              focusedEntityId={selection.focusedEntityId}
               objectViewMode={ctx.objectViewMode}
               objectSegments={ctx.effectiveFemMesh?.object_segments ?? []}
               meshParts={ctx.meshParts}
@@ -547,11 +557,11 @@ export function ViewportTabContent({
               meshEntityViewState={bridge.effectiveFemMeshEntityViewState}
               onMeshPartViewStatePatch={bridge.patchMeshPartViewState}
               visibleObjectIds={bridge.visibleObjectIds}
-              airSegmentVisible={ctx.airMeshVisible}
-              airSegmentOpacity={ctx.airMeshOpacity}
-              viewportAxesScope={ctx.viewportAxesScope}
-              universeWireframeVisible={ctx.universeWireframeVisible}
-              focusObjectRequest={ctx.focusObjectRequest}
+              airSegmentVisible={viz.airMeshVisible}
+              airSegmentOpacity={viz.airMeshOpacity}
+              viewportAxesScope={viz.viewportAxesScope}
+              universeWireframeVisible={viz.universeWireframeVisible}
+              focusObjectRequest={selection.focusObjectRequest}
               onAntennaTranslate={ctx.applyAntennaTranslation}
               onGeometryTranslate={ctx.applyGeometryTranslation}
               onRequestObjectSelect={bridge.handleRequestObjectSelect}
@@ -593,8 +603,8 @@ export function ViewportTabContent({
             vectors: bridge.vectorSurfaceVectors,
             toolbarMode: bridge.vectorToolbarMode,
             viewportVisible,
-            viewportAxesScope: ctx.viewportAxesScope,
-            universeWireframeVisible: ctx.universeWireframeVisible,
+            viewportAxesScope: viz.viewportAxesScope,
+            universeWireframeVisible: viz.universeWireframeVisible,
           }}
         />
       </div>
@@ -613,7 +623,7 @@ export function ViewportTabContent({
             meshData={bridge.scaledFemMeshData ?? ctx.femMeshData}
             viewportVisible={viewportVisible}
             onViewportHealthChange={onViewportHealthChange}
-            selectedSidebarNodeId={ctx.selectedSidebarNodeId}
+            selectedSidebarNodeId={selection.selectedSidebarNodeId}
             viewportFitSeed={bridge.viewportFitSeed}
             cameraFitRequestSeed={cameraFitRequestSeed}
             colorField="none"
@@ -625,27 +635,27 @@ export function ViewportTabContent({
             renderMode={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceWireframe
                 ? "wireframe"
-                : ctx.meshRenderMode
+                : viz.meshRenderMode
             }
             opacity={1}
             clipEnabled={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                 ? false
-                : ctx.meshClipEnabled
+                : viz.meshClipEnabled
             }
-            clipAxis={ctx.meshClipAxis}
-            clipPos={ctx.meshClipPos}
-            clipFlip={ctx.meshClipFlip}
+            clipAxis={viz.meshClipAxis}
+            clipPos={viz.meshClipPos}
+            clipFlip={viz.meshClipFlip}
             showArrowsRequested={false}
             showOrientationLegend={false}
             worldExtent={ctx.worldExtent}
             worldCenter={ctx.worldCenter}
-            viewportAxesScope={ctx.viewportAxesScope}
-            universeWireframeVisible={ctx.universeWireframeVisible}
+            viewportAxesScope={viz.viewportAxesScope}
+            universeWireframeVisible={viz.universeWireframeVisible}
             partExplorerOpen={bridge.selectedSubmeshesToolboxOpen}
             onTogglePartExplorer={bridge.openSelectedSubmeshesToolbox}
-            legendOpen={ctx.viewportLegendVisible}
-            onLegendOpenChange={ctx.setViewportLegendVisible}
+            legendOpen={viz.viewportLegendVisible}
+            onLegendOpenChange={handleLegendOpenChange}
             onVisibleSubmeshSnapshotChange={ctx.setVisibleSubmeshSnapshot}
           />
         </ViewportErrorBoundary>
@@ -777,9 +787,9 @@ export function ViewportTabContent({
             }}
             selection={{
               selectedObjectId: bridge.viewportSelectedObjectId,
-              selectedEntityId: ctx.selectedEntityId,
-              focusedEntityId: ctx.focusedEntityId,
-              selectedSidebarNodeId: ctx.selectedSidebarNodeId,
+              selectedEntityId: selection.selectedEntityId,
+              focusedEntityId: selection.focusedEntityId,
+              selectedSidebarNodeId: selection.selectedSidebarNodeId,
               objectViewMode: ctx.objectViewMode,
             }}
             selectionActions={{
@@ -788,11 +798,11 @@ export function ViewportTabContent({
                   bridge.handleRequestObjectSelect(objectId);
                   return;
                 }
-                ctx.setSelectedObjectId(null);
+                selectionActions.setSelectedObjectId(null);
               },
-              onEntitySelect: ctx.setSelectedEntityId,
-              onEntityFocus: ctx.setFocusedEntityId,
-              onSidebarNodeSelect: (nodeId) => ctx.setSelectedSidebarNodeId(nodeId),
+              onEntitySelect: selectionActions.setSelectedEntityId,
+              onEntityFocus: selectionActions.setFocusedEntityId,
+              onSidebarNodeSelect: (nodeId) => selectionActions.setSelectedSidebarNodeId(nodeId),
               onObjectViewModeChange: ctx.setObjectViewMode,
             }}
             overlays={{

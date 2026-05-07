@@ -181,6 +181,10 @@ describe("View ribbon contribution", () => {
 
     const axis = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:axis");
     const mode = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:mode");
+    const component = findNode(
+      sliceGroup.actions.find((action) => action.id === "view-slice-quantity")?.menu ?? [],
+      "slice:quantity:component",
+    );
     expect(sliceGroup.actions.map((action) => action.id)).toEqual([
       "view-slice-quantity",
       "view-slice-vectors",
@@ -196,13 +200,16 @@ describe("View ribbon contribution", () => {
 
     expect(axis).toMatchObject({ type: "radio-group", value: "y" });
     expect(mode).toMatchObject({ type: "radio-group", value: "slab" });
+    expect(component).toMatchObject({ type: "radio-group", value: "magnitude" });
     expect(render).toMatchObject({ type: "radio-group", value: "heatmap" });
     expect(airbox).toMatchObject({ type: "checkbox", checked: true });
     expect(airboxRender).toMatchObject({ type: "radio-group", value: "wireframe" });
     expect(vectors).toMatchObject({ type: "checkbox", checked: true });
 
     axis?.onValueChange?.("x");
+    component?.onValueChange?.("z");
     expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-axis", axis: "x" });
+    expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-component", component: "z" });
   });
 
   it("lets all-layer projection sliders reach their configured maximum", () => {
@@ -218,6 +225,11 @@ describe("View ribbon contribution", () => {
     expect(findNode(menu, "slice:plane:projection-samples")).toMatchObject({
       type: "slider",
       max: 100,
+    });
+    expect(findNode(menu, "slice:plane:projection-component")).toMatchObject({
+      type: "radio-group",
+      value: "magnitude",
+      disabled: false,
     });
     expect(findNode(menu, "slice:plane:projection-resolution")).toMatchObject({
       type: "slider",

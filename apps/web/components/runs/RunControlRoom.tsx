@@ -55,6 +55,12 @@ import MeshBuildModal from "./control-room/MeshBuildModal";
 import { buildVisualizationPresetNodeId } from "./control-room/visualizationPresets";
 import { WorkspaceRightToolbox } from "../workspace/modes/WorkspaceModeInspectors";
 import { useAnalyzeStore } from "@/features/analyze";
+import {
+  useSelectedSidebarNodeId,
+  useSelectionActions,
+} from "@/features/selection";
+import { useRenderMode } from "@/features/visualization/hooks/useVizSlice";
+import { useVisualizationStore } from "@/features/visualization/store/useVisualizationStore";
 import { useWorkspaceGraphBridge } from "@/features/workspace-graph";
 import type { WorkspaceMode } from "./control-room/context-hooks";
 import SettingsDialog from "../workspace/overlays/SettingsDialog";
@@ -267,6 +273,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const _viewport = useViewport();
   const _cmd = useCommand();
   const _model = useModel();
+  const selectedSidebarNodeId = useSelectedSidebarNodeId();
+  const { setSelectedObjectId, setSelectedSidebarNodeId } = useSelectionActions();
+  const meshRenderMode = useRenderMode();
+  const setMagneticTextureDensity = useVisualizationStore((s) => s.setFemTextureDownsampleCells);
   const hasNoActiveWorkspace = _cmd.error?.includes("no active local live workspace") ?? false;
 
   const femDiscretization = resolveFemDiscretization(
@@ -442,10 +452,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const selectedAntennaName = useMemo(
     () =>
       resolveAntennaNodeName(
-        _model.selectedSidebarNodeId,
+        selectedSidebarNodeId,
         _cmd.scriptBuilderCurrentModules.map((module) => module.name),
       ),
-    [_model.selectedSidebarNodeId, _cmd.scriptBuilderCurrentModules],
+    [selectedSidebarNodeId, _cmd.scriptBuilderCurrentModules],
   );
   const authoringStudyDocument = useMemo<StudyPipelineDocument>(
     () => (_model.studyPipeline as StudyPipelineDocument | null) ?? migrateFlatStagesToStudyPipeline(_model.studyStages),
@@ -459,7 +469,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     workspaceMode: currentStage,
     workspaceTabs: workspaceTabsByStage,
     activeWorkspaceTabByStage,
-    selectedNodeId: _model.selectedSidebarNodeId,
+    selectedNodeId: selectedSidebarNodeId,
     studyPipeline: authoringStudyDocument,
     resultsWorkspace: analyzeResultsWorkspace,
     quantities: _cmd.quantities,
@@ -469,7 +479,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     plane: _viewport.plane,
     sliceIndex: _viewport.sliceIndex,
     viewMode: _viewport.effectiveViewMode,
-    renderMode: _model.meshRenderMode,
+    renderMode: meshRenderMode,
   });
   useKeyboardShortcuts();
 
@@ -500,8 +510,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   );
 
   const handleSelectModelNode = useCallback((nodeId: string) => {
-    _model.setSelectedSidebarNodeId(nodeId);
-    _model.setSelectedObjectId(resolveSelectedObjectId(nodeId, _model.modelBuilderGraph));
+    setSelectedSidebarNodeId(nodeId);
+    setSelectedObjectId(resolveSelectedObjectId(nodeId, _model.modelBuilderGraph));
     const analyzeTarget = parseAnalyzeTreeNode(nodeId);
     if (analyzeTarget) {
       openAnalyzeCenterTab(analyzeTarget, { nodeId, source: "analyze_target" });
@@ -537,8 +547,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     }
   }, [
     _model.modelBuilderGraph,
-    _model.setSelectedSidebarNodeId,
-    _model.setSelectedObjectId,
+    setSelectedSidebarNodeId,
+    setSelectedObjectId,
     _viewport.sidebarCollapsed,
     _viewport.setSidebarCollapsed,
     maybePreviewAntennaField,
@@ -551,10 +561,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     if (_viewport.sidebarCollapsed) {
       _viewport.setSidebarCollapsed(false);
     }
-    _model.setSelectedSidebarNodeId(`ant-${nextModule.name}`);
-    _model.setSelectedObjectId(null);
+    setSelectedSidebarNodeId(`ant-${nextModule.name}`);
+    setSelectedObjectId(null);
     maybePreviewAntennaField();
-  }, [_cmd.scriptBuilderCurrentModules, _model.setScriptBuilderCurrentModules, _viewport.sidebarCollapsed, _viewport.setSidebarCollapsed, _model.setSelectedSidebarNodeId, _model.setSelectedObjectId, maybePreviewAntennaField]);
+  }, [_cmd.scriptBuilderCurrentModules, _model.setScriptBuilderCurrentModules, _viewport.sidebarCollapsed, _viewport.setSidebarCollapsed, setSelectedSidebarNodeId, setSelectedObjectId, maybePreviewAntennaField]);
 
   const handleCreateVisualizationPreset = useCallback(() => {
     const ref = _model.createVisualizationPreset("project");
@@ -608,17 +618,17 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       if (_viewport.sidebarCollapsed) {
         _viewport.setSidebarCollapsed(false);
       }
-      _model.setSelectedObjectId(objectId);
-      _model.setSelectedSidebarNodeId(`physobj-${objectId}`);
+      setSelectedObjectId(objectId);
+      setSelectedSidebarNodeId(`physobj-${objectId}`);
     },
-    [_model.setSceneDocument, _model.setSelectedObjectId, _model.setSelectedSidebarNodeId, _viewport.sidebarCollapsed, _viewport.setSidebarCollapsed],
+    [_model.setSceneDocument, setSelectedObjectId, setSelectedSidebarNodeId, _viewport.sidebarCollapsed, _viewport.setSidebarCollapsed],
   );
 
   const handleAssignMagnetizationPreset = useCallback(
     (objectId: string, kind: MagneticPresetKind) => {
       _viewport.handleViewModeChange("3D");
-      _model.setSelectedObjectId(objectId);
-      _model.setSelectedSidebarNodeId(`mag-${objectId}`);
+      setSelectedObjectId(objectId);
+      setSelectedSidebarNodeId(`mag-${objectId}`);
       _model.setSceneDocument((prev) => {
         if (!prev) return prev;
         const target = prev.objects.find(
@@ -634,7 +644,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         });
       });
     },
-    [_model.setSceneDocument, _model.setSelectedObjectId, _model.setSelectedSidebarNodeId, _viewport.handleViewModeChange],
+    [_model.setSceneDocument, setSelectedObjectId, setSelectedSidebarNodeId, _viewport.handleViewModeChange],
   );
 
   const handleSetTransformScope = useCallback(
@@ -660,8 +670,8 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const handleSetTextureTransformMode = useCallback(
     (objectId: string, mode: "translate" | "rotate" | "scale") => {
       _viewport.handleViewModeChange("3D");
-      _model.setSelectedObjectId(objectId);
-      _model.setSelectedSidebarNodeId(`mag-${objectId}-transform`);
+      setSelectedObjectId(objectId);
+      setSelectedSidebarNodeId(`mag-${objectId}-transform`);
       _model.setActiveTransformScope("texture");
       _model.setSceneDocument((prev) => {
         if (!prev) return prev;
@@ -693,7 +703,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         };
       });
     },
-    [_model.setActiveTransformScope, _model.setSceneDocument, _model.setSelectedObjectId, _model.setSelectedSidebarNodeId, _viewport.handleViewModeChange],
+    [_model.setActiveTransformScope, _model.setSceneDocument, setSelectedObjectId, setSelectedSidebarNodeId, _viewport.handleViewModeChange],
   );
 
   const commitStudyDocument = useCallback((next: StudyPipelineDocument, nextSelectedNodeId?: string | null) => {
@@ -711,13 +721,13 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     placement: "append" | "before" | "after",
   ) => {
     const nextNode = createPrimitiveNode(kind);
-    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, _model.selectedSidebarNodeId);
+    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, selectedSidebarNodeId);
     const nextDocument =
       !anchorId || placement === "append"
         ? appendNode(authoringStudyDocument, nextNode)
         : insertNodeNear(authoringStudyDocument, anchorId, placement, nextNode);
     commitStudyDocument(nextDocument, buildPipelineStudyStageNodeId(nextNode.id));
-  }, [authoringStudyDocument, commitStudyDocument, _model.selectedSidebarNodeId]);
+  }, [authoringStudyDocument, commitStudyDocument, selectedSidebarNodeId]);
 
   const handleStudyAddMacro = useCallback((
     kind:
@@ -732,25 +742,25 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     placement: "append" | "before" | "after",
   ) => {
     const nextNode = createMacroNode(kind);
-    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, _model.selectedSidebarNodeId);
+    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, selectedSidebarNodeId);
     const nextDocument =
       !anchorId || placement === "append"
         ? appendNode(authoringStudyDocument, nextNode)
         : insertNodeNear(authoringStudyDocument, anchorId, placement, nextNode);
     commitStudyDocument(nextDocument, buildPipelineStudyStageNodeId(nextNode.id));
-  }, [authoringStudyDocument, commitStudyDocument, _model.selectedSidebarNodeId]);
+  }, [authoringStudyDocument, commitStudyDocument, selectedSidebarNodeId]);
 
   const handleStudyDuplicateSelected = useCallback(() => {
-    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, _model.selectedSidebarNodeId);
+    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, selectedSidebarNodeId);
     if (!anchorId) return;
     commitStudyDocument(duplicateNode(authoringStudyDocument, anchorId));
-  }, [authoringStudyDocument, commitStudyDocument, _model.selectedSidebarNodeId]);
+  }, [authoringStudyDocument, commitStudyDocument, selectedSidebarNodeId]);
 
   const handleStudyToggleSelectedEnabled = useCallback(() => {
-    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, _model.selectedSidebarNodeId);
+    const anchorId = resolveStudyAnchorNodeId(authoringStudyDocument, selectedSidebarNodeId);
     if (!anchorId) return;
     commitStudyDocument(toggleNodeEnabled(authoringStudyDocument, anchorId));
-  }, [authoringStudyDocument, commitStudyDocument, _model.selectedSidebarNodeId]);
+  }, [authoringStudyDocument, commitStudyDocument, selectedSidebarNodeId]);
 
   const hasSharedAirboxDomain =
     _model.effectiveFemMesh?.domain_mesh_mode === "shared_domain_mesh_with_air";
@@ -819,9 +829,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     openAnalyzeCenterTab,
     run: _cmd.run,
     scalarRows: _transport.scalarRows,
-    selectedSidebarNodeId: _model.selectedSidebarNodeId,
+    selectedSidebarNodeId: selectedSidebarNodeId,
     session: _cmd.session,
-    setSelectedSidebarNodeId: _model.setSelectedSidebarNodeId,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeId,
     workspaceStatus: _cmd.workspaceStatus,
   });
 
@@ -937,7 +947,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
             _viewport.requestPreviewQuantity("m");
           }
         }}
-        onSetMagneticTextureDensity={_model.setFemTextureDownsampleCells}
+        onSetMagneticTextureDensity={setMagneticTextureDensity}
         onSetQuantityShaderVisible={(visible) =>
           void _viewport.patchDisplay(visualizationPatchForFemLayers({
             ...ribbonFemLayers,

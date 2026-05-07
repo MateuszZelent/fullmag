@@ -52,7 +52,6 @@ export function buildWorkspaceGraphBridgeSignature(input: WorkspaceGraphBridgeIn
     workspaceTabs: {
       build: input.workspaceTabs.build.map((tab) => tab.id),
       study: input.workspaceTabs.study.map((tab) => tab.id),
-      analyze: input.workspaceTabs.analyze.map((tab) => tab.id),
     },
     activeWorkspaceTabByStage: input.activeWorkspaceTabByStage,
     studyPipeline: signatureForStudyPipeline(input.studyPipeline),

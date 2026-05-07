@@ -10,12 +10,12 @@
  *   - lastBuiltMeshConfigSignature — fingerprint of the last successful build
  *   - meshSelection — selected mesh faces
  *
- * Phase 2.3 (PR 1): Store creation with structural sharing.
- * Phase 2.3 (PR 2): Sync bridge in ControlRoomContext.
- * Phase 2.3 (PR 3): Consumer migration (future).
+ * Store ownership is complete: ControlRoomContext reads and writes this store
+ * directly; there is no context-to-store sync bridge.
  */
 
 import { create } from "zustand";
+import type { SetStateAction } from "react";
 import type { MeshOptionsState } from "@/lib/mesh/options";
 import type { MeshSelectionSnapshot } from "@/components/preview/fem/femMeshTypes";
 import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
@@ -35,24 +35,14 @@ export interface MeshConfigStoreState {
   setMeshOptions: (
     opts: MeshOptionsState | ((prev: MeshOptionsState) => MeshOptionsState),
   ) => void;
-  setMeshGenerating: (v: boolean) => void;
-  setLastBuiltMeshConfigSignature: (sig: string | null) => void;
+  setMeshGenerating: (v: SetStateAction<boolean>) => void;
+  setLastBuiltMeshConfigSignature: (sig: SetStateAction<string | null>) => void;
   setMeshSelection: (
     sel:
       | MeshSelectionSnapshot
       | ((prev: MeshSelectionSnapshot) => MeshSelectionSnapshot),
   ) => void;
 
-  /** Batch-set from sync bridge (structural sharing). */
-  syncFromContext: (patch: MeshConfigSyncPatch) => void;
-}
-
-/** Fields synced from ControlRoomContext → store. */
-export interface MeshConfigSyncPatch {
-  meshOptionsState: MeshOptionsState;
-  meshGenerating: boolean;
-  lastBuiltMeshConfigSignature: string | null;
-  meshSelection: MeshSelectionSnapshot;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -70,7 +60,6 @@ const INITIAL_STATE: Omit<
   | "setMeshGenerating"
   | "setLastBuiltMeshConfigSignature"
   | "setMeshSelection"
-  | "syncFromContext"
 > = {
   meshOptionsState: DEFAULT_MESH_OPTIONS,
   meshGenerating: false,
@@ -82,13 +71,6 @@ const INITIAL_STATE: Omit<
  * Store
  * ══════════════════════════════════════════════════════════════════ */
 
-const SYNC_KEYS = [
-  "meshOptionsState",
-  "meshGenerating",
-  "lastBuiltMeshConfigSignature",
-  "meshSelection",
-] as const;
-
 export const useMeshConfigStore = create<MeshConfigStoreState>((set) => ({
   ...INITIAL_STATE,
 
@@ -98,10 +80,16 @@ export const useMeshConfigStore = create<MeshConfigStoreState>((set) => ({
         typeof opts === "function" ? opts(prev.meshOptionsState) : opts,
     })),
 
-  setMeshGenerating: (v) => set({ meshGenerating: v }),
+  setMeshGenerating: (v) =>
+    set((prev) => ({
+      meshGenerating: typeof v === "function" ? v(prev.meshGenerating) : v,
+    })),
 
   setLastBuiltMeshConfigSignature: (sig) =>
-    set({ lastBuiltMeshConfigSignature: sig }),
+    set((prev) => ({
+      lastBuiltMeshConfigSignature:
+        typeof sig === "function" ? sig(prev.lastBuiltMeshConfigSignature) : sig,
+    })),
 
   setMeshSelection: (sel) =>
     set((prev) => ({
@@ -109,19 +97,6 @@ export const useMeshConfigStore = create<MeshConfigStoreState>((set) => ({
         typeof sel === "function" ? sel(prev.meshSelection) : sel,
     })),
 
-  syncFromContext: (patch) =>
-    set((prev) => {
-      // Structural sharing: only update if at least one field changed
-      let changed = false;
-      for (const k of SYNC_KEYS) {
-        if (!Object.is(prev[k], patch[k])) {
-          changed = true;
-          break;
-        }
-      }
-      if (!changed) return prev;
-      return { ...prev, ...patch };
-    }),
 }));
 
 /* ══════════════════════════════════════════════════════════════════

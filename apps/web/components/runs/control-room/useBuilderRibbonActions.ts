@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import type { PrimitiveKind } from "@/features/geometry-builder/model/types";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+import { useSelectedObjectId, useSelectionActions } from "@/features/selection";
 import { createScenePrimitiveAuthoringUpdate } from "@/features/geometry-builder/scene/scenePrimitiveAuthoring";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import type {
@@ -52,6 +53,13 @@ export function useBuilderRibbonActions({
   const toggleBuilderSnap = useGeometryBuilderStore((state) => state.toggleSnap);
   const disableBuilderMode = useGeometryBuilderStore((state) => state.disableBuilder);
   const sceneAuthoring = useSceneAuthoringActions();
+  const selectedObjectId = useSelectedObjectId();
+  const {
+    setFocusedEntityId,
+    setSelectedEntityId,
+    setSelectedObjectId,
+    setSelectedSidebarNodeId,
+  } = useSelectionActions();
   const selectedBuilderPrimitiveId =
     builderSelection.type === "primitive" ? builderSelection.id : null;
 
@@ -113,8 +121,8 @@ export function useBuilderRibbonActions({
       viewport.handleViewModeChange("3D");
     }
     const referenceOverlay =
-      model.selectedObjectId
-        ? model.objectOverlays.find((overlay) => overlay.id === model.selectedObjectId) ?? null
+      selectedObjectId
+        ? model.objectOverlays.find((overlay) => overlay.id === selectedObjectId) ?? null
         : null;
     const fallbackOverlay = model.objectOverlays[0] ?? null;
     const prev = model.sceneDocument;
@@ -152,10 +160,10 @@ export function useBuilderRibbonActions({
     if (viewport.sidebarCollapsed) {
       viewport.setSidebarCollapsed(false);
     }
-    model.setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
-    model.setSelectedObjectId(update.selectedObjectId);
-    model.setSelectedEntityId(null);
-    model.setFocusedEntityId(null);
+    setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
+    setSelectedObjectId(update.selectedObjectId);
+    setSelectedEntityId(null);
+    setFocusedEntityId(null);
     model.requestFocusObject(update.selectedObjectId);
     setRightInspectorOpen(true);
     model.setActiveTransformScope("object");
@@ -177,7 +185,7 @@ export function useBuilderRibbonActions({
 
   const handleBuilderSetTransformTool = useCallback((tool: "move" | "rotate" | "scale") => {
     setBuilderViewportTool(tool);
-    if (activeCoreTab === "Geometry" && model.selectedObjectId) {
+    if (activeCoreTab === "Geometry" && selectedObjectId) {
       model.setActiveTransformScope("object");
       model.setSceneDocument((prev) =>
         prev
@@ -192,7 +200,7 @@ export function useBuilderRibbonActions({
           : prev,
       );
     }
-  }, [activeCoreTab, model, setBuilderViewportTool]);
+  }, [activeCoreTab, model, selectedObjectId, setBuilderViewportTool]);
 
   const handleBuilderCenterInUniverse = useCallback((primitiveId: string) => {
     const primitive = getBuilderPrimitive(primitiveId);

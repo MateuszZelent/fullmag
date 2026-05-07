@@ -82,6 +82,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
 
 impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
     fn from(value: PersistedCurrentLiveSnapshot) -> Self {
+        let scalar_revision = value.scalar_rows.len() as u64;
         SessionStateResponse {
             session_protocol_version: value.session_protocol_version,
             capability_profile_version: value.capability_profile_version,
@@ -106,6 +107,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             preview: value.preview,
             builder_adapter: value.builder_adapter,
             state_version: 0,
+            scalar_revision,
             mesh_revision: value.mesh_revision,
             mesh_build_revision: value.mesh_build_revision,
         }

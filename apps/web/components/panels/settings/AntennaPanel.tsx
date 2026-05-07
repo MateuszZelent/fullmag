@@ -7,6 +7,7 @@ import type {
 } from "../../../lib/session/types";
 import { useModel } from "../../runs/control-room/ControlRoomContext";
 import { useViewport } from "../../runs/control-room/context-hooks";
+import { useSelectionActions } from "@/features/selection";
 import { fmtSI, resolveAntennaNodeName } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
@@ -108,6 +109,7 @@ function ensureUniqueName(
 
 export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
+  const { setSelectedSidebarNodeId } = useSelectionActions();
   const vp = useViewport();
   const modules = model.scriptBuilderCurrentModules;
   const antennaNames = useMemo(() => modules.map((module) => module.name), [modules]);
@@ -152,16 +154,16 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
     (kind: "MicrostripAntenna" | "CPWAntenna") => {
       const nextModule = makeAntennaModule(kind, modules);
       model.setScriptBuilderCurrentModules((prev) => [...prev, nextModule]);
-      model.setSelectedSidebarNodeId(`ant-${nextModule.name}`);
+      setSelectedSidebarNodeId(`ant-${nextModule.name}`);
     },
-    [model, modules],
+    [model, modules, setSelectedSidebarNodeId],
   );
 
   const selectModule = useCallback(
     (name: string) => {
-      model.setSelectedSidebarNodeId(`ant-${name}`);
+      setSelectedSidebarNodeId(`ant-${name}`);
     },
-    [model],
+    [setSelectedSidebarNodeId],
   );
 
   const renameActiveModule = useCallback(
@@ -171,7 +173,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
       }
       const nextName = ensureUniqueName(value, activeIndex, modules);
       updateModuleAt(activeIndex, (module) => ({ ...module, name: nextName }));
-      model.setSelectedSidebarNodeId(`ant-${nextName}`);
+      setSelectedSidebarNodeId(`ant-${nextName}`);
       if (model.scriptBuilderExcitationAnalysis?.source === activeModule.name) {
         model.setScriptBuilderExcitationAnalysis((prev) =>
           prev ? { ...prev, source: nextName } : prev,
@@ -248,7 +250,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
     if (model.scriptBuilderExcitationAnalysis?.source === activeModule.name) {
       model.setScriptBuilderExcitationAnalysis(null);
     }
-    model.setSelectedSidebarNodeId("antennas");
+    setSelectedSidebarNodeId("antennas");
   }, [activeIndex, activeModule, model]);
 
   const enableExcitationAnalysis = useCallback(() => {

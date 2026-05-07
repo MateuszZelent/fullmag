@@ -8,6 +8,7 @@ import {
   selectVisualizationLocalPresets,
   selectActiveVisualizationPresetRef,
 } from "@/features/visualization";
+import { useSelectionActions } from "@/features/selection";
 import {
   buildVisualizationPresetNodeId,
   parseVisualizationPresetNodeId,
@@ -53,6 +54,7 @@ function PresetSourceBadge({ source }: { source: VisualizationPresetSource }) {
 
 export default function VisualizationPresetPanel({ nodeId }: VisualizationPresetPanelProps) {
   const ctx = useModel();
+  const { setSelectedSidebarNodeId } = useSelectionActions();
   const visualizationProjectPresets = useVisualizationStore(selectVisualizationProjectPresets);
   const visualizationLocalPresets = useVisualizationStore(selectVisualizationLocalPresets);
   const activeVisualizationPresetRef = useVisualizationStore(selectActiveVisualizationPresetRef);
@@ -63,9 +65,9 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
       const ref = ctx.createVisualizationPreset(source);
       ctx.setActiveVisualizationPresetRef(ref);
       ctx.applyVisualizationPreset(ref);
-      ctx.setSelectedSidebarNodeId(buildVisualizationPresetNodeId(source, ref.preset_id));
+      setSelectedSidebarNodeId(buildVisualizationPresetNodeId(source, ref.preset_id));
     },
-    [ctx],
+    [ctx, setSelectedSidebarNodeId],
   );
 
   const isRootNode = nodeId === VISUALIZATION_ROOT_NODE_ID;
@@ -230,7 +232,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
               onClick={() => {
                 const next = ctx.duplicateVisualizationPreset(presetRef, parsedNode.source);
                 if (!next) return;
-                ctx.setSelectedSidebarNodeId(
+                setSelectedSidebarNodeId(
                   buildVisualizationPresetNodeId(next.source, next.preset_id),
                 );
               }}
@@ -244,7 +246,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
                 const target = parsedNode.source === "project" ? "local" : "project";
                 const moved = ctx.copyVisualizationPresetToSource(presetRef, target);
                 if (!moved) return;
-                ctx.setSelectedSidebarNodeId(
+                setSelectedSidebarNodeId(
                   buildVisualizationPresetNodeId(moved.source, moved.preset_id),
                 );
               }}
@@ -259,7 +261,7 @@ export default function VisualizationPresetPanel({ nodeId }: VisualizationPreset
                   return;
                 }
                 ctx.deleteVisualizationPreset(presetRef);
-                ctx.setSelectedSidebarNodeId(
+                setSelectedSidebarNodeId(
                   parsedNode.source === "project"
                     ? VISUALIZATION_PROJECT_SECTION_NODE_ID
                     : VISUALIZATION_LOCAL_SECTION_NODE_ID,

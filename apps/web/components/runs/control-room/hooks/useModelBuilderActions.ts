@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { AuthoringStudyRuntimePatchRequest } from "@/src/api/types";
 import type {
@@ -47,7 +47,6 @@ export interface UseModelBuilderActionsParams {
   modelBuilderDefaults: ModelBuilderDefaults;
   sceneDocumentDraft: SceneDocument | null;
   localBuilderDraft: SceneDocument | null;
-  remoteSceneDocument: SceneDocument | null;
   patchStudyRuntime: (request: AuthoringStudyRuntimePatchRequest) => Promise<unknown>;
   setModelBuilderGraph: Dispatch<SetStateAction<ModelBuilderGraphV2 | null>>;
   setSceneDocumentDraft: Dispatch<SetStateAction<SceneDocument | null>>;
@@ -59,7 +58,6 @@ export function useModelBuilderActions({
   modelBuilderDefaults,
   sceneDocumentDraft,
   localBuilderDraft,
-  remoteSceneDocument,
   patchStudyRuntime,
   setModelBuilderGraph,
   setSceneDocumentDraft,
@@ -259,38 +257,6 @@ export function useModelBuilderActions({
     [localBuilderDraft, sceneDocumentDraft, setModelBuilderGraph, setSceneDocumentDraft],
   );
 
-  const sceneObjects = useMemo(
-    () => localBuilderDraft?.objects ?? remoteSceneDocument?.objects ?? [],
-    [localBuilderDraft, remoteSceneDocument],
-  );
-
-  const meshPerGeometryPayload = useMemo(
-    () =>
-      sceneObjects.map((object) => ({
-        geometry: object.name,
-        mode: object.mesh_override?.mode ?? "inherit",
-        hmax: object.mesh_override?.hmax ?? "",
-        hmin: object.mesh_override?.hmin ?? "",
-        order: object.mesh_override?.order ?? null,
-        source: object.mesh_override?.source ?? null,
-        algorithm_2d: object.mesh_override?.algorithm_2d ?? null,
-        algorithm_3d: object.mesh_override?.algorithm_3d ?? null,
-        size_factor: object.mesh_override?.size_factor ?? null,
-        size_from_curvature: object.mesh_override?.size_from_curvature ?? null,
-        growth_rate: object.mesh_override?.growth_rate ?? "",
-        narrow_regions: object.mesh_override?.narrow_regions ?? null,
-        smoothing_steps: object.mesh_override?.smoothing_steps ?? null,
-        optimize: object.mesh_override?.optimize ?? null,
-        optimize_iterations: object.mesh_override?.optimize_iterations ?? null,
-        compute_quality: object.mesh_override?.compute_quality ?? null,
-        per_element_quality: object.mesh_override?.per_element_quality ?? null,
-        size_fields: object.mesh_override?.size_fields ?? [],
-        operations: object.mesh_override?.operations ?? [],
-        build_requested: object.mesh_override?.build_requested ?? false,
-      })),
-    [sceneObjects],
-  );
-
   return {
     setSolverSettings,
     setMeshOptions,
@@ -303,7 +269,5 @@ export function useModelBuilderActions({
     setScriptBuilderCurrentModules,
     setScriptBuilderExcitationAnalysis,
     setSceneDocument,
-    sceneObjects,
-    meshPerGeometryPayload,
   };
 }

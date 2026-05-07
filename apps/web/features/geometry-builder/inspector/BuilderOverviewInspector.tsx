@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useGeometryBuilderStore } from "../store/useGeometryBuilderStore";
 import type { PrimitiveKind } from "../model/types";
 import { useCommand, useModel } from "@/components/runs/control-room/context-hooks";
+import { useSelectedObjectId, useSelectionActions } from "@/features/selection";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import {
   createScenePrimitiveAuthoringUpdate,
@@ -63,6 +64,13 @@ const SHORTCUTS = [
 export default function BuilderOverviewInspector() {
   const command = useCommand();
   const model = useModel();
+  const selectedObjectId = useSelectedObjectId();
+  const {
+    setFocusedEntityId,
+    setSelectedEntityId,
+    setSelectedObjectId,
+    setSelectedSidebarNodeId,
+  } = useSelectionActions();
   const sceneAuthoring = useSceneAuthoringActions();
   const graphNodes = useGeometryBuilderStore((s) => s.graph.nodes);
   const draftPrimitiveCount = useMemo(
@@ -136,8 +144,8 @@ export default function BuilderOverviewInspector() {
       return;
     }
     const referenceOverlay =
-      model.selectedObjectId
-        ? model.objectOverlays.find((overlay) => overlay.id === model.selectedObjectId) ?? null
+      selectedObjectId
+        ? model.objectOverlays.find((overlay) => overlay.id === selectedObjectId) ?? null
         : null;
     let update: ReturnType<typeof createScenePrimitiveAuthoringUpdate>;
     try {
@@ -154,10 +162,10 @@ export default function BuilderOverviewInspector() {
     }
     model.setSceneDocument(update.scene);
     setSceneCommitError(null);
-    model.setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
-    model.setSelectedObjectId(update.selectedObjectId);
-    model.setSelectedEntityId(null);
-    model.setFocusedEntityId(null);
+    setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
+    setSelectedObjectId(update.selectedObjectId);
+    setSelectedEntityId(null);
+    setFocusedEntityId(null);
     model.requestFocusObject(update.selectedObjectId);
     void sceneAuthoring
       .createObject(update.createObjectRequest)

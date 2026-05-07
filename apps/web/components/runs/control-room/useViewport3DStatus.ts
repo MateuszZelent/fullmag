@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Viewport3DHealthReport } from "@/components/preview/FemMeshView3D";
+import type { FemViewportLayerState } from "@/features/viewport-unified/model/unifiedViewportTypes";
+import { useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
+import { useSelectedEntityId, useSelectedObjectId } from "@/features/selection";
 import type { PreviewState } from "@/lib/session/types";
 import type { ModelContextValue, ViewportContextValue } from "./context-hooks";
 
@@ -9,19 +12,22 @@ type Viewport3DStatusValue = {
   detail: string;
 };
 
+type Viewport3DStatusModel = Pick<
+  ModelContextValue,
+  | "femMeshData"
+  | "femTopologyKey"
+  | "objectViewMode"
+> & {
+  airMeshVisible: boolean;
+  femViewportLayers: FemViewportLayerState;
+  meshShowArrows: boolean;
+  selectedEntityId: string | null;
+  selectedObjectId: string | null;
+};
+
 interface ComputeViewport3DStatusArgs {
   femDiscretization: boolean;
-  model: Pick<
-    ModelContextValue,
-    | "airMeshVisible"
-    | "femMeshData"
-    | "femTopologyKey"
-    | "femViewportLayers"
-    | "meshShowArrows"
-    | "objectViewMode"
-    | "selectedEntityId"
-    | "selectedObjectId"
-  >;
+  model: Viewport3DStatusModel;
   spatialPreview: Extract<PreviewState, { kind: "spatial" }> | null;
   viewport: Pick<ViewportContextValue, "effectiveViewMode" | "previewBusy" | "previewGrid">;
   viewportRuntimeHealth: Viewport3DHealthReport | null;
@@ -118,40 +124,44 @@ export function useViewport3DStatus({
   femDiscretization: boolean;
   model: Pick<
     ModelContextValue,
-    | "airMeshVisible"
     | "femMeshData"
     | "femTopologyKey"
-    | "femViewportLayers"
-    | "meshShowArrows"
     | "objectViewMode"
-    | "selectedEntityId"
-    | "selectedObjectId"
   >;
   spatialPreview: Extract<PreviewState, { kind: "spatial" }> | null;
   viewport: Pick<ViewportContextValue, "effectiveViewMode" | "previewBusy" | "previewGrid">;
 }) {
+  const viz = useViewportRenderState();
+  const selectedEntityId = useSelectedEntityId();
+  const selectedObjectId = useSelectedObjectId();
+  const statusModel = useMemo(
+    () => ({
+      ...model,
+      airMeshVisible: viz.airMeshVisible,
+      femViewportLayers: viz.femViewportLayers,
+      meshShowArrows: viz.meshShowArrows,
+      selectedEntityId,
+      selectedObjectId,
+    }),
+    [model, selectedEntityId, selectedObjectId, viz.airMeshVisible, viz.femViewportLayers, viz.meshShowArrows],
+  );
   const [viewportRuntimeHealth, setViewportRuntimeHealth] =
     useState<Viewport3DHealthReport | null>(null);
   const viewport3DStatus = useMemo(() => computeViewport3DStatus({
     femDiscretization,
-    model,
+    model: statusModel,
     spatialPreview,
     viewport,
     viewportRuntimeHealth,
   }), [
     femDiscretization,
-    model.airMeshVisible,
     model.femMeshData,
     model.femTopologyKey,
-    model.femViewportLayers.showMagneticTexture,
-    model.femViewportLayers.showMesh,
-    model.femViewportLayers.showPrimitives,
-    model.femViewportLayers.showQuantity,
-    model.meshShowArrows,
     model.objectViewMode,
-    model.selectedEntityId,
-    model.selectedObjectId,
+    selectedEntityId,
+    selectedObjectId,
     spatialPreview,
+    statusModel,
     viewport.effectiveViewMode,
     viewport.previewBusy,
     viewport.previewGrid,

@@ -43,6 +43,13 @@ import type {
   Viewport3DFdmModulePatch,
 } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
+import {
+  useFdmVisualizationSettings,
+  useVectorState,
+  useViewportRenderState,
+} from "@/features/visualization/hooks/useVizSlice";
+import { useSelectionState } from "@/features/selection";
+import { useVisualizationStore } from "@/features/visualization/store/useVisualizationStore";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 
 import type { FemColorField, RenderMode } from "@/components/preview/FemMeshView3D";
@@ -197,6 +204,10 @@ export const ViewportBar = memo(function ViewportBar() {
   const viewport = useViewport();
   const model = useModel();
   const transport = useTransport();
+  const viz = useViewportRenderState();
+  const vectorViz = useVectorState();
+  const fdmVisualizationSettings = useFdmVisualizationSettings();
+  const selection = useSelectionState();
   const { status } = useLiveStatus({
     enabled: FRONTEND_DIAGNOSTIC_FLAGS.shell.showViewportBar,
   });
@@ -239,19 +250,19 @@ export const ViewportBar = memo(function ViewportBar() {
     autoScale: viewport.requestedPreviewAutoScale,
     maxPoints: viewport.requestedPreviewMaxPoints,
     everyN: viewport.requestedPreviewEveryN,
-    meshRenderMode: toUnifiedMeshRenderMode(model.meshRenderMode),
-    meshOpacity: model.meshOpacity,
-    clipEnabled: model.meshClipEnabled,
-    clipAxis: model.meshClipAxis,
-    clipPosition: model.meshClipPos,
-    femLayers: model.femViewportLayers,
+    meshRenderMode: toUnifiedMeshRenderMode(viz.meshRenderMode),
+    meshOpacity: viz.meshOpacity,
+    clipEnabled: viz.meshClipEnabled,
+    clipAxis: viz.meshClipAxis,
+    clipPosition: viz.meshClipPos,
+    femLayers: viz.femViewportLayers,
   }), [
-    model.meshClipAxis,
-    model.meshClipEnabled,
-    model.meshClipPos,
-    model.meshOpacity,
-    model.meshRenderMode,
-    model.femViewportLayers,
+    viz.meshClipAxis,
+    viz.meshClipEnabled,
+    viz.meshClipPos,
+    viz.meshOpacity,
+    viz.meshRenderMode,
+    viz.femViewportLayers,
     status,
     viewport.component,
     viewport.effectiveViewMode,
@@ -361,10 +372,9 @@ export const ViewportBar = memo(function ViewportBar() {
       nextLayers.showQuantity !== currentLayers.showQuantity
     ) {
       if (nextLayers.showMagneticTexture !== currentLayers.showMagneticTexture) {
-        model.setViewportVisualizationState((previous) => ({
-          ...previous,
+        useVisualizationStore.getState().patch({
           femViewportLayers: nextLayers,
-        }));
+        });
       }
       if (
         nextLayers.showPrimitives !== currentLayers.showPrimitives ||
@@ -398,14 +408,14 @@ export const ViewportBar = memo(function ViewportBar() {
       component: toViewportFieldComponent(renderState.vectorComponent),
       selection: {
         objectId: model.viewportSelectedObjectId,
-        partId: model.selectedEntityId,
+        partId: selection.selectedEntityId,
       },
       clip: {
         enabled: Boolean(renderState.clipEnabled),
         axis: renderState.clipAxis ?? "z",
         position:
           typeof renderState.clipPosition === "number" ? renderState.clipPosition : 50,
-        invert: model.meshClipFlip,
+        invert: viz.meshClipFlip,
       },
       topologyFallbackRevision: model.femTopologyKey,
       femMeshFieldRevision: model.femMeshData?.fieldRevision,
@@ -413,12 +423,12 @@ export const ViewportBar = memo(function ViewportBar() {
       selectedVectorCount: transport.selectedVectors?.length ?? 0,
     },
     toolbar: {
-      clipFlip: model.meshClipFlip,
+      clipFlip: viz.meshClipFlip,
       interactionMode: toolbarState.rowB.interactionMode,
       snapEnabled: toolbarState.rowB.snapEnabled,
       objectViewMode: toolbarState.rowB.objectView,
       vectorsVisible: legacyFdmVectorsEnabled,
-      legendVisible: model.viewportLegendVisible,
+      legendVisible: viz.viewportLegendVisible,
       partExplorerVisible: toolbarState.rowB.partExplorerVisible,
       projection: toolbarState.rowB.projection,
       navProfile: toolbarState.rowB.navProfile,
@@ -428,15 +438,15 @@ export const ViewportBar = memo(function ViewportBar() {
       discretization: command.isFemBackend ? "fem" : "fdm",
       worldExtent: model.worldExtent,
       worldCenter: model.worldCenter,
-      selectedEntityFallbackId: model.selectedEntityId,
-      focusedEntityId: model.focusedEntityId,
-      selectedSidebarNodeId: model.selectedSidebarNodeId,
+      selectedEntityFallbackId: selection.selectedEntityId,
+      focusedEntityId: selection.focusedEntityId,
+      selectedSidebarNodeId: selection.selectedSidebarNodeId,
       loading: viewport.previewBusy,
       message: viewport.previewMessage,
       error: command.error,
       pendingMeshBuild: model.meshConfigDirty,
       sourceKind: status ? "live" : "none",
-      fdmSettings: model.fdmVisualizationSettings,
+      fdmSettings: fdmVisualizationSettings,
       fdmVectorsVisible: legacyFdmVectorsEnabled,
     },
   });
@@ -463,7 +473,7 @@ export const ViewportBar = memo(function ViewportBar() {
   const partExplorerOpen = rightInspectorOpen && rightInspectorTab === "selected-submeshes";
 
   const vectorsEnabled = supportsTopology
-    ? model.meshShowArrows
+    ? viz.meshShowArrows
     : (fdmModule?.vectorsVisible ?? legacyFdmVectorsEnabled);
   const activeTool: GeometryTool = supportsAuthoring
     ? builderTool
@@ -491,7 +501,7 @@ export const ViewportBar = memo(function ViewportBar() {
       return;
     }
     void displayControls.setVectorGlyphs(next);
-  }, [displayControls, model, supportsTopology, vectorsEnabled]);
+  }, [displayControls, supportsTopology, vectorsEnabled, viewport]);
 
   const patchFdmSettings = useCallback(
     (delta: Viewport3DFdmModulePatch) => {
@@ -499,23 +509,24 @@ export const ViewportBar = memo(function ViewportBar() {
       if (Object.keys(legacyDelta).length === 0) {
         return;
       }
-      model.setFdmVisualizationSettings((previous) => ({ ...previous, ...legacyDelta }));
+      const store = useVisualizationStore.getState();
+      store.setFdmVisualizationSettings({ ...store.fdmVisualizationSettings, ...legacyDelta });
     },
-    [model],
+    [],
   );
-  const fdmRenderMode = fdmModule?.renderMode ?? model.fdmVisualizationSettings.render_mode;
-  const fdmSampling = fdmModule?.sampling ?? model.fdmVisualizationSettings.sampling;
-  const fdmBrightness = fdmModule?.brightness ?? model.fdmVisualizationSettings.brightness;
-  const fdmVoxelOpacity = fdmModule?.voxelOpacity ?? model.fdmVisualizationSettings.voxel_opacity;
-  const fdmVoxelGap = fdmModule?.voxelGap ?? model.fdmVisualizationSettings.voxel_gap;
+  const fdmRenderMode = fdmModule?.renderMode ?? fdmVisualizationSettings.render_mode;
+  const fdmSampling = fdmModule?.sampling ?? fdmVisualizationSettings.sampling;
+  const fdmBrightness = fdmModule?.brightness ?? fdmVisualizationSettings.brightness;
+  const fdmVoxelOpacity = fdmModule?.voxelOpacity ?? fdmVisualizationSettings.voxel_opacity;
+  const fdmVoxelGap = fdmModule?.voxelGap ?? fdmVisualizationSettings.voxel_gap;
   const fdmVoxelThreshold =
-    fdmModule?.voxelThreshold ?? model.fdmVisualizationSettings.voxel_threshold;
+    fdmModule?.voxelThreshold ?? fdmVisualizationSettings.voxel_threshold;
   const fdmTopographyEnabled =
-    fdmModule?.topography.enabled ?? model.fdmVisualizationSettings.topo_enabled;
+    fdmModule?.topography.enabled ?? fdmVisualizationSettings.topo_enabled;
   const fdmTopographyAxis =
-    fdmModule?.topography.component ?? model.fdmVisualizationSettings.topo_component;
+    fdmModule?.topography.component ?? fdmVisualizationSettings.topo_component;
   const fdmTopographyAmplitude =
-    fdmModule?.topography.amplitude ?? model.fdmVisualizationSettings.topo_multiplier;
+    fdmModule?.topography.amplitude ?? fdmVisualizationSettings.topo_multiplier;
 
   const patchBuilderSnapSettings = useCallback(
     (
@@ -667,7 +678,7 @@ export const ViewportBar = memo(function ViewportBar() {
         quantityOptions={quantityOptions}
         quantityStatus={viewport.requestedPreviewQuantityDataStatus}
         onQuantityChange={viewport.requestDisplayQuantity}
-        clipFlip={model.meshClipFlip}
+        clipFlip={viz.meshClipFlip}
         onClipFlipChange={(flipped) => {
           void viewport.patchDisplay(visualizationPatchForClip({ flipped }));
         }}
@@ -960,7 +971,7 @@ export const ViewportBar = memo(function ViewportBar() {
                 Domain
                 <select
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                  value={model.femVectorDomainFilter}
+                  value={vectorViz.domainFilter}
                   onChange={(event) =>
                     void viewport.patchDisplay({
                       layers: {
@@ -981,7 +992,7 @@ export const ViewportBar = memo(function ViewportBar() {
                 Ferromagnet
                 <select
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                  value={model.femFerromagnetVisibilityMode}
+                  value={vectorViz.ferromagnetVisibilityMode}
                   onChange={(event) =>
                     void viewport.patchDisplay(
                       visualizationPatchForVectorStyle({
@@ -1002,7 +1013,7 @@ export const ViewportBar = memo(function ViewportBar() {
                   min={0}
                   max={1}
                   step={0.01}
-                  value={model.femArrowAlpha}
+                  value={vectorViz.alpha}
                   onChange={(event) =>
                     void viewport.patchDisplay(
                       visualizationPatchForVectorStyle({ alpha: Number(event.target.value) }),
@@ -1018,7 +1029,7 @@ export const ViewportBar = memo(function ViewportBar() {
                   min={0.2}
                   max={4}
                   step={0.05}
-                  value={model.femArrowLengthScale}
+                  value={vectorViz.lengthScale}
                   onChange={(event) =>
                     void viewport.patchDisplay(
                       visualizationPatchForVectorStyle({
@@ -1036,7 +1047,7 @@ export const ViewportBar = memo(function ViewportBar() {
                   min={0.2}
                   max={4}
                   step={0.05}
-                  value={model.femArrowThickness}
+                  value={vectorViz.thickness}
                   onChange={(event) =>
                     void viewport.patchDisplay(
                       visualizationPatchForVectorStyle({
@@ -1108,7 +1119,7 @@ export const ViewportBar = memo(function ViewportBar() {
                 Arrows
                 <select
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                  value={model.femArrowColorMode}
+                  value={vectorViz.colorMode}
                   onChange={(event) =>
                     void viewport.patchDisplay(
                       visualizationPatchForVectorStyle({
@@ -1125,13 +1136,13 @@ export const ViewportBar = memo(function ViewportBar() {
                   <option value="monochrome">monochrome</option>
                 </select>
               </label>
-              {model.femArrowColorMode === "monochrome" ? (
+              {vectorViz.colorMode === "monochrome" ? (
                 <label className={ROW_B_HINT_CLASS}>
                   Monochrome
                   <input
                     type="color"
                     className="ml-1 h-7 w-10 rounded border border-border/35 bg-background/45 p-0.5 align-middle"
-                    value={model.femArrowMonoColor}
+                    value={vectorViz.monoColor}
                     onChange={(event) =>
                       void viewport.patchDisplay(
                         visualizationPatchForVectorStyle({ monoColor: event.target.value }),
@@ -1146,7 +1157,7 @@ export const ViewportBar = memo(function ViewportBar() {
               Voxel color mode
               <select
                 className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                value={fdmModule?.voxelColorMode ?? model.fdmVisualizationSettings.voxel_color_mode}
+                value={fdmModule?.voxelColorMode ?? fdmVisualizationSettings.voxel_color_mode}
                 onChange={(event) =>
                   patchFdmSettings({
                     voxelColorMode: event.target.value as "orientation" | "x" | "y" | "z",
@@ -1178,7 +1189,7 @@ export const ViewportBar = memo(function ViewportBar() {
                 Quality
                 <select
                   className="ml-1 h-7 rounded border border-border/35 bg-background/45 px-1.5 text-[0.72rem]"
-                  value={fdmModule?.quality ?? model.fdmVisualizationSettings.quality}
+                  value={fdmModule?.quality ?? fdmVisualizationSettings.quality}
                   onChange={(event) =>
                     patchFdmSettings({
                       quality: event.target.value as "low" | "high" | "ultra",
@@ -1334,10 +1345,10 @@ export const ViewportBar = memo(function ViewportBar() {
             <input
               type="checkbox"
               className="ml-1 align-middle"
-              checked={model.viewportLegendVisible}
+              checked={viz.viewportLegendVisible}
               onChange={(event) => {
                 const next = event.target.checked;
-                model.setViewportLegendVisible(next);
+                useVisualizationStore.getState().setViewportLegendVisible(next);
                 dispatchToolbar({ type: "setLegendVisible", value: next });
               }}
               disabled={!supportsTopology}
@@ -1420,7 +1431,7 @@ export const ViewportBar = memo(function ViewportBar() {
             Grid: {viewport.previewGrid[0]} × {viewport.previewGrid[1]} × {viewport.previewGrid[2]}
           </div>
           <div>
-            Render mode: {supportsTopology ? model.meshRenderMode : (fdmModule?.renderMode ?? fdmRenderMode)}
+            Render mode: {supportsTopology ? viz.meshRenderMode : (fdmModule?.renderMode ?? fdmRenderMode)}
           </div>
           <div>Objects visible: {model.objectOverlays.length}</div>
           <div>Builder active: {builderEnabled ? "yes" : "no"}</div>

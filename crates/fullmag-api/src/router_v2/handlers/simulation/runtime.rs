@@ -242,7 +242,7 @@ pub async fn get_solver_energies_current(
         latest_energy_row(snapshot).ok_or_else(|| ApiError::not_found("no solver energy data"))?;
 
     Ok(Json(SolverEnergyCurrentResource {
-        revision: snapshot.scalar_rows.len() as u64,
+        revision: snapshot.scalar_revision,
         step: latest_row.step,
         time_seconds: latest_row.time,
         exchange: latest_row.e_ex,
@@ -283,7 +283,7 @@ pub async fn get_solver_energies_history(
     };
 
     Ok(Json(SolverEnergyHistoryResource {
-        revision: total_rows as u64,
+        revision: snapshot.scalar_revision,
         total_rows: total_rows as u64,
         returned_rows: rows.len() as u64,
         rows: rows

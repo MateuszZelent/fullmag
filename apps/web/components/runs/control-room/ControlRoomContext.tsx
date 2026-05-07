@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { VisualizationStateResource } from "@/src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
 import { useSceneDocument } from "@/src/hooks/resources/useSceneDocument";
@@ -18,9 +19,48 @@ import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelecti
 import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
-import { useVisualizationStore } from "../../../features/visualization/store/useVisualizationStore";
+import {
+  useFdmVisualizationSettings,
+  useViewportRenderState,
+} from "../../../features/visualization/hooks/useVizSlice";
+import { useVisualizationStore, selectEffectiveViewportVizState } from "../../../features/visualization/store/useVisualizationStore";
 import { useSelectionStore } from "../../../features/selection/store/useSelectionStore";
-import { useMeshConfigStore } from "../../../features/mesh-config/store/useMeshConfigStore";
+import {
+  selectLastBuiltMeshConfigSignature,
+  selectMeshGenerating,
+  selectMeshOptionsState,
+  selectMeshSelection,
+  useMeshConfigStore,
+} from "../../../features/mesh-config/store/useMeshConfigStore";
+import {
+  selectModelBuilderGraph,
+  selectMeshPerGeometryPayload,
+  selectRemoteSceneDocument,
+  selectSceneDocumentDraft,
+  selectSceneObjects,
+  selectScriptBuilderCurrentModules,
+  selectScriptBuilderDemagRealization,
+  selectScriptBuilderExcitationAnalysis,
+  selectScriptBuilderGeometries,
+  selectScriptBuilderUniverse,
+  selectSolverPlan,
+  selectSolverSettings,
+  selectStudyPipeline,
+  selectStudyStages,
+  useDocumentStore,
+} from "../../../features/document/store/useDocumentStore";
+import {
+  selectCommandErrorMessage,
+  selectCommandPostInFlight,
+  selectPreviewMessage,
+  selectPreviewPostInFlight,
+  selectRunUntilInput,
+  selectScriptSyncBusy,
+  selectScriptSyncMessage,
+  selectStateIoBusy,
+  selectStateIoMessage,
+  useCommandStore,
+} from "../../../features/command/store/useCommandStore";
 import {
   DEFAULT_FEM_VIEWPORT_LAYER_STATE,
   type FemViewportLayerState,
@@ -30,9 +70,9 @@ import { useBuilderAutoSync } from "./hooks/useBuilderAutoSync";
 import { useDomainLayout } from "./hooks/useDomainLayout";
 import { useFemMeshDerived } from "./hooks/useFemMeshDerived";
 import { useMeshCommandPipeline } from "./hooks/useMeshCommandPipeline";
-import { useViewportVisualizationState } from "./hooks/useViewportVisualizationState";
 import { useVisualizationPresets } from "./hooks/useVisualizationPresets";
 import { useWorkspaceActions } from "./hooks/useWorkspaceActions";
+import { useSessionHydration } from "../../../features/session-orchestrator/hooks/useSessionHydration";
 import {
   DEFAULT_AIR_MESH_OPACITY,
   DEFAULT_FDM_VISUALIZATION_SETTINGS,
@@ -42,10 +82,6 @@ import {
   EMPTY_SCALAR_ROWS,
   loadLocalActiveVisualizationRef,
   loadLocalVisualizationPresets,
-  normalizePersistedMeshEntityViewState,
-  normalizePersistedObjectViewMode,
-  normalizeVisualizationPresetRef,
-  sameMeshEntityViewStateMap,
 } from "./controlRoomUtils";
 import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import type {
@@ -68,32 +104,19 @@ import type {
   ScriptBuilderUniverseState,
   StudyPipelineDocumentState,
 } from "../../../lib/session/types";
-import {
-  buildModelBuilderGraphV2,
-  selectModelBuilderCurrentModules,
-  selectModelBuilderExcitationAnalysis,
-  selectModelBuilderGeometries,
-  selectModelBuilderStudyPipeline,
-  selectModelBuilderStages,
-  selectModelBuilderUniverse,
-  serializeModelBuilderGraphV2,
-} from "../../../lib/session/modelBuilderGraph";
+import { serializeModelBuilderGraphV2 } from "../../../lib/session/modelBuilderGraph";
 import {
   buildSceneDocumentFromScriptBuilder,
-  buildScriptBuilderFromSceneDocument,
 } from "../../../lib/session/sceneDocument";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import {
   isFemDiscretization,
 } from "@/src/domain/capabilities";
-import { DEFAULT_SOLVER_SETTINGS } from "../../panels/SolverSettingsPanel";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
-import { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
-import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
+import type { MeshQualityData } from "@/lib/mesh/options";
 import type {
   ClipAxis,
   FemMeshData,
-  MeshSelectionSnapshot,
   RenderMode,
 } from "@/components/preview/FemMeshView3D";
 import {
@@ -111,9 +134,7 @@ import {
   buildScriptBuilderSignature,
   buildScriptBuilderUpdatePayload,
   extractSolverPlan,
-  meshOptionsFromBuilder,
   meshOptionsToBuilder,
-  solverSettingsFromBuilder,
   solverSettingsToBuilder,
 } from "./helpers";
 import {
@@ -207,8 +228,6 @@ const ENABLE_VIEWPORT_DATA_DEBUG_LOGS =
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production";
 
-const AIRBOX_DISABLED_BY_DEFAULT =
-  FRONTEND_DIAGNOSTIC_FLAGS.femViewport.airboxDisabledByDefault;
 
 /* ── Provider ── */
 export function ControlRoomProvider({ children }: { children: ReactNode }) {
@@ -285,92 +304,26 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [femDockTab, setFemDockTab] = useState<FemDockTab>("mesh");
   // ── Viewport chrome: owned by useVisualizationStore (Phase 5.1) ──
-  const femTextureDownsampleCells = useVisualizationStore((s) => s.femTextureDownsampleCells);
-  const setFemTextureDownsampleCells: Dispatch<SetStateAction<number>> = useCallback(
-    (action) => {
-      const store = useVisualizationStore.getState();
-      const next = typeof action === "function" ? action(store.femTextureDownsampleCells) : action;
-      store.setFemTextureDownsampleCells(next);
-    }, [],
+  const viz = useViewportRenderState();
+  const fdmVisualizationSettings = useFdmVisualizationSettings();
+  const femViewportLayers = viz.femViewportLayers;
+  const setFdmVisualizationSettings = useVisualizationStore(
+    (s) => s.setFdmVisualizationSettings,
   );
-  const [
-    viewportVisualizationState,
-    setViewportVisualizationState,
-  ] = useViewportVisualizationState({
-    meshRenderMode: "surface",
-    meshOpacity: 100,
-    meshClipEnabled: false,
-    meshClipAxis: "x",
-    meshClipPos: 50,
-    meshClipFlip: false,
-    meshShowArrows: false,
-    femVectorGlyphBudget: 1_200,
-    femArrowColorMode: "orientation",
-    femArrowMonoColor: "#00c2ff",
-    femArrowAlpha: 1,
-    femArrowLengthScale: 1,
-    femArrowThickness: 1,
-    femVectorDomainFilter: "auto",
-    femFerromagnetVisibilityMode: "hide",
-    femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
-    airMeshVisible: false,
-    airMeshOpacity: DEFAULT_AIR_MESH_OPACITY,
-  });
-  const {
-    meshRenderMode,
-    meshOpacity,
-    meshClipEnabled,
-    meshClipAxis,
-    meshClipPos,
-    meshClipFlip,
-    meshShowArrows,
-    femVectorGlyphBudget,
-    femArrowColorMode,
-    femArrowMonoColor,
-    femArrowAlpha,
-    femArrowLengthScale,
-    femArrowThickness,
-    femVectorDomainFilter,
-    femFerromagnetVisibilityMode,
-    femViewportLayers,
-    airMeshVisible,
-    airMeshOpacity,
-  } = viewportVisualizationState;
-  // ── Viewport chrome: owned by useVisualizationStore (Phase 5.1) ──
-  const viewportLegendVisible = useVisualizationStore((s) => s.viewportLegendVisible);
-  const setViewportLegendVisible: Dispatch<SetStateAction<boolean>> = useCallback(
-    (action) => {
-      const store = useVisualizationStore.getState();
-      const next = typeof action === "function" ? action(store.viewportLegendVisible) : action;
-      store.setViewportLegendVisible(next);
-    }, [],
-  );
-  const viewportAxesScope = useVisualizationStore((s) => s.viewportAxesScope);
-  const setViewportAxesScope: Dispatch<SetStateAction<"universe" | "object">> = useCallback(
-    (action) => {
-      const store = useVisualizationStore.getState();
-      const next = typeof action === "function" ? action(store.viewportAxesScope) : action;
-      store.setViewportAxesScope(next);
-    }, [],
-  );
-  const universeWireframeVisible = useVisualizationStore((s) => s.universeWireframeVisible);
-  const setUniverseWireframeVisible: Dispatch<SetStateAction<boolean>> = useCallback(
-    (action) => {
-      const store = useVisualizationStore.getState();
-      const next = typeof action === "function" ? action(store.universeWireframeVisible) : action;
-      store.setUniverseWireframeVisible(next);
-    }, [],
-  );
-  const fdmVisualizationSettings = useVisualizationStore((s) => s.fdmVisualizationSettings);
-  const setFdmVisualizationSettings: Dispatch<SetStateAction<VisualizationPresetFdmState>> = useCallback(
-    (action) => {
-      const store = useVisualizationStore.getState();
-      const next = typeof action === "function" ? action(store.fdmVisualizationSettings) : action;
-      store.setFdmVisualizationSettings(next);
-    }, [],
-  );
-  const [runUntilInput, setRunUntilInput] = useState("1e-12");
-  const [selectedSidebarNodeId, setSelectedSidebarNodeId] = useState<string | null>(null);
+  const runUntilInput = useCommandStore(selectRunUntilInput);
+  const setRunUntilInput = useCommandStore((s) => s.setRunUntilInput);
+  const selectedSidebarNodeId = useSelectionStore((s) => s.selectedSidebarNodeId);
+  const selectedObjectId = useSelectionStore((s) => s.selectedObjectId);
+  const selectedEntityId = useSelectionStore((s) => s.selectedEntityId);
+  const focusedEntityId = useSelectionStore((s) => s.focusedEntityId);
+  const viewportScope = useSelectionStore((s) => s.viewportScope);
+  const focusObjectRequest = useSelectionStore((s) => s.focusObjectRequest);
+  const setSelectedSidebarNodeId = useSelectionStore((s) => s.setSelectedSidebarNodeId);
+  const setSelectedObjectId = useSelectionStore((s) => s.setSelectedObjectId);
+  const setSelectedEntityId = useSelectionStore((s) => s.setSelectedEntityId);
+  const setFocusedEntityId = useSelectionStore((s) => s.setFocusedEntityId);
+  const setViewportScope = useSelectionStore((s) => s.setViewportScope);
+  const setFocusObjectRequest = useSelectionStore((s) => s.setFocusObjectRequest);
   const {
     activeResultWorkspaceId,
     addResultWorkspaceEntry,
@@ -386,9 +339,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useAnalyzeWorkspaceState({
     activateAnalyzeView: () => setViewMode("Analyze"),
   });
-  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
-  const [viewportScope, setViewportScope] = useState<ViewportScope>("universe");
-  const [focusObjectRequest, setFocusObjectRequest] = useState<FocusObjectRequest | null>(null);
   const [cameraFitRequestSeed, setCameraFitRequestSeed] = useState(0);
   const requestViewportCameraFit = useCallback(() => {
     setCameraFitRequestSeed((seed) => seed + 1);
@@ -398,21 +348,32 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const [meshEntityViewState, setMeshEntityViewState] = useState<MeshEntityViewStateMap>({});
   const [visibleSubmeshSnapshot, setVisibleSubmeshSnapshot] =
     useState<VisibleSubmeshSnapshot | null>(null);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-  const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null);
-  const [commandPostInFlight, setCommandPostInFlight] = useState(false);
-  const [commandErrorMessage, setCommandErrorMessage] = useState<string | null>(null);
-  const [scriptSyncBusy, setScriptSyncBusy] = useState(false);
-  const [scriptSyncMessage, setScriptSyncMessage] = useState<string | null>(null);
-  const [stateIoBusy, setStateIoBusy] = useState(false);
-  const [stateIoMessage, setStateIoMessage] = useState<string | null>(null);
-  const [previewPostInFlight, setPreviewPostInFlight] = useState(false);
-  const [previewMessage, setPreviewMessage] = useState<string | null>(null);
+  const commandPostInFlight = useCommandStore(selectCommandPostInFlight);
+  const commandErrorMessage = useCommandStore(selectCommandErrorMessage);
+  const scriptSyncBusy = useCommandStore(selectScriptSyncBusy);
+  const scriptSyncMessage = useCommandStore(selectScriptSyncMessage);
+  const stateIoBusy = useCommandStore(selectStateIoBusy);
+  const stateIoMessage = useCommandStore(selectStateIoMessage);
+  const previewPostInFlight = useCommandStore(selectPreviewPostInFlight);
+  const previewMessage = useCommandStore(selectPreviewMessage);
+  const setCommandPostInFlight = useCommandStore((s) => s.setCommandPostInFlight);
+  const setCommandErrorMessage = useCommandStore((s) => s.setCommandErrorMessage);
+  const setScriptSyncBusy = useCommandStore((s) => s.setScriptSyncBusy);
+  const setScriptSyncMessage = useCommandStore((s) => s.setScriptSyncMessage);
+  const setStateIoBusy = useCommandStore((s) => s.setStateIoBusy);
+  const setStateIoMessage = useCommandStore((s) => s.setStateIoMessage);
+  const setPreviewPostInFlight = useCommandStore((s) => s.setPreviewPostInFlight);
+  const setPreviewMessage = useCommandStore((s) => s.setPreviewMessage);
   const [optimisticDisplaySelection, setOptimisticDisplaySelection] =
     useState<DisplaySelection | null>(null);
-  const [meshOptionsState, setMeshOptionsState] = useState<MeshOptionsState>(DEFAULT_MESH_OPTIONS);
-  const [meshGenerating, setMeshGenerating] = useState(false);
-  const [lastBuiltMeshConfigSignature, setLastBuiltMeshConfigSignature] = useState<string | null>(null);
+  const meshOptionsState = useMeshConfigStore(selectMeshOptionsState);
+  const meshGenerating = useMeshConfigStore(selectMeshGenerating);
+  const lastBuiltMeshConfigSignature = useMeshConfigStore(selectLastBuiltMeshConfigSignature);
+  const setMeshOptionsState = useMeshConfigStore((s) => s.setMeshOptions);
+  const setMeshGenerating = useMeshConfigStore((s) => s.setMeshGenerating);
+  const setLastBuiltMeshConfigSignature = useMeshConfigStore(
+    (s) => s.setLastBuiltMeshConfigSignature,
+  );
   const [frontendTraceLog, setFrontendTraceLog] = useState<EngineLogEntry[]>([]);
   const femTopologyKeyRef = useRef<string | null>(null);
   const femMeshDataRef = useRef<FemMeshData | null>(null);
@@ -426,19 +387,25 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const pendingMeshConfigSignatureRef = useRef<string | null>(null);
   const lastLoggedCommandStatusRef = useRef<string | null>(null);
   const lastAppliedVisualizationPresetRef = useRef<string | null>(null);
-  const [solverSettingsState, setSolverSettingsState] =
-    useState<SolverSettingsState>(DEFAULT_SOLVER_SETTINGS);
-  const [modelBuilderGraph, setModelBuilderGraph] = useState<ModelBuilderGraphV2 | null>(null);
-  const [sceneDocumentDraft, setSceneDocumentDraft] = useState<SceneDocument | null>(null);
+  const solverSettingsState = useDocumentStore(selectSolverSettings);
+  const solverPlan = useDocumentStore(selectSolverPlan);
+  const modelBuilderGraph = useDocumentStore(selectModelBuilderGraph);
+  const sceneDocumentDraft = useDocumentStore(selectSceneDocumentDraft);
+  const remoteSceneDocument = useDocumentStore(selectRemoteSceneDocument);
+  const sceneObjects = useDocumentStore(selectSceneObjects);
+  const meshPerGeometryPayload = useDocumentStore(selectMeshPerGeometryPayload);
+  const setSolverSettingsState = useDocumentStore((s) => s.setSolverSettings);
+  const setSolverPlan = useDocumentStore((s) => s.setSolverPlan);
+  const setModelBuilderGraph = useDocumentStore((s) => s.setModelBuilderGraph);
+  const setSceneDocumentDraft = useDocumentStore((s) => s.setSceneDocumentDraft);
+  const setRemoteSceneDocument = useDocumentStore((s) => s.setRemoteSceneDocument);
   const [localVisualizationPresets, setLocalVisualizationPresets] = useState<VisualizationPreset[]>(
     () => loadLocalVisualizationPresets(),
   );
   const [activeVisualizationPresetRef, setActiveVisualizationPresetRef] =
     useState<VisualizationPresetRef | null>(() => loadLocalActiveVisualizationRef());
-  const [meshSelection, setMeshSelection] = useState<MeshSelectionSnapshot>({
-    selectedFaceIndices: [],
-    primaryFaceIndex: null,
-  });
+  const meshSelection = useMeshConfigStore(selectMeshSelection);
+  const setMeshSelection = useMeshConfigStore((s) => s.setMeshSelection);
   const stickyViewportObjectIdRef = useRef<string | null>(null);
   const lastFieldDataRevisionRef = useRef<string | null>(null);
   const fieldDataTimestampRef = useRef<number | null>(null);
@@ -467,10 +434,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     );
     setPlane((previous) => (previous === nextPlane ? previous : nextPlane));
     setSliceIndex((previous) => (previous === nextSliceIndex ? previous : nextSliceIndex));
-    setViewportVisualizationState((previous) =>
-      projectResolvedRenderPlanToViewportState(plan, previous),
-    );
-  }, [femViewportLayers, setViewportVisualizationState]);
+    useVisualizationStore
+      .getState()
+      .applyFromRenderPlan(
+        projectResolvedRenderPlanToViewportState(plan, useVisualizationStore.getState()),
+      );
+  }, [femViewportLayers]);
 
   const resolvedRenderPlan = useMemo(
     () =>
@@ -479,49 +448,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         : null,
     [femViewportLayers, visualizationStateResource],
   );
-  const effectiveViewportVisualizationState = useMemo(
-    () => projectResolvedRenderPlanToViewportState(
-      resolvedRenderPlan,
-      viewportVisualizationState,
-    ),
-    [resolvedRenderPlan, viewportVisualizationState],
+
+  // Push the render plan into the viz store so hooks can derive effective state.
+  useEffect(() => {
+    useVisualizationStore.getState().setResolvedRenderPlan(resolvedRenderPlan);
+  }, [resolvedRenderPlan]);
+
+  const effectiveViewportVisualizationState = useVisualizationStore(
+    useShallow(selectEffectiveViewportVizState),
   );
-
-  /* ── Sync bridge → useVisualizationStore (Phase 2.1 — core viz fields only) ── */
-  const vizStoreSetCore = useVisualizationStore.getState().setCore;
-  useEffect(() => {
-    vizStoreSetCore(effectiveViewportVisualizationState);
-  }, [effectiveViewportVisualizationState, vizStoreSetCore]);
-  // Note: viewportLegendVisible, viewportAxesScope, universeWireframeVisible,
-  // fdmVisualizationSettings, femTextureDownsampleCells are now directly owned
-  // by useVisualizationStore (Phase 5.1) — no sync bridge needed for those.
-
-  /* ── Sync bridge → useSelectionStore (Phase 2.2 migration) ── */
-  const selectionSync = useSelectionStore.getState().syncFromContext;
-  useEffect(() => {
-    selectionSync({
-      selectedSidebarNodeId,
-      selectedObjectId,
-      selectedEntityId,
-      focusedEntityId,
-      viewportScope,
-      focusObjectRequest,
-    });
-  }, [
-    selectedSidebarNodeId, selectedObjectId, selectedEntityId,
-    focusedEntityId, viewportScope, focusObjectRequest, selectionSync,
-  ]);
-
-  /* ── Sync bridge → useMeshConfigStore (Phase 2.3 migration) ── */
-  const meshConfigSync = useMeshConfigStore.getState().syncFromContext;
-  useEffect(() => {
-    meshConfigSync({
-      meshOptionsState,
-      meshGenerating,
-      lastBuiltMeshConfigSignature,
-      meshSelection,
-    });
-  }, [meshOptionsState, meshGenerating, lastBuiltMeshConfigSignature, meshSelection, meshConfigSync]);
 
   useEffect(() => {
     if (!visualizationStateResource) {
@@ -656,7 +591,9 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     liveApi,
     streamFemMesh,
   });
-  const remoteSceneDocument = resourceSceneDocument;
+  useEffect(() => {
+    setRemoteSceneDocument(resourceSceneDocument);
+  }, [resourceSceneDocument, setRemoteSceneDocument]);
   const meshConfigSignature = useMemo(
     () => buildMeshConfigurationSignature(sceneDocumentDraft ?? remoteSceneDocument),
     [remoteSceneDocument, sceneDocumentDraft],
@@ -665,33 +602,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const scriptBuilder = runtimeScriptBuilder;
   const remoteModelBuilderGraph = null as ModelBuilderGraphV2 | null;
   const scriptInitialState = scriptBuilder?.initial_state ?? null;
-  const studyStages = useMemo(
-    () => selectModelBuilderStages(modelBuilderGraph),
-    [modelBuilderGraph],
-  );
-  const studyPipeline = useMemo(
-    () => selectModelBuilderStudyPipeline(modelBuilderGraph),
-    [modelBuilderGraph],
-  );
-  const scriptBuilderDemagRealization = useMemo(
-    () => modelBuilderGraph?.study.demag_realization ?? null,
-    [modelBuilderGraph],
-  );
-  const scriptBuilderUniverse = useMemo(
-    () => selectModelBuilderUniverse(modelBuilderGraph),
-    [modelBuilderGraph],
-  );
-  const scriptBuilderGeometries = useMemo(
-    () => selectModelBuilderGeometries(modelBuilderGraph),
-    [modelBuilderGraph],
-  );
-  const scriptBuilderCurrentModules = useMemo(
-    () => selectModelBuilderCurrentModules(modelBuilderGraph),
-    [modelBuilderGraph],
-  );
-  const scriptBuilderExcitationAnalysis = useMemo(
-    () => selectModelBuilderExcitationAnalysis(modelBuilderGraph),
-    [modelBuilderGraph],
+  const studyStages = useDocumentStore(selectStudyStages);
+  const studyPipeline = useDocumentStore(selectStudyPipeline);
+  const scriptBuilderDemagRealization = useDocumentStore(selectScriptBuilderDemagRealization);
+  const scriptBuilderUniverse = useDocumentStore(selectScriptBuilderUniverse);
+  const scriptBuilderGeometries = useDocumentStore(selectScriptBuilderGeometries);
+  const scriptBuilderCurrentModules = useDocumentStore(selectScriptBuilderCurrentModules);
+  const scriptBuilderExcitationAnalysis = useDocumentStore(
+    selectScriptBuilderExcitationAnalysis,
   );
   const runtimeStatus = runtimeRuntimeStatus;
   const commandStatus = runtimeCommandStatus;
@@ -748,10 +666,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     syncWorkspaceTabsFromArtifacts(
-      "analyze",
+      workspaceStage,
       artifactsArr.map((artifact) => artifact.path),
     );
-  }, [artifactsArr, syncWorkspaceTabsFromArtifacts]);
+  }, [artifactsArr, syncWorkspaceTabsFromArtifacts, workspaceStage]);
 
   const modelBuilderDefaults = useMemo(
     () => ({
@@ -780,8 +698,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setFocusObjectRequest(null);
     setObjectViewMode("context");
     setActiveTransformScope(null);
-    setViewportVisualizationState((previous) => ({
-      ...previous,
+    useVisualizationStore.getState().patch({
       airMeshVisible: false,
       airMeshOpacity: DEFAULT_AIR_MESH_OPACITY,
       femArrowColorMode: "orientation",
@@ -789,7 +706,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       femArrowAlpha: 1,
       femArrowLengthScale: 1,
       femArrowThickness: 1,
-    }));
+    });
     setMeshEntityViewState({});
     setSelectedEntityId(null);
     setFocusedEntityId(null);
@@ -944,7 +861,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const sessionStartedAt = session?.started_at_unix_ms ?? 0;
   const sessionFinishedAt = session?.finished_at_unix_ms ?? 0;
 
-  const solverPlan = useMemo(() => extractSolverPlan(metadata, session), [metadata, session]);
+  const extractedSolverPlan = useMemo(() => extractSolverPlan(metadata, session), [metadata, session]);
+  useEffect(() => {
+    setSolverPlan(extractedSolverPlan);
+  }, [extractedSolverPlan, setSolverPlan]);
   const quantityDescriptorById = useMemo(
     () => new Map(quantities.map((quantity) => [quantity.id, quantity] as const)),
     [quantities],
@@ -1004,13 +924,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setScriptBuilderCurrentModules,
     setScriptBuilderExcitationAnalysis,
     setSceneDocument,
-    sceneObjects,
-    meshPerGeometryPayload,
   } = useModelBuilderActions({
     modelBuilderDefaults,
     sceneDocumentDraft,
     localBuilderDraft,
-    remoteSceneDocument,
     patchStudyRuntime: liveApi.patchStudyRuntime,
     setModelBuilderGraph,
     setSceneDocumentDraft,
@@ -1123,142 +1040,30 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   /* ── Builder auto-sync (extracted hook) ── */
   const builderAutoSync = useBuilderAutoSync();
 
-  /* Hydrate solver-settings panel from the actual backend plan on first load. */
-  const [solverSettingsHydrated, setSolverSettingsHydrated] = useState(false);
-  useEffect(() => {
-    builderAutoSync.resetAutoSync();
-    pendingMeshConfigSignatureRef.current = null;
-    setLastBuiltMeshConfigSignature(null);
-    setSolverSettingsHydrated(false);
-    setModelBuilderGraph(null);
-    setSceneDocumentDraft(null);
-  }, [workspaceHydrationKey]);
-
-  useEffect(() => {
-    if (solverSettingsHydrated || !solverPlan || scriptBuilder || remoteModelBuilderGraph) return;
-    setSolverSettingsState((prev) => ({
-      ...prev,
-      integrator: solverPlan.integrator ?? prev.integrator,
-      fixedTimestep:
-        solverPlan.fixedTimestep != null ? String(solverPlan.fixedTimestep) : prev.fixedTimestep,
-      relaxAlgorithm: solverPlan.relaxation?.algorithm ?? prev.relaxAlgorithm,
-      torqueTolerance:
-        solverPlan.relaxation?.torqueTolerance != null
-          ? String(solverPlan.relaxation.torqueTolerance)
-          : prev.torqueTolerance,
-      energyTolerance:
-        solverPlan.relaxation?.energyTolerance != null
-          ? String(solverPlan.relaxation.energyTolerance)
-          : prev.energyTolerance,
-      maxRelaxSteps:
-        solverPlan.relaxation?.maxSteps != null
-          ? String(solverPlan.relaxation.maxSteps)
-          : prev.maxRelaxSteps,
-    }));
-    setSolverSettingsHydrated(true);
-  }, [remoteModelBuilderGraph, scriptBuilder, solverPlan, solverSettingsHydrated]);
-
-  useEffect(() => {
-    const incomingGraph =
-      remoteModelBuilderGraph ??
-      (scriptBuilder
-        ? buildModelBuilderGraphV2(scriptBuilder)
-        : (remoteSceneDocument
-            ? buildModelBuilderGraphV2(buildScriptBuilderFromSceneDocument(remoteSceneDocument))
-            : null));
-    if (!workspaceHydrationKey || !incomingGraph) {
-      return;
-    }
-    if (builderAutoSync.isHydrated(workspaceHydrationKey)) {
-      return;
-    }
-    setSolverSettingsState((prev) => ({
-      ...prev,
-      ...solverSettingsFromBuilder(incomingGraph.study.solver),
-    }));
-    setMeshOptionsState((prev) => ({
-      ...prev,
-      ...meshOptionsFromBuilder(incomingGraph.study.mesh_defaults),
-    }));
-    setModelBuilderGraph(incomingGraph);
-    const hydratedScene =
-      remoteSceneDocument ??
-      buildSceneDocumentFromScriptBuilder({
-        revision: incomingGraph.revision,
-        initial_state: incomingGraph.study.initial_state,
-        ...serializeModelBuilderGraphV2(incomingGraph),
-      });
-    hydratedScene.study.requested_backend =
-      remoteSceneDocument?.study.requested_backend ?? incomingGraph.study.requested_backend;
-    hydratedScene.study.requested_device =
-      remoteSceneDocument?.study.requested_device ?? incomingGraph.study.requested_device;
-    hydratedScene.study.requested_precision =
-      remoteSceneDocument?.study.requested_precision ?? incomingGraph.study.requested_precision;
-    hydratedScene.study.requested_mode =
-      remoteSceneDocument?.study.requested_mode ?? incomingGraph.study.requested_mode;
-    setSceneDocumentDraft(hydratedScene);
-    setLastBuiltMeshConfigSignature(buildMeshConfigurationSignature(hydratedScene));
-    pendingMeshConfigSignatureRef.current = null;
-    setSelectedObjectId(
-      workspaceSelection?.selected_object_id ?? hydratedScene.editor.selected_object_id,
-    );
-    setObjectViewMode(normalizePersistedObjectViewMode(hydratedScene.editor.object_view_mode));
-    setViewportVisualizationState((previous) => ({
-      ...previous,
-      femVectorDomainFilter: hydratedScene.editor.vector_domain_filter ?? "auto",
-      femFerromagnetVisibilityMode:
-        hydratedScene.editor.ferromagnet_visibility_mode ?? "hide",
-      airMeshVisible: AIRBOX_DISABLED_BY_DEFAULT
-        ? false
-        : (hydratedScene.editor.air_mesh_visible ?? false),
-      airMeshOpacity:
-        typeof hydratedScene.editor.air_mesh_opacity === "number" &&
-        Number.isFinite(hydratedScene.editor.air_mesh_opacity)
-          ? hydratedScene.editor.air_mesh_opacity
-          : DEFAULT_AIR_MESH_OPACITY,
-    }));
-    setMeshEntityViewState((previous) => {
-      const next = normalizePersistedMeshEntityViewState(
-        hydratedScene.editor.mesh_entity_view_state,
-      );
-      return sameMeshEntityViewStateMap(previous, next) ? previous : next;
-    });
-    setSelectedEntityId(
-      workspaceSelection?.selected_entity_id ?? hydratedScene.editor.selected_entity_id,
-    );
-    setFocusedEntityId(hydratedScene.editor.focused_entity_id);
-    setActiveVisualizationPresetRef(
-      normalizeVisualizationPresetRef(hydratedScene.editor.active_visualization_preset_ref),
-    );
-    const firstRunStage = incomingGraph.study.stages.find(
-      (stage) => stage.kind === "run" && stage.until_seconds.trim().length > 0,
-    );
-    if (firstRunStage) {
-      setRunUntilInput(firstRunStage.until_seconds);
-    }
-    builderAutoSync.markHydrated(workspaceHydrationKey);
-    builderAutoSync.gateAutoSync(2500);
-    builderAutoSync.bumpGateVersion();
-    builderAutoSync.recordPushSignature(buildScriptBuilderSignature(incomingGraph, {
-      solverSettings,
-      meshOptions,
-      universe: incomingGraph.universe.value,
-      demagRealization: incomingGraph.study.demag_realization,
-      stages: incomingGraph.study.stages,
-      geometries: incomingGraph.objects.items.map((objectNode) => objectNode.geometry),
-      currentModules: incomingGraph.current_modules.modules,
-      excitationAnalysis: incomingGraph.current_modules.excitation_analysis,
-    }));
-    setSolverSettingsHydrated(true);
-  }, [
+  useSessionHydration({
+    builderAutoSync,
     meshOptions,
-    remoteSceneDocument,
+    pendingMeshConfigSignatureRef,
     remoteModelBuilderGraph,
+    remoteSceneDocument,
     scriptBuilder,
+    solverPlan,
     solverSettings,
-    workspaceSelection,
     workspaceHydrationKey,
-  ]);
+    workspaceSelection,
+    setActiveVisualizationPresetRef,
+    setFocusedEntityId,
+    setLastBuiltMeshConfigSignature,
+    setMeshEntityViewState,
+    setMeshOptionsState,
+    setModelBuilderGraph,
+    setObjectViewMode,
+    setRunUntilInput,
+    setSceneDocumentDraft,
+    setSelectedEntityId,
+    setSelectedObjectId,
+    setSolverSettingsState,
+  });
 
   useWorkspaceSelectionPersistence({
     lastPersistedWorkspaceSelectionRef,
@@ -1976,14 +1781,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshEntityViewState(result.meshEntityViewState);
     if (result.resetGlobals) {
       void patchDisplay(visualizationPatchForViewportDisplayDefaults(result.globals));
-      setViewportVisualizationState((previous) => ({
-        ...previous,
+      useVisualizationStore.getState().patch({
         femViewportLayers: DEFAULT_FEM_VIEWPORT_LAYER_STATE,
-      }));
+      });
     }
   }, [
     selectedSidebarNodeId, selectedObjectId, selectedEntityId,
-    meshParts, meshEntityViewState, visibleMeshPartIds, patchDisplay, setViewportVisualizationState,
+    meshParts, meshEntityViewState, visibleMeshPartIds, patchDisplay,
   ]);
 
   const modelValue = useMemo<ModelContextValue>(() => ({
@@ -2015,26 +1819,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         null,
     },
     material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
-    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
-    meshOpacity: effectiveViewportVisualizationState.meshOpacity,
-    meshClipEnabled: effectiveViewportVisualizationState.meshClipEnabled,
-    meshClipAxis: effectiveViewportVisualizationState.meshClipAxis,
-    meshClipPos: effectiveViewportVisualizationState.meshClipPos,
-    meshClipFlip: effectiveViewportVisualizationState.meshClipFlip,
-    meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
-    femTextureDownsampleCells,
-    femVectorGlyphBudget: effectiveViewportVisualizationState.femVectorGlyphBudget,
-    femArrowColorMode: effectiveViewportVisualizationState.femArrowColorMode,
-    femArrowMonoColor: effectiveViewportVisualizationState.femArrowMonoColor,
-    femArrowAlpha: effectiveViewportVisualizationState.femArrowAlpha,
-    femArrowLengthScale: effectiveViewportVisualizationState.femArrowLengthScale,
-    femArrowThickness: effectiveViewportVisualizationState.femArrowThickness,
-    femVectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
-    femFerromagnetVisibilityMode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
-    femViewportLayers: effectiveViewportVisualizationState.femViewportLayers,
-    viewportLegendVisible,
-    viewportAxesScope, universeWireframeVisible,
-    fdmVisualizationSettings,
     visualizationProjectPresets: projectVisualizationPresets,
     visualizationLocalPresets: localVisualizationPresets,
     activeVisualizationPresetRef,
@@ -2056,20 +1840,12 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshHmax: Number.isFinite(meshSummary?.hmax ?? NaN) ? (meshSummary?.hmax ?? null) : meshHmax,
     mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
-    selectedSidebarNodeId,
-    selectedObjectId,
     viewportSelectedObjectId,
-    viewportScope,
-    focusObjectRequest,
     cameraFitRequestSeed,
     objectViewMode,
     activeTransformScope,
-    airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
-    airMeshOpacity: effectiveViewportVisualizationState.airMeshOpacity,
     meshEntityViewState,
     visibleSubmeshSnapshot,
-    selectedEntityId,
-    focusedEntityId,
     meshParts,
     visibleMeshPartIds,
     visibleMagneticObjectIds,
@@ -2084,21 +1860,15 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     workspaceTabs,
     activeWorkspaceTabId,
     setSolverSettings, setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
-    setViewportVisualizationState, setFemTextureDownsampleCells, setFdmVisualizationSettings, setMeshSelection, setMeshOptions, setFemDockTab,
-    setViewportLegendVisible,
-    setViewportAxesScope, setUniverseWireframeVisible,
-    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi, setSelectedObjectId, setViewportScope, setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setSelectedEntityId, setFocusedEntityId, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, requestViewportCameraFit, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
+    setMeshSelection, setMeshOptions, setFemDockTab,
+    setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, requestViewportCameraFit, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
     sceneResourceSessionKey, runtimeResourceRevisions,
-    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan, effectiveViewportVisualizationState,
-    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos, meshClipFlip, meshShowArrows, femTextureDownsampleCells, femVectorGlyphBudget,
-    femArrowColorMode, femArrowMonoColor, femArrowAlpha, femArrowLengthScale, femArrowThickness,
-    femVectorDomainFilter, femFerromagnetVisibilityMode, femViewportLayers, viewportLegendVisible,
-    viewportAxesScope, universeWireframeVisible,
-    fdmVisualizationSettings, projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
+    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
+    projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
     effectiveFemMesh, femMeshData, femTopologyKey, femColorField,
     femMagnetization3DActive, femShouldShowArrows, arrowVisibility, isMeshWorkspaceView,
@@ -2107,11 +1877,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshSummary, meshName, meshSource, meshExtent, meshBoundsMin, meshBoundsMax, meshFeOrder, liveMeshName,
     domainFrame, worldExtent, worldCenter, worldExtentSource, meshHmax, mesherBackend, mesherSourceKind, mesherCurrentSettings,
     meshWorkspacePreset,
-    selectedSidebarNodeId, selectedObjectId, viewportSelectedObjectId, viewportScope, focusObjectRequest, cameraFitRequestSeed, objectViewMode, airMeshVisible, airMeshOpacity, meshEntityViewState, visibleSubmeshSnapshot, selectedEntityId, focusedEntityId, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject, requestViewportCameraFit,
+    viewportSelectedObjectId, cameraFitRequestSeed, objectViewMode, meshEntityViewState, visibleSubmeshSnapshot, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject, requestViewportCameraFit,
     setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
     applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,
-    setSelectedSidebarNodeIdFromUi,
     resetViewportDisplayState,
   ]);
 

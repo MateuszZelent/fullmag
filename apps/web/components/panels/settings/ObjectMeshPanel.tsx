@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useVectorState, useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
 import {
   getFemBoundaryFaceCount,
   getFemElementCount,
@@ -339,6 +340,8 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const viz = useViewportRenderState();
+  const vectorViz = useVectorState();
   const sceneAuthoring = useSceneAuthoringActions();
   /* Backward-compatible ctx composed from granular hooks */
   const ctx = { ...model, effectiveViewMode: viewport.effectiveViewMode, handleViewModeChange: viewport.handleViewModeChange, workspaceStatus: cmd.workspaceStatus, engineLog: cmd.engineLog, isWaitingForCompute: cmd.isWaitingForCompute, scriptSyncBusy: cmd.scriptSyncBusy, scriptSyncMessage: cmd.scriptSyncMessage };
@@ -408,12 +411,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     meshHmax,
     effectiveViewMode,
     handleViewModeChange,
-    meshRenderMode,
-    meshClipEnabled,
-    meshClipAxis,
-    meshClipPos,
-    meshOpacity,
-    meshShowArrows,
     meshQualitySummary,
     meshQualityData,
     meshBoundsMin,
@@ -424,6 +421,14 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     meshWorkspacePreset,
     meshWorkspace,
   } = ctx;
+  const {
+    meshRenderMode,
+    meshClipEnabled,
+    meshClipAxis,
+    meshClipPos,
+    meshOpacity,
+  } = viz;
+  const meshShowArrows = vectorViz.showArrows;
 
   const meshHighlights = useMemo(() => extractMeshLogHighlights(engineLog), [engineLog]);
   const femNodeCount = effectiveFemMesh ? getFemNodeCount(effectiveFemMesh) : 0;

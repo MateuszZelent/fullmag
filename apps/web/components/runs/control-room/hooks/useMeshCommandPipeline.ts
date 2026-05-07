@@ -16,16 +16,17 @@ import type { FemMeshData } from "@/components/preview/FemMeshView3D";
 import {
   displayPatchFromPreviewComponentOnly,
 } from "@/src/api/displaySelection";
+import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import type {
   DisplayPatchRequest,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/src/api/contracts";
-import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { enqueueRuntimeCommand } from "@/features/command/actions/commandActions";
 
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
 const ENABLE_INFO_CONSOLE_TRACE =
@@ -223,38 +224,14 @@ export function useMeshCommandPipeline({
   }, []);
 
   const enqueueCommand = useCallback(async (payload: Record<string, unknown>) => {
-    setCommandPostInFlight(true);
-    setCommandErrorMessage(null);
-    const commandKind =
-      typeof payload.kind === "string" ? payload.kind.toUpperCase() : "COMMAND";
-    appendFrontendTrace("info", `TX: ${commandKind} ${JSON.stringify(payload)}`);
-    try {
-      if (payload.kind === "solve") {
-        const realization = await getLiveSessionClient().scene.createGeometryRealization({});
-        if (realization.status === "blocked") {
-          const reason =
-            realization.diagnostics.find((diagnostic) =>
-              diagnostic.blocks.includes("run_solver"),
-            )?.message ?? "Geometry realization is blocked.";
-          throw new Error(reason);
-        }
-        appendFrontendTrace(
-          "system",
-          `RX: geometry realization ${realization.status} scene_rev=${realization.source_scene_revision}`,
-        );
-      }
-      await liveApi.queueCommand(payload);
-      appendFrontendTrace("system", `RX: HTTP accepted ${commandKind}`);
-    } catch (e) {
-      appendFrontendTrace(
-        "warn",
-        `RX: HTTP rejected ${commandKind} — ${e instanceof Error ? e.message : "Failed to queue command"}`,
-      );
-      setCommandErrorMessage(e instanceof Error ? e.message : "Failed to queue command");
-    } finally {
-      setCommandPostInFlight(false);
-    }
-  }, [appendFrontendTrace, liveApi]);
+    await enqueueRuntimeCommand({
+      appendFrontendTrace,
+      liveApi,
+      payload,
+      setCommandErrorMessage,
+      setCommandPostInFlight,
+    });
+  }, [appendFrontendTrace, liveApi, setCommandErrorMessage, setCommandPostInFlight]);
 
   const buildMeshOptionsPayload = useCallback(
     (

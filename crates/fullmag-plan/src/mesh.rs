@@ -153,7 +153,7 @@ pub(crate) fn initial_vectors_for_magnet(
         }
         Some(InitialMagnetizationIR::PresetTexture {
             preset_kind,
-            params,
+            preset_params,
             mapping,
             texture_transform,
         }) => {
@@ -209,7 +209,7 @@ pub(crate) fn initial_vectors_for_magnet(
                     active: true,
                 })
                 .collect::<Vec<_>>();
-            sample_preset_texture(preset_kind, params, mapping, texture_transform, &points)?
+            sample_preset_texture(preset_kind, &preset_params, mapping, texture_transform, &points)?
         }
         None => vec![[1.0, 0.0, 0.0]; n_nodes],
     })

@@ -9,6 +9,12 @@ import { Button } from "../../ui/button";
 import SelectField from "../../ui/SelectField";
 import TextField from "../../ui/TextField";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
+import {
+  useDocumentActions,
+  useSolverPlan,
+  useSolverSettings,
+} from "@/features/document";
+import { useSelectedObjectId, useSelectionActions } from "@/features/selection";
 import { SidebarSection, InfoRow, StatusBadge } from "./primitives";
 import {
   buildPhysicsCapabilityView,
@@ -254,8 +260,12 @@ function solverPolicyFieldNumber(
 export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   const cmd = useCommand();
   const model = useModel();
+  const solverSettings = useSolverSettings();
+  const solverPlan = useSolverPlan();
+  const { setSolverSettings } = useDocumentActions();
+  const selectedObjectId = useSelectedObjectId();
+  const { setSelectedObjectId, setSelectedSidebarNodeId } = useSelectionActions();
   const sceneAuthoring = useSceneAuthoringActions();
-  const solverPlan = model.solverPlan;
   const context = useMemo(() => parsePhysicsNodeContext(nodeId), [nodeId]);
   const femDiscretization = resolveFemDiscretization(
     cmd.domainCapabilities,
@@ -277,14 +287,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   );
   const targetObject = useMemo<SceneObject | null>(() => {
     if (sceneObjects.length === 0) return null;
-    if (model.selectedObjectId) {
+    if (selectedObjectId) {
       const selected = sceneObjects.find(
-        (entry) => entry.id === model.selectedObjectId || entry.name === model.selectedObjectId,
+        (entry) => entry.id === selectedObjectId || entry.name === selectedObjectId,
       );
       if (selected) return selected;
     }
     return sceneObjects[0] ?? null;
-  }, [sceneObjects, model.selectedObjectId]);
+  }, [sceneObjects, selectedObjectId]);
   const targetMaterialDind = useMemo(() => {
     if (!targetObject) return null;
     return sceneMaterials.find((entry) => entry.id === targetObject.material_ref)?.properties.Dind ?? null;
@@ -1471,7 +1481,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
             <SelectField
               label="Authoring object"
               value={targetObject.id}
-              onchange={(value) => model.setSelectedObjectId(value)}
+              onchange={(value) => setSelectedObjectId(value)}
               options={sceneObjects.map((object) => ({
                 value: object.id,
                 label: object.name,
@@ -1536,7 +1546,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
             size="sm"
             variant="outline"
             type="button"
-            onClick={() => model.setSelectedSidebarNodeId(`physobj-${targetObject.name}`)}
+            onClick={() => setSelectedSidebarNodeId(`physobj-${targetObject.name}`)}
           >
             Open Material Panel
           </Button>
@@ -1805,9 +1815,9 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       <>
         <SidebarSection title="Solver Defaults" defaultOpen={true}>
           <div className="grid gap-1">
-            <InfoRow label="Integrator" value={solverPlan?.integrator ?? model.solverSettings.integrator ?? "—"} />
-            <InfoRow label="Fixed dt" value={solverPlan?.fixedTimestep != null ? fmtExp(solverPlan.fixedTimestep) : (model.solverSettings.fixedTimestep || "adaptive")} />
-            <InfoRow label="Relax algorithm" value={solverPlan?.relaxation?.algorithm ?? model.solverSettings.relaxAlgorithm ?? "—"} />
+            <InfoRow label="Integrator" value={solverPlan?.integrator ?? solverSettings.integrator ?? "—"} />
+            <InfoRow label="Fixed dt" value={solverPlan?.fixedTimestep != null ? fmtExp(solverPlan.fixedTimestep) : (solverSettings.fixedTimestep || "adaptive")} />
+            <InfoRow label="Relax algorithm" value={solverPlan?.relaxation?.algorithm ?? solverSettings.relaxAlgorithm ?? "—"} />
             <InfoRow
               label="Gamma"
               value={solverPlan?.gyromagneticRatio != null ? `${fmtExp(solverPlan.gyromagneticRatio)} m/(A·s)` : "—"}
@@ -1817,16 +1827,16 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
 
         <SidebarSection title="Integrator" defaultOpen={true}>
           <IntegratorSettingsPanel
-            settings={model.solverSettings}
-            onChange={model.setSolverSettings}
+            settings={solverSettings}
+            onChange={setSolverSettings}
             solverRunning={cmd.workspaceStatus === "running"}
           />
         </SidebarSection>
 
         <SidebarSection title="Relaxation" defaultOpen={true}>
           <RelaxationSettingsPanel
-            settings={model.solverSettings}
-            onChange={model.setSolverSettings}
+            settings={solverSettings}
+            onChange={setSolverSettings}
             solverRunning={cmd.workspaceStatus === "running"}
           />
         </SidebarSection>
@@ -1857,7 +1867,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                 size="sm"
                 variant={context.kind === "module-method" ? "default" : "outline"}
                 type="button"
-                onClick={() => model.setSelectedSidebarNodeId("physics-module-demag-method")}
+                onClick={() => setSelectedSidebarNodeId("physics-module-demag-method")}
               >
                 Method
               </Button>
@@ -1865,7 +1875,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                 size="sm"
                 variant={context.kind === "module-boundary" ? "default" : "outline"}
                 type="button"
-                onClick={() => model.setSelectedSidebarNodeId("physics-module-demag-boundary")}
+                onClick={() => setSelectedSidebarNodeId("physics-module-demag-boundary")}
               >
                 Boundary Conditions
               </Button>
@@ -1886,7 +1896,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
             label="Backend"
             value={solverPlan?.resolvedBackend ?? solverPlan?.backendKind ?? cmd.sessionFooter.requestedBackend ?? "—"}
           />
-          <InfoRow label="Solver" value={solverPlan?.integrator ?? model.solverSettings.integrator ?? "—"} />
+          <InfoRow label="Solver" value={solverPlan?.integrator ?? solverSettings.integrator ?? "—"} />
           <InfoRow label="Demag realization" value={demagRealization} />
           <InfoRow label="Exchange BC" value={solverPlan?.exchangeBoundary ?? "—"} />
           <InfoRow label="External field" value={formatVector(externalField, "T")} />
@@ -1897,7 +1907,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
         </div>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
-          <Button size="sm" variant="outline" type="button" onClick={() => model.setSelectedSidebarNodeId("physics-solver")}>
+          <Button size="sm" variant="outline" type="button" onClick={() => setSelectedSidebarNodeId("physics-solver")}>
             Open Solver
           </Button>
           {capabilityEntries
@@ -1925,7 +1935,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                 key={entry.id}
                 type="button"
                 className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-left transition-colors hover:bg-card/60"
-                onClick={() => model.setSelectedSidebarNodeId(`physics-module-${entry.id}`)}
+                onClick={() => setSelectedSidebarNodeId(`physics-module-${entry.id}`)}
               >
                 <div className="flex items-start gap-2">
                   <div>

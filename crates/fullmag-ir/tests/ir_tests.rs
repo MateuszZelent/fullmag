@@ -181,7 +181,7 @@ fn preset_texture_initial_magnetization_requires_preset_kind() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::PresetTexture {
         preset_kind: String::new(),
-        params: BTreeMap::new(),
+        preset_params: BTreeMap::new(),
         mapping: TextureMappingIR::default(),
         texture_transform: TextureTransform3DIR::default(),
     });
@@ -936,4 +936,52 @@ fn validation_rejects_multiple_oersted_terms() {
     assert!(errors.iter().any(|error| {
         error.contains("at most one executable Oersted energy term is currently supported")
     }));
+}
+
+#[test]
+fn preset_texture_accepts_preset_params_key() {
+    let json = r#"{
+        "kind": "preset_texture",
+        "preset_kind": "uniform",
+        "preset_params": { "direction": [0.0, 0.0, 0.99] }
+    }"#;
+    let decoded: InitialMagnetizationIR =
+        serde_json::from_str(json).expect("preset_params key should deserialize");
+    match decoded {
+        InitialMagnetizationIR::PresetTexture {
+            preset_params, ..
+        } => {
+            let dir = preset_params
+                .get("direction")
+                .expect("direction key must exist")
+                .as_array()
+                .expect("direction must be an array");
+            assert!((dir[2].as_f64().unwrap() - 0.99).abs() < 1e-6);
+        }
+        other => panic!("expected PresetTexture, got {:?}", other),
+    }
+}
+
+#[test]
+fn preset_texture_backward_compat_params_alias() {
+    let json = r#"{
+        "kind": "preset_texture",
+        "preset_kind": "uniform",
+        "params": { "direction": [0.0, 1.0, 0.0] }
+    }"#;
+    let decoded: InitialMagnetizationIR =
+        serde_json::from_str(json).expect("params alias should deserialize");
+    match decoded {
+        InitialMagnetizationIR::PresetTexture {
+            preset_params, ..
+        } => {
+            let dir = preset_params
+                .get("direction")
+                .expect("direction key must exist")
+                .as_array()
+                .expect("direction must be an array");
+            assert!((dir[1].as_f64().unwrap() - 1.0).abs() < 1e-6);
+        }
+        other => panic!("expected PresetTexture, got {:?}", other),
+    }
 }

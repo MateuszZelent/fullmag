@@ -62,10 +62,8 @@ export function useScalarSeriesData({
 
   // ── Hydrate metadata from quantities ──
   useEffect(() => {
-    if (quantities.length > 0) {
-      const meta = buildScalarSeriesMeta(quantities);
-      usePlot2DStore.getState().hydrateScalarMeta(meta);
-    }
+    const meta = buildScalarSeriesMeta(quantities);
+    usePlot2DStore.getState().hydrateScalarMeta(meta);
   }, [quantities]);
 
   // ── Live rows → store ──
@@ -97,8 +95,10 @@ export function useScalarSeriesData({
     const currentTable = usePlot2DStore.getState().scalar.table;
     const currentCount = currentTable?.rowCount ?? 0;
 
-    // Fetch history if we know there's more data than what we have
-    if (scalarRowsTotal > currentCount && scalarRowsTotal > 0 && currentCount > 0) {
+    // Fetch history if we know there's more data than what the local store has.
+    // This must also run from an empty store: on page load the transport may not
+    // have live rows yet while the backend scalar-history endpoint already does.
+    if (scalarRowsTotal > currentCount && scalarRowsTotal > 0) {
       fetchingRef.current = true;
       usePlot2DStore.getState().setScalarLoading(true);
 

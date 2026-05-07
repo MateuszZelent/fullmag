@@ -184,6 +184,14 @@ describe("ribbon viewport commands", () => {
       axis: "y",
     })).toEqual({ slice: { axis: "y" } });
     expect(visualizationPatchFromRibbonCommand({
+      id: "viewport.set-slice-component",
+      component: "z",
+    })).toEqual({
+      view_mode: "2d",
+      slice: { component: "z" },
+      quantity: { field_component: "z" },
+    });
+    expect(visualizationPatchFromRibbonCommand({
       id: "viewport.set-slice-mode",
       mode: "all_layers",
     })).toEqual({ slice: { mode: "all_layers" }, slice_mode: "all" });
@@ -500,6 +508,7 @@ describe("ribbon viewport commands", () => {
     const ctx = context({ onSetSlice2DToolbar });
 
     executeRibbonCommand(ctx, { id: "viewport.set-slice-axis", axis: "x" });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-component", component: "z" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-mode", mode: "slab" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-position", positionPercent: 42 });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox", visible: true });
@@ -508,15 +517,16 @@ describe("ribbon viewport commands", () => {
     executeRibbonCommand(ctx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" });
 
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { axis: "x" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { mode: "slab" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { positionPercent: 42 });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { showAirbox: true });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, { airboxRenderMode: "points" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, {
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { component: "z" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { mode: "slab" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { positionPercent: 42 });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, { showAirbox: true });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, { airboxRenderMode: "points" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(7, {
       showAirboxVectors: true,
       renderMode: "vectors",
     });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(7, {
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(8, {
       renderMode: "mesh-overlay",
       showMesh: true,
       showVectors: false,

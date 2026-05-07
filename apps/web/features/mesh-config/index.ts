@@ -6,7 +6,6 @@
 export {
   useMeshConfigStore,
   type MeshConfigStoreState,
-  type MeshConfigSyncPatch,
   // Selectors
   selectMeshOptionsState,
   selectMeshGenerating,

@@ -97,7 +97,7 @@ export interface UseVisualizationPresetsParams {
   setSliceIndex: Dispatch<SetStateAction<number>>;
   setObjectViewMode: Dispatch<SetStateAction<ObjectViewMode>>;
   setMeshEntityViewState: Dispatch<SetStateAction<MeshEntityViewStateMap>>;
-  setFdmVisualizationSettings: Dispatch<SetStateAction<VisualizationPresetFdmState>>;
+  setFdmVisualizationSettings: (v: VisualizationPresetFdmState) => void;
 
   /* Callback */
   patchDisplay: (patch: VisualizationStatePatch) => Promise<void>;

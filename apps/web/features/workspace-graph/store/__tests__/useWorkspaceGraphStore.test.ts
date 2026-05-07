@@ -120,12 +120,10 @@ describe("workspace graph store", () => {
       workspaceTabs: {
         build: [],
         study: [],
-        analyze: [],
       },
       activeWorkspaceTabByStage: {
         build: null,
         study: "core:3d",
-        analyze: null,
       },
       selectedNodeId: "study.root",
       studyPipeline,
@@ -159,12 +157,10 @@ describe("workspace graph store", () => {
       workspaceTabs: {
         build: [],
         study: [],
-        analyze: [],
       },
       activeWorkspaceTabByStage: {
         build: null,
         study: "core:3d",
-        analyze: null,
       },
       selectedNodeId: "study.root",
       studyPipeline,
@@ -192,8 +188,8 @@ describe("workspace graph store", () => {
       createWorkspaceGraphSnapshot({
         projectLabel: "Micromagnetic Workspace",
         workspaceMode: "study",
-        workspaceTabs: { build: [], study: [], analyze: [] },
-        activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+        workspaceTabs: { build: [], study: [] },
+        activeWorkspaceTabByStage: { build: null, study: "core:3d" },
         selectedNodeId: "study.root",
         studyPipeline,
         resultsWorkspace,
@@ -276,8 +272,8 @@ describe("workspace graph store", () => {
     const firstSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "results",
       studyPipeline,
       resultsWorkspace,
@@ -295,8 +291,8 @@ describe("workspace graph store", () => {
       {
         projectLabel: "Micromagnetic Workspace",
         workspaceMode: "study",
-        workspaceTabs: { build: [], study: [], analyze: [] },
-        activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+        workspaceTabs: { build: [], study: [] },
+        activeWorkspaceTabByStage: { build: null, study: "core:3d" },
         selectedNodeId: resultNodeToTreeNodeId("dataset", "ds-1"),
         studyPipeline,
         resultsWorkspace: {
@@ -346,8 +342,8 @@ describe("workspace graph store", () => {
     const firstSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "study.root",
       studyPipeline,
       resultsWorkspace,
@@ -387,8 +383,8 @@ describe("workspace graph store", () => {
       {
         projectLabel: "Micromagnetic Workspace",
         workspaceMode: "study",
-        workspaceTabs: { build: [], study: [], analyze: [] },
-        activeWorkspaceTabByStage: { build: null, study: null, analyze: null },
+        workspaceTabs: { build: [], study: [] },
+        activeWorkspaceTabByStage: { build: null, study: null },
         selectedNodeId: "study.root",
         studyPipeline,
         resultsWorkspace,
@@ -422,8 +418,8 @@ describe("workspace graph store", () => {
     const firstSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "study.root",
       studyPipeline,
       resultsWorkspace,
@@ -442,8 +438,8 @@ describe("workspace graph store", () => {
     const secondSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "study.root",
       studyPipeline,
       resultsWorkspace,
@@ -471,8 +467,8 @@ describe("workspace graph store", () => {
     const firstSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "study.root",
       studyPipeline,
       resultsWorkspace,
@@ -497,8 +493,8 @@ describe("workspace graph store", () => {
     const secondSnapshot = createWorkspaceGraphSnapshot({
       projectLabel: "Micromagnetic Workspace",
       workspaceMode: "study",
-      workspaceTabs: { build: [], study: [], analyze: [] },
-      activeWorkspaceTabByStage: { build: null, study: "core:3d", analyze: null },
+      workspaceTabs: { build: [], study: [] },
+      activeWorkspaceTabByStage: { build: null, study: "core:3d" },
       selectedNodeId: "study.root",
       studyPipeline,
       resultsWorkspace,

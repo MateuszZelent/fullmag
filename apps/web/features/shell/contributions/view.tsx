@@ -910,7 +910,7 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const projectionDisabledReason = slice.reason ?? (mode !== "all_layers" ? "Select All layers mode first" : null);
   return {
     id: "view-slice-2d",
-    title: "2D Slice",
+    title: "2D Slice 2",
     subtitle: ctx.viewMode === "2D" ? "Ribbon controls" : "Inactive",
     tone: "neutral",
     actions: [
@@ -942,7 +942,7 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             disabledReason: slice.reason,
             onValueChange: (nextComponent) =>
               ctx.run({
-                id: "viewport.set-component",
+                id: "viewport.set-slice-component",
                 component: nextComponent as "x" | "y" | "z" | "magnitude",
               }),
             items: [
@@ -1190,6 +1190,25 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
               { value: "single", label: "Single" },
               { value: "slab", label: "Slab" },
               { value: "all_layers", label: "All layers" },
+            ],
+          },
+          {
+            type: "radio-group",
+            id: "slice:plane:projection-component",
+            label: "Component",
+            value: component,
+            disabled: projectionDisabled,
+            disabledReason: projectionDisabledReason,
+            onValueChange: (nextComponent) =>
+              ctx.run({
+                id: "viewport.set-slice-component",
+                component: nextComponent as "x" | "y" | "z" | "magnitude",
+              }),
+            items: [
+              { value: "magnitude", label: "Magnitude |v|" },
+              { value: "x", label: "X" },
+              { value: "y", label: "Y" },
+              { value: "z", label: "Z" },
             ],
           },
           {

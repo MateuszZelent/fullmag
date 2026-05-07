@@ -15,6 +15,8 @@ ln -s AGENTS.md GEMINI.md
 
 ## 0. Non-negotiables
 
+Are you 100% confident in this strategy? If not, find all possible loopholes, suggest proper fixes and run this loop until you are factually 100% confident in the new startegy.
+
 These rules override everything else in this file when in conflict:
 
 1. **No flattery, no filler.** Skip openers like "Great question", "You're absolutely right", "Excellent idea", "I'd be happy to". Start with the answer or the action.

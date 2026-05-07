@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SetStateAction } from "react";
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useBuilderKeyboardShortcuts } from "@/features/geometry-builder";
@@ -44,6 +45,13 @@ import {
 } from "@/features/viewport-unified/camera-lifecycle";
 import type { Viewport3DInteractionMode } from "@/features/viewport-unified/model/viewport3dContracts";
 import { useSessionRuntimeStore } from "@/features/session-runtime/store/useSessionRuntimeStore";
+import {
+  useFdmVisualizationSettings,
+  useVectorState,
+  useViewportRenderState,
+} from "@/features/visualization/hooks/useVizSlice";
+import { useSelectionActions, useSelectionState } from "@/features/selection";
+import { useVisualizationStore } from "@/features/visualization/store/useVisualizationStore";
 import type { UnifiedRenderState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import type { TextureTransform3D as PreviewTextureTransform3D } from "@/lib/textureTransform";
@@ -270,6 +278,24 @@ export function useViewportDataBridge() {
     () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
     [_transport, _viewport, _cmd, _model],
   );
+  const viz = useViewportRenderState();
+  const vectorViz = useVectorState();
+  const fdmVisualizationSettings = useFdmVisualizationSettings();
+  const selection = useSelectionState();
+  const { setSelectedObjectId, setSelectedSidebarNodeId } = useSelectionActions();
+  const setFdmVisualizationSettingsAction = useCallback(
+    (action: SetStateAction<typeof fdmVisualizationSettings>) => {
+      const store = useVisualizationStore.getState();
+      const next =
+        typeof action === "function"
+          ? (action as (value: typeof fdmVisualizationSettings) => typeof fdmVisualizationSettings)(
+              store.fdmVisualizationSettings,
+            )
+          : action;
+      store.setFdmVisualizationSettings(next);
+    },
+    [],
+  );
 
   /* ── Session runtime ── */
   const runtimeSessionId = useSessionRuntimeStore((s) => s.session?.session_id ?? null);
@@ -286,9 +312,9 @@ export function useViewportDataBridge() {
   const workspaceSelection = useMemo(
     () =>
       selectionFromControlRoomState({
-        selectedObjectId: ctx.selectedObjectId,
-        selectedEntityId: ctx.selectedEntityId,
-        selectedSidebarNodeId: ctx.selectedSidebarNodeId,
+        selectedObjectId: selection.selectedObjectId,
+        selectedEntityId: selection.selectedEntityId,
+        selectedSidebarNodeId: selection.selectedSidebarNodeId,
         sourceSurface:
           ctx.effectiveViewMode === "2D"
               ? "slice2d"
@@ -296,9 +322,9 @@ export function useViewportDataBridge() {
       }),
     [
       ctx.effectiveViewMode,
-      ctx.selectedEntityId,
-      ctx.selectedObjectId,
-      ctx.selectedSidebarNodeId,
+      selection.selectedEntityId,
+      selection.selectedObjectId,
+      selection.selectedSidebarNodeId,
     ],
   );
 
@@ -417,13 +443,13 @@ export function useViewportDataBridge() {
       deriveFemVectorScopes({
         meshParts: ctx.meshParts,
         meshEntityViewState: ctx.meshEntityViewState,
-        airMeshVisible: ctx.airMeshVisible,
-        vectorDomainFilter: ctx.femVectorDomainFilter,
+        airMeshVisible: viz.airMeshVisible,
+        vectorDomainFilter: vectorViz.domainFilter,
         selectedFieldDomain: femMeshData?.quantityDomain ?? null,
       }),
     [
-      ctx.airMeshVisible,
-      ctx.femVectorDomainFilter,
+      viz.airMeshVisible,
+      vectorViz.domainFilter,
       ctx.meshEntityViewState,
       ctx.meshParts,
       femMeshData?.quantityDomain,
@@ -449,13 +475,13 @@ export function useViewportDataBridge() {
   );
   const vectorGlyphDataNeeded =
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
-    ctx.meshShowArrows;
+    vectorViz.showArrows;
   const shaderFieldDataNeeded =
     (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
     (
-      ctx.meshShowArrows ||
-      ctx.femViewportLayers.showQuantity ||
-      (ctx.femViewportLayers.showMagneticTexture && ctx.selectedQuantity === "m")
+      vectorViz.showArrows ||
+      viz.femViewportLayers.showQuantity ||
+      (viz.femViewportLayers.showMagneticTexture && ctx.selectedQuantity === "m")
     );
 
   /* ── 3D vector glyph model: arrows only, with glyph-density controls. ── */
@@ -609,8 +635,6 @@ export function useViewportDataBridge() {
   );
 
   /* ── Object select callback ── */
-  const setSelectedObjectId = ctx.setSelectedObjectId;
-  const setSelectedSidebarNodeId = ctx.setSelectedSidebarNodeId;
   const handleRequestObjectSelect = useCallback(
     (objectId: string) => {
       setSelectedObjectId(objectId);
@@ -621,7 +645,7 @@ export function useViewportDataBridge() {
 
   /* ── Antenna / overlays ── */
   const selectedAntennaName = resolveAntennaNodeName(
-    ctx.selectedSidebarNodeId,
+    selection.selectedSidebarNodeId,
     ctx.scriptBuilderCurrentModules.map((m) => m.name),
   );
   const visibleObjectIds = useMemo(
@@ -716,7 +740,7 @@ export function useViewportDataBridge() {
     : ctx.plane;
 
   /* ── FEM layer state ── */
-  const femLayerState = renderPlan?.layers.femLayers ?? ctx.femViewportLayers;
+  const femLayerState = renderPlan?.layers.femLayers ?? viz.femViewportLayers;
   const geometryAuthoringShowPrimitives = showGeometryAuthoringViewport
     ? true
     : femLayerState.showPrimitives;
@@ -762,16 +786,16 @@ export function useViewportDataBridge() {
       deriveFemLayerRenderState({
         layers: femLayerState,
         objectOverlays: displayObjectOverlays,
-        meshOpacity: renderPlan?.layers.meshOpacityPercent ?? ctx.meshOpacity,
+        meshOpacity: renderPlan?.layers.meshOpacityPercent ?? viz.meshOpacity,
         colorField: ctx.femColorField,
         magneticTextureColorField:
           ctx.selectedQuantity === "m" ? "orientation" : "none",
-        showArrows: renderPlan?.layers.vectorsVisible ?? ctx.meshShowArrows,
+        showArrows: renderPlan?.layers.vectorsVisible ?? vectorViz.showArrows,
       }),
     [
       ctx.femColorField,
-      ctx.meshOpacity,
-      ctx.meshShowArrows,
+      viz.meshOpacity,
+      vectorViz.showArrows,
       ctx.selectedQuantity,
       displayObjectOverlays,
       femLayerState,
@@ -793,18 +817,18 @@ export function useViewportDataBridge() {
         plan: renderPlan,
         meshParts: ctx.meshParts,
         meshEntityViewState: ctx.meshEntityViewState,
-        fallbackMeshRenderMode: ctx.meshRenderMode,
-        fallbackMeshOpacity: ctx.meshOpacity,
+        fallbackMeshRenderMode: viz.meshRenderMode,
+        fallbackMeshOpacity: viz.meshOpacity,
         fallbackSelectedQuantity: ctx.selectedQuantity,
       });
     }
     const next: MeshEntityViewStateMap = { ...ctx.meshEntityViewState };
     const resolvedGlobalMeshRenderMode: MeshEntityViewState["renderMode"] =
-      ctx.meshRenderMode === "wireframe" || ctx.meshRenderMode === "surface+edges"
-        || ctx.meshRenderMode === "surface"
-        || ctx.meshRenderMode === "points"
-        || ctx.meshRenderMode === "mesh"
-        ? ctx.meshRenderMode
+      viz.meshRenderMode === "wireframe" || viz.meshRenderMode === "surface+edges"
+        || viz.meshRenderMode === "surface"
+        || viz.meshRenderMode === "points"
+        || viz.meshRenderMode === "mesh"
+        ? viz.meshRenderMode
         : "surface";
     for (const part of ctx.meshParts) {
       const current = next[part.id] ?? defaultMeshEntityViewState(part);
@@ -836,7 +860,7 @@ export function useViewportDataBridge() {
           ? current.opacity
           : hasExplicitState
             ? current.opacity
-            : ctx.meshOpacity,
+            : viz.meshOpacity,
         colorField:
           part.role === "magnetic_object"
             ? femLayerState.showQuantity
@@ -852,9 +876,9 @@ export function useViewportDataBridge() {
     return next;
   }, [
     ctx.meshEntityViewState,
-    ctx.meshOpacity,
+    viz.meshOpacity,
     ctx.meshParts,
-    ctx.meshRenderMode,
+    viz.meshRenderMode,
     ctx.selectedQuantity,
     femDiscretization,
     femLayerState.showMesh,
@@ -1183,7 +1207,7 @@ export function useViewportDataBridge() {
       auto_contrast: renderPlan?.slice.autoContrast ?? ctx.requestedPreviewAutoScale,
       contrast_min: null,
       contrast_max: null,
-      vector_glyphs: renderPlan?.slice.showVectors ?? ctx.meshShowArrows,
+      vector_glyphs: renderPlan?.slice.showVectors ?? vectorViz.showArrows,
       vector_density: ctx.requestedPreviewEveryN,
       slice_mode: renderPlan?.slice.mode ?? (ctx.requestedPreviewAllLayers ? "all_layers" : "single"),
       slice_layer: renderPlan?.slice.layerIndex ?? ctx.sliceIndex,
@@ -1192,7 +1216,7 @@ export function useViewportDataBridge() {
       y_chosen_size: ctx.requestedPreviewYChosenSize,
     }),
     [
-      ctx.meshShowArrows,
+      vectorViz.showArrows,
       ctx.requestedPreviewAllLayers,
       ctx.requestedPreviewAutoScale,
       ctx.requestedPreviewEveryN,
@@ -1211,10 +1235,10 @@ export function useViewportDataBridge() {
     () => ({
       axis: renderPlan?.slice.axis ?? sliceAxisFromPlane(effectiveSlicePlane),
       positionPercent: renderPlan?.slice.positionPercent ?? (femDiscretization
-        ? (ctx.meshClipPos ?? 50)
+        ? (viz.meshClipPos ?? 50)
         : sliceSampling.cutNorm * 100),
     }),
-    [ctx.meshClipPos, effectiveSlicePlane, femDiscretization, renderPlan?.slice, sliceSampling.cutNorm],
+    [viz.meshClipPos, effectiveSlicePlane, femDiscretization, renderPlan?.slice, sliceSampling.cutNorm],
   );
 
   const slice2DBaseModel = useSlice2DModel({
@@ -1246,13 +1270,13 @@ export function useViewportDataBridge() {
     const layerControlledToolbar = femDiscretization
         ? {
           ...slice2DBaseModel.toolbar,
-          showPrimitives: ctx.femViewportLayers.showPrimitives,
-          showMesh: ctx.femViewportLayers.showMesh,
-          showMagneticTexture: ctx.femViewportLayers.showMagneticTexture,
+          showPrimitives: viz.femViewportLayers.showPrimitives,
+          showMesh: viz.femViewportLayers.showMesh,
+          showMagneticTexture: viz.femViewportLayers.showMagneticTexture,
           showAirbox: false,
           airboxRenderMode: "wireframe" as const,
           showAirboxVectors: false,
-          showQuantity: ctx.femViewportLayers.showQuantity,
+          showQuantity: viz.femViewportLayers.showQuantity,
         }
       : slice2DBaseModel.toolbar;
     const toolbar = renderPlan?.slice
@@ -1271,7 +1295,7 @@ export function useViewportDataBridge() {
         showVectors: toolbar.showVectors,
       },
     };
-  }, [ctx.femViewportLayers, femDiscretization, renderPlan?.slice, slice2DBaseModel, slice2DToolbarPatch]);
+  }, [viz.femViewportLayers, femDiscretization, renderPlan?.slice, slice2DBaseModel, slice2DToolbarPatch]);
 
   const slice2D = useFieldSlice2D(
     shouldUseSliceApi2D ? sliceQuantityId : null,
@@ -1406,10 +1430,10 @@ export function useViewportDataBridge() {
         nodes: scopedFetchedFemMeshData.nodes,
         nNodes: scopedFetchedFemMeshData.nNodes,
         fieldData: scopedFetchedFemMeshData.fieldData,
-        targetBins: ctx.femTextureDownsampleCells,
+        targetBins: viz.femTextureDownsampleCells,
       }),
     };
-  }, [ctx.femTextureDownsampleCells, scopedFetchedFemMeshData]);
+  }, [viz.femTextureDownsampleCells, scopedFetchedFemMeshData]);
 
   const renderFemMeshData = shaderDownsampledFemMeshData ?? scopedFetchedFemMeshData;
 
@@ -1470,10 +1494,10 @@ export function useViewportDataBridge() {
       objectOverlays: ctx.objectOverlays,
       selectedObjectId: viewportSelectedObjectId,
       universeCenter: ctx.worldCenter,
-      focusObjectRequest: ctx.focusObjectRequest,
+      focusObjectRequest: selection.focusObjectRequest,
       objectViewMode: ctx.objectViewMode,
-      settings: ctx.fdmVisualizationSettings,
-      onSettingsChange: ctx.setFdmVisualizationSettings,
+      settings: fdmVisualizationSettings,
+      onSettingsChange: setFdmVisualizationSettingsAction,
       onAntennaTranslate: ctx.applyAntennaTranslation,
       onGeometryTranslate: ctx.applyGeometryTranslation,
       onRequestObjectSelect: handleRequestObjectSelect,
@@ -1494,12 +1518,12 @@ export function useViewportDataBridge() {
       ctx.activeTransformScope,
       ctx.applyAntennaTranslation,
       ctx.applyGeometryTranslation,
-      ctx.fdmVisualizationSettings,
-      ctx.focusObjectRequest,
+      fdmVisualizationSettings,
+      selection.focusObjectRequest,
       ctx.objectOverlays,
       ctx.objectViewMode,
       ctx.previewGrid,
-      ctx.setFdmVisualizationSettings,
+      setFdmVisualizationSettingsAction,
       ctx.worldCenter,
       ctx.worldExtent,
       handleVectorSurfaceTransformScopeChange,
@@ -1538,36 +1562,36 @@ export function useViewportDataBridge() {
       autoScale: renderPlan?.quantity.autoContrast ?? ctx.requestedPreviewAutoScale,
       maxPoints: renderPlan?.sampling.maxPoints ?? ctx.requestedPreviewMaxPoints,
       everyN: ctx.requestedPreviewEveryN,
-      meshRenderMode: toUnifiedRenderMode(renderPlan?.layers.renderMode ?? ctx.meshRenderMode),
-      meshOpacity: renderPlan?.layers.meshOpacityPercent ?? ctx.meshOpacity,
-      clipEnabled: renderPlan?.clip.enabled ?? ctx.meshClipEnabled,
-      clipAxis: renderPlan?.clip.axis ?? ctx.meshClipAxis,
-      clipPosition: renderPlan?.clip.positionPercent ?? ctx.meshClipPos,
-      arrowColorMode: renderPlan?.vectorStyle.colorMode ?? ctx.femArrowColorMode,
-      arrowMonoColor: renderPlan?.vectorStyle.monoColor ?? ctx.femArrowMonoColor,
-      arrowLengthScale: renderPlan?.vectorStyle.lengthScale ?? ctx.femArrowLengthScale,
-      arrowThickness: renderPlan?.vectorStyle.thickness ?? ctx.femArrowThickness,
-      vectorDomainFilter: renderPlan?.layers.vectorDomainFilter ?? ctx.femVectorDomainFilter,
+      meshRenderMode: toUnifiedRenderMode(renderPlan?.layers.renderMode ?? viz.meshRenderMode),
+      meshOpacity: renderPlan?.layers.meshOpacityPercent ?? viz.meshOpacity,
+      clipEnabled: renderPlan?.clip.enabled ?? viz.meshClipEnabled,
+      clipAxis: renderPlan?.clip.axis ?? viz.meshClipAxis,
+      clipPosition: renderPlan?.clip.positionPercent ?? viz.meshClipPos,
+      arrowColorMode: renderPlan?.vectorStyle.colorMode ?? vectorViz.colorMode,
+      arrowMonoColor: renderPlan?.vectorStyle.monoColor ?? vectorViz.monoColor,
+      arrowLengthScale: renderPlan?.vectorStyle.lengthScale ?? vectorViz.lengthScale,
+      arrowThickness: renderPlan?.vectorStyle.thickness ?? vectorViz.thickness,
+      vectorDomainFilter: renderPlan?.layers.vectorDomainFilter ?? vectorViz.domainFilter,
       ferromagnetVisibilityMode:
-        renderPlan?.vectorStyle.ferromagnetVisibility ?? ctx.femFerromagnetVisibilityMode,
-      femLayers: renderPlan?.layers.femLayers ?? ctx.femViewportLayers,
+        renderPlan?.vectorStyle.ferromagnetVisibility ?? vectorViz.ferromagnetVisibilityMode,
+      femLayers: renderPlan?.layers.femLayers ?? viz.femViewportLayers,
       renderPasses: renderPlan?.layers.passes,
       airboxPasses: renderPlan?.layers.airbox,
     }),
     [
       ctx.effectiveViewMode,
-      ctx.femArrowColorMode,
-      ctx.femArrowLengthScale,
-      ctx.femArrowMonoColor,
-      ctx.femArrowThickness,
-      ctx.femFerromagnetVisibilityMode,
-      ctx.femViewportLayers,
-      ctx.femVectorDomainFilter,
-      ctx.meshClipAxis,
-      ctx.meshClipEnabled,
-      ctx.meshClipPos,
-      ctx.meshOpacity,
-      ctx.meshRenderMode,
+      vectorViz.colorMode,
+      vectorViz.lengthScale,
+      vectorViz.monoColor,
+      vectorViz.thickness,
+      vectorViz.ferromagnetVisibilityMode,
+      viz.femViewportLayers,
+      vectorViz.domainFilter,
+      viz.meshClipAxis,
+      viz.meshClipEnabled,
+      viz.meshClipPos,
+      viz.meshOpacity,
+      viz.meshRenderMode,
       renderPlan,
       ctx.requestedPreviewAllLayers,
       ctx.requestedPreviewAutoScale,
@@ -1592,13 +1616,13 @@ export function useViewportDataBridge() {
       ),
       selection: {
         objectId: viewportSelectedObjectId,
-        partId: ctx.selectedEntityId,
+        partId: selection.selectedEntityId,
       },
       clip: {
-        enabled: renderPlan?.clip.enabled ?? ctx.meshClipEnabled,
-        axis: renderPlan?.clip.axis ?? ctx.meshClipAxis,
-        position: renderPlan?.clip.positionPercent ?? ctx.meshClipPos,
-        invert: renderPlan?.clip.flipped ?? ctx.meshClipFlip,
+        enabled: renderPlan?.clip.enabled ?? viz.meshClipEnabled,
+        axis: renderPlan?.clip.axis ?? viz.meshClipAxis,
+        position: renderPlan?.clip.positionPercent ?? viz.meshClipPos,
+        invert: renderPlan?.clip.flipped ?? viz.meshClipFlip,
       },
       topologyFallbackRevision: resolvedFemTopologyKey,
       femMeshFieldRevision: scaledFemMeshData?.fieldRevision,
@@ -1610,12 +1634,12 @@ export function useViewportDataBridge() {
           ?? 0,
     },
     toolbar: {
-      clipFlip: renderPlan?.clip.flipped ?? ctx.meshClipFlip,
+      clipFlip: renderPlan?.clip.flipped ?? viz.meshClipFlip,
       interactionMode: viewport3DInteractionMode,
       snapEnabled: Boolean(builderSnapSettings.enabled),
       objectViewMode: ctx.objectViewMode,
-      vectorsVisible: renderPlan?.layers.vectorsVisible ?? ctx.meshShowArrows,
-      legendVisible: ctx.viewportLegendVisible,
+      vectorsVisible: renderPlan?.layers.vectorsVisible ?? vectorViz.showArrows,
+      legendVisible: viz.viewportLegendVisible,
       partExplorerVisible: selectedSubmeshesToolboxOpen,
       projection: graphActiveViewportCameraState?.projection ?? "perspective",
       navProfile: graphActiveViewportCameraState?.navigation ?? "trackball",
@@ -1624,9 +1648,9 @@ export function useViewportDataBridge() {
       discretization: femDiscretization ? "fem" : "fdm",
       worldExtent: ctx.worldExtent,
       worldCenter: ctx.worldCenter,
-      selectedEntityFallbackId: ctx.selectedEntityId,
-      focusedEntityId: ctx.focusedEntityId,
-      selectedSidebarNodeId: ctx.selectedSidebarNodeId,
+      selectedEntityFallbackId: selection.selectedEntityId,
+      focusedEntityId: selection.focusedEntityId,
+      selectedSidebarNodeId: selection.selectedSidebarNodeId,
       loading: ctx.previewBusy,
       message: ctx.previewMessage,
       error: ctx.error,
@@ -1647,8 +1671,8 @@ export function useViewportDataBridge() {
             },
           }
         : null,
-      fdmSettings: ctx.fdmVisualizationSettings,
-      fdmVectorsVisible: ctx.fdmVisualizationSettings.render_mode === "glyph",
+      fdmSettings: fdmVisualizationSettings,
+      fdmVectorsVisible: fdmVisualizationSettings.render_mode === "glyph",
     },
   });
 
@@ -1659,12 +1683,12 @@ export function useViewportDataBridge() {
     effectiveViewMode: ctx.effectiveViewMode,
     selectedQuantity: ctx.selectedQuantity,
     effectiveVectorComponent: ctx.effectiveVectorComponent,
-    meshRenderMode: ctx.meshRenderMode,
-    meshClipEnabled: ctx.meshClipEnabled,
-    meshClipAxis: ctx.meshClipAxis,
-    meshClipPos: ctx.meshClipPos,
-    femVectorDomainFilter: ctx.femVectorDomainFilter,
-    femFerromagnetVisibilityMode: ctx.femFerromagnetVisibilityMode,
+    meshRenderMode: viz.meshRenderMode,
+    meshClipEnabled: viz.meshClipEnabled,
+    meshClipAxis: viz.meshClipAxis,
+    meshClipPos: viz.meshClipPos,
+    femVectorDomainFilter: vectorViz.domainFilter,
+    femFerromagnetVisibilityMode: vectorViz.ferromagnetVisibilityMode,
   });
 
   const createViewport3DModel = viewport3DController.createModel;

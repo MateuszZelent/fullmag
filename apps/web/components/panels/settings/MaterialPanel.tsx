@@ -11,6 +11,7 @@ import {
 } from "../../../lib/magnetizationPresetCatalog";
 import { useCommand, useViewport } from "../../runs/control-room/context-hooks";
 import { useModel } from "../../runs/control-room/ControlRoomContext";
+import { useSelectionActions } from "@/features/selection";
 import { fmtSI } from "../../runs/control-room/shared";
 import { TextField } from "../../ui/TextField";
 import SelectField from "../../ui/SelectField";
@@ -181,6 +182,7 @@ export default function MaterialPanel({
   const cmd = useCommand();
   const viewport = useViewport();
   const model = useModel();
+  const { setSelectedSidebarNodeId } = useSelectionActions();
   const showMagneticParametersPanel = mode === "magneticParameters";
   const showMagneticTexturePanel = mode === "magneticTexture";
 
@@ -735,7 +737,7 @@ export default function MaterialPanel({
     if (!target || !magnetizationNodeIds) {
       return;
     }
-    model.setSelectedSidebarNodeId(magnetizationNodeIds[target]);
+    setSelectedSidebarNodeId(magnetizationNodeIds[target]);
   };
   useEffect(() => {
     if (!sceneObject || !activeTransformSubpanel) {

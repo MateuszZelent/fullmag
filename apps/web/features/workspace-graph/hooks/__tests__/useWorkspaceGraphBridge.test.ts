@@ -10,12 +10,10 @@ const baseInput: WorkspaceGraphBridgeInput = {
   workspaceTabs: {
     build: [],
     study: [],
-    analyze: [],
   },
   activeWorkspaceTabByStage: {
     build: null,
     study: "core:3d",
-    analyze: null,
   },
   selectedNodeId: "study.root",
   studyPipeline: null,

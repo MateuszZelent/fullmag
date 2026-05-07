@@ -28,6 +28,7 @@ import type { ScriptBuilderStageState } from "@/lib/session/types";
 import StageInspector from "@/components/workspace/study-builder/StageInspector";
 import StudyBuilderWorkspace from "@/components/workspace/study-builder/StudyBuilderWorkspace";
 import { useTransport, useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
+import { useSelectionActions } from "@/features/selection";
 import { Button } from "../../ui/button";
 import MetricTile from "../../ui/MetricTile";
 import SelectField from "../../ui/SelectField";
@@ -215,9 +216,11 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const selectionActions = useSelectionActions();
   /* Backward-compatible ctx composed from granular hooks */
   const ctx = {
     ...model,
+    ...selectionActions,
     totalCells: viewport.totalCells,
     workspaceMode: viewport.workspaceStage,
     setWorkspaceMode: viewport.setWorkspaceStage,

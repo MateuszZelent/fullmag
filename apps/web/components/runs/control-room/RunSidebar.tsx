@@ -33,6 +33,7 @@ import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useEigenSpectrumSummary } from "@/src/hooks/resources/useEigenSpectrumSummary";
 import type { StudyPipelineDocumentState } from "@/lib/session/types";
+import { useSelectionActions, useSelectionState } from "@/features/selection";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import {
   resolveBuilderSidebarNodeId,
@@ -150,6 +151,13 @@ function uniqueSortedModeIndices(artifactPaths: string[]): number[] {
  */
 export default function RunSidebar() {
   const model = useModel();
+  const selection = useSelectionState();
+  const {
+    setFocusedEntityId,
+    setSelectedEntityId,
+    setSelectedObjectId,
+    setSelectedSidebarNodeId,
+  } = useSelectionActions();
   const cmd = useCommand();
   const tp = useTransport();
   const vp = useViewport();
@@ -574,28 +582,28 @@ export default function RunSidebar() {
   const activeNodeId =
     builderActiveNodeId ??
     (graphEnabled ? graphSelection.activeNodeId : null) ??
-    model.selectedSidebarNodeId ??
+    selection.selectedSidebarNodeId ??
     fallbackNodeId;
   useEffect(() => {
     const nextBuilderSidebarNodeId = resolveBuilderSidebarSelectionSync({
       builderEnabled,
       builderSelection,
-      currentSidebarNodeId: model.selectedSidebarNodeId,
+      currentSidebarNodeId: selection.selectedSidebarNodeId,
     });
     if (!nextBuilderSidebarNodeId) {
       return;
     }
-    if (model.selectedSidebarNodeId !== nextBuilderSidebarNodeId) {
-      model.setSelectedSidebarNodeId(nextBuilderSidebarNodeId);
+    if (selection.selectedSidebarNodeId !== nextBuilderSidebarNodeId) {
+      setSelectedSidebarNodeId(nextBuilderSidebarNodeId);
     }
-    if (model.selectedObjectId != null) {
-      model.setSelectedObjectId(null);
+    if (selection.selectedObjectId != null) {
+      setSelectedObjectId(null);
     }
-    if (model.selectedEntityId != null) {
-      model.setSelectedEntityId(null);
+    if (selection.selectedEntityId != null) {
+      setSelectedEntityId(null);
     }
-    if (model.focusedEntityId != null) {
-      model.setFocusedEntityId(null);
+    if (selection.focusedEntityId != null) {
+      setFocusedEntityId(null);
     }
   }, [
     builderEnabled,
@@ -615,12 +623,12 @@ export default function RunSidebar() {
     setRightInspectorTab("properties");
 
     if (builderEnabled && id.startsWith("builder-")) {
-      model.setSelectedObjectId(null);
-      model.setSelectedEntityId(null);
-      model.setFocusedEntityId(null);
+      setSelectedObjectId(null);
+      setSelectedEntityId(null);
+      setFocusedEntityId(null);
       if (id === "builder-universe") {
         selectBuilderTarget({ type: "universe", id: "universe" });
-        model.setSelectedSidebarNodeId(id);
+        setSelectedSidebarNodeId(id);
         return;
       }
       if (
@@ -629,7 +637,7 @@ export default function RunSidebar() {
         id === "builder-lifecycle"
       ) {
         clearBuilderSelection();
-        model.setSelectedSidebarNodeId(id);
+        setSelectedSidebarNodeId(id);
         return;
       }
       if (id.startsWith("builder-prim-")) {
@@ -637,7 +645,7 @@ export default function RunSidebar() {
         const primitiveId = primitiveSegment.split("/")[0];
         if (primitiveId.length > 0) {
           selectBuilderTarget({ type: "primitive", id: primitiveId });
-          model.setSelectedSidebarNodeId(`builder-prim-${primitiveId}`);
+          setSelectedSidebarNodeId(`builder-prim-${primitiveId}`);
           return;
         }
       }
@@ -645,7 +653,7 @@ export default function RunSidebar() {
         const boolId = id.slice("builder-bool-".length);
         if (boolId.length > 0) {
           selectBuilderTarget({ type: "boolean", id: boolId });
-          model.setSelectedSidebarNodeId(`builder-bool-${boolId}`);
+          setSelectedSidebarNodeId(`builder-bool-${boolId}`);
           return;
         }
       }
@@ -693,10 +701,10 @@ export default function RunSidebar() {
     }
     const visualizationPresetNode = parseVisualizationPresetNodeId(id);
     if (visualizationPresetNode) {
-      model.setSelectedSidebarNodeId(id);
-      model.setSelectedObjectId(null);
-      model.setSelectedEntityId(null);
-      model.setFocusedEntityId(null);
+      setSelectedSidebarNodeId(id);
+      setSelectedObjectId(null);
+      setSelectedEntityId(null);
+      setFocusedEntityId(null);
       model.setActiveVisualizationPresetRef({
         source: visualizationPresetNode.source,
         preset_id: visualizationPresetNode.presetId,
@@ -704,15 +712,15 @@ export default function RunSidebar() {
       return;
     }
     if (isVisualizationTreeNode(id)) {
-      model.setSelectedSidebarNodeId(id);
-      model.setSelectedObjectId(null);
-      model.setSelectedEntityId(null);
-      model.setFocusedEntityId(null);
+      setSelectedSidebarNodeId(id);
+      setSelectedObjectId(null);
+      setSelectedEntityId(null);
+      setFocusedEntityId(null);
       return;
     }
     const analyzeTarget = parseAnalyzeTreeNode(id);
     if (analyzeTarget) {
-      model.setSelectedSidebarNodeId(id);
+      setSelectedSidebarNodeId(id);
       model.openAnalyzeSurface({ selection: analyzeTarget, source: "run-sidebar" });
       return;
     }
@@ -730,31 +738,31 @@ export default function RunSidebar() {
       resultContext.kind !== "results-solutions" &&
       resultContext.kind !== "results-analyses"
     ) {
-      model.setSelectedSidebarNodeId(id);
-      model.setSelectedObjectId(null);
-      model.setSelectedEntityId(null);
-      model.setFocusedEntityId(null);
+      setSelectedSidebarNodeId(id);
+      setSelectedObjectId(null);
+      setSelectedEntityId(null);
+      setFocusedEntityId(null);
       model.openAnalyzeSurface({ source: "run-sidebar" });
       return;
     }
     const objectId = resolveSelectedObjectId(id, model.sceneDocument ?? model.modelBuilderGraph);
-    model.setSelectedSidebarNodeId(id);
-    model.setSelectedObjectId(objectId);
+    setSelectedSidebarNodeId(id);
+    setSelectedObjectId(objectId);
     if (id === "universe-airbox" || id === "universe-airbox-mesh") {
       const airPartId = model.airPart?.id ?? null;
-      model.setSelectedEntityId(airPartId);
-      model.setFocusedEntityId(null);
+      setSelectedEntityId(airPartId);
+      setFocusedEntityId(null);
       return;
     }
     if (objectId) {
       // Tree selection should only change selection/highlight state.
       // Camera focus stays reserved for explicit actions like "Focus in 3D".
-      model.setSelectedEntityId(null);
-      model.setFocusedEntityId(null);
+      setSelectedEntityId(null);
+      setFocusedEntityId(null);
       return;
     }
-    model.setSelectedEntityId(null);
-    model.setFocusedEntityId(null);
+    setSelectedEntityId(null);
+    setFocusedEntityId(null);
   }, [
     builderEnabled,
     clearBuilderSelection,
@@ -953,7 +961,7 @@ export default function RunSidebar() {
       if (action === "duplicate") {
         const duplicateId = model.duplicateResultWorkspaceEntry(id);
         if (duplicateId) {
-          model.setSelectedSidebarNodeId(`res-analysis-${duplicateId}`);
+          setSelectedSidebarNodeId(`res-analysis-${duplicateId}`);
           model.openAnalyzeSurface({
             resultWorkspaceId: duplicateId,
             source: "run-sidebar-context-menu",
@@ -981,7 +989,7 @@ export default function RunSidebar() {
       } as const;
       if (action === "apply") {
         model.applyVisualizationPreset(ref);
-        model.setSelectedSidebarNodeId(nodeId);
+        setSelectedSidebarNodeId(nodeId);
         return;
       }
       if (action === "rename") {
@@ -999,7 +1007,7 @@ export default function RunSidebar() {
       if (action === "duplicate") {
         const created = model.duplicateVisualizationPreset(ref);
         if (created) {
-          model.setSelectedSidebarNodeId(
+          setSelectedSidebarNodeId(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }
@@ -1015,7 +1023,7 @@ export default function RunSidebar() {
       if (action === "save-project") {
         const created = model.copyVisualizationPresetToSource(ref, "project");
         if (created) {
-          model.setSelectedSidebarNodeId(
+          setSelectedSidebarNodeId(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }
@@ -1024,7 +1032,7 @@ export default function RunSidebar() {
       if (action === "save-local") {
         const created = model.copyVisualizationPresetToSource(ref, "local");
         if (created) {
-          model.setSelectedSidebarNodeId(
+          setSelectedSidebarNodeId(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }

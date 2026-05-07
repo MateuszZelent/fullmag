@@ -11,6 +11,7 @@ import {
   Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useWorkspaceStore } from "@/lib/workspace/workspace-store";
 import { useViewport } from "./context-hooks";
 import type { ViewportMode } from "./shared";
 
@@ -102,7 +103,6 @@ export const ViewportTabBar = memo(function ViewportTabBar() {
     if (tab.disabled) return;
     // "2D Plots" has mode=null — activate via workspace docking
     if (tab.id === "charts" && tab.mode === null) {
-      const { useWorkspaceStore } = require("@/lib/workspace/workspace-store");
       const store = useWorkspaceStore.getState();
       store.activateTab(store.currentStage, "core:charts");
       return;

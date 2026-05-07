@@ -435,6 +435,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
     };
@@ -454,6 +455,28 @@ async fn test_router_with_session() -> axum::Router {
 
 async fn test_v2_router_with_session() -> axum::Router {
     build_v2_router().with_state(test_app_state_with_live_session().await)
+}
+
+fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
+    ScalarRow {
+        step,
+        time,
+        solver_dt: 1e-12,
+        mx: 0.1 * step as f64,
+        my: 0.2 * step as f64,
+        mz: 0.9,
+        e_ex: 1.0,
+        e_demag: 2.0,
+        e_ext: 3.0,
+        e_ani: 0.4,
+        e_dmi: 0.5,
+        e_total,
+        max_dm_dt: 0.01,
+        max_h_eff: 100.0,
+        max_h_demag: 10.0,
+        max_torque_Apm: 2.0,
+        max_torque_T: 0.002,
+    }
 }
 
 async fn test_router_with_scene_document() -> axum::Router {
@@ -795,6 +818,7 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
     };
@@ -897,6 +921,7 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         preview: None,
         builder_adapter: None,
         state_version: 0,
+        scalar_revision: 0,
         mesh_revision: 0,
         mesh_build_revision: 0,
     };
@@ -1662,6 +1687,46 @@ async fn visualization_state_rejects_invalid_airbox_vector_domain() {
         json["error"],
         "layers.airbox.vectors.domain must be airbox_only"
     );
+}
+
+// ─── scalar history endpoints ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn scalar_history_returns_windowed_columnar_rows() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        snapshot.scalar_rows = vec![
+            sample_scalar_row(1, 1e-12, 6.9),
+            sample_scalar_row(2, 2e-12, 7.3),
+        ];
+        snapshot.scalar_revision = 2;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/scalars?since_revision=1&limit=1&columns=time,e_total,mx")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 2);
+    assert_eq!(json["total_rows"], 2);
+    assert_eq!(json["returned_rows"], 1);
+    assert_eq!(
+        json["columns"],
+        serde_json::json!(["step", "time", "e_total", "mx"])
+    );
+    assert_eq!(json["rows"], serde_json::json!([[2.0, 2e-12, 7.3, 0.2]]));
 }
 
 // ─── quantities endpoints ───────────────────────────────────────────────────

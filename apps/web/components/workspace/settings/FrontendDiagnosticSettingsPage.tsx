@@ -63,7 +63,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "dockCenterTabs.enableInlineCloseButton": "Render inline close button inside tab trigger.",
   "dockCenterTabs.enableTabContent": "Render mapped tab content panels.",
   "dockCenterTabs.showPreviewNotices": "Show preview stale/downscale notices above tab content.",
-  "dockCenterTabs.enableChartsViewport": "Enable ChartsViewport for chart tabs.",
+  "dockCenterTabs.enableChartsViewport": "Enable 2D Plots workbench for chart tabs.",
   "dockCenterTabs.enableAnalyzeViewport": "Enable AnalyzeViewport for analyze/result tabs.",
   "dockCenterTabs.enableViewportCanvas": "Enable ViewportCanvasArea for viewport/result-quantity tabs.",
   "dockCenterTabs.enablePinOverlayButton": "Enable bottom-right Pin/Unpin overlay button in tab panel.",

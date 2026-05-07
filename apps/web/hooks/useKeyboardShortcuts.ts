@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useCommand, useViewport, useModel } from "../components/runs/control-room/ControlRoomContext";
+import { useSelectionActions } from "@/features/selection";
 import { useVisualizationStore, selectMeshRenderMode } from "@/features/visualization";
 import { visualizationPatchForRenderMode } from "@/components/runs/control-room/visualizationStateSync";
 
@@ -31,7 +32,8 @@ export interface KeyboardShortcutCallbacks {
 export function useKeyboardShortcuts(callbacks?: KeyboardShortcutCallbacks) {
   const { handleSimulationAction } = useCommand();
   const { handleViewModeChange, patchDisplay, setSidebarCollapsed } = useViewport();
-  const { setSelectedSidebarNodeId, setObjectViewMode } = useModel();
+  const { setObjectViewMode } = useModel();
+  const { setSelectedSidebarNodeId } = useSelectionActions();
   const meshRenderMode = useVisualizationStore(selectMeshRenderMode);
 
   useEffect(() => {

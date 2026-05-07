@@ -4,6 +4,7 @@ import type {
   ModelContextValue,
   ViewportContextValue,
 } from "./context-hooks";
+import { useSelectedSidebarNodeId, useSelectionActions } from "@/features/selection";
 import {
   buildMeshBuildStages,
   deriveEffectiveMeshTargets,
@@ -41,8 +42,6 @@ interface UseMeshBuildFlowInput {
     | "modelBuilderGraph"
     | "openFemMeshWorkspace"
     | "sceneDocument"
-    | "selectedSidebarNodeId"
-    | "setSelectedSidebarNodeId"
   >;
   viewport: Pick<ViewportContextValue, "handleViewModeChange">;
   hasSharedAirboxDomain: boolean;
@@ -62,6 +61,8 @@ export function useMeshBuildFlow({
   setRightInspectorOpen,
   setRightInspectorTab,
 }: UseMeshBuildFlowInput) {
+  const selectedSidebarNodeId = useSelectedSidebarNodeId();
+  const { setSelectedSidebarNodeId } = useSelectionActions();
   const [meshBuildDialogOpen, setMeshBuildDialogOpen] = useState(false);
   const [meshBuildIntent, setMeshBuildIntent] = useState<MeshBuildIntent | null>(null);
   const [meshBuildError, setMeshBuildError] = useState<string | null>(null);
@@ -75,12 +76,12 @@ export function useMeshBuildFlow({
     () =>
       meshBuildIntentForNode({
         mode: "selected",
-        nodeId: model.selectedSidebarNodeId,
+        nodeId: selectedSidebarNodeId,
         sceneDocument: model.sceneDocument,
         modelBuilderGraph: model.modelBuilderGraph,
         hasSharedAirboxDomain,
       }),
-    [model.modelBuilderGraph, model.sceneDocument, model.selectedSidebarNodeId, hasSharedAirboxDomain],
+    [model.modelBuilderGraph, model.sceneDocument, selectedSidebarNodeId, hasSharedAirboxDomain],
   );
 
   const effectiveMeshTargets = useMemo(
@@ -176,7 +177,7 @@ export function useMeshBuildFlow({
   const handleBuildMeshSelected = useCallback(async () => {
     const intent = meshBuildIntentForNode({
       mode: "selected",
-      nodeId: model.selectedSidebarNodeId,
+      nodeId: selectedSidebarNodeId,
       sceneDocument: model.sceneDocument,
       modelBuilderGraph: model.modelBuilderGraph,
       hasSharedAirboxDomain,
@@ -204,7 +205,7 @@ export function useMeshBuildFlow({
   const handleBuildMeshAll = useCallback(async () => {
     const intent = meshBuildIntentForNode({
       mode: "all",
-      nodeId: model.selectedSidebarNodeId,
+      nodeId: selectedSidebarNodeId,
       sceneDocument: model.sceneDocument,
       modelBuilderGraph: model.modelBuilderGraph,
       hasSharedAirboxDomain,
@@ -225,7 +226,7 @@ export function useMeshBuildFlow({
 
   const handleOpenMeshStatistics = useCallback(() => {
     const nodeId = hasSharedAirboxDomain ? "mesh-statistics" : "universe-mesh-statistics";
-    model.setSelectedSidebarNodeId(nodeId);
+    setSelectedSidebarNodeId(nodeId);
     setRightInspectorOpen(true);
     setRightInspectorTab("properties");
   }, [hasSharedAirboxDomain, model, setRightInspectorOpen, setRightInspectorTab]);
@@ -236,8 +237,8 @@ export function useMeshBuildFlow({
   }, [hasSharedAirboxDomain, openMeshNode, viewport]);
 
   const handleOpenMeshSize = useCallback(() => {
-    if (model.selectedSidebarNodeId?.startsWith("geo-") && model.selectedSidebarNodeId.endsWith("-mesh")) {
-      selectModelNode(model.selectedSidebarNodeId);
+    if (selectedSidebarNodeId?.startsWith("geo-") && selectedSidebarNodeId.endsWith("-mesh")) {
+      selectModelNode(selectedSidebarNodeId);
       model.openFemMeshWorkspace("mesher");
       viewport.handleViewModeChange("3D");
       return;

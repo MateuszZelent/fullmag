@@ -3,6 +3,7 @@
 import { startTransition, useCallback, useMemo, useState } from "react";
 
 import { useModel } from "../../runs/control-room/ControlRoomContext";
+import { useSelectionActions } from "@/features/selection";
 import { extractGeometryBoundsFromParams, fmtSI } from "../../runs/control-room/shared";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import { TextField } from "../../ui/TextField";
@@ -259,6 +260,12 @@ function describeGeometryDescriptor(raw: unknown): string {
 
 export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
   const model = useModel();
+  const {
+    setFocusedEntityId,
+    setSelectedEntityId,
+    setSelectedObjectId,
+    setSelectedSidebarNodeId,
+  } = useSelectionActions();
   const sceneAuthoring = useSceneAuthoringActions();
 
   const { object: sceneObject, index: objectIndex, material, magnetization } = useMemo(
@@ -607,10 +614,10 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                     });
                 }
                 startTransition(() => {
-                  model.setSelectedObjectId(duplicateName);
-                  model.setSelectedSidebarNodeId(`obj-${duplicateName}`);
-                  model.setSelectedEntityId(null);
-                  model.setFocusedEntityId(null);
+                  setSelectedObjectId(duplicateName);
+                  setSelectedSidebarNodeId(`obj-${duplicateName}`);
+                  setSelectedEntityId(null);
+                  setFocusedEntityId(null);
                   model.setObjectViewMode("context");
                 });
               }}
@@ -662,10 +669,10 @@ export default function GeometryPanel({ nodeId }: { nodeId?: string }) {
                     });
                 }
                 startTransition(() => {
-                  model.setSelectedObjectId(null);
-                  model.setSelectedSidebarNodeId("objects");
-                  model.setSelectedEntityId(null);
-                  model.setFocusedEntityId(null);
+                  setSelectedObjectId(null);
+                  setSelectedSidebarNodeId("objects");
+                  setSelectedEntityId(null);
+                  setFocusedEntityId(null);
                   model.setObjectViewMode("context");
                 });
               }}

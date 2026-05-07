@@ -6,7 +6,6 @@
 export {
   useSelectionStore,
   type SelectionStoreState,
-  type SelectionSyncPatch,
   // Selectors
   selectSelectedSidebarNodeId,
   selectSelectedObjectId,
@@ -15,3 +14,13 @@ export {
   selectViewportScope,
   selectFocusObjectRequest,
 } from "./store/useSelectionStore";
+export {
+  useSelectedSidebarNodeId,
+  useSelectedObjectId,
+  useSelectedEntityId,
+  useFocusedEntityId,
+  useViewportScopeSelection,
+  useFocusObjectRequest,
+  useSelectionState,
+  useSelectionActions,
+} from "./hooks/useSelectionSlice";

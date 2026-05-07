@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useVectorState, useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
 
 import { useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { type ViewportMode } from "../../runs/control-room/shared";
@@ -60,6 +61,8 @@ export default function MeshPanel() {
   const viewport = useViewport();
   const cmd = useCommand();
   const model = useModel();
+  const viz = useViewportRenderState();
+  const vectorViz = useVectorState();
 
   const {
     effectiveViewMode,
@@ -75,18 +78,12 @@ export default function MeshPanel() {
     effectiveFemMesh,
     meshFeOrder,
     meshHmax,
-    meshRenderMode,
     meshFaceDetail,
     meshSelection,
     setMeshSelection,
     meshWorkspacePreset,
     meshWorkspace,
     meshConfigDirty,
-    meshClipEnabled,
-    meshClipAxis,
-    meshClipPos,
-    meshOpacity,
-    meshShowArrows,
     meshQualitySummary,
     meshQualityData,
     meshBoundsMin,
@@ -100,6 +97,14 @@ export default function MeshPanel() {
     meshOptions,
     applyMeshWorkspacePreset,
   } = model;
+  const {
+    meshRenderMode,
+    meshClipEnabled,
+    meshClipAxis,
+    meshClipPos,
+    meshOpacity,
+  } = viz;
+  const meshShowArrows = vectorViz.showArrows;
 
   const pipelinePhases =
     meshWorkspace?.mesh_pipeline_status?.length

@@ -36,12 +36,10 @@ export const EMPTY_WORKSPACE_GRAPH: WorkspaceGraphState = {
   workspaceTabs: {
     build: [],
     study: [],
-    analyze: [],
   },
   activeWorkspaceTabByStage: {
     build: null,
     study: null,
-    analyze: null,
   },
   selection: EMPTY_SELECTION,
   scalarRows: [],

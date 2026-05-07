@@ -14,6 +14,7 @@ import type {
   AirboxDisplayPatch,
   ViewportMeshRenderMode,
 } from "@/components/shell/ribbon/command-registry";
+import { useViewportRenderState } from "@/features/visualization/hooks/useVizSlice";
 import { defaultMeshEntityViewState } from "@/lib/session/types";
 import {
   normalizeSliceComponent,
@@ -51,6 +52,7 @@ export function useRibbonVisualizationActions({
   const slice2DToolbarPatch = useSlice2DToolbarStore((state) => state.patch);
   const patchSlice2DToolbar = useSlice2DToolbarStore((state) => state.patchToolbar);
   const airboxStore = useSlice2DAirboxStore();
+  const viz = useViewportRenderState();
 
   const handleRibbonPreviewComponent = useCallback((component: RibbonPreviewComponent) => {
     const nextComponent = component === "3D" ? "magnitude" : component;
@@ -100,7 +102,7 @@ export function useRibbonVisualizationActions({
 
   const effectiveSlicePlane = resolveEffectiveSlicePlane({
     plane: viewport.plane,
-    clipAxis: model.meshClipAxis,
+    clipAxis: viz.meshClipAxis,
     preferClipAxis: Boolean(femDiscretization),
   });
   const canonicalSliceToolbar = model.resolvedRenderPlan?.slice ?? null;
@@ -113,7 +115,7 @@ export function useRibbonVisualizationActions({
       mode: viewport.requestedPreviewAllLayers ? "all_layers" : "single",
       layerIndex: viewport.sliceIndex,
       positionPercent: femDiscretization
-        ? (model.meshClipPos ?? 50)
+        ? (viz.meshClipPos ?? 50)
         : positionPercentFromSliceIndex({
           grid: viewport.previewGrid,
           plane: effectiveSlicePlane,
@@ -122,15 +124,15 @@ export function useRibbonVisualizationActions({
       thicknessPercent: null,
       colormap: "viridis",
       autoContrast: Boolean(viewport.requestedPreviewAutoScale ?? true),
-      showPrimitives: model.femViewportLayers.showPrimitives,
-      showMesh: model.femViewportLayers.showMesh,
-      showMagneticTexture: model.femViewportLayers.showMagneticTexture,
+      showPrimitives: viz.femViewportLayers.showPrimitives,
+      showMesh: viz.femViewportLayers.showMesh,
+      showMagneticTexture: viz.femViewportLayers.showMagneticTexture,
       showAirbox: false,
       airboxRenderMode: "wireframe",
       showAirboxVectors: false,
-      showQuantity: model.femViewportLayers.showQuantity,
-      showVectors: Boolean(model.meshShowArrows),
-      renderMode: model.meshShowArrows ? "vectors" : "heatmap",
+      showQuantity: viz.femViewportLayers.showQuantity,
+      showVectors: Boolean(viz.meshShowArrows),
+      renderMode: viz.meshShowArrows ? "vectors" : "heatmap",
       projectionReduction: "mean_occupied",
       projectionIncludeAirAsZero: false,
       projectionSamples: 20,
@@ -160,10 +162,10 @@ export function useRibbonVisualizationActions({
     canonicalSliceToolbar,
     effectiveSlicePlane,
     femDiscretization,
-    model.femViewportLayers,
-    model.meshClipPos,
-    model.meshShowArrows,
     slice2DToolbarPatch,
+    viz.femViewportLayers,
+    viz.meshClipPos,
+    viz.meshShowArrows,
     viewport.component,
     viewport.previewGrid,
     viewport.requestedPreviewAllLayers,
@@ -183,8 +185,8 @@ export function useRibbonVisualizationActions({
   });
   const airMeshRenderMode: ViewportMeshRenderMode | null =
     airboxDisplayState.renderMode === "custom" ? null : airboxDisplayState.renderMode;
-  const ribbonFemLayers = model.resolvedRenderPlan?.layers.femLayers ?? model.femViewportLayers;
-  const ribbonAirboxVisible = model.resolvedRenderPlan?.layers.airbox.visible ?? model.airMeshVisible;
+  const ribbonFemLayers = model.resolvedRenderPlan?.layers.femLayers ?? viz.femViewportLayers;
+  const ribbonAirboxVisible = model.resolvedRenderPlan?.layers.airbox.visible ?? viz.airMeshVisible;
 
   const handleRibbonSlice2DToolbar = useCallback((patch: Partial<Slice2DToolbarState>) => {
     patchSlice2DToolbar(patch);
@@ -246,7 +248,7 @@ export function useRibbonVisualizationActions({
           },
         },
       });
-      if (!patch.showVectors && model.femViewportLayers.showMagneticTexture && !model.femViewportLayers.showQuantity) {
+      if (!patch.showVectors && viz.femViewportLayers.showMagneticTexture && !viz.femViewportLayers.showQuantity) {
         viewport.requestPreviewQuantity("m");
       }
     }
@@ -285,9 +287,9 @@ export function useRibbonVisualizationActions({
     handleRibbonPreviewAutoScale,
     handleRibbonPreviewColormap,
     handleRibbonPreviewComponent,
-    model.femViewportLayers,
     patchSlice2DToolbar,
     ribbonFemLayers,
+    viz.femViewportLayers,
     viewport,
   ]);
 

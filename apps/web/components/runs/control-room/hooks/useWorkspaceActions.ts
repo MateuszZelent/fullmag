@@ -61,6 +61,10 @@ import {
   visualizationPatchForRenderMode,
 } from "../visualizationStateSync";
 import { canIssueSolverControlCommand } from "../commandControlGuards";
+import {
+  handleComputeCommand,
+  syncScriptBuilderCommand,
+} from "@/features/command/actions/commandActions";
 
 type NormalizedViewportMode = ViewportMode | "charts";
 export type QuantitySwitchCacheState =
@@ -413,7 +417,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
 
   /* ── handleCompute ── */
   const handleCompute = useCallback(() => {
-    void enqueueCommand({ kind: "solve" });
+    handleComputeCommand(enqueueCommand);
   }, [enqueueCommand]);
 
   /* ── openFemMeshWorkspace ── */
@@ -810,42 +814,26 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
   /* ── syncScriptBuilder ── */
   const syncScriptBuilder = useCallback(async () => {
     const scriptPath = session?.script_path ?? null;
-    if (!scriptPath) {
-      setScriptSyncMessage("No script path is available for the active workspace");
-      appendFrontendTrace("warn", "TX: SCRIPT_SYNC skipped — no script path available");
-      return;
-    }
-
-    setScriptSyncBusy(true);
-    setScriptSyncMessage(null);
-    appendFrontendTrace("info", `TX: SCRIPT_SYNC ${scriptPath}`);
-    try {
-      if (!localBuilderDraft) {
-        throw new Error("No scene document is available for script sync");
-      }
-      builderAutoSync.cancelPendingPush();
-      await liveApi.updateSceneDocument(localBuilderDraft);
-      builderAutoSync.recordPushSignature(localBuilderSignature);
-      const response = await liveApi.syncScript();
-      const syncedPath =
-        typeof response.script_path === "string" && response.script_path.trim().length > 0
-          ? response.script_path
-          : scriptPath;
-      setScriptSyncMessage(`Synced ${syncedPath.split("/").pop() ?? "script"} to canonical Python`);
-      appendFrontendTrace(
-        "success",
-        `RX: SCRIPT_SYNC ok — ${syncedPath.split("/").pop() ?? "script"}`,
-      );
-    } catch (error) {
-      setScriptSyncMessage(error instanceof Error ? error.message : "Failed to sync script");
-      appendFrontendTrace(
-        "error",
-        `RX: SCRIPT_SYNC failed — ${error instanceof Error ? error.message : "Failed to sync script"}`,
-      );
-    } finally {
-      setScriptSyncBusy(false);
-    }
-  }, [appendFrontendTrace, liveApi, localBuilderDraft, localBuilderSignature, session?.script_path]);
+    await syncScriptBuilderCommand({
+      appendFrontendTrace,
+      builderAutoSync,
+      liveApi,
+      localBuilderDraft,
+      localBuilderSignature,
+      scriptPath,
+      setScriptSyncBusy,
+      setScriptSyncMessage,
+    });
+  }, [
+    appendFrontendTrace,
+    builderAutoSync,
+    liveApi,
+    localBuilderDraft,
+    localBuilderSignature,
+    session?.script_path,
+    setScriptSyncBusy,
+    setScriptSyncMessage,
+  ]);
 
   /* ── useEffect: command status logging ── */
   useEffect(() => {

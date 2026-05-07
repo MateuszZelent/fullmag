@@ -19,6 +19,12 @@ import {
   useModel,
   useTransport,
 } from "../../runs/control-room/context-hooks";
+import {
+  useFocusedEntityId,
+  useSelectedEntityId,
+  useSelectedSidebarNodeId,
+  useSelectionActions,
+} from "@/features/selection";
 import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
 import { FemPartExplorerPanel } from "@/components/preview/fem/FemPartExplorerPanel";
 import type { PartQualitySummary } from "@/components/preview/fem/FemPartExplorerPanel";
@@ -34,10 +40,14 @@ export function WorkspaceRightToolbox() {
   const transport = useTransport();
   const command = useCommand();
   const model = useModel();
+  const selectedSidebarNodeId = useSelectedSidebarNodeId();
+  const selectedEntityId = useSelectedEntityId();
+  const focusedEntityId = useFocusedEntityId();
+  const { setSelectedEntityId, setFocusedEntityId } = useSelectionActions();
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
   const capabilitySummary = useMemo(() => summarizeCapabilityCoverage(), []);
-  const selectedNodeId = model.selectedSidebarNodeId ?? "study-root";
+  const selectedNodeId = selectedSidebarNodeId ?? "study-root";
 
   const snapshot = model.visibleSubmeshSnapshot;
   const meshParts = model.meshParts;
@@ -142,10 +152,10 @@ export function WorkspaceRightToolbox() {
 
   const handlePartSelect = useCallback(
     (partId: string) => {
-      model.setSelectedEntityId(partId);
-      model.setFocusedEntityId(partId);
+      setSelectedEntityId(partId);
+      setFocusedEntityId(partId);
     },
-    [model],
+    [setFocusedEntityId, setSelectedEntityId],
   );
 
   const handleRoleVisibility = useCallback(
@@ -202,12 +212,12 @@ export function WorkspaceRightToolbox() {
                 roleVisibilitySummary={roleVisibilitySummary}
                 inspectedMeshPart={inspectedMeshPart}
                 inspectedPartQuality={inspectedPartQuality}
-                selectedEntityId={model.selectedEntityId}
-                focusedEntityId={model.focusedEntityId}
+                selectedEntityId={selectedEntityId}
+                focusedEntityId={focusedEntityId}
                 visiblePartsCount={snapshot.visiblePartsCount}
                 onClose={() => setRightInspectorTab("properties")}
                 onPartSelect={handlePartSelect}
-                onEntityFocus={model.setFocusedEntityId}
+                onEntityFocus={setFocusedEntityId}
                 onPatchPart={(partId, patch) => patchMeshPartViewState([partId], patch)}
                 onRoleVisibility={handleRoleVisibility}
               />

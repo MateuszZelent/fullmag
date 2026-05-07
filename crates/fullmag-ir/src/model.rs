@@ -200,8 +200,8 @@ pub enum InitialMagnetizationIR {
     },
     PresetTexture {
         preset_kind: String,
-        #[serde(default)]
-        params: BTreeMap<String, Value>,
+        #[serde(default, alias = "params")]
+        preset_params: BTreeMap<String, Value>,
         #[serde(default)]
         mapping: TextureMappingIR,
         #[serde(default)]

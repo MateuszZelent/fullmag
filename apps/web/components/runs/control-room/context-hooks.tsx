@@ -57,13 +57,10 @@ import type {
 } from "../../../lib/session/types";
 import type { SolverSettingsState } from "../../panels/SolverSettingsPanel";
 import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
-import type { FemViewportLayerState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import type {
-  ClipAxis,
   FemColorField,
   FemMeshData,
   MeshSelectionSnapshot,
-  RenderMode,
 } from "@/components/preview/FemMeshView3D";
 import type {
   AntennaOverlay,
@@ -77,10 +74,7 @@ import type {
   ViewportMode,
 } from "./shared";
 import { computeMeshFaceDetail } from "./shared";
-import type {
-  ResolvedRenderPlan,
-  ViewportVisualizationState,
-} from "./visualizationStateSync";
+import type { ResolvedRenderPlan } from "./visualizationStateSync";
 import type {
   ActivityInfo,
   BackendErrorInfo,
@@ -139,7 +133,7 @@ export interface TransportContextValue {
 
 /* ── Viewport: user-driven UI state ── */
 export type WorkspaceStage = "build" | "study";
-export type WorkspaceMode = WorkspaceStage | "analyze";
+export type WorkspaceMode = WorkspaceStage;
 export type ResultWorkspaceKind =
   | "spectrum"
   | "dispersion"
@@ -174,7 +168,7 @@ export interface ViewportContextValue {
   setWorkspaceStage: (v: WorkspaceStage | ((prev: WorkspaceStage) => WorkspaceStage)) => void;
   /** @deprecated Use workspaceStage. Kept while older panels are migrated. */
   workspaceMode: WorkspaceMode;
-  /** @deprecated Use setWorkspaceStage. Legacy "analyze" inputs are normalized to study. */
+  /** @deprecated Use setWorkspaceStage. */
   setWorkspaceMode: (v: WorkspaceMode | ((prev: WorkspaceMode) => WorkspaceMode)) => void;
   viewMode: ViewportMode;
   effectiveViewMode: ViewportMode;
@@ -328,27 +322,6 @@ export interface ModelContextValue {
   objectOverlays: BuilderObjectOverlay[];
   femMesh: FemLiveMesh | null;
   resolvedRenderPlan: ResolvedRenderPlan | null;
-  meshRenderMode: RenderMode;
-  meshOpacity: number;
-  meshClipEnabled: boolean;
-  meshClipAxis: ClipAxis;
-  meshClipPos: number;
-  meshClipFlip: boolean;
-  meshShowArrows: boolean;
-  femTextureDownsampleCells: number;
-  femVectorGlyphBudget: number;
-  femArrowColorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
-  femArrowMonoColor: string;
-  femArrowAlpha: number;
-  femArrowLengthScale: number;
-  femArrowThickness: number;
-  femVectorDomainFilter: "auto" | "magnetic_only" | "full_domain" | "airbox_only";
-  femFerromagnetVisibilityMode: "hide" | "ghost";
-  femViewportLayers: FemViewportLayerState;
-  viewportLegendVisible: boolean;
-  viewportAxesScope: "universe" | "object";
-  universeWireframeVisible: boolean;
-  fdmVisualizationSettings: VisualizationPresetFdmState;
   visualizationProjectPresets: VisualizationPreset[];
   visualizationLocalPresets: VisualizationPreset[];
   activeVisualizationPresetRef: VisualizationPresetRef | null;
@@ -386,19 +359,11 @@ export interface ModelContextValue {
   mesherSourceKind: string | null;
   mesherCurrentSettings: Record<string, unknown> | null;
   meshWorkspacePreset: MeshWorkspacePresetId;
-  selectedSidebarNodeId: string | null;
-  selectedObjectId: string | null;
   viewportSelectedObjectId: string | null;
-  viewportScope: ViewportScope;
-  focusObjectRequest: FocusObjectRequest | null;
   cameraFitRequestSeed: number;
   objectViewMode: ObjectViewMode;
   activeTransformScope: "object" | "texture" | null;
-  airMeshVisible: boolean;
-  airMeshOpacity: number;
   meshEntityViewState: MeshEntityViewStateMap;
-  selectedEntityId: string | null;
-  focusedEntityId: string | null;
   meshParts: FemMeshPart[];
   visibleMeshPartIds: string[];
   visibleMagneticObjectIds: string[];
@@ -437,28 +402,15 @@ export interface ModelContextValue {
   setScriptBuilderExcitationAnalysis: React.Dispatch<
     React.SetStateAction<ScriptBuilderExcitationAnalysisEntry | null>
   >;
-  setViewportVisualizationState: React.Dispatch<React.SetStateAction<ViewportVisualizationState>>;
-  setFemTextureDownsampleCells: React.Dispatch<React.SetStateAction<number>>;
-  setViewportLegendVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  setViewportAxesScope: React.Dispatch<React.SetStateAction<"universe" | "object">>;
-  setUniverseWireframeVisible: React.Dispatch<React.SetStateAction<boolean>>;
-  setFdmVisualizationSettings: React.Dispatch<
-    React.SetStateAction<VisualizationPresetFdmState>
-  >;
   setMeshSelection: React.Dispatch<React.SetStateAction<MeshSelectionSnapshot>>;
   setMeshOptions: React.Dispatch<React.SetStateAction<MeshOptionsState>>;
   setFemDockTab: React.Dispatch<React.SetStateAction<FemDockTab>>;
-  setSelectedSidebarNodeId: React.Dispatch<React.SetStateAction<string | null>>;
-  setSelectedObjectId: React.Dispatch<React.SetStateAction<string | null>>;
-  setViewportScope: React.Dispatch<React.SetStateAction<ViewportScope>>;
   setObjectViewMode: React.Dispatch<React.SetStateAction<ObjectViewMode>>;
   setActiveTransformScope: React.Dispatch<React.SetStateAction<"object" | "texture" | null>>;
   setMeshEntityViewState: React.Dispatch<React.SetStateAction<MeshEntityViewStateMap>>;
   setVisibleSubmeshSnapshot: React.Dispatch<
     React.SetStateAction<VisibleSubmeshSnapshot | null>
   >;
-  setSelectedEntityId: (id: string | null) => void;
-  setFocusedEntityId: (id: string | null) => void;
   setAnalyzeSelection: React.Dispatch<React.SetStateAction<AnalyzeSelectionState>>;
   openAnalyze: (next?: Partial<AnalyzeSelectionState>) => void;
   selectAnalyzeTab: (tab: AnalyzeTab) => void;

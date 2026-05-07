@@ -20,6 +20,11 @@
 
 import { create } from "zustand";
 import type { RenderMode } from "@/components/preview/FemMeshView3D";
+import type {
+  ResolvedRenderPlan,
+  ViewportVisualizationState,
+} from "@/components/runs/control-room/visualizationStateSync";
+import { projectResolvedRenderPlanToViewportState } from "@/components/runs/control-room/visualizationStateSync";
 import type { ClipAxis } from "@/components/preview/fem/femMeshTypes";
 import type {
   FemViewportLayerState,
@@ -83,6 +88,9 @@ export interface VisualizationStoreState extends ViewportVizCore {
   /* FDM visualization */
   fdmVisualizationSettings: VisualizationPresetFdmState;
 
+  /** Resolved render plan from the backend visualization state resource. */
+  resolvedRenderPlan: ResolvedRenderPlan | null;
+
   /* Presets */
   visualizationProjectPresets: VisualizationPreset[];
   visualizationLocalPresets: VisualizationPreset[];
@@ -92,6 +100,12 @@ export interface VisualizationStoreState extends ViewportVizCore {
 
   /** Batch-update core viewport viz fields (from render plan projection). */
   setCore: (core: ViewportVizCore) => void;
+
+  /** Apply a canonical render-plan projection. */
+  applyFromRenderPlan: (core: ViewportVizCore) => void;
+
+  /** Apply visualization fields restored from a user preset. */
+  applyFromPreset: (partial: Partial<ViewportVizCore>) => void;
 
   /** Patch individual fields (for UI controls). */
   patch: (partial: Partial<ViewportVizCore>) => void;
@@ -105,6 +119,7 @@ export interface VisualizationStoreState extends ViewportVizCore {
   setViewportAxesScope: (v: "universe" | "object") => void;
   setUniverseWireframeVisible: (v: boolean) => void;
   setFdmVisualizationSettings: (v: VisualizationPresetFdmState) => void;
+  setResolvedRenderPlan: (v: ResolvedRenderPlan | null) => void;
 
   /* Preset management */
   setVisualizationProjectPresets: (v: VisualizationPreset[]) => void;
@@ -139,10 +154,10 @@ export const DEFAULT_CORE: ViewportVizCore = {
 };
 
 const INITIAL_STATE: Omit<VisualizationStoreState,
-  | "setCore" | "patch" | "resetToDefaults"
+  | "setCore" | "applyFromRenderPlan" | "applyFromPreset" | "patch" | "resetToDefaults"
   | "setFemTextureDownsampleCells" | "setViewportLegendVisible"
   | "setViewportAxesScope" | "setUniverseWireframeVisible"
-  | "setFdmVisualizationSettings"
+  | "setFdmVisualizationSettings" | "setResolvedRenderPlan"
   | "setVisualizationProjectPresets" | "setVisualizationLocalPresets"
   | "setActiveVisualizationPresetRef"
 > = {
@@ -152,6 +167,7 @@ const INITIAL_STATE: Omit<VisualizationStoreState,
   viewportAxesScope: "universe",
   universeWireframeVisible: true,
   fdmVisualizationSettings: DEFAULT_FDM_VISUALIZATION_SETTINGS,
+  resolvedRenderPlan: null,
   visualizationProjectPresets: [],
   visualizationLocalPresets: [],
   activeVisualizationPresetRef: null,
@@ -179,6 +195,34 @@ export const useVisualizationStore = create<VisualizationStoreState>((set) => ({
       return { ...prev, ...core };
     }),
 
+  applyFromRenderPlan: (core) =>
+    set((prev) => {
+      let changed = false;
+      const keys = Object.keys(core) as (keyof ViewportVizCore)[];
+      for (const k of keys) {
+        if (!Object.is(prev[k], core[k])) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return prev;
+      return { ...prev, ...core };
+    }),
+
+  applyFromPreset: (partial) =>
+    set((prev) => {
+      let changed = false;
+      const keys = Object.keys(partial) as (keyof ViewportVizCore)[];
+      for (const k of keys) {
+        if (!Object.is(prev[k], partial[k])) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return prev;
+      return { ...prev, ...partial };
+    }),
+
   patch: (partial) =>
     set((prev) => {
       let changed = false;
@@ -200,6 +244,7 @@ export const useVisualizationStore = create<VisualizationStoreState>((set) => ({
   setViewportAxesScope: (v) => set({ viewportAxesScope: v }),
   setUniverseWireframeVisible: (v) => set({ universeWireframeVisible: v }),
   setFdmVisualizationSettings: (v) => set({ fdmVisualizationSettings: v }),
+  setResolvedRenderPlan: (v) => set({ resolvedRenderPlan: v }),
 
   setVisualizationProjectPresets: (v) => set({ visualizationProjectPresets: v }),
   setVisualizationLocalPresets: (v) => set({ visualizationLocalPresets: v }),
@@ -247,7 +292,21 @@ export const selectUniverseWireframeVisible = (s: VisualizationStoreState) => s.
 // FDM
 export const selectFdmVisualizationSettings = (s: VisualizationStoreState) => s.fdmVisualizationSettings;
 
+// Render plan
+export const selectResolvedRenderPlan = (s: VisualizationStoreState) => s.resolvedRenderPlan;
+
 // Presets
 export const selectVisualizationProjectPresets = (s: VisualizationStoreState) => s.visualizationProjectPresets;
 export const selectVisualizationLocalPresets = (s: VisualizationStoreState) => s.visualizationLocalPresets;
 export const selectActiveVisualizationPresetRef = (s: VisualizationStoreState) => s.activeVisualizationPresetRef;
+
+/**
+ * Derive the effective viewport visualization state from the store.
+ * This projects the resolved render plan onto the base viz core state,
+ * providing the same semantics as the old CRC `effectiveViewportVisualizationState`.
+ */
+export function selectEffectiveViewportVizState(
+  s: VisualizationStoreState,
+): ViewportVisualizationState {
+  return projectResolvedRenderPlanToViewportState(s.resolvedRenderPlan, s);
+}

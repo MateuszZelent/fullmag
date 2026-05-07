@@ -2,6 +2,8 @@
 
 import { useMemo } from "react";
 import RibbonBar, { type RibbonBarProps } from "@/components/shell/RibbonBar";
+import { useMagneticTextureDensity } from "@/features/visualization/hooks/useVizSlice";
+import { useSelectedObjectId, useSelectedSidebarNodeId } from "@/features/selection";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { useCommand, useModel, useViewport } from "./context-hooks";
 import { resolveSolverControlDisabledReasons } from "./commandControlGuards";
@@ -61,6 +63,9 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
   const viewport = useViewport();
   const command = useCommand();
   const model = useModel();
+  const selectedSidebarNodeId = useSelectedSidebarNodeId();
+  const selectedObjectId = useSelectedObjectId();
+  const magneticTextureDensity = useMagneticTextureDensity();
   const builderRunBlocked = useBuilderRunBlocked();
   const femDiscretization = resolveFemDiscretization(
     command.domainCapabilities,
@@ -105,7 +110,7 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       explorerVisible={props.explorerVisible}
       inspectorVisible={props.inspectorVisible}
       telemetryVisible={props.telemetryVisible}
-      selectedNodeId={model.selectedSidebarNodeId}
+      selectedNodeId={selectedSidebarNodeId}
       canRun={command.canRunCommand && !builderRunBlocked}
       canRelax={command.canRelaxCommand && !builderRunBlocked}
       canPause={command.canPauseCommand}
@@ -129,7 +134,7 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       requestedPreviewMaxPoints={viewport.requestedPreviewMaxPoints}
       requestedPreviewAutoScale={viewport.requestedPreviewAutoScale}
       requestedPreviewQuantityDataStatus={viewport.requestedPreviewQuantityDataStatus}
-      magneticTextureDensity={model.femTextureDownsampleCells}
+      magneticTextureDensity={magneticTextureDensity}
       onQuickPreviewSelect={viewport.requestPreviewQuantity}
       onSetFemVectorGlyphBudget={(glyphBudget) =>
         void viewport.patchDisplay({
@@ -143,7 +148,7 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       onStateExport={() => void command.handleStateExport("compact")}
       meshGenerating={model.meshGenerating}
       meshConfigDirty={model.meshConfigDirty}
-      selectedObjectId={model.selectedObjectId}
+      selectedObjectId={selectedObjectId}
       objectViewMode={model.objectViewMode}
       sceneObjectCount={model.sceneDocument?.objects.length ?? 0}
       onRequestObjectFocus={model.requestFocusObject}

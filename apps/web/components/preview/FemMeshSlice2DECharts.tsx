@@ -145,7 +145,7 @@ export default function FemMeshSlice2DECharts({
   const hasField = Boolean(meshData.fieldData);
   const isMagnetizationQuantity = !quantityId || quantityId === "m";
   const componentOptions: VectorComponent[] = fieldNComp >= 3
-    ? (isMagnetizationQuantity ? ["x", "y", "z"] : ["magnitude", "x", "y", "z"])
+    ? ["magnitude", "x", "y", "z"]
     : ["magnitude"];
   const effectiveComponent: VectorComponent = componentOptions.includes(component)
     ? component
