@@ -201,10 +201,12 @@ describe("ribbon viewport commands", () => {
     })).toEqual({
       slice: {
         show_airbox_vectors: true,
-        show_vectors: true,
-        render_mode: "vectors",
       },
     });
+    expect(visualizationPatchFromRibbonCommand({
+      id: "viewport.set-slice-projection-reduction",
+      reduction: "rms",
+    })).toEqual({ slice: { projection_reduction: "rms" } });
   });
 
   it("dispatches slice toolbar through visualization state when canonical patching is available", () => {
@@ -525,7 +527,6 @@ describe("ribbon viewport commands", () => {
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, { airboxRenderMode: "points" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(7, {
       showAirboxVectors: true,
-      renderMode: "vectors",
     });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(8, {
       renderMode: "mesh-overlay",

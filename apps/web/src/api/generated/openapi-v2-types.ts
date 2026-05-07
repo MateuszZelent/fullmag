@@ -3079,6 +3079,12 @@ export interface components {
             mode?: null | components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent?: number | null;
+            projection_include_air_as_zero?: boolean | null;
+            projection_reduction?: string | null;
+            /** Format: int32 */
+            projection_resolution?: number | null;
+            /** Format: int32 */
+            projection_samples?: number | null;
             quantity_id?: string | null;
             render_mode?: null | components["schemas"]["SliceRenderMode"];
             show_airbox?: boolean | null;
@@ -3102,6 +3108,12 @@ export interface components {
             mode: components["schemas"]["SliceVisualizationMode"];
             /** Format: double */
             position_percent: number;
+            projection_include_air_as_zero: boolean;
+            projection_reduction: string;
+            /** Format: int32 */
+            projection_resolution: number;
+            /** Format: int32 */
+            projection_samples: number;
             quantity_id: string;
             render_mode: components["schemas"]["SliceRenderMode"];
             show_airbox: boolean;

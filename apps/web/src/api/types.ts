@@ -266,6 +266,10 @@ export interface SliceVisualizationState {
   show_quantity: boolean;
   show_vectors: boolean;
   render_mode: SliceRenderMode;
+  projection_reduction: FieldProjectionReduction;
+  projection_include_air_as_zero: boolean;
+  projection_samples: number;
+  projection_resolution: number;
 }
 
 export interface SliceVisualizationPatch {
@@ -287,6 +291,10 @@ export interface SliceVisualizationPatch {
   show_quantity?: boolean | null;
   show_vectors?: boolean | null;
   render_mode?: SliceRenderMode | null;
+  projection_reduction?: FieldProjectionReduction | null;
+  projection_include_air_as_zero?: boolean | null;
+  projection_samples?: number | null;
+  projection_resolution?: number | null;
 }
 
 export type ClipAxis = "x" | "y" | "z";

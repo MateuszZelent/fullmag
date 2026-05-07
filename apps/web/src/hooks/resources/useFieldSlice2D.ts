@@ -9,7 +9,13 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { FieldBinaryResponse, FieldSliceMeta, FieldSliceQuery } from "../../api/types";
+import type {
+  FieldBinaryResponse,
+  FieldProjectionMeta,
+  FieldProjectionQuery,
+  FieldSliceMeta,
+  FieldSliceQuery,
+} from "../../api/types";
 import {
   getLiveSessionClient,
   type LiveSessionClient,
@@ -40,15 +46,21 @@ export interface SliceArrowData {
 }
 
 export interface UseFieldSlice2DResult {
-  meta: FieldSliceMeta | null;
+  meta: Field2DMeta | null;
   scalar: SliceScalarData | null;
   arrows: SliceArrowData | null;
   loading: boolean;
   error: LiveApiError | null;
 }
 
+export type Field2DMeta = FieldSliceMeta | FieldProjectionMeta;
+
+export type Field2DResourceRequest =
+  | { kind: "slice"; query: FieldSliceQuery }
+  | { kind: "projection"; query: FieldProjectionQuery };
+
 export interface LoadedFieldSlice2D {
-  meta: FieldSliceMeta;
+  meta: Field2DMeta;
   scalar: SliceScalarData;
   arrows: SliceArrowData | null;
 }
@@ -57,7 +69,7 @@ export interface FieldSliceRequestParams {
   quantityId: string;
   fieldRevision: number;
   domainGenerationId: number;
-  query: FieldSliceQuery;
+  request: Field2DResourceRequest;
 }
 
 export interface FieldSliceRequestHandle {
@@ -94,17 +106,43 @@ export function buildFieldSliceQueryToken(query: FieldSliceQuery): string {
   ].join(":");
 }
 
+export function buildFieldProjectionQueryToken(query: FieldProjectionQuery): string {
+  return [
+    query.plane,
+    query.component ?? "magnitude",
+    query.reduction ?? "mean_occupied",
+    query.include_air_as_zero ?? false,
+    query.samples ?? "none",
+    query.adaptive ?? false,
+    query.error_tolerance ?? "none",
+    query.min_samples ?? "none",
+    query.x_size ?? "none",
+    query.y_size ?? "none",
+    query.max_points ?? "none",
+    query.tile_x ?? "none",
+    query.tile_y ?? "none",
+    query.tile_size ?? "none",
+  ].join(":");
+}
+
+export function buildField2DRequestToken(request: Field2DResourceRequest): string {
+  return request.kind === "projection"
+    ? `projection:${buildFieldProjectionQueryToken(request.query)}`
+    : `slice:${buildFieldSliceQueryToken(request.query)}`;
+}
+
 export function buildFieldSliceResourceKey(params: FieldSliceRequestParams): string {
+  const component = params.request.query.component ?? "full";
   return `${ResourceCache.fieldKey(
     params.quantityId,
     params.fieldRevision,
     params.domainGenerationId,
-    params.query.component ?? "full",
-  )}:slice:${buildFieldSliceQueryToken(params.query)}`;
+    component,
+  )}:2d:${buildField2DRequestToken(params.request)}`;
 }
 
 export function buildFieldSliceRequestKey(params: FieldSliceRequestParams): string {
-  return `field-slice:${params.quantityId}:${params.fieldRevision}:${params.domainGenerationId}:${buildFieldSliceQueryToken(params.query)}`;
+  return `field-2d:${params.quantityId}:${params.fieldRevision}:${params.domainGenerationId}:${buildField2DRequestToken(params.request)}`;
 }
 
 export function getFieldSliceInflightCount(): number {
@@ -184,10 +222,16 @@ async function fetchDecodeAndCacheFieldSlice(
   cached: LoadedFieldSlice2D | null,
   signal: AbortSignal,
 ): Promise<LoadedFieldSlice2D> {
-  const meta = await client.fields.getSliceMeta(params.quantityId, params.query, {
-    cache: "default",
-    signal,
-  });
+  const meta =
+    params.request.kind === "projection"
+      ? await client.fields.getProjectionMeta(params.quantityId, params.request.query, {
+          cache: "default",
+          signal,
+        })
+      : await client.fields.getSliceMeta(params.quantityId, params.request.query, {
+          cache: "default",
+          signal,
+        });
   throwIfAborted(signal);
 
   const scalar = await fetchDecodeSliceScalar(
@@ -197,7 +241,7 @@ async function fetchDecodeAndCacheFieldSlice(
     cached?.scalar ?? null,
     signal,
   );
-  const arrows = params.query.include_arrows
+  const arrows = params.request.kind === "slice" && params.request.query.include_arrows
     ? await fetchDecodeSliceArrows(client, params, cached?.arrows ?? null, signal)
     : null;
   throwIfAborted(signal);
@@ -216,16 +260,24 @@ async function fetchDecodeAndCacheFieldSlice(
 async function fetchDecodeSliceScalar(
   client: FieldSliceRequestClient,
   params: FieldSliceRequestParams,
-  meta: FieldSliceMeta,
+  meta: Field2DMeta,
   cached: SliceScalarData | null,
   signal: AbortSignal,
 ): Promise<SliceScalarData> {
-  const response: FieldBinaryResponse = await client.fields.getSliceScalarResponse(
-    params.quantityId,
-    params.query,
-    cached?.etag ?? undefined,
-    { cache: "default", signal },
-  );
+  const response: FieldBinaryResponse =
+    params.request.kind === "projection"
+      ? await client.fields.getProjectionScalarResponse(
+          params.quantityId,
+          params.request.query,
+          cached?.etag ?? undefined,
+          { cache: "default", signal },
+        )
+      : await client.fields.getSliceScalarResponse(
+          params.quantityId,
+          params.request.query,
+          cached?.etag ?? undefined,
+          { cache: "default", signal },
+        );
   throwIfAborted(signal);
   if (response.status === 304 && cached) {
     return cached;
@@ -243,9 +295,12 @@ async function fetchDecodeSliceArrows(
   cached: SliceArrowData | null,
   signal: AbortSignal,
 ): Promise<SliceArrowData> {
+  if (params.request.kind !== "slice") {
+    throw new Error("projection resources do not expose slice arrows");
+  }
   const response: FieldBinaryResponse = await client.fields.getSliceArrowsResponse(
     params.quantityId,
-    params.query,
+    params.request.query,
     cached?.etag ?? undefined,
     { cache: "default", signal },
   );
@@ -287,7 +342,17 @@ export function useFieldSlice2D(
   domainGenerationId: number,
   query: FieldSliceQuery | null,
 ): UseFieldSlice2DResult {
-  const [meta, setMeta] = useState<FieldSliceMeta | null>(null);
+  const request = query ? { kind: "slice" as const, query } : null;
+  return useField2DResource(quantityId, fieldRevision, domainGenerationId, request);
+}
+
+export function useField2DResource(
+  quantityId: string | null,
+  fieldRevision: number | null,
+  domainGenerationId: number,
+  request: Field2DResourceRequest | null,
+): UseFieldSlice2DResult {
+  const [meta, setMeta] = useState<Field2DMeta | null>(null);
   const [scalar, setScalar] = useState<SliceScalarData | null>(null);
   const [arrows, setArrows] = useState<SliceArrowData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -301,13 +366,13 @@ export function useFieldSlice2D(
       qId: string,
       rev: number,
       domainGenId: number,
-      q: FieldSliceQuery,
+      req: Field2DResourceRequest,
     ) => {
       const params: FieldSliceRequestParams = {
         quantityId: qId,
         fieldRevision: rev,
         domainGenerationId: domainGenId,
-        query: q,
+        request: req,
       };
       const queryKey = buildFieldSliceRequestKey(params);
       if (fetchedKeyRef.current === queryKey) return () => undefined;
@@ -345,7 +410,7 @@ export function useFieldSlice2D(
   );
 
   useEffect(() => {
-    if (!quantityId || fieldRevision == null || !query) {
+    if (!quantityId || fieldRevision == null || !request) {
       activeRequestRef.current = null;
       fetchedKeyRef.current = null;
       setMeta(null);
@@ -355,8 +420,8 @@ export function useFieldSlice2D(
       setError(null);
       return undefined;
     }
-    return fetchSlice(quantityId, fieldRevision, domainGenerationId, query);
-  }, [quantityId, fieldRevision, domainGenerationId, query, fetchSlice]);
+    return fetchSlice(quantityId, fieldRevision, domainGenerationId, request);
+  }, [quantityId, fieldRevision, domainGenerationId, request, fetchSlice]);
 
   return { meta, scalar, arrows, loading, error };
 }
@@ -367,7 +432,7 @@ export function useFieldSlice2D(
  * Decode a scalar slice binary buffer (FMVP v2 format, nComp=1).
  * Falls back to a plain f64 array if the magic header is absent.
  */
-function decodeSliceScalar(buffer: ArrayBuffer, meta: FieldSliceMeta): SliceScalarData {
+function decodeSliceScalar(buffer: ArrayBuffer, meta: Field2DMeta): SliceScalarData {
   const view = new DataView(buffer);
 
   // Check FMVP magic: bytes 0-3 = "FMVP"

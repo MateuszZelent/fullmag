@@ -225,14 +225,14 @@ pub(crate) fn projection_empty_mask_cache_key(
 
 /// Slice cache key.
 ///
-/// Format: `fmvp-slice:{quantity_id}:{field_revision}:{domain_gen}:{plane}:{cut_norm_x1e6}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2`
+/// Format: `fmvp-slice:{quantity_id}:{field_revision}:{domain_gen}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn slice_cache_key(
     quantity_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
-    cut_norm: f64,
+    cut_key: &str,
     x_size: u32,
     y_size: u32,
     component: &str,
@@ -240,9 +240,8 @@ pub(crate) fn slice_cache_key(
     arrow_every: u32,
     max_arrows: u32,
 ) -> String {
-    let cut_i = (cut_norm * 1_000_000.0).round() as i64;
     format!(
-        "fmvp-slice:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_i}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2",
+        "fmvp-slice:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2",
         arrows = u8::from(include_arrows),
     )
 }
@@ -377,7 +376,19 @@ mod tests {
 
     #[test]
     fn slice_cache_key_format() {
-        let key = slice_cache_key("m", 7, 42, "xy", 0.5, 128, 128, "x", false, 4, 20_000);
-        assert!(key.starts_with("fmvp-slice:m:7:42:xy:"));
+        let key = slice_cache_key(
+            "m",
+            7,
+            42,
+            "xy",
+            "norm:4602678819172646912",
+            128,
+            128,
+            "x",
+            false,
+            4,
+            20_000,
+        );
+        assert!(key.starts_with("fmvp-slice:m:7:42:xy:norm:"));
     }
 }

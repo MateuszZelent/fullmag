@@ -803,15 +803,20 @@ export function computeProjectionSlice(
   const bounds: Bounds2D = { uMin, uMax, vMin, vMax };
 
   // ── 3. Determine grid resolution (preserve aspect ratio) ──────
-  const MIN_RES = 16; // prevent 1-pixel collapse for thin samples
+  // MIN_RES prevents 1-pixel collapse only when the base resolution is large
+  // enough that aspect-ratio scaling would produce a degenerate axis. For
+  // explicitly tiny resolutions (e.g. tests with resolution=1) we honour the request.
+  const MIN_RES = 16;
   let xRes: number;
   let yRes: number;
   if (uRange >= vRange) {
     xRes = resolution;
-    yRes = Math.max(MIN_RES, Math.round(resolution * (vRange / uRange)));
+    const scaled = Math.max(1, Math.round(resolution * (vRange / uRange)));
+    yRes = resolution >= MIN_RES ? Math.max(MIN_RES, scaled) : scaled;
   } else {
     yRes = resolution;
-    xRes = Math.max(MIN_RES, Math.round(resolution * (uRange / vRange)));
+    const scaled = Math.max(1, Math.round(resolution * (uRange / vRange)));
+    xRes = resolution >= MIN_RES ? Math.max(MIN_RES, scaled) : scaled;
   }
 
   const cellWidth = uRange / xRes;

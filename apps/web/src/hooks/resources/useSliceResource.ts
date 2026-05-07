@@ -5,13 +5,13 @@ import { useMemo } from "react";
 import { useFieldSlice2D } from "./useFieldSlice2D";
 import type {
   SliceArrowData,
+  Field2DMeta,
   SliceScalarData,
   UseFieldSlice2DResult,
 } from "./useFieldSlice2D";
 import type {
   CapabilityMap,
   DisplaySelection,
-  FieldSliceMeta,
   FieldSliceQuery,
   ResourceRevisionMap,
 } from "../../api/types";
@@ -23,7 +23,7 @@ import type { Slice2DModel } from "../../features/slice2d";
 import type { slicePlaneFromDisplay } from "../../features/workspaceSync/contracts";
 
 export interface UseSliceResourceResult {
-  meta: FieldSliceMeta | null;
+  meta: Field2DMeta | null;
   scalar: SliceScalarData | null;
   vectors: SliceArrowData | null;
   arrows: SliceArrowData | null;

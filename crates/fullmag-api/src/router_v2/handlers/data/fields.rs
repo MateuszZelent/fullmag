@@ -14,7 +14,10 @@ use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::{
     component_etag_token, parse_component, project_values, ComponentSelection,
 };
-use crate::field_render_png::{encode_rgba_matrix_png, encode_scalar_png, AutoScaleMode};
+use crate::field_render_png::{
+    encode_rgba_matrix_png, encode_rgba_matrix_png_with_lines, encode_scalar_png,
+    encode_scalar_png_with_lines, AutoScaleMode,
+};
 use crate::field_slice::{
     fdm_projection, fdm_slice, fem_projection_exact, fem_projection_profile, fem_slice_fallback,
     resolve_projection_profile_query, resolve_projection_query, resolve_slice_query,
@@ -973,6 +976,12 @@ fn projection_etag_token(
     )
 }
 
+fn slice_cut_cache_key(q: &crate::field_slice::ResolvedSliceQuery) -> String {
+    q.cut_world
+        .map(|value| format!("world:{}", value.to_bits()))
+        .unwrap_or_else(|| format!("norm:{}", q.cut_norm.to_bits()))
+}
+
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct FieldSliceMatrixQuery {
@@ -1045,6 +1054,7 @@ struct MatrixBuild {
     scalar_values: Option<Vec<f64>>,
     rgba_pixels: Option<Vec<[u8; 4]>>,
     mask_flat: Vec<u8>,
+    mesh_lines: Vec<[f64; 4]>,
 }
 
 fn slice_matrix_mode(mode: Option<&str>) -> Result<&'static str, ApiError> {
@@ -1092,6 +1102,156 @@ fn matrix_axes(plane: SlicePlane) -> (&'static str, &'static str, &'static str) 
         SlicePlane::Xz => ("x", "z", "y"),
         SlicePlane::Yz => ("y", "z", "x"),
     }
+}
+
+fn slice_normal_axis(plane: SlicePlane) -> usize {
+    match plane {
+        SlicePlane::Xy => 2,
+        SlicePlane::Xz => 1,
+        SlicePlane::Yz => 0,
+    }
+}
+
+fn fem_normal_bounds(field: &FemField, plane: SlicePlane) -> Option<(f64, f64)> {
+    let axis = slice_normal_axis(plane);
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for node in &field.nodes {
+        let value = node[axis];
+        if value.is_finite() {
+            min = min.min(value);
+            max = max.max(value);
+        }
+    }
+    if min.is_finite() && max.is_finite() && (max - min).abs() > f64::EPSILON {
+        Some((min, max))
+    } else {
+        None
+    }
+}
+
+fn fdm_normal_bounds(field: &FdmField, plane: SlicePlane) -> Option<(f64, f64)> {
+    let axis = slice_normal_axis(plane);
+    let origin = field.origin?;
+    let spacing = field.spacing?;
+    let extent = field.grid[axis] as f64 * spacing[axis];
+    if !origin[axis].is_finite() || !extent.is_finite() || extent.abs() <= f64::EPSILON {
+        return None;
+    }
+    let end = origin[axis] + extent;
+    Some((origin[axis].min(end), origin[axis].max(end)))
+}
+
+fn cut_norm_from_world(cut_world: Option<f64>, bounds: Option<(f64, f64)>, fallback: f64) -> f64 {
+    let Some(cut_world) = cut_world else {
+        return fallback;
+    };
+    let Some((min, max)) = bounds else {
+        return fallback;
+    };
+    ((cut_world - min) / (max - min)).clamp(0.0, 1.0)
+}
+
+fn fem_slice_mesh_lines(
+    field: &FemField,
+    plane: SlicePlane,
+    cut_world: Option<f64>,
+    bounds: &FieldSliceBounds,
+    x_size: u32,
+    y_size: u32,
+) -> Vec<[f64; 4]> {
+    let Some(cut_world) = cut_world else {
+        return Vec::new();
+    };
+    let (u_axis, v_axis, normal_axis) = match plane {
+        SlicePlane::Xy => (0, 1, 2),
+        SlicePlane::Xz => (0, 2, 1),
+        SlicePlane::Yz => (1, 2, 0),
+    };
+    let u_span = (bounds.u_max - bounds.u_min).abs().max(f64::EPSILON);
+    let v_span = (bounds.v_max - bounds.v_min).abs().max(f64::EPSILON);
+    let epsilon = fem_normal_bounds(field, plane)
+        .map(|(min, max)| (max - min).abs().max(1.0) * 1.0e-12)
+        .unwrap_or(1.0e-12);
+    let mut lines = Vec::new();
+    let edges = [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+    for (element_index, element) in field.elements.iter().enumerate() {
+        if field
+            .element_markers
+            .get(element_index)
+            .copied()
+            .unwrap_or(1)
+            == 0
+        {
+            continue;
+        }
+        let mut points: Vec<[f64; 2]> = Vec::new();
+        for (a, b) in edges {
+            let Some(pa) = field.nodes.get(element[a] as usize).copied() else {
+                continue;
+            };
+            let Some(pb) = field.nodes.get(element[b] as usize).copied() else {
+                continue;
+            };
+            let da = pa[normal_axis] - cut_world;
+            let db = pb[normal_axis] - cut_world;
+            if da.abs() <= epsilon && db.abs() <= epsilon {
+                push_unique_uv(&mut points, [pa[u_axis], pa[v_axis]], epsilon);
+                push_unique_uv(&mut points, [pb[u_axis], pb[v_axis]], epsilon);
+                continue;
+            }
+            if da.abs() <= epsilon {
+                push_unique_uv(&mut points, [pa[u_axis], pa[v_axis]], epsilon);
+                continue;
+            }
+            if db.abs() <= epsilon {
+                push_unique_uv(&mut points, [pb[u_axis], pb[v_axis]], epsilon);
+                continue;
+            }
+            if da.signum() == db.signum() {
+                continue;
+            }
+            let t = da / (da - db);
+            let u = pa[u_axis] + (pb[u_axis] - pa[u_axis]) * t;
+            let v = pa[v_axis] + (pb[v_axis] - pa[v_axis]) * t;
+            push_unique_uv(&mut points, [u, v], epsilon);
+        }
+        if points.len() < 2 {
+            continue;
+        }
+        let center = points.iter().fold([0.0, 0.0], |acc, point| {
+            [acc[0] + point[0], acc[1] + point[1]]
+        });
+        let center = [
+            center[0] / points.len() as f64,
+            center[1] / points.len() as f64,
+        ];
+        points.sort_by(|a, b| {
+            let aa = (a[1] - center[1]).atan2(a[0] - center[0]);
+            let bb = (b[1] - center[1]).atan2(b[0] - center[0]);
+            aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for i in 0..points.len() {
+            let a = points[i];
+            let b = points[(i + 1) % points.len()];
+            lines.push([
+                (a[0] - bounds.u_min) / u_span * (x_size.saturating_sub(1)) as f64,
+                (1.0 - (a[1] - bounds.v_min) / v_span) * (y_size.saturating_sub(1)) as f64,
+                (b[0] - bounds.u_min) / u_span * (x_size.saturating_sub(1)) as f64,
+                (1.0 - (b[1] - bounds.v_min) / v_span) * (y_size.saturating_sub(1)) as f64,
+            ]);
+        }
+    }
+    lines
+}
+
+fn push_unique_uv(points: &mut Vec<[f64; 2]>, point: [f64; 2], epsilon: f64) {
+    if points.iter().any(|existing| {
+        (existing[0] - point[0]).abs() <= epsilon && (existing[1] - point[1]).abs() <= epsilon
+    }) {
+        return;
+    }
+    points.push(point);
 }
 
 fn matrix_hash(raw: &str) -> String {
@@ -1367,6 +1527,7 @@ fn matrix_response_from_slice(
         scalar_values,
         rgba_pixels,
         mask_flat,
+        mesh_lines: Vec::new(),
     })
 }
 
@@ -1422,6 +1583,7 @@ fn matrix_response_from_projection(
         scalar_values: Some(projection.scalar_values),
         rgba_pixels: None,
         mask_flat,
+        mesh_lines: Vec::new(),
     }
 }
 
@@ -1571,7 +1733,7 @@ async fn build_slice_matrix(
         result.y_size,
         &extra,
     ));
-    let matrix = matrix_response_from_slice(
+    let mut matrix = matrix_response_from_slice(
         quantity_id,
         query.plane,
         mode,
@@ -1587,6 +1749,16 @@ async fn build_slice_matrix(
         result,
         hash.clone(),
     )?;
+    if let Some(fem_field) = fem_field.as_ref() {
+        matrix.mesh_lines = fem_slice_mesh_lines(
+            fem_field,
+            query.plane,
+            matrix.response.cut_world,
+            &matrix.response.bounds,
+            matrix.response.x_size,
+            matrix.response.y_size,
+        );
+    }
     Ok((hash, matrix))
 }
 
@@ -2313,19 +2485,47 @@ fn encode_png_from_matrix(
     matrix: &MatrixBuild,
     query: &FieldRenderPngQuery,
 ) -> Result<Vec<u8>, ApiError> {
+    let mesh_lines: &[[f64; 4]] = if query.show_mesh.unwrap_or(false) {
+        &matrix.mesh_lines
+    } else {
+        &[]
+    };
     if let Some(rgba) = matrix.rgba_pixels.as_ref() {
-        return encode_rgba_matrix_png(
+        if mesh_lines.is_empty() {
+            return encode_rgba_matrix_png(
+                matrix.response.x_size,
+                matrix.response.y_size,
+                rgba,
+                &matrix.mask_flat,
+                query.alpha_mask.unwrap_or(true),
+            );
+        }
+        return encode_rgba_matrix_png_with_lines(
             matrix.response.x_size,
             matrix.response.y_size,
             rgba,
             &matrix.mask_flat,
             query.alpha_mask.unwrap_or(true),
+            mesh_lines,
         );
     }
     let values = matrix.scalar_values.as_ref().ok_or_else(|| {
         ApiError::internal("render_png: scalar matrix values missing for PNG render")
     })?;
-    encode_scalar_png(
+    if mesh_lines.is_empty() {
+        return encode_scalar_png(
+            matrix.response.x_size,
+            matrix.response.y_size,
+            values,
+            &matrix.mask_flat,
+            query.colormap.as_deref().unwrap_or("viridis"),
+            AutoScaleMode::parse(query.auto_scale.as_deref())?,
+            query.vmin,
+            query.vmax,
+            query.alpha_mask.unwrap_or(true),
+        );
+    }
+    encode_scalar_png_with_lines(
         matrix.response.x_size,
         matrix.response.y_size,
         values,
@@ -2335,6 +2535,7 @@ fn encode_png_from_matrix(
         query.vmin,
         query.vmax,
         query.alpha_mask.unwrap_or(true),
+        mesh_lines,
     )
 }
 
@@ -2423,6 +2624,14 @@ pub async fn get_field_slice_meta(
     } else {
         fdm_slice(&fdm_field, &resolved)?
     };
+    let response_cut_norm = cut_norm_from_world(
+        slice_result.cut_world,
+        fem_field
+            .as_ref()
+            .and_then(|field| fem_normal_bounds(field, resolved.plane))
+            .or_else(|| fdm_normal_bounds(&fdm_field, resolved.plane)),
+        resolved.cut_norm,
+    );
 
     let scalar_etag_token = slice_etag_token(&quantity_id, field_revision, gen_id, &resolved);
     let scalar_etag = crate::router_v2::handlers::shared::stable_strong_etag(&scalar_etag_token);
@@ -2450,7 +2659,14 @@ pub async fn get_field_slice_meta(
     // Build canonical href parameters for binary endpoints
     let comp_param = urlencoding(&comp_label);
     let plane_param = urlencoding(&plane_str);
-    let cut_param = format!("cut_norm={:.6}", resolved.cut_norm);
+    let cut_param = if query.cut_world.is_some() {
+        resolved
+            .cut_world
+            .map(|value| format!("cut_world={value}"))
+            .unwrap_or_else(|| format!("cut_norm={response_cut_norm:.6}"))
+    } else {
+        format!("cut_norm={response_cut_norm:.6}")
+    };
     let size_param = format!("x_size={}&y_size={}", resolved.x_size, resolved.y_size);
 
     let scalar_href = format!(
@@ -2480,7 +2696,7 @@ pub async fn get_field_slice_meta(
         component: comp_label,
         plane: plane_str,
         cut_kind: cut_kind.to_string(),
-        cut_norm: resolved.cut_norm,
+        cut_norm: response_cut_norm,
         cut_world: slice_result.cut_world,
         field_revision,
         domain_generation_id: gen_id,
@@ -2583,7 +2799,7 @@ pub async fn get_field_slice_scalar(
         field_revision,
         gen_id,
         resolved.plane.as_str(),
-        resolved.cut_norm,
+        &slice_cut_cache_key(&resolved),
         resolved.x_size,
         resolved.y_size,
         &component,
@@ -2710,7 +2926,7 @@ pub async fn get_field_slice_arrows(
         field_revision,
         gen_id,
         resolved.plane.as_str(),
-        resolved.cut_norm,
+        &slice_cut_cache_key(&resolved),
         resolved.x_size,
         resolved.y_size,
         "full",

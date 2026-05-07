@@ -1,4 +1,9 @@
-import type { FieldSliceMeta, FieldSliceQuery } from "../../api/types";
+import type {
+  FieldProjectionMeta,
+  FieldProjectionQuery,
+  FieldSliceMeta,
+  FieldSliceQuery,
+} from "../../api/types";
 import type {
   DomainRevisionState,
   QuantitySelectionState,
@@ -92,9 +97,10 @@ export interface Slice2DDiagnostics {
 }
 
 export interface SliceRenderState {
-  query: FieldSliceQuery | null;
-  meta: FieldSliceMeta | null;
-  sampling: "fdm-layer" | "fem-plane" | "unavailable";
+  query: FieldSliceQuery | FieldProjectionQuery | null;
+  resourceKind: "slice" | "projection" | null;
+  meta: FieldSliceMeta | FieldProjectionMeta | null;
+  sampling: "fdm-layer" | "fdm-projection" | "fem-plane" | "fem-projection" | "unavailable";
 }
 
 export interface SliceOverlayState {
@@ -133,7 +139,8 @@ export interface SliceBuildRequest {
 }
 
 export interface SliceFrame {
-  query: FieldSliceQuery | null;
+  query: FieldSliceQuery | FieldProjectionQuery | null;
+  resourceKind: SliceRenderState["resourceKind"];
   sampling: SliceRenderState["sampling"];
   diagnostics: string[];
 }

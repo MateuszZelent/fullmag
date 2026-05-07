@@ -9,7 +9,8 @@ import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGe
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { displayPatchFromPreviewComponentOnly } from "@/src/api/displaySelection";
 import type { DisplaySelection } from "@/src/api/types";
-import { useFieldSlice2D } from "@/src/hooks/resources/useFieldSlice2D";
+import { useField2DResource } from "@/src/hooks/resources/useFieldSlice2D";
+import type { Field2DResourceRequest } from "@/src/hooks/resources/useFieldSlice2D";
 import {
   useMeshWorkspaceModel,
   useSubmitMeshBuildCommand,
@@ -1152,11 +1153,8 @@ export function useViewportDataBridge() {
     ? FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
     : FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D;
   const femSliceTopologyReady = !ctx.isFemBackend || Boolean(ctx.femMeshData);
-  // When local FEM renderer is active (femMeshData available), skip the backend
-  // API path — it returns useless 1×1 px via fem_fallback_fdm_nearest.
-  const localFemRendererActive = ctx.isFemBackend && Boolean(femMeshData);
   const shouldUseSliceApi2D =
-    ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady && !localFemRendererActive;
+    ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady;
   const sliceSampling = useMemo(
     () => deriveSliceSampling(ctx.previewGrid, effectiveSlicePlane, ctx.sliceIndex),
     [ctx.previewGrid, ctx.sliceIndex, effectiveSlicePlane],
@@ -1164,42 +1162,6 @@ export function useViewportDataBridge() {
   const sliceFieldRevision = ctx.liveFieldSourceStep ?? ctx.effectiveStep ?? null;
   const sliceQuantityId = scaledSpatialPreview?.quantity ?? ctx.selectedQuantity;
   const sliceComponent = ctx.component;
-
-  const sliceQuery = useMemo(
-    () =>
-      shouldUseSliceApi2D
-        ? {
-            plane: effectiveSlicePlane,
-            component: sliceComponent,
-            cut_norm: sliceSampling.cutNorm,
-            x_size:
-              ctx.requestedPreviewXChosenSize > 0
-                ? ctx.requestedPreviewXChosenSize
-                : sliceSampling.xPixels,
-            y_size:
-              ctx.requestedPreviewYChosenSize > 0
-                ? ctx.requestedPreviewYChosenSize
-                : sliceSampling.yPixels,
-            max_points:
-              ctx.requestedPreviewMaxPoints > 0 ? ctx.requestedPreviewMaxPoints : undefined,
-            include_arrows: false,
-            arrow_every: ctx.requestedPreviewEveryN,
-            max_arrows: ctx.requestedPreviewMaxPoints,
-          }
-        : null,
-    [
-      ctx.requestedPreviewEveryN,
-      ctx.requestedPreviewMaxPoints,
-      ctx.requestedPreviewXChosenSize,
-      ctx.requestedPreviewYChosenSize,
-      effectiveSlicePlane,
-      shouldUseSliceApi2D,
-      sliceComponent,
-      sliceSampling.cutNorm,
-      sliceSampling.xPixels,
-      sliceSampling.yPixels,
-    ],
-  );
 
   const unifiedSliceDisplaySelection = useMemo<DisplaySelection>(
     () => ({
@@ -1300,11 +1262,26 @@ export function useViewportDataBridge() {
     };
   }, [viz.femViewportLayers, femDiscretization, renderPlan?.slice, slice2DBaseModel, slice2DToolbarPatch]);
 
-  const slice2D = useFieldSlice2D(
-    shouldUseSliceApi2D ? sliceQuantityId : null,
-    shouldUseSliceApi2D ? sliceFieldRevision : null,
+  const field2DRequest = useMemo<Field2DResourceRequest | null>(() => {
+    if (!shouldUseSliceApi2D || !slice2DModel.render.query || !slice2DModel.render.resourceKind) {
+      return null;
+    }
+    if (slice2DModel.toolbar.mode === "slab") {
+      return null;
+    }
+    return {
+      kind: slice2DModel.render.resourceKind,
+      query: slice2DModel.render.query,
+    } as Field2DResourceRequest;
+  }, [shouldUseSliceApi2D, slice2DModel]);
+
+  const shouldUseBackendSlice2D = Boolean(field2DRequest);
+
+  const slice2D = useField2DResource(
+    shouldUseBackendSlice2D ? sliceQuantityId : null,
+    shouldUseBackendSlice2D ? sliceFieldRevision : null,
     runtimeResourceRevisions?.domain_generation_id ?? 0,
-    sliceQuery,
+    field2DRequest,
   );
 
   const scaledSliceScalar = useMemo(() => {
@@ -1833,7 +1810,7 @@ export function useViewportDataBridge() {
     geometryAuthoringShowQuantity,
     geometryAuthoringMeshStatus,
     geometryModeObjectOverlays,
-    shouldUseSliceApi2D,
+    shouldUseSliceApi2D: shouldUseBackendSlice2D,
     sliceQuantityId,
     sliceComponent,
     slice2DModel,

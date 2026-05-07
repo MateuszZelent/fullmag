@@ -350,10 +350,16 @@ export function visualizationPatchFromRibbonCommand(
       return {
         slice: {
           show_airbox_vectors: command.visible,
-          show_vectors: command.visible,
-          render_mode: command.visible ? "vectors" : "heatmap",
         },
       };
+    case "viewport.set-slice-projection-reduction":
+      return { slice: { projection_reduction: command.reduction } };
+    case "viewport.set-slice-projection-air-zero":
+      return { slice: { projection_include_air_as_zero: command.enabled } };
+    case "viewport.set-slice-projection-samples":
+      return { slice: { projection_samples: command.samples } };
+    case "viewport.set-slice-projection-resolution":
+      return { slice: { projection_resolution: command.resolution } };
     default:
       return null;
   }
@@ -1015,7 +1021,6 @@ export function executeRibbonCommand(
     case "viewport.set-slice-airbox-vectors":
       ctx.onSetSlice2DToolbar?.({
         showAirboxVectors: command.visible,
-        renderMode: command.visible ? "vectors" : "heatmap",
       });
       return;
     case "viewport.set-slice-projection-reduction":

@@ -2,6 +2,7 @@ import type {
   CapabilityMap,
   DisplaySelection,
   FieldComponent,
+  FieldProjectionQuery,
   FieldSliceQuery,
   ResourceRevisionMap,
 } from "../../api/types";
@@ -57,7 +58,7 @@ export function slice2DToolbarFromDisplay(
     projectionReduction: "mean_occupied",
     projectionIncludeAirAsZero: false,
     projectionSamples: 20,
-    projectionResolution: 128,
+    projectionResolution: display.x_chosen_size > 0 ? display.x_chosen_size : 128,
   };
 }
 
@@ -139,6 +140,7 @@ export function buildSlice2DModel(args: {
     },
     render: {
       query: frame.query,
+      resourceKind: frame.resourceKind,
       meta: null,
       sampling: frame.sampling,
     },
@@ -167,8 +169,9 @@ export function createFdmSlice2DAdapter(
         return unavailableFrame("Requires structured_grid capability");
       }
       return {
-        query: fieldSliceQueryFromRequest(request),
-        sampling: "fdm-layer",
+        query: field2DQueryFromRequest(request),
+        resourceKind: request.plane.mode === "all_layers" ? "projection" : "slice",
+        sampling: request.plane.mode === "all_layers" ? "fdm-projection" : "fdm-layer",
         diagnostics:
           request.plane.mode === "all_layers" && !capabilities.slice_all_layers
             ? ["All layers mode is disabled for this runtime"]
@@ -191,13 +194,16 @@ export function createFemSlice2DAdapter(
         return unavailableFrame("Requires explicit_topology capability");
       }
       const query = fieldSliceQueryFromRequest(request);
+      const allLayers = request.plane.mode === "all_layers";
       return {
-        query: {
-          ...query,
-          cut_norm: request.plane.positionPercent / 100,
-          include_arrows: request.toolbar.showVectors && capabilities.slice_vectors,
-        },
-        sampling: "fem-plane",
+        query: allLayers
+          ? fieldProjectionQueryFromRequest(request)
+          : {
+            ...query,
+            include_arrows: request.toolbar.showVectors && capabilities.slice_vectors,
+          },
+        resourceKind: allLayers ? "projection" : "slice",
+        sampling: allLayers ? "fem-projection" : "fem-plane",
         diagnostics:
           request.plane.mode === "slab"
             ? ["Slab mode samples a band around the FEM cut plane"]
@@ -208,15 +214,44 @@ export function createFemSlice2DAdapter(
 }
 
 export function fieldSliceQueryFromRequest(request: SliceBuildRequest): FieldSliceQuery {
+  const cut =
+    typeof request.toolbar.positionWorld === "number"
+      ? { cut_world: request.toolbar.positionWorld }
+      : { cut_norm: request.plane.positionPercent / 100 };
+  const resolution = request.toolbar.projectionResolution;
   return {
     plane: planeTokenFromAxis(request.plane.axis),
-    component: fieldComponentFromQuantity(request.quantity),
-    cut_norm: request.plane.positionPercent / 100,
+    component: request.toolbar.component ?? fieldComponentFromQuantity(request.quantity),
+    ...cut,
+    x_size: resolution,
+    y_size: resolution,
     max_points: request.toolbar.mode === "all_layers" ? undefined : 100_000,
     include_arrows: request.toolbar.showVectors,
     arrow_every: request.toolbar.showVectors ? 4 : undefined,
     max_arrows: request.toolbar.showVectors ? 10_000 : undefined,
   };
+}
+
+export function fieldProjectionQueryFromRequest(request: SliceBuildRequest): FieldProjectionQuery {
+  const resolution = request.toolbar.projectionResolution;
+  return {
+    plane: planeTokenFromAxis(request.plane.axis),
+    component: request.toolbar.component ?? fieldComponentFromQuantity(request.quantity),
+    reduction: request.toolbar.projectionReduction,
+    include_air_as_zero: request.toolbar.projectionIncludeAirAsZero,
+    samples: request.toolbar.projectionSamples,
+    x_size: resolution,
+    y_size: resolution,
+    max_points: Math.max(1, resolution * resolution),
+  };
+}
+
+export function field2DQueryFromRequest(
+  request: SliceBuildRequest,
+): FieldSliceQuery | FieldProjectionQuery {
+  return request.plane.mode === "all_layers"
+    ? fieldProjectionQueryFromRequest(request)
+    : fieldSliceQueryFromRequest(request);
 }
 
 function planeTokenFromAxis(axis: SliceAxis): FieldSliceQuery["plane"] {
@@ -236,6 +271,7 @@ function fieldComponentFromQuantity(quantity: QuantitySelectionState): FieldComp
 function unavailableFrame(message: string): SliceFrame {
   return {
     query: null,
+    resourceKind: null,
     sampling: "unavailable",
     diagnostics: [message],
   };
@@ -245,4 +281,6 @@ export const __slice2DAdapterInternals = {
   planeTokenFromAxis,
   fieldComponentFromQuantity,
   fieldSliceQueryFromRequest,
+  fieldProjectionQueryFromRequest,
+  field2DQueryFromRequest,
 };

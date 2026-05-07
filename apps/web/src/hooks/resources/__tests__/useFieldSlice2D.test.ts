@@ -114,7 +114,10 @@ describe("field slice request lifecycle", () => {
       quantityId: `m-${Date.now()}`,
       fieldRevision: 11,
       domainGenerationId: 7,
-      query: { plane: "xy" as const, component: "x" as const, cut_norm: 0.5 },
+      request: {
+        kind: "slice" as const,
+        query: { plane: "xy" as const, component: "x" as const, cut_norm: 0.5 },
+      },
     };
 
     const requestA = loadFieldSliceRequest(client, params);
@@ -160,11 +163,14 @@ describe("field slice request lifecycle", () => {
       quantityId: "m",
       fieldRevision: 11,
       domainGenerationId: 7,
-      query: {
-        plane: "xy" as const,
-        component: "x" as const,
-        cut_norm: 0.5,
-        include_arrows: true,
+      request: {
+        kind: "slice" as const,
+        query: {
+          plane: "xy" as const,
+          component: "x" as const,
+          cut_norm: 0.5,
+          include_arrows: true,
+        },
       },
     };
 

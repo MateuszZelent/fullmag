@@ -214,10 +214,10 @@ export function sliceToolbarFromVisualizationState(
     showQuantity: state.slice.show_quantity,
     showVectors: state.slice.show_vectors,
     renderMode: state.slice.render_mode,
-    projectionReduction: "mean_occupied",
-    projectionIncludeAirAsZero: false,
-    projectionSamples: 20,
-    projectionResolution: 128,
+    projectionReduction: state.slice.projection_reduction,
+    projectionIncludeAirAsZero: state.slice.projection_include_air_as_zero,
+    projectionSamples: state.slice.projection_samples,
+    projectionResolution: state.slice.projection_resolution,
   };
 }
 

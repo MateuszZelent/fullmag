@@ -453,6 +453,10 @@ fn default_slice_visualization_for_presentation(
         show_quantity: layers.quantity_overlay.visible,
         show_vectors: false,
         render_mode: SliceRenderMode::Heatmap,
+        projection_reduction: "mean_occupied".to_string(),
+        projection_include_air_as_zero: false,
+        projection_samples: 32,
+        projection_resolution: 128,
     }
 }
 
@@ -673,6 +677,18 @@ fn apply_visualization_presentation_patch(
         }
         if let Some(render_mode) = slice_patch.render_mode {
             slice.render_mode = render_mode;
+        }
+        if let Some(projection_reduction) = &slice_patch.projection_reduction {
+            slice.projection_reduction = projection_reduction.clone();
+        }
+        if let Some(projection_include_air_as_zero) = slice_patch.projection_include_air_as_zero {
+            slice.projection_include_air_as_zero = projection_include_air_as_zero;
+        }
+        if let Some(projection_samples) = slice_patch.projection_samples {
+            slice.projection_samples = projection_samples.clamp(1, 512);
+        }
+        if let Some(projection_resolution) = slice_patch.projection_resolution {
+            slice.projection_resolution = projection_resolution.clamp(1, 512);
         }
         presentation.visualization_slice = Some(slice);
     }

@@ -83,11 +83,87 @@ describe("slice2d adapters", () => {
       planeOptions: { axis: "x", positionPercent: 25 },
     });
     expect(model.render.sampling).toBe("fem-plane");
+    expect(model.render.resourceKind).toBe("slice");
     expect(model.render.query).toMatchObject({
       plane: "yz",
       component: "magnitude",
       cut_norm: 0.25,
       include_arrows: false,
+    });
+  });
+
+  it("uses physical cut_world when the FEM toolbar has world bounds", () => {
+    const model = buildSlice2DModel({
+      display: display({ vector_glyphs: false, x_chosen_size: 96 }),
+      resources: { domain_generation_id: 1, fields_revision: 2 },
+      capabilities: capabilities({ structured_grid: false, explicit_topology: true }),
+      adapterKind: "fem",
+      planeOptions: { axis: "z", positionPercent: 50 },
+    });
+    const frame = createFemSlice2DAdapter({
+      preview_2d: true,
+      structured_grid: false,
+      explicit_topology: true,
+      authoring_primitives: true,
+      slice_probe: true,
+      slice_measure: true,
+      slice_profile: true,
+      slice_vectors: true,
+      slice_all_layers: true,
+    }).buildSlice({
+      ...model,
+      plane: model.plane,
+      toolbar: {
+        ...model.toolbar,
+        positionWorld: 2.5e-8,
+        normalAxisBounds: { min: 0, max: 5e-8 },
+      },
+    });
+    expect(frame.query).toMatchObject({
+      plane: "xy",
+      cut_world: 2.5e-8,
+      x_size: 96,
+      y_size: 96,
+    });
+    expect(frame.query).not.toHaveProperty("cut_norm");
+  });
+
+  it("builds FEM all-layer projection requests from projection toolbar state", () => {
+    const model = buildSlice2DModel({
+      display: display({ field_component: "y", slice_mode: "all_layers", vector_glyphs: false }),
+      resources: { domain_generation_id: 1, fields_revision: 2 },
+      capabilities: capabilities({ structured_grid: false, explicit_topology: true }),
+      adapterKind: "fem",
+      planeOptions: { axis: "z", positionPercent: 50 },
+    });
+    const toolbar = {
+      ...model.toolbar,
+      projectionReduction: "rms" as const,
+      projectionIncludeAirAsZero: true,
+      projectionSamples: 64,
+      projectionResolution: 256,
+    };
+    const frame = createFemSlice2DAdapter({
+      preview_2d: true,
+      structured_grid: false,
+      explicit_topology: true,
+      authoring_primitives: true,
+      slice_probe: true,
+      slice_measure: true,
+      slice_profile: true,
+      slice_vectors: true,
+      slice_all_layers: true,
+    }).buildSlice({ ...model, plane: model.plane, toolbar });
+    expect(frame.sampling).toBe("fem-projection");
+    expect(frame.resourceKind).toBe("projection");
+    expect(frame.query).toMatchObject({
+      plane: "xy",
+      component: "y",
+      reduction: "rms",
+      include_air_as_zero: true,
+      samples: 64,
+      x_size: 256,
+      y_size: 256,
     });
   });
 

@@ -542,8 +542,27 @@ pub fn fdm_slice(field: &FdmField, q: &ResolvedSliceQuery) -> Result<SliceResult
         return Err(ApiError::internal("slice axis has zero extent"));
     }
 
-    // Map cut_norm to fixed-axis index
-    let w_idx = ((q.cut_norm * (w_len - 1) as f64).round() as usize).min(w_len - 1);
+    let cut_norm_for_index = if let (Some(cut_world), Some(origin), Some(spacing)) =
+        (q.cut_world, field.origin, field.spacing)
+    {
+        let axis = match q.plane {
+            SlicePlane::Xy => 2,
+            SlicePlane::Xz => 1,
+            SlicePlane::Yz => 0,
+        };
+        let step = spacing[axis];
+        if step.is_finite() && step.abs() > f64::EPSILON {
+            ((cut_world - origin[axis]) / step - 0.5) / (w_len - 1).max(1) as f64
+        } else {
+            q.cut_norm
+        }
+    } else {
+        q.cut_norm
+    };
+
+    // Map the requested physical cut to the fixed-axis index when possible.
+    let w_idx =
+        ((cut_norm_for_index.clamp(0.0, 1.0) * (w_len - 1) as f64).round() as usize).min(w_len - 1);
 
     // Resolve cut_world if origin/spacing are available
     let cut_world = q.cut_world.or_else(|| {
@@ -1623,6 +1642,20 @@ mod tests {
         let res = fdm_slice(&field, &rq).unwrap();
         // z=1 layer: [100,101,110,111]
         assert_eq!(res.scalar_values, vec![100.0, 101.0, 110.0, 111.0]);
+    }
+
+    #[test]
+    fn slice_cut_world_selects_physical_fdm_layer() {
+        let mut field = mock_fdm_field();
+        field.origin = Some([0.0, 0.0, 10.0]);
+        field.spacing = Some([1.0, 1.0, 2.0]);
+        let mut q = mock_query(SlicePlane::Xy, 0.0);
+        q.cut_world = Some(13.0);
+        q.cut_norm = None;
+        let rq = resolve_slice_query(&q, 1).unwrap();
+        let res = fdm_slice(&field, &rq).unwrap();
+        assert_eq!(res.scalar_values, vec![100.0, 101.0, 110.0, 111.0]);
+        assert_eq!(res.cut_world, Some(13.0));
     }
 
     #[test]

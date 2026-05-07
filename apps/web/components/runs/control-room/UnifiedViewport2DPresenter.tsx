@@ -10,7 +10,12 @@ import { percentFromWorldPosition } from "@/src/features/slice2d/axisMapping";
 import type { Slice2DModel } from "@/src/features/slice2d";
 import type { CrossSurfaceSelectionState } from "@/src/features/workspaceSync";
 import { sessionApiPaths } from "@/src/api/client/sessionPaths";
-import type { FieldSliceMeta, FieldSliceQuery } from "@/src/api/types";
+import type {
+  FieldProjectionMeta,
+  FieldProjectionQuery,
+  FieldSliceMeta,
+  FieldSliceQuery,
+} from "@/src/api/types";
 import type { SliceArrowData } from "@/src/hooks/resources/useFieldSlice2D";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
@@ -52,7 +57,7 @@ export interface UnifiedViewport2DPresenterProps {
   hasSliceScalar: boolean;
   sliceLoading: boolean;
   sliceErrorMessage: string | null;
-  sliceMeta: FieldSliceMeta | null;
+  sliceMeta: FieldSliceMeta | FieldProjectionMeta | null;
   sliceArrows: SliceArrowData | null;
   grid: [number, number, number];
   vectors: Float64Array | null;
@@ -231,6 +236,44 @@ export default function UnifiedViewport2DPresenter({
       </Slice2DShell>
     ) : content;
 
+  if (shouldUseSliceApi2D) {
+    if (sliceLoading && !hasSliceScalar) {
+      return wrap(
+        <div className="flex h-full w-full items-center justify-center opacity-80">
+          <EmptyState
+            title="Loading 2D quantity slice"
+            description="Fetching scalar slice data from /data/fields resources."
+            tone="info"
+          />
+        </div>,
+      );
+    }
+    if (sliceErrorMessage && !hasSliceScalar) {
+      return wrap(
+        <div className="flex h-full w-full items-center justify-center opacity-80">
+          <EmptyState
+            title="Slice request failed"
+            description={sliceErrorMessage}
+            tone="warning"
+          />
+        </div>,
+      );
+    }
+    return wrap(
+      <MagnetizationSlice2D
+        grid={grid}
+        vectors={null}
+        scalarValues={sliceScalarValues}
+        scalarShape={sliceScalarShape}
+        quantityLabel={quantityLabel}
+        quantityId={quantityId}
+        component={component}
+        plane={plane}
+        sliceIndex={sliceIndex}
+      />,
+    );
+  }
+
   if (preferFemMesh && femMeshData) {
     return wrap(
       <FemMeshSlice2D
@@ -273,44 +316,6 @@ export default function UnifiedViewport2DPresenter({
     );
   }
 
-  if (shouldUseSliceApi2D) {
-    if (sliceLoading && !hasSliceScalar) {
-      return wrap(
-        <div className="flex h-full w-full items-center justify-center opacity-80">
-          <EmptyState
-            title="Loading 2D quantity slice"
-            description="Fetching scalar slice data from /slice resources."
-            tone="info"
-          />
-        </div>,
-      );
-    }
-    if (sliceErrorMessage && !hasSliceScalar) {
-      return wrap(
-        <div className="flex h-full w-full items-center justify-center opacity-80">
-          <EmptyState
-            title="Slice request failed"
-            description={sliceErrorMessage}
-            tone="warning"
-          />
-        </div>,
-      );
-    }
-    return wrap(
-      <MagnetizationSlice2D
-        grid={grid}
-        vectors={null}
-        scalarValues={sliceScalarValues}
-        scalarShape={sliceScalarShape}
-        quantityLabel={quantityLabel}
-        quantityId={quantityId}
-        component={component}
-        plane={plane}
-        sliceIndex={sliceIndex}
-      />,
-    );
-  }
-
   return wrap(
     <MagnetizationSlice2D
       grid={grid}
@@ -340,9 +345,9 @@ function Slice2DDebugPanel({
   renderingMode,
 }: {
   quantityId: string | null;
-  query: FieldSliceQuery | null;
+  query: FieldSliceQuery | FieldProjectionQuery | null;
   toolbar: Slice2DModel["toolbar"];
-  sliceMeta: FieldSliceMeta | null;
+  sliceMeta: FieldSliceMeta | FieldProjectionMeta | null;
   sliceArrows: SliceArrowData | null;
   sliceScalarValues: Float64Array | null;
   sliceScalarShape: [number, number] | null;
@@ -382,6 +387,7 @@ function Slice2DDebugPanel({
           title="Request"
           lines={[
             ["quantity_id", quantityId ?? "none"],
+            ["resource", queryResourceKind(query)],
             ["query", requestSummary.queryJson],
             ["meta GET", requestSummary.metaUrl],
             ["scalar GET", requestSummary.scalarUrl],
@@ -418,9 +424,11 @@ function Slice2DDebugPanel({
             ["component", sliceMeta?.component ?? "none"],
             [
               "cut",
-              sliceMeta
+              isSliceMeta(sliceMeta)
                 ? `${sliceMeta.cut_kind} norm=${formatNumber(sliceMeta.cut_norm)} world=${formatNumber(sliceMeta.cut_world)}`
-                : "none",
+                : isProjectionMeta(sliceMeta)
+                  ? `${sliceMeta.reduction}, samples=${sliceMeta.samples}`
+                  : "none",
             ],
             ["pixels", sliceMeta ? `${sliceMeta.x_pixels} x ${sliceMeta.y_pixels}` : "none"],
             [
@@ -433,7 +441,7 @@ function Slice2DDebugPanel({
             [
               "revisions",
               sliceMeta
-                ? `field=${sliceMeta.field_revision}, domain=${sliceMeta.domain_generation_id}, slice=${sliceMeta.slice_revision}`
+                ? `field=${sliceMeta.field_revision}, domain=${sliceMeta.domain_generation_id}, ${isProjectionMeta(sliceMeta) ? `projection=${sliceMeta.projection_revision}` : `slice=${sliceMeta.slice_revision}`}`
                 : "none",
             ],
             [
@@ -444,7 +452,7 @@ function Slice2DDebugPanel({
             ],
             [
               "arrow desc",
-              sliceMeta
+              isSliceMeta(sliceMeta)
                 ? `available=${String(sliceMeta.arrows.available)}, n_comp=${sliceMeta.arrows.n_comp}, points=${sliceMeta.arrows.point_count}`
                 : "none",
             ],
@@ -468,7 +476,7 @@ function Slice2DDebugPanel({
           title="Arrow Payload"
           lines={[
             ["arrow count", sliceArrows ? String(sliceArrows.arrowCount) : "0"],
-            ["components", sliceMeta ? String(sliceMeta.arrows.n_comp) : "none"],
+            ["components", isSliceMeta(sliceMeta) ? String(sliceMeta.arrows.n_comp) : "none"],
             ["values", sliceArrows ? String(sliceArrows.values.length) : "0"],
             ["bytes", sliceArrows ? String(sliceArrows.values.byteLength) : "0"],
             ["etag", sliceArrows?.etag ?? "none"],
@@ -505,7 +513,7 @@ function DebugBlock({
 
 function buildSliceRequestSummary(
   quantityId: string | null,
-  query: FieldSliceQuery | null,
+  query: FieldSliceQuery | FieldProjectionQuery | null,
 ) {
   const baseUrl = resolveApiBase();
   if (!quantityId || !query) {
@@ -516,11 +524,16 @@ function buildSliceRequestSummary(
       arrowsUrl: null as string | null,
     };
   }
-  const params = buildSliceParams(query);
+  const isProjection = isProjectionQuery(query);
+  const params = isProjection ? buildProjectionParams(query) : buildSliceParams(query);
   const paramsString = params.toString();
-  const metaPath = `${sessionApiPaths.data.fieldSliceMeta(quantityId)}?${paramsString}`;
-  const scalarPath = `${sessionApiPaths.data.fieldSliceScalar(quantityId)}?${paramsString}`;
-  const arrowsPath = query.include_arrows
+  const metaPath = isProjection
+    ? `${sessionApiPaths.data.fieldProjectionMeta(quantityId)}?${paramsString}`
+    : `${sessionApiPaths.data.fieldSliceMeta(quantityId)}?${paramsString}`;
+  const scalarPath = isProjection
+    ? `${sessionApiPaths.data.fieldProjectionScalar(quantityId)}?${paramsString}`
+    : `${sessionApiPaths.data.fieldSliceScalar(quantityId)}?${paramsString}`;
+  const arrowsPath = !isProjection && query.include_arrows
     ? `${sessionApiPaths.data.fieldSliceArrows(quantityId)}?${buildSliceParams(query, { arrows: true }).toString()}`
     : null;
   return {
@@ -531,6 +544,29 @@ function buildSliceRequestSummary(
       ? `GET ${baseUrl}${arrowsPath}`
       : null,
   };
+}
+
+function isProjectionQuery(
+  query: FieldSliceQuery | FieldProjectionQuery | null,
+): query is FieldProjectionQuery {
+  return Boolean(query && ("reduction" in query || "include_air_as_zero" in query));
+}
+
+function queryResourceKind(query: FieldSliceQuery | FieldProjectionQuery | null): string {
+  if (!query) return "none";
+  return isProjectionQuery(query) ? "projection" : "slice";
+}
+
+function isSliceMeta(
+  meta: FieldSliceMeta | FieldProjectionMeta | null,
+): meta is FieldSliceMeta {
+  return Boolean(meta && "slice_revision" in meta);
+}
+
+function isProjectionMeta(
+  meta: FieldSliceMeta | FieldProjectionMeta | null,
+): meta is FieldProjectionMeta {
+  return Boolean(meta && "projection_revision" in meta);
 }
 
 function buildSliceParams(
@@ -547,6 +583,23 @@ function buildSliceParams(
   if (extra?.arrows || q.include_arrows) p.set("include_arrows", "true");
   if (q.arrow_every !== undefined) p.set("arrow_every", String(q.arrow_every));
   if (q.max_arrows !== undefined) p.set("max_arrows", String(q.max_arrows));
+  return p;
+}
+
+function buildProjectionParams(q: FieldProjectionQuery): URLSearchParams {
+  const p = new URLSearchParams({ plane: q.plane });
+  if (q.component && q.component !== "full") p.set("component", q.component);
+  if (q.reduction !== undefined) p.set("reduction", q.reduction);
+  if (q.include_air_as_zero !== undefined) {
+    p.set("include_air_as_zero", String(q.include_air_as_zero));
+  }
+  if (q.samples !== undefined) p.set("samples", String(q.samples));
+  if (q.adaptive !== undefined) p.set("adaptive", String(q.adaptive));
+  if (q.error_tolerance !== undefined) p.set("error_tolerance", String(q.error_tolerance));
+  if (q.min_samples !== undefined) p.set("min_samples", String(q.min_samples));
+  if (q.x_size !== undefined) p.set("x_size", String(q.x_size));
+  if (q.y_size !== undefined) p.set("y_size", String(q.y_size));
+  if (q.max_points !== undefined) p.set("max_points", String(q.max_points));
   return p;
 }
 

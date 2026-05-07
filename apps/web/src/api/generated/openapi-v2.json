@@ -5497,6 +5497,34 @@
               "null"
             ]
           },
+          "projection_include_air_as_zero": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "projection_reduction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projection_resolution": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projection_samples": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "quantity_id": {
             "type": [
               "string",
@@ -5596,6 +5624,22 @@
             "format": "double",
             "type": "number"
           },
+          "projection_include_air_as_zero": {
+            "type": "boolean"
+          },
+          "projection_reduction": {
+            "type": "string"
+          },
+          "projection_resolution": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projection_samples": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "quantity_id": {
             "type": "string"
           },
@@ -5647,7 +5691,11 @@
           "show_airbox_vectors",
           "show_quantity",
           "show_vectors",
-          "render_mode"
+          "render_mode",
+          "projection_reduction",
+          "projection_include_air_as_zero",
+          "projection_samples",
+          "projection_resolution"
         ],
         "type": "object"
       },

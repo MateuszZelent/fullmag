@@ -345,6 +345,10 @@ pub struct SliceVisualizationState {
     pub show_quantity: bool,
     pub show_vectors: bool,
     pub render_mode: SliceRenderMode,
+    pub projection_reduction: String,
+    pub projection_include_air_as_zero: bool,
+    pub projection_samples: u32,
+    pub projection_resolution: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -385,6 +389,14 @@ pub struct SliceVisualizationPatch {
     pub show_vectors: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_mode: Option<SliceRenderMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_reduction: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_include_air_as_zero: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_samples: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_resolution: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]

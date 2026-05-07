@@ -79,6 +79,117 @@ pub(crate) fn encode_rgba_matrix_png(
     encode_rgba_png(width, height, &rgba)
 }
 
+pub(crate) fn encode_scalar_png_with_lines(
+    width: u32,
+    height: u32,
+    values: &[f64],
+    mask: &[u8],
+    colormap: &str,
+    auto_scale: AutoScaleMode,
+    vmin: Option<f64>,
+    vmax: Option<f64>,
+    alpha_mask: bool,
+    lines: &[[f64; 4]],
+) -> Result<Vec<u8>, ApiError> {
+    let expected = width as usize * height as usize;
+    if values.len() != expected || mask.len() != expected {
+        return Err(ApiError::internal(
+            "render_png: scalar values and mask length must match image size",
+        ));
+    }
+    let (min, max) = scalar_range(values, mask, auto_scale, vmin, vmax);
+    let span = (max - min).abs().max(f64::EPSILON);
+    let mut rgba = Vec::with_capacity(expected * 4);
+    for (index, value) in values.iter().copied().enumerate() {
+        let empty = mask[index] != 0 || !value.is_finite();
+        if empty {
+            rgba.extend_from_slice(&[0, 0, 0, if alpha_mask { 0 } else { 255 }]);
+            continue;
+        }
+        let t = ((value - min) / span).clamp(0.0, 1.0);
+        let [r, g, b] = map_colormap(t, colormap);
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    overlay_lines(width, height, &mut rgba, lines);
+    encode_rgba_png(width, height, &rgba)
+}
+
+pub(crate) fn encode_rgba_matrix_png_with_lines(
+    width: u32,
+    height: u32,
+    rgba_pixels: &[[u8; 4]],
+    mask: &[u8],
+    alpha_mask: bool,
+    lines: &[[f64; 4]],
+) -> Result<Vec<u8>, ApiError> {
+    let expected = width as usize * height as usize;
+    if rgba_pixels.len() != expected || mask.len() != expected {
+        return Err(ApiError::internal(
+            "render_png: rgba values and mask length must match image size",
+        ));
+    }
+    let mut rgba = Vec::with_capacity(expected * 4);
+    for (index, pixel) in rgba_pixels.iter().copied().enumerate() {
+        if alpha_mask && mask[index] != 0 {
+            rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 0]);
+        } else {
+            rgba.extend_from_slice(&pixel);
+        }
+    }
+    overlay_lines(width, height, &mut rgba, lines);
+    encode_rgba_png(width, height, &rgba)
+}
+
+fn overlay_lines(width: u32, height: u32, rgba: &mut [u8], lines: &[[f64; 4]]) {
+    for [x0, y0, x1, y1] in lines.iter().copied() {
+        draw_line(width, height, rgba, x0, y0, x1, y1);
+    }
+}
+
+fn draw_line(width: u32, height: u32, rgba: &mut [u8], x0: f64, y0: f64, x1: f64, y1: f64) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let mut x = x0.round() as i32;
+    let mut y = y0.round() as i32;
+    let x_end = x1.round() as i32;
+    let y_end = y1.round() as i32;
+    let dx = (x_end - x).abs();
+    let dy = -(y_end - y).abs();
+    let sx = if x < x_end { 1 } else { -1 };
+    let sy = if y < y_end { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        draw_pixel(width, height, rgba, x, y);
+        if x == x_end && y == y_end {
+            break;
+        }
+        let e2 = err * 2;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+fn draw_pixel(width: u32, height: u32, rgba: &mut [u8], x: i32, y: i32) {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+        return;
+    }
+    let idx = ((y as u32 * width + x as u32) * 4) as usize;
+    if idx + 3 >= rgba.len() {
+        return;
+    }
+    rgba[idx] = 24;
+    rgba[idx + 1] = 24;
+    rgba[idx + 2] = 24;
+    rgba[idx + 3] = 255;
+}
+
 fn scalar_range(
     values: &[f64],
     mask: &[u8],
