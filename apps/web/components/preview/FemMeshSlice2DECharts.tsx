@@ -1,17 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSlice2DToolbarStore } from "@/src/features/slice2d";
+import {
+  formatWorldPosition,
+  sliceAxisBoundsFromMesh,
+  sliceAxisMagneticExtent,
+} from "@/src/features/slice2d/axisMapping";
+import { computeSliceAutoCenter } from "@/src/features/slice2d/sliceAutoCenter";
 import * as echarts from "echarts";
 import type { FemMeshData, FemVectorDomainFilter, RenderMode } from "./fem/femMeshTypes";
 import type { AntennaOverlay, ObjectViewMode } from "../runs/control-room/shared";
 import type { FemMeshPart, MeshEntityViewStateMap } from "../../lib/session/types";
 import {
+  buildQuantityExtentMask,
   buildSliceVisibilityState,
   clipAxisToPlane,
   normalizedClipToWorld,
 } from "./fem/femSliceUtils";
 import {
-  axisIndices,
   computeProjectionSlice,
   type ProjectionResult,
   type ProjectionReduction,
@@ -134,12 +141,19 @@ export default function FemMeshSlice2DECharts({
   projectionSamples = 20,
   projectionResolution = 128,
   onComponentChange,
+  onClipPosChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
   const projectionRequestSeq = useRef(0);
+  const lastValidExactSliceRef = useRef<ReturnType<typeof useFemSliceSampling>["slice"] | null>(null);
   const [projectionResult, setProjectionResult] = useState<ProjectionResult | null>(null);
   const [projectionPending, setProjectionPending] = useState(false);
+  const [showStaleSliceBadge, setShowStaleSliceBadge] = useState(false);
+  const setNormalAxisBounds = useSlice2DToolbarStore((state) => state.setNormalAxisBounds);
+  const setMagneticExtent = useSlice2DToolbarStore((state) => state.setMagneticExtent);
+  const setPositionWorld = useSlice2DToolbarStore((state) => state.setPositionWorld);
+  const currentPositionWorld = useSlice2DToolbarStore((state) => state.positionWorld);
 
   const fieldNComp = meshData.fieldNComp ?? 3;
   const hasField = Boolean(meshData.fieldData);
@@ -160,23 +174,10 @@ export default function FemMeshSlice2DECharts({
   }, [component, effectiveComponent, onComponentChange]);
 
   // ── Normal axis bounds ─────────────────────────────────────────
-  const { normal } = axisIndices(effectivePlane);
+  const normalAxis = effectivePlane === "yz" ? "x" : effectivePlane === "xz" ? "y" : "z";
   const normalBounds = useMemo(() => {
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < meshData.nNodes; i += 1) {
-      const value = meshData.nodes[i * 3 + normal];
-      if (value < min) min = value;
-      if (value > max) max = value;
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 0 };
-    return { min, max };
-  }, [meshData.nNodes, meshData.nodes, normal]);
-
-  const planeCoord = useMemo(
-    () => normalizedClipToWorld(normalBounds.min, normalBounds.max, clipPos),
-    [clipPos, normalBounds.max, normalBounds.min],
-  );
+    return sliceAxisBoundsFromMesh(meshData.nodes, meshData.nNodes, normalAxis);
+  }, [meshData.nNodes, meshData.nodes, normalAxis]);
 
   // ── Visibility state ───────────────────────────────────────────
   const visibilityState = useMemo(
@@ -192,6 +193,92 @@ export default function FemMeshSlice2DECharts({
       }),
     [airSegmentVisible, meshData, meshEntityViewState, meshParts, objectViewMode, visibleObjectIds],
   );
+  const quantityExtentMask = useMemo(
+    () =>
+      buildQuantityExtentMask({
+        visibility: visibilityState,
+        quantityDomain: meshData.quantityDomain,
+      }),
+    [meshData.quantityDomain, visibilityState],
+  );
+  const magneticExtent = useMemo(
+    () =>
+      sliceAxisMagneticExtent(
+        meshData.nodes,
+        meshData.nNodes,
+        normalAxis,
+        quantityExtentMask,
+        meshData.elements,
+      ),
+    [
+      meshData.elements,
+      meshData.nNodes,
+      meshData.nodes,
+      normalAxis,
+      quantityExtentMask,
+    ],
+  );
+  const planeCoord = useMemo(() => {
+    const unclamped = normalizedClipToWorld(normalBounds.min, normalBounds.max, clipPos);
+    if (!magneticExtent) {
+      return unclamped;
+    }
+    return Math.min(magneticExtent.max, Math.max(magneticExtent.min, unclamped));
+  }, [clipPos, magneticExtent, normalBounds.max, normalBounds.min]);
+
+  useEffect(() => {
+    setNormalAxisBounds(normalBounds);
+    setMagneticExtent(magneticExtent);
+  }, [
+    magneticExtent,
+    normalBounds,
+    setMagneticExtent,
+    setNormalAxisBounds,
+  ]);
+
+  useEffect(() => {
+    if (currentPositionWorld != null) {
+      return;
+    }
+    const autoCenter = computeSliceAutoCenter({
+      meshNodes: meshData.nodes,
+      nNodes: meshData.nNodes,
+      normalAxisIndex: normalAxis === "x" ? 0 : normalAxis === "y" ? 1 : 2,
+      visibleElements: quantityExtentMask,
+      elements: meshData.elements,
+      nElements: meshData.nElements,
+    });
+    setPositionWorld(autoCenter.centerWorld);
+    onClipPosChange?.(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          ((autoCenter.centerWorld - normalBounds.min)
+            / Math.max(normalBounds.max - normalBounds.min, 1e-18)) * 100,
+        ),
+      ),
+    );
+  }, [
+    currentPositionWorld,
+    meshData.elements,
+    meshData.nElements,
+    meshData.nNodes,
+    meshData.nodes,
+    normalAxis,
+    normalBounds.max,
+    normalBounds.min,
+    onClipPosChange,
+    quantityExtentMask,
+    setPositionWorld,
+  ]);
+
+  useEffect(() => {
+    if (currentPositionWorld == null) {
+      return;
+    }
+    setPositionWorld(planeCoord);
+  }, [currentPositionWorld, planeCoord, setPositionWorld]);
 
   // ── Slice query (exact section) ────────────────────────────────
   const sliceQuery = useMemo(() => {
@@ -408,18 +495,68 @@ export default function FemMeshSlice2DECharts({
     if (isProjectionMode && projectionResult && projectionResult.xRes > 0) {
       // ── Projection raster (heatmap) ──────────────────────────
       const { values, xRes, yRes, bounds } = projectionResult;
+      const cellWidth = (bounds.uMax - bounds.uMin) / xRes;
+      const cellHeight = (bounds.vMax - bounds.vMin) / yRes;
+
+      // Convert grid cells to world-coordinate heatmap data
       const data: [number, number, number][] = [];
       for (let iy = 0; iy < yRes; iy++) {
         for (let ix = 0; ix < xRes; ix++) {
           const v = values[iy * xRes + ix];
           if (!Number.isNaN(v)) {
-            data.push([ix, iy, v]);
+            const worldU = bounds.uMin + (ix + 0.5) * cellWidth;
+            const worldV = bounds.vMin + (iy + 0.5) * cellHeight;
+            data.push([worldU, worldV, v]);
           }
         }
       }
 
       const uLabel = projectionResult.uLabel;
       const vLabel = projectionResult.vLabel;
+      const fmtAxis = (val: number) => {
+        const abs = Math.abs(val);
+        if (abs === 0) return "0";
+        if (abs >= 1e-3) return `${(val * 1e3).toFixed(1)} mm`;
+        if (abs >= 1e-6) return `${(val * 1e6).toFixed(1)} µm`;
+        return `${(val * 1e9).toFixed(1)} nm`;
+      };
+
+      // Outline segments are already in world coords
+      const outlineSeriesData = projectionResult.outlineSegments.map((seg, i) => {
+        return [i, seg.a[0], seg.a[1], seg.b[0], seg.b[1]];
+      });
+
+      const series: echarts.SeriesOption[] = [{
+        name: quantityLabel,
+        type: "heatmap",
+        selectedMode: false,
+        emphasis: { disabled: true },
+        progressive: 0,
+        data,
+      }];
+
+      // Geometry outline overlay
+      if (outlineSeriesData.length > 0 && showMesh) {
+        series.push({
+          type: "custom" as const,
+          coordinateSystem: "cartesian2d" as const,
+          data: outlineSeriesData,
+          renderItem: (_params: unknown, api: echarts.CustomSeriesRenderItemAPI) => {
+            const idx = api.value(0) as number;
+            const seg = outlineSeriesData[idx];
+            if (!seg) return { type: "group" as const, children: [] };
+            const a = api.coord([seg[1], seg[2]]);
+            const b = api.coord([seg[3], seg[4]]);
+            return {
+              type: "line" as const,
+              shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] },
+              style: { stroke: "rgba(205, 214, 244, 0.7)", lineWidth: 1.2 },
+            };
+          },
+          silent: true,
+          z: 10,
+        } as echarts.SeriesOption);
+      }
 
       chart.setOption({
         animation: true,
@@ -440,8 +577,8 @@ export default function FemMeshSlice2DECharts({
             if (!Array.isArray(val) || val.length < 3) return "";
             return [
               `<strong>${quantityTitle}</strong>`,
-              `${uLabel}: ${val[0]}`,
-              `${vLabel}: ${val[1]}`,
+              `${uLabel}: ${fmtAxis(Number(val[0]))}`,
+              `${vLabel}: ${fmtAxis(Number(val[1]))}`,
               `value: ${formatMagnitude(Number(val[2]))}`,
             ].join("<br/>");
           },
@@ -452,27 +589,37 @@ export default function FemMeshSlice2DECharts({
           textStyle: { color: THEME.tooltipText, fontSize: 12 },
         },
         xAxis: {
-          type: "category",
-          data: Array.from({ length: xRes }, (_, i) => i),
-          name: `${uLabel} (cell)`,
+          type: "value",
+          min: bounds.uMin,
+          max: bounds.uMax,
+          name: `${uLabel} [m]`,
           nameLocation: "middle",
           nameGap: 30,
           nameTextStyle: { color: THEME.text2, fontWeight: 600 },
           axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisTick: { show: false },
-          axisLabel: { show: false },
+          axisTick: { show: true },
+          axisLabel: {
+            color: THEME.text2,
+            fontSize: 10,
+            formatter: (val: number) => fmtAxis(val),
+          },
           splitLine: { show: false },
         },
         yAxis: {
-          type: "category",
-          data: Array.from({ length: yRes }, (_, i) => i),
-          name: `${vLabel} (cell)`,
+          type: "value",
+          min: bounds.vMin,
+          max: bounds.vMax,
+          name: `${vLabel} [m]`,
           nameLocation: "middle",
-          nameGap: 44,
+          nameGap: 54,
           nameTextStyle: { color: THEME.text2, fontWeight: 600 },
           axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisTick: { show: false },
-          axisLabel: { show: false },
+          axisTick: { show: true },
+          axisLabel: {
+            color: THEME.text2,
+            fontSize: 10,
+            formatter: (val: number) => fmtAxis(val),
+          },
           splitLine: { show: false },
         },
         visualMap: [{
@@ -499,15 +646,8 @@ export default function FemMeshSlice2DECharts({
           outOfRange: { color: ["rgba(107, 122, 154, 0.18)"] },
           seriesIndex: 0,
         }],
-        series: [{
-          name: quantityLabel,
-          type: "heatmap",
-          selectedMode: false,
-          emphasis: { disabled: true },
-          progressive: 0,
-          data,
-        }],
-        grid: { containLabel: true, left: 58, right: 92, top: 48, bottom: 52 },
+        series,
+        grid: { containLabel: true, left: 68, right: 92, top: 48, bottom: 52 },
         toolbox: {
           show: true,
           top: 10,
@@ -524,14 +664,23 @@ export default function FemMeshSlice2DECharts({
       }, { notMerge: true });
     } else if (hasField && !isProjectionMode) {
       // ── Exact section: render polygons via custom series ──────
-      const slice = exactSlice.slice;
-      const polygons = slice.polygons;
-      const bounds = slice.bounds;
+      const requestedSlice = exactSlice.slice;
+      const staleSlice =
+        requestedSlice.polygons.length === 0 && lastValidExactSliceRef.current !== null;
+      const slice = requestedSlice.polygons.length > 0
+        ? requestedSlice
+        : lastValidExactSliceRef.current;
+      if (requestedSlice.polygons.length > 0) {
+        lastValidExactSliceRef.current = requestedSlice;
+      }
+      setShowStaleSliceBadge((current) => (current === staleSlice ? current : staleSlice));
+      const polygons = slice?.polygons ?? [];
 
-      if (polygons.length === 0) {
+      if (polygons.length === 0 || !slice) {
         chart.clear();
         return;
       }
+      const bounds = slice.bounds;
 
       const customData = polygons.map((p, i) => [i, p.value]);
       const segments = showMesh ? slice.segments : [];
@@ -669,6 +818,7 @@ export default function FemMeshSlice2DECharts({
         },
       }, { notMerge: true });
     } else {
+      setShowStaleSliceBadge((current) => (current ? false : current));
       chart.clear();
     }
   }, [
@@ -696,10 +846,17 @@ export default function FemMeshSlice2DECharts({
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      className="h-full w-full"
-      style={{ backgroundColor: BG }}
-    />
+    <div className="relative h-full w-full" style={{ backgroundColor: BG }}>
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+        style={{ backgroundColor: BG }}
+      />
+      {showStaleSliceBadge ? (
+        <div className="pointer-events-none absolute right-3 top-3 rounded-md border border-amber-400/40 bg-slate-950/85 px-3 py-2 text-xs text-amber-100 shadow-lg">
+          No magnetic material at {formatWorldPosition(planeCoord)}. Showing last valid slice.
+        </div>
+      ) : null}
+    </div>
   );
 }

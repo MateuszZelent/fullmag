@@ -886,6 +886,46 @@ function buildGlobalDisplayGroup(ctx: RibbonBuildContext): RibbonGroup {
   };
 }
 
+const SLICE_POSITION_DEBOUNCE_MS = 50;
+let slicePositionDebounceHandle: ReturnType<typeof setTimeout> | null = null;
+
+function metersToNanometers(value: number): number {
+  return value * 1e9;
+}
+
+function nanometersToMeters(value: number): number {
+  return value / 1e9;
+}
+
+function formatNanometers(valueNm: number): string {
+  return `${valueNm.toFixed(3)} nm`;
+}
+
+function percentFromBounds(min: number, max: number, world: number): number {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || Math.abs(max - min) <= 1e-18) {
+    return 50;
+  }
+  return Math.max(0, Math.min(100, ((world - min) / (max - min)) * 100));
+}
+
+function clearSlicePositionDebounce(): void {
+  if (slicePositionDebounceHandle != null) {
+    clearTimeout(slicePositionDebounceHandle);
+    slicePositionDebounceHandle = null;
+  }
+}
+
+function queueSlicePositionCommand(
+  ctx: RibbonBuildContext,
+  positionPercent: number,
+): void {
+  clearSlicePositionDebounce();
+  slicePositionDebounceHandle = setTimeout(() => {
+    ctx.run({ id: "viewport.set-slice-position", positionPercent });
+    slicePositionDebounceHandle = null;
+  }, SLICE_POSITION_DEBOUNCE_MS);
+}
+
 function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const slice = canUse2D(ctx);
   const toolbar = ctx.slice2DToolbar;
@@ -901,6 +941,31 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const showAirboxVectors = toolbar?.showAirboxVectors ?? false;
   const airboxRenderMode = toolbar?.airboxRenderMode ?? "wireframe";
   const position = toolbar?.positionPercent ?? ctx.meshClipPos ?? 50;
+  const positionWorld = toolbar?.positionWorld ?? null;
+  const normalAxisBounds = toolbar?.normalAxisBounds ?? null;
+  const magneticExtent = toolbar?.magneticExtent ?? null;
+  const hasPhysicalBounds = Boolean(
+    normalAxisBounds &&
+    Number.isFinite(normalAxisBounds.min) &&
+    Number.isFinite(normalAxisBounds.max) &&
+    normalAxisBounds.max > normalAxisBounds.min,
+  );
+  const physicalMinNm = hasPhysicalBounds ? metersToNanometers(normalAxisBounds!.min) : 0;
+  const physicalMaxNm = hasPhysicalBounds ? metersToNanometers(normalAxisBounds!.max) : 100;
+  const physicalValueNm = hasPhysicalBounds
+    ? metersToNanometers(
+      positionWorld ?? (
+        normalAxisBounds!.min +
+        ((normalAxisBounds!.max - normalAxisBounds!.min) * position) / 100
+      ),
+    )
+    : position;
+  const magneticExtentLabel = magneticExtent
+    ? `${formatNanometers(metersToNanometers(magneticExtent.min))} -> ${formatNanometers(metersToNanometers(magneticExtent.max))}`
+    : "Unavailable for this slice";
+  const physicalStepNm = hasPhysicalBounds
+    ? Math.max((physicalMaxNm - physicalMinNm) / 200, 0.1)
+    : 0.5;
   const autoScale = toolbar?.autoContrast ?? Boolean(ctx.requestedPreviewAutoScale ?? true);
   const projectionReduction = toolbar?.projectionReduction ?? "mean_occupied";
   const projectionIncludeAirAsZero = toolbar?.projectionIncludeAirAsZero ?? false;
@@ -1280,15 +1345,55 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
           {
             type: "slider",
             id: "slice:plane:position",
-            label: "Position",
-            value: position,
-            min: 0,
-            max: 100,
-            step: 0.5,
-            unit: "%",
+            label: hasPhysicalBounds ? `${axis.toUpperCase()} position` : "Position",
+            value: physicalValueNm,
+            min: hasPhysicalBounds ? physicalMinNm : 0,
+            max: hasPhysicalBounds ? physicalMaxNm : 100,
+            step: physicalStepNm,
+            unit: hasPhysicalBounds ? " nm" : "%",
+            highlightRange:
+              hasPhysicalBounds && magneticExtent
+                ? {
+                  min: metersToNanometers(magneticExtent.min),
+                  max: metersToNanometers(magneticExtent.max),
+                }
+                : null,
+            description: hasPhysicalBounds
+              ? `Magnetic material extent: ${magneticExtentLabel}`
+              : "Physical mesh bounds unavailable; using normalized percent",
             disabled: slice.disabled,
             disabledReason: slice.reason,
-            onValueChange: (positionPercent) => ctx.run({ id: "viewport.set-slice-position", positionPercent }),
+            formatValue: hasPhysicalBounds
+              ? (value) => formatNanometers(value)
+              : undefined,
+            onValueCommit: (nextValue) => {
+              if (hasPhysicalBounds) {
+                clearSlicePositionDebounce();
+                const world = nanometersToMeters(nextValue);
+                const positionPercent = percentFromBounds(
+                  normalAxisBounds!.min,
+                  normalAxisBounds!.max,
+                  world,
+                );
+                ctx.run({ id: "viewport.set-slice-position", positionPercent });
+                return;
+              }
+              clearSlicePositionDebounce();
+              ctx.run({ id: "viewport.set-slice-position", positionPercent: nextValue });
+            },
+            onValueChange: (nextValue) => {
+              if (hasPhysicalBounds) {
+                const world = nanometersToMeters(nextValue);
+                const positionPercent = percentFromBounds(
+                  normalAxisBounds!.min,
+                  normalAxisBounds!.max,
+                  world,
+                );
+                queueSlicePositionCommand(ctx, positionPercent);
+                return;
+              }
+              queueSlicePositionCommand(ctx, nextValue);
+            },
           },
         ],
       },

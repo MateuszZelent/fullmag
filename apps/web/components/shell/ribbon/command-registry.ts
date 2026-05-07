@@ -847,7 +847,17 @@ export function executeRibbonCommand(
   }
   const visualizationPatch = visualizationPatchFromRibbonCommand(command);
   if (visualizationPatch && typeof ctx.onPatchVisualizationState === "function") {
-    ctx.onPatchVisualizationState(visualizationPatch);
+    if (ctx.isFemBackend && command.id === "viewport.set-slice-axis") {
+      ctx.onPatchVisualizationState({
+        ...visualizationPatch,
+        clip: {
+          ...(visualizationPatch.clip ?? {}),
+          axis: command.axis,
+        },
+      });
+    } else {
+      ctx.onPatchVisualizationState(visualizationPatch);
+    }
     return;
   }
   switch (command.id) {

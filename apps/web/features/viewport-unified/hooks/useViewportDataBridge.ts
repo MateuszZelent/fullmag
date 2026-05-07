@@ -1152,8 +1152,11 @@ export function useViewportDataBridge() {
     ? FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
     : FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D;
   const femSliceTopologyReady = !ctx.isFemBackend || Boolean(ctx.femMeshData);
+  // When local FEM renderer is active (femMeshData available), skip the backend
+  // API path — it returns useless 1×1 px via fem_fallback_fdm_nearest.
+  const localFemRendererActive = ctx.isFemBackend && Boolean(femMeshData);
   const shouldUseSliceApi2D =
-    ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady;
+    ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady && !localFemRendererActive;
   const sliceSampling = useMemo(
     () => deriveSliceSampling(ctx.previewGrid, effectiveSlicePlane, ctx.sliceIndex),
     [ctx.previewGrid, ctx.sliceIndex, effectiveSlicePlane],

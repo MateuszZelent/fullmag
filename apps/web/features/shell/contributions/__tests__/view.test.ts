@@ -12,6 +12,9 @@ const slice2DToolbar: Slice2DToolbarState = {
   mode: "single",
   layerIndex: 0,
   positionPercent: 50,
+  positionWorld: null,
+  normalAxisBounds: null,
+  magneticExtent: null,
   thicknessPercent: null,
   colormap: "viridis",
   autoContrast: true,
@@ -241,6 +244,38 @@ describe("View ribbon contribution", () => {
       value: 100,
       max: 100,
     });
+  });
+
+  it("renders FEM slice position in physical nanometers when bounds are available", () => {
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        slice2DEnabled: true,
+        slice2DToolbar: {
+          ...slice2DToolbar,
+          axis: "y",
+          positionWorld: 25e-9,
+          normalAxisBounds: { min: 10e-9, max: 40e-9 },
+          magneticExtent: { min: 18e-9, max: 34e-9 },
+        },
+      }),
+    )[1];
+    const menu = sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [];
+    const slider = findNode(menu, "slice:plane:position");
+
+    expect(slider).toMatchObject({
+      type: "slider",
+      label: "Y position",
+      min: 10,
+      max: 40,
+      value: 25,
+      highlightRange: { min: 18, max: 34 },
+      description: "Magnetic material extent: 18.000 nm -> 34.000 nm",
+    });
+    if (slider?.type !== "slider") {
+      throw new Error("slice position slider missing");
+    }
+    expect(slider.formatValue?.(25)).toBe("25.000 nm");
   });
 
   it("keeps 2D airbox controls off the 3D airbox command path", () => {

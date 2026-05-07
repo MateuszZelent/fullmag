@@ -7,7 +7,10 @@ import {
   sampleSliceField,
   type SlicePlane,
 } from "../femSliceGeometry";
-import { buildSliceVisibilityState } from "../femSliceUtils";
+import {
+  buildQuantityExtentMask,
+  buildSliceVisibilityState,
+} from "../femSliceUtils";
 import type { FemMeshData } from "../femMeshTypes";
 import type { FemMeshPart } from "../../../../lib/session/types";
 
@@ -68,6 +71,22 @@ describe("collectSegments", () => {
     expect(sliceZ.polygons[0]?.value).toBe(3);
     expect(sliceX.arrows[0]?.vector).toEqual([1, 2]);
     expect(sliceZ.arrows[0]?.vector).toEqual([1, 2]);
+  });
+
+  it("returns a visible boundary slice for the xz plane at the minimum normal coordinate", () => {
+    const meshData = makeMeshData();
+
+    const slice = collectSegments(meshData, "xz", "x", 0, null);
+
+    expect(slice.polygons).toHaveLength(1);
+    expect(slice.polygons[0]?.points).toEqual([
+      [0, 0],
+      [1, 0],
+      [0, 1],
+    ]);
+    expect(slice.normalLabel).toBe("y");
+    expect(slice.uLabel).toBe("x");
+    expect(slice.vLabel).toBe("z");
   });
 
   it("keeps airbox slice polygons independently visible from magnetic objects", () => {
@@ -247,6 +266,88 @@ describe("collectSegments", () => {
         (polygon) => polygon.partId,
       ),
     ).toEqual(["mag", "air"]);
+  });
+
+  it("uses only magnetic elements for quantity extent when quantity is magnetic-only", () => {
+    const meshData: FemMeshData = {
+      nodes: [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        20, 0, 0,
+        30, 0, 0,
+        20, 5, 0,
+        20, 0, 6,
+      ],
+      elements: [0, 1, 2, 3, 4, 5, 6, 7],
+      boundaryFaces: [],
+      nNodes: 8,
+      nElements: 2,
+      fieldNComp: 3,
+      fieldData: {
+        x: [1, 1, 1, 1, 0, 0, 0, 0],
+        y: [0, 0, 0, 0, 0, 0, 0, 0],
+        z: [0, 0, 0, 0, 0, 0, 0, 0],
+      },
+      quantityDomain: "magnetic_only",
+    };
+    const basePart = {
+      label: "",
+      object_id: null,
+      geometry_id: null,
+      material_id: null,
+      boundary_face_start: 0,
+      boundary_face_count: 0,
+      boundary_face_indices: [],
+      node_start: 0,
+      node_count: 0,
+      node_indices: [],
+      surface_faces: [],
+      bounds_min: null,
+      bounds_max: null,
+    } satisfies Omit<FemMeshPart, "id" | "role" | "element_start" | "element_count">;
+    const meshParts: FemMeshPart[] = [
+      {
+        ...basePart,
+        id: "mag",
+        label: "magnetic",
+        role: "magnetic_object",
+        object_id: "body",
+        element_start: 0,
+        element_count: 1,
+      },
+      {
+        ...basePart,
+        id: "air",
+        label: "airbox",
+        role: "air",
+        element_start: 1,
+        element_count: 1,
+      },
+    ];
+
+    const visibility = buildSliceVisibilityState({
+      meshData,
+      meshParts,
+      meshEntityViewState: {
+        air: { visible: true, renderMode: "wireframe", opacity: 28, colorField: "none" },
+      },
+      airSegmentVisible: true,
+      objectViewMode: "context",
+      visibleObjectIds: ["body"],
+      vectorDomainFilter: "full_domain",
+    });
+
+    expect(Array.from(visibility.visibleElements ?? [])).toEqual([1, 1]);
+    expect(
+      Array.from(
+        buildQuantityExtentMask({
+          visibility,
+          quantityDomain: meshData.quantityDomain,
+        }) ?? [],
+      ),
+    ).toEqual([1, 0]);
   });
 
   it("supports explicit all-layer projection reductions", () => {

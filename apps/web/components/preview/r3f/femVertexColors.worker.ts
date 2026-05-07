@@ -1,5 +1,5 @@
 import type { FemColorField, FemMeshData } from "../fem/femMeshTypes";
-import { computeVertexColors } from "./femVertexColors";
+import { computeVertexColors } from "./femVertexColorsCore";
 
 interface ComputeVertexColorsRequest {
   id: number;

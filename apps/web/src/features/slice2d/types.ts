@@ -44,6 +44,9 @@ export interface Slice2DToolbarState {
   mode: "single" | "slab" | "all_layers";
   layerIndex: number | null;
   positionPercent: number;
+  positionWorld: number | null;
+  normalAxisBounds: { min: number; max: number } | null;
+  magneticExtent: { min: number; max: number } | null;
   thicknessPercent: number | null;
   colormap: string;
   autoContrast: boolean;

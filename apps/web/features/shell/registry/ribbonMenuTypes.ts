@@ -55,6 +55,10 @@ export type RibbonMenuSliderNode = RibbonMenuNodeBase & {
   max: number;
   step: number;
   unit?: string;
+  highlightRange?: {
+    min: number;
+    max: number;
+  } | null;
   formatValue?: (value: number) => string;
   onValueChange: (value: number) => void;
   onValueCommit?: (value: number) => void;

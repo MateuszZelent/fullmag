@@ -4,9 +4,14 @@ import dynamic from "next/dynamic";
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
+import { resolveApiBase } from "@/lib/apiBase";
 import { Slice2DShell } from "@/src/features/slice2d";
+import { percentFromWorldPosition } from "@/src/features/slice2d/axisMapping";
 import type { Slice2DModel } from "@/src/features/slice2d";
 import type { CrossSurfaceSelectionState } from "@/src/features/workspaceSync";
+import { sessionApiPaths } from "@/src/api/client/sessionPaths";
+import type { FieldSliceMeta, FieldSliceQuery } from "@/src/api/types";
+import type { SliceArrowData } from "@/src/hooks/resources/useFieldSlice2D";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
 import EmptyState from "../../ui/EmptyState";
@@ -47,6 +52,8 @@ export interface UnifiedViewport2DPresenterProps {
   hasSliceScalar: boolean;
   sliceLoading: boolean;
   sliceErrorMessage: string | null;
+  sliceMeta: FieldSliceMeta | null;
+  sliceArrows: SliceArrowData | null;
   grid: [number, number, number];
   vectors: Float64Array | null;
   sliceScalarValues: Float64Array | null;
@@ -95,6 +102,8 @@ export default function UnifiedViewport2DPresenter({
   hasSliceScalar,
   sliceLoading,
   sliceErrorMessage,
+  sliceMeta,
+  sliceArrows,
   grid,
   vectors,
   sliceScalarValues,
@@ -148,7 +157,14 @@ export default function UnifiedViewport2DPresenter({
       ? Boolean(toolbar.showAirboxVectors || toolbar.showVectors)
       : showArrows;
   const effectiveClipAxis = toolbar?.axis ?? clipAxis;
-  const effectiveClipPos = toolbar?.positionPercent ?? clipPos;
+  const effectiveClipPos =
+    toolbar?.normalAxisBounds && typeof toolbar.positionWorld === "number"
+      ? percentFromWorldPosition(
+        toolbar.normalAxisBounds.min,
+        toolbar.normalAxisBounds.max,
+        toolbar.positionWorld,
+      )
+      : toolbar?.positionPercent ?? clipPos;
   const effectiveAirboxVisible = toolbar?.showAirbox ?? airSegmentVisible;
   const effectiveVectorDomainFilter: FemVectorDomainFilter =
     toolbar?.showAirboxVectors && effectiveAirboxVisible
@@ -166,9 +182,51 @@ export default function UnifiedViewport2DPresenter({
     });
   }, [effectiveAirboxVisible, meshEntityViewState, meshParts, toolbar]);
 
+  const sliceDebugPanel = useMemo(() => {
+    if (!slice2DModel) {
+      return null;
+    }
+    return (
+      <Slice2DDebugPanel
+        quantityId={quantityId ?? sliceMeta?.quantity_id ?? null}
+        query={slice2DModel.render.query}
+        toolbar={slice2DModel.toolbar}
+        sliceMeta={sliceMeta}
+        sliceArrows={sliceArrows}
+        sliceScalarValues={sliceScalarValues}
+        sliceScalarShape={sliceScalarShape}
+        sliceLoading={sliceLoading}
+        sliceErrorMessage={sliceErrorMessage}
+        usesSliceApi={shouldUseSliceApi2D}
+        renderingMode={
+          preferFemMesh && femMeshData
+            ? "fem-mesh-local"
+            : shouldUseSliceApi2D
+              ? "api-raster"
+              : "fdm-grid"
+        }
+      />
+    );
+  }, [
+    femMeshData,
+    preferFemMesh,
+    shouldUseSliceApi2D,
+    slice2DModel,
+    sliceArrows,
+    sliceErrorMessage,
+    sliceLoading,
+    sliceMeta,
+    sliceScalarShape,
+    sliceScalarValues,
+  ]);
+
   const wrap = (content: ReactNode) =>
     slice2DModel ? (
-      <Slice2DShell model={slice2DModel} selection={workspaceSelection}>
+      <Slice2DShell
+        model={slice2DModel}
+        selection={workspaceSelection}
+        debugPanel={sliceDebugPanel}
+      >
         {content}
       </Slice2DShell>
     ) : content;
@@ -266,4 +324,290 @@ export default function UnifiedViewport2DPresenter({
       sliceIndex={sliceIndex}
     />,
   );
+}
+
+function Slice2DDebugPanel({
+  quantityId,
+  query,
+  toolbar,
+  sliceMeta,
+  sliceArrows,
+  sliceScalarValues,
+  sliceScalarShape,
+  sliceLoading,
+  sliceErrorMessage,
+  usesSliceApi,
+  renderingMode,
+}: {
+  quantityId: string | null;
+  query: FieldSliceQuery | null;
+  toolbar: Slice2DModel["toolbar"];
+  sliceMeta: FieldSliceMeta | null;
+  sliceArrows: SliceArrowData | null;
+  sliceScalarValues: Float64Array | null;
+  sliceScalarShape: [number, number] | null;
+  sliceLoading: boolean;
+  sliceErrorMessage: string | null;
+  usesSliceApi: boolean;
+  renderingMode: "fem-mesh-local" | "api-raster" | "fdm-grid";
+}) {
+  const requestSummary = useMemo(
+    () => buildSliceRequestSummary(quantityId, query),
+    [quantityId, query],
+  );
+  const scalarSummary = useMemo(
+    () => buildScalarDebugSummary(sliceScalarValues, sliceScalarShape),
+    [sliceScalarShape, sliceScalarValues],
+  );
+  const metaJson = useMemo(
+    () => (sliceMeta ? JSON.stringify(sliceMeta, null, 2) : "null"),
+    [sliceMeta],
+  );
+
+  return (
+    <section className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-medium text-amber-300">2D Slice API Debug</span>
+        <span className="text-muted-foreground">renderer: {renderingMode}</span>
+        <span className="text-muted-foreground">
+          api slice path active: {usesSliceApi ? "yes" : "no"}
+        </span>
+        <span className="text-muted-foreground">loading: {sliceLoading ? "yes" : "no"}</span>
+        {sliceErrorMessage ? (
+          <span className="text-red-300">error: {sliceErrorMessage}</span>
+        ) : null}
+      </div>
+      <div className="mt-2 grid gap-2 lg:grid-cols-2">
+        <DebugBlock
+          title="Request"
+          lines={[
+            ["quantity_id", quantityId ?? "none"],
+            ["query", requestSummary.queryJson],
+            ["meta GET", requestSummary.metaUrl],
+            ["scalar GET", requestSummary.scalarUrl],
+            ["arrows GET", requestSummary.arrowsUrl ?? "not requested"],
+          ]}
+        />
+        <DebugBlock
+          title="Frontend Render Inputs"
+          lines={[
+            ["renderer", renderingMode],
+            ["toolbar axis", toolbar.axis],
+            ["toolbar component", toolbar.component],
+            ["position %", formatNumber(toolbar.positionPercent)],
+            ["position world", formatNumber(toolbar.positionWorld)],
+            [
+              "normal bounds",
+              toolbar.normalAxisBounds
+                ? `${formatNumber(toolbar.normalAxisBounds.min)} .. ${formatNumber(toolbar.normalAxisBounds.max)}`
+                : "none",
+            ],
+            [
+              "magnetic extent",
+              toolbar.magneticExtent
+                ? `${formatNumber(toolbar.magneticExtent.min)} .. ${formatNumber(toolbar.magneticExtent.max)}`
+                : "none",
+            ],
+            ["query plane", query?.plane ?? "none"],
+          ]}
+        />
+        <DebugBlock
+          title="Meta Response"
+          lines={[
+            ["plane", sliceMeta?.plane ?? "none"],
+            ["component", sliceMeta?.component ?? "none"],
+            [
+              "cut",
+              sliceMeta
+                ? `${sliceMeta.cut_kind} norm=${formatNumber(sliceMeta.cut_norm)} world=${formatNumber(sliceMeta.cut_world)}`
+                : "none",
+            ],
+            ["pixels", sliceMeta ? `${sliceMeta.x_pixels} x ${sliceMeta.y_pixels}` : "none"],
+            [
+              "grid",
+              sliceMeta
+                ? `${sliceMeta.grid.x_size} x ${sliceMeta.grid.y_size}, points=${sliceMeta.grid.point_count}`
+                : "none",
+            ],
+            ["sampling", sliceMeta?.sampling_method ?? "none"],
+            [
+              "revisions",
+              sliceMeta
+                ? `field=${sliceMeta.field_revision}, domain=${sliceMeta.domain_generation_id}, slice=${sliceMeta.slice_revision}`
+                : "none",
+            ],
+            [
+              "scalar desc",
+              sliceMeta
+                ? `available=${String(sliceMeta.scalar.available)}, n_comp=${sliceMeta.scalar.n_comp}, points=${sliceMeta.scalar.point_count}, min=${formatNumber(sliceMeta.scalar.min)}, max=${formatNumber(sliceMeta.scalar.max)}`
+                : "none",
+            ],
+            [
+              "arrow desc",
+              sliceMeta
+                ? `available=${String(sliceMeta.arrows.available)}, n_comp=${sliceMeta.arrows.n_comp}, points=${sliceMeta.arrows.point_count}`
+                : "none",
+            ],
+            ["raw json", metaJson],
+          ]}
+        />
+        <DebugBlock
+          title="Scalar Payload"
+          lines={[
+            ["shape", scalarSummary.shape],
+            ["values", scalarSummary.length],
+            ["finite", scalarSummary.finiteCount],
+            ["non-zero", scalarSummary.nonZeroCount],
+            ["min/max", `${scalarSummary.min} / ${scalarSummary.max}`],
+            ["abs max", scalarSummary.absMax],
+            ["bytes", scalarSummary.bytes],
+            ["sample", scalarSummary.sample],
+          ]}
+        />
+        <DebugBlock
+          title="Arrow Payload"
+          lines={[
+            ["arrow count", sliceArrows ? String(sliceArrows.arrowCount) : "0"],
+            ["components", sliceMeta ? String(sliceMeta.arrows.n_comp) : "none"],
+            ["values", sliceArrows ? String(sliceArrows.values.length) : "0"],
+            ["bytes", sliceArrows ? String(sliceArrows.values.byteLength) : "0"],
+            ["etag", sliceArrows?.etag ?? "none"],
+          ]}
+        />
+      </div>
+    </section>
+  );
+}
+
+function DebugBlock({
+  title,
+  lines,
+}: {
+  title: string;
+  lines: ReadonlyArray<readonly [string, string]>;
+}) {
+  return (
+    <div className="rounded border border-border/40 bg-background/50 p-2">
+      <div className="mb-1 font-medium text-foreground">{title}</div>
+      <div className="space-y-1">
+        {lines.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[90px_minmax(0,1fr)] gap-2">
+            <span className="text-muted-foreground">{label}</span>
+            <code className="break-all whitespace-pre-wrap text-[11px] text-foreground/90">
+              {value}
+            </code>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function buildSliceRequestSummary(
+  quantityId: string | null,
+  query: FieldSliceQuery | null,
+) {
+  const baseUrl = resolveApiBase();
+  if (!quantityId || !query) {
+    return {
+      queryJson: query ? JSON.stringify(query) : "null",
+      metaUrl: "no slice request",
+      scalarUrl: "no slice request",
+      arrowsUrl: null as string | null,
+    };
+  }
+  const params = buildSliceParams(query);
+  const paramsString = params.toString();
+  const metaPath = `${sessionApiPaths.data.fieldSliceMeta(quantityId)}?${paramsString}`;
+  const scalarPath = `${sessionApiPaths.data.fieldSliceScalar(quantityId)}?${paramsString}`;
+  const arrowsPath = query.include_arrows
+    ? `${sessionApiPaths.data.fieldSliceArrows(quantityId)}?${buildSliceParams(query, { arrows: true }).toString()}`
+    : null;
+  return {
+    queryJson: JSON.stringify(query),
+    metaUrl: `GET ${baseUrl}${metaPath}`,
+    scalarUrl: `GET ${baseUrl}${scalarPath}`,
+    arrowsUrl: arrowsPath
+      ? `GET ${baseUrl}${arrowsPath}`
+      : null,
+  };
+}
+
+function buildSliceParams(
+  q: FieldSliceQuery,
+  extra?: { arrows?: boolean },
+): URLSearchParams {
+  const p = new URLSearchParams({ plane: q.plane });
+  if (q.component && q.component !== "full") p.set("component", q.component);
+  if (q.cut_world !== undefined) p.set("cut_world", String(q.cut_world));
+  if (q.cut_norm !== undefined) p.set("cut_norm", String(q.cut_norm));
+  if (q.x_size !== undefined) p.set("x_size", String(q.x_size));
+  if (q.y_size !== undefined) p.set("y_size", String(q.y_size));
+  if (q.max_points !== undefined) p.set("max_points", String(q.max_points));
+  if (extra?.arrows || q.include_arrows) p.set("include_arrows", "true");
+  if (q.arrow_every !== undefined) p.set("arrow_every", String(q.arrow_every));
+  if (q.max_arrows !== undefined) p.set("max_arrows", String(q.max_arrows));
+  return p;
+}
+
+function buildScalarDebugSummary(
+  values: Float64Array | null,
+  shape: [number, number] | null,
+) {
+  if (!values) {
+    return {
+      shape: shape ? `${shape[0]} x ${shape[1]}` : "none",
+      length: "0",
+      finiteCount: "0",
+      nonZeroCount: "0",
+      min: "none",
+      max: "none",
+      absMax: "none",
+      bytes: "0",
+      sample: "[]",
+    };
+  }
+
+  let finiteCount = 0;
+  let nonZeroCount = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let absMax = 0;
+  const sample: number[] = [];
+  const sampleCount = Math.min(values.length, 8);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index];
+    if (index < sampleCount) {
+      sample.push(value);
+    }
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    finiteCount += 1;
+    if (value !== 0) {
+      nonZeroCount += 1;
+    }
+    if (value < min) min = value;
+    if (value > max) max = value;
+    const abs = Math.abs(value);
+    if (abs > absMax) absMax = abs;
+  }
+
+  return {
+    shape: shape ? `${shape[0]} x ${shape[1]}` : "unknown",
+    length: String(values.length),
+    finiteCount: String(finiteCount),
+    nonZeroCount: String(nonZeroCount),
+    min: finiteCount > 0 ? formatNumber(min) : "none",
+    max: finiteCount > 0 ? formatNumber(max) : "none",
+    absMax: finiteCount > 0 ? formatNumber(absMax) : "none",
+    bytes: String(values.byteLength),
+    sample: `[${sample.map((value) => formatNumber(value)).join(", ")}]`,
+  };
+}
+
+function formatNumber(value: number | null | undefined): string {
+  if (value == null) return "none";
+  if (!Number.isFinite(value)) return String(value);
+  return value.toExponential(6);
 }

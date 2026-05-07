@@ -223,7 +223,7 @@ describe("ribbon viewport commands", () => {
     expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
   });
 
-  it("does not change global FEM clip state from slice axis patches", () => {
+  it("keeps FEM clip axis synchronized with canonical slice axis patches", () => {
     const onPatchVisualizationState = vi.fn();
     const onSetSlice2DToolbar = vi.fn();
     const ctx = context({
@@ -239,6 +239,7 @@ describe("ribbon viewport commands", () => {
 
     expect(onPatchVisualizationState).toHaveBeenCalledWith({
       slice: { axis: "y" },
+      clip: { axis: "y" },
     });
     expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
   });

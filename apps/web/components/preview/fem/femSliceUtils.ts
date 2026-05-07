@@ -12,6 +12,34 @@ export interface SliceVisibilityState {
   visiblePartIds: Set<string>;
 }
 
+export function buildQuantityExtentMask(args: {
+  visibility: SliceVisibilityState;
+  quantityDomain: FemMeshData["quantityDomain"];
+}): Uint8Array | null {
+  const { visibility, quantityDomain } = args;
+  const baseMask = visibility.visibleElements;
+  if (!baseMask) {
+    return null;
+  }
+  if (quantityDomain === "full_domain") {
+    return baseMask;
+  }
+  const mask = new Uint8Array(baseMask.length);
+  let hasVisibleMagneticElement = false;
+  for (let index = 0; index < baseMask.length; index += 1) {
+    if (baseMask[index] !== 1) {
+      continue;
+    }
+    const partId = visibility.elementPartIds[index];
+    const part = partId ? visibility.partById.get(partId) : null;
+    if (part?.role === "magnetic_object") {
+      mask[index] = 1;
+      hasVisibleMagneticElement = true;
+    }
+  }
+  return hasVisibleMagneticElement ? mask : null;
+}
+
 export interface SmartColorScale {
   min: number;
   max: number;

@@ -4,6 +4,8 @@ import {
   type Slice2DToolbarState,
 } from "@/src/features/slice2d";
 import {
+  percentFromWorldPosition,
+  worldPositionFromPercent,
   positionPercentFromSliceIndex,
   resolveEffectiveSlicePlane,
   resolveSliceAxisSelection,
@@ -50,6 +52,9 @@ export function useRibbonVisualizationActions({
   viewport: ViewportContextValue;
 }) {
   const slice2DToolbarPatch = useSlice2DToolbarStore((state) => state.patch);
+  const normalAxisBounds = useSlice2DToolbarStore((state) => state.normalAxisBounds);
+  const magneticExtent = useSlice2DToolbarStore((state) => state.magneticExtent);
+  const positionWorld = useSlice2DToolbarStore((state) => state.positionWorld);
   const patchSlice2DToolbar = useSlice2DToolbarStore((state) => state.patchToolbar);
   const airboxStore = useSlice2DAirboxStore();
   const viz = useViewportRenderState();
@@ -121,6 +126,22 @@ export function useRibbonVisualizationActions({
           plane: effectiveSlicePlane,
           sliceIndex: viewport.sliceIndex,
         }),
+      positionWorld:
+        femDiscretization
+          ? (
+            positionWorld ?? (
+              normalAxisBounds
+                ? worldPositionFromPercent(
+                  normalAxisBounds.min,
+                  normalAxisBounds.max,
+                  viz.meshClipPos ?? 50,
+                )
+                : null
+            )
+          )
+          : null,
+      normalAxisBounds,
+      magneticExtent,
       thicknessPercent: null,
       colormap: "viridis",
       autoContrast: Boolean(viewport.requestedPreviewAutoScale ?? true),
@@ -155,13 +176,37 @@ export function useRibbonVisualizationActions({
     if (typeof slice2DToolbarPatch.positionPercent === "number") {
       localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
     }
+    if (typeof slice2DToolbarPatch.positionWorld === "number" || slice2DToolbarPatch.positionWorld === null) {
+      localProjectionPatch.positionWorld = slice2DToolbarPatch.positionWorld;
+    }
+    if (slice2DToolbarPatch.normalAxisBounds !== undefined) {
+      localProjectionPatch.normalAxisBounds = slice2DToolbarPatch.normalAxisBounds;
+    }
+    if (slice2DToolbarPatch.magneticExtent !== undefined) {
+      localProjectionPatch.magneticExtent = slice2DToolbarPatch.magneticExtent;
+    }
     return canonicalSliceToolbar
-      ? { ...canonicalSliceToolbar, ...localProjectionPatch }
-      : { ...fallbackToolbar, ...slice2DToolbarPatch };
+      ? {
+        ...canonicalSliceToolbar,
+        normalAxisBounds,
+        magneticExtent,
+        positionWorld,
+        ...localProjectionPatch,
+      }
+      : {
+        ...fallbackToolbar,
+        positionWorld,
+        normalAxisBounds,
+        magneticExtent,
+        ...slice2DToolbarPatch,
+      };
   }, [
     canonicalSliceToolbar,
     effectiveSlicePlane,
     femDiscretization,
+    magneticExtent,
+    normalAxisBounds,
+    positionWorld,
     slice2DToolbarPatch,
     viz.femViewportLayers,
     viz.meshClipPos,
@@ -189,96 +234,165 @@ export function useRibbonVisualizationActions({
   const ribbonAirboxVisible = model.resolvedRenderPlan?.layers.airbox.visible ?? viz.airMeshVisible;
 
   const handleRibbonSlice2DToolbar = useCallback((patch: Partial<Slice2DToolbarState>) => {
-    patchSlice2DToolbar(patch);
-    if (patch.quantityId) {
-      viewport.requestPreviewQuantity(patch.quantityId);
-    }
-    if (patch.component) {
-      handleRibbonPreviewComponent(patch.component);
-    }
-    if (patch.axis) {
-      const nextSliceAxis = resolveSliceAxisSelection({
-        axis: patch.axis,
-        syncClipAxis: Boolean(femDiscretization),
+    const sliceDisplayPatches: Array<Parameters<typeof viewport.patchDisplay>[0]> = [];
+    const queueSliceDisplayPatch = (displayPatch: Parameters<typeof viewport.patchDisplay>[0]) => {
+      sliceDisplayPatches.push(displayPatch);
+    };
+    const flushSliceDisplayPatches = () => {
+      if (sliceDisplayPatches.length === 0) {
+        return;
+      }
+      queueMicrotask(() => {
+        for (const displayPatch of sliceDisplayPatches) {
+          void viewport.patchDisplay(displayPatch);
+        }
       });
-      viewport.setPlane(nextSliceAxis.plane);
-      if (nextSliceAxis.clipAxis) {
-        void viewport.patchDisplay(visualizationPatchForClip({ axis: nextSliceAxis.clipAxis }));
+    };
+    const nextPatch: Partial<Slice2DToolbarState> = { ...patch };
+    const axisSelection = nextPatch.axis
+      ? resolveSliceAxisSelection({
+        axis: nextPatch.axis,
+        syncClipAxis: Boolean(femDiscretization),
+      })
+      : null;
+    const targetPlane = axisSelection?.plane ?? effectiveSlicePlane;
+    if (typeof nextPatch.positionWorld === "number" && slice2DToolbar.normalAxisBounds) {
+      nextPatch.positionPercent = percentFromWorldPosition(
+        slice2DToolbar.normalAxisBounds.min,
+        slice2DToolbar.normalAxisBounds.max,
+        nextPatch.positionWorld,
+      );
+    } else if (
+      typeof nextPatch.positionPercent === "number" &&
+      slice2DToolbar.normalAxisBounds &&
+      nextPatch.positionWorld === undefined
+    ) {
+      nextPatch.positionWorld = worldPositionFromPercent(
+        slice2DToolbar.normalAxisBounds.min,
+        slice2DToolbar.normalAxisBounds.max,
+        nextPatch.positionPercent,
+      );
+    }
+    if (nextPatch.axis && femDiscretization) {
+      nextPatch.normalAxisBounds = null;
+      nextPatch.magneticExtent = null;
+      if (nextPatch.positionPercent === undefined) {
+        nextPatch.positionPercent = 50;
+      }
+      if (nextPatch.positionWorld === undefined) {
+        nextPatch.positionWorld = null;
       }
     }
-    if (patch.mode) {
-      void viewport.patchDisplay({ slice_mode: patch.mode === "all_layers" ? "all" : patch.mode });
+    if (nextPatch.quantityId) {
+      viewport.requestPreviewQuantity(nextPatch.quantityId);
     }
-    if (typeof patch.layerIndex === "number") {
-      viewport.setSliceIndex(patch.layerIndex);
-      void viewport.patchDisplay({ slice_layer: patch.layerIndex });
+    if (nextPatch.component) {
+      handleRibbonPreviewComponent(nextPatch.component);
+    }
+    if (nextPatch.axis) {
+      viewport.setPlane(targetPlane);
+      if (axisSelection?.clipAxis) {
+        queueSliceDisplayPatch(
+          visualizationPatchForClip({
+            axis: axisSelection.clipAxis,
+            positionPercent:
+              typeof nextPatch.positionPercent === "number"
+                ? nextPatch.positionPercent
+                : undefined,
+          }),
+        );
+      }
+      if (!femDiscretization) {
+        const centeredPercent =
+          typeof nextPatch.positionPercent === "number" ? nextPatch.positionPercent : 50;
+        const centeredSliceIndex = sliceIndexFromPositionPercent({
+          grid: viewport.previewGrid,
+          plane: targetPlane,
+          positionPercent: centeredPercent,
+        });
+        nextPatch.positionPercent = centeredPercent;
+        nextPatch.layerIndex = centeredSliceIndex;
+        viewport.setSliceIndex(centeredSliceIndex);
+        void viewport.patchDisplay({ slice_layer: centeredSliceIndex });
+      }
+    }
+    patchSlice2DToolbar(nextPatch);
+    if (nextPatch.mode) {
+      queueSliceDisplayPatch({ slice_mode: nextPatch.mode === "all_layers" ? "all" : nextPatch.mode });
+    }
+    if (typeof nextPatch.layerIndex === "number") {
+      viewport.setSliceIndex(nextPatch.layerIndex);
+      queueSliceDisplayPatch({ slice_layer: nextPatch.layerIndex });
       if (femDiscretization) {
-        void viewport.patchDisplay(
+        queueSliceDisplayPatch(
           visualizationPatchForClip({
             positionPercent: positionPercentFromSliceIndex({
               grid: viewport.previewGrid,
-              plane: effectiveSlicePlane,
-              sliceIndex: patch.layerIndex,
+              plane: targetPlane,
+              sliceIndex: nextPatch.layerIndex,
             }),
           }),
         );
       }
     }
-    if (typeof patch.positionPercent === "number") {
+    if (typeof nextPatch.positionPercent === "number") {
       const nextSliceIndex = sliceIndexFromPositionPercent({
         grid: viewport.previewGrid,
-        plane: effectiveSlicePlane,
-        positionPercent: patch.positionPercent,
+        plane: targetPlane,
+        positionPercent: nextPatch.positionPercent,
       });
-      void viewport.patchDisplay(visualizationPatchForClip({ positionPercent: patch.positionPercent }));
+      if (!nextPatch.axis || !femDiscretization) {
+        queueSliceDisplayPatch(visualizationPatchForClip({ positionPercent: nextPatch.positionPercent }));
+      }
       viewport.setSliceIndex(nextSliceIndex);
-      void viewport.patchDisplay({ slice_layer: nextSliceIndex });
+      queueSliceDisplayPatch({ slice_layer: nextSliceIndex });
     }
-    if (patch.colormap) {
-      handleRibbonPreviewColormap(patch.colormap);
+    flushSliceDisplayPatches();
+    if (nextPatch.colormap) {
+      handleRibbonPreviewColormap(nextPatch.colormap);
     }
-    if (typeof patch.autoContrast === "boolean") {
-      handleRibbonPreviewAutoScale(patch.autoContrast);
+    if (typeof nextPatch.autoContrast === "boolean") {
+      handleRibbonPreviewAutoScale(nextPatch.autoContrast);
     }
-    if (typeof patch.showVectors === "boolean") {
+    if (typeof nextPatch.showVectors === "boolean") {
       void viewport.patchDisplay({
         layers: {
           vectors: {
-            visible: patch.showVectors,
+            visible: nextPatch.showVectors,
           },
         },
       });
-      if (!patch.showVectors && viz.femViewportLayers.showMagneticTexture && !viz.femViewportLayers.showQuantity) {
+      if (!nextPatch.showVectors && viz.femViewportLayers.showMagneticTexture && !viz.femViewportLayers.showQuantity) {
         viewport.requestPreviewQuantity("m");
       }
     }
-    if (typeof patch.showPrimitives === "boolean") {
+    if (typeof nextPatch.showPrimitives === "boolean") {
       void viewport.patchDisplay(visualizationPatchForFemLayers({
         ...ribbonFemLayers,
-        showPrimitives: patch.showPrimitives,
+        showPrimitives: nextPatch.showPrimitives,
       }));
     }
-    if (typeof patch.showMesh === "boolean") {
+    if (typeof nextPatch.showMesh === "boolean") {
       void viewport.patchDisplay(visualizationPatchForFemLayers({
         ...ribbonFemLayers,
-        showMesh: patch.showMesh,
+        showMesh: nextPatch.showMesh,
       }));
     }
-    if (typeof patch.showMagneticTexture === "boolean") {
+    if (typeof nextPatch.showMagneticTexture === "boolean") {
       void viewport.patchDisplay(visualizationPatchForFemLayers({
         ...ribbonFemLayers,
-        showMagneticTexture: patch.showMagneticTexture,
-        showQuantity: patch.showMagneticTexture ? false : ribbonFemLayers.showQuantity,
+        showMagneticTexture: nextPatch.showMagneticTexture,
+        showQuantity: nextPatch.showMagneticTexture ? false : ribbonFemLayers.showQuantity,
       }));
-      if (patch.showMagneticTexture) {
+      if (nextPatch.showMagneticTexture) {
         viewport.requestPreviewQuantity("m");
       }
     }
-    if (typeof patch.showQuantity === "boolean") {
+    if (typeof nextPatch.showQuantity === "boolean") {
       void viewport.patchDisplay(visualizationPatchForFemLayers({
         ...ribbonFemLayers,
-        showQuantity: patch.showQuantity,
-        showMagneticTexture: patch.showQuantity ? false : ribbonFemLayers.showMagneticTexture,
+        showQuantity: nextPatch.showQuantity,
+        showMagneticTexture: nextPatch.showQuantity ? false : ribbonFemLayers.showMagneticTexture,
       }));
     }
   }, [
@@ -289,6 +403,7 @@ export function useRibbonVisualizationActions({
     handleRibbonPreviewComponent,
     patchSlice2DToolbar,
     ribbonFemLayers,
+    slice2DToolbar.normalAxisBounds,
     viz.femViewportLayers,
     viewport,
   ]);

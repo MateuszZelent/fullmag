@@ -499,7 +499,7 @@ function collectTetraTopology(
     uLabel: axisLabel(u),
     vLabel: axisLabel(v),
     bounds,
-    segments: [],
+    segments: extractEdgesFromPolygons(polygons),
     polygons,
   };
 }
@@ -655,6 +655,8 @@ export interface ProjectionResult {
   vLabel: string;
   /** Number of Z-planes actually sampled. */
   nPlanesSampled: number;
+  /** Boundary outline segments (mid-plane) for geometry contour overlay. */
+  outlineSegments: BoundarySegmentTopology2D[];
 }
 
 export interface ProjectionOptions {
@@ -752,42 +754,64 @@ export function computeProjectionSlice(
   const projectionVisibility = limitProjectionVisibility(meshData, visibility, maxElements);
   const { normal, u, v } = axisIndices(plane);
 
-  // ── 1. Determine normal-axis extent from visible mesh nodes ────
+  // ── 1. Determine bounds from visible element nodes only ────────
+  // Iterate only nodes belonging to visible elements to exclude airbox.
   const flatNodes = meshData.nodes;
+  const elements = meshData.elements;
+  const nElements = Math.floor(elements.length / 4);
+  const visMask = projectionVisibility?.visibleElements ?? null;
   const numNodes = flatNodes.length / 3;
+
   let normalMin = Number.POSITIVE_INFINITY;
   let normalMax = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < numNodes; i++) {
-    const val = flatNodes[i * 3 + normal];
-    if (val < normalMin) normalMin = val;
-    if (val > normalMax) normalMax = val;
+  let uMin = Number.POSITIVE_INFINITY;
+  let uMax = Number.NEGATIVE_INFINITY;
+  let vMin = Number.POSITIVE_INFINITY;
+  let vMax = Number.NEGATIVE_INFINITY;
+
+  // Collect bounds from nodes of visible elements
+  const visitedNodes = new Uint8Array(numNodes);
+  for (let ei = 0; ei < nElements; ei++) {
+    if (visMask && visMask[ei] !== 1) continue;
+    const base = ei * 4;
+    for (let li = 0; li < 4; li++) {
+      const ni = Math.trunc(Number(elements[base + li]));
+      if (ni < 0 || ni >= numNodes || visitedNodes[ni]) continue;
+      visitedNodes[ni] = 1;
+      const nv = flatNodes[ni * 3 + normal];
+      const uv = flatNodes[ni * 3 + u];
+      const vv = flatNodes[ni * 3 + v];
+      if (nv < normalMin) normalMin = nv;
+      if (nv > normalMax) normalMax = nv;
+      if (uv < uMin) uMin = uv;
+      if (uv > uMax) uMax = uv;
+      if (vv < vMin) vMin = vv;
+      if (vv > vMax) vMax = vv;
+    }
   }
+
   if (!Number.isFinite(normalMin) || !Number.isFinite(normalMax) || normalMin >= normalMax) {
     return emptyProjectionResult(plane, resolution);
   }
 
-  // ── 2. Determine in-plane bounds from first slice ──────────────
-  // Sample the midpoint to get a representative bounds estimate.
-  const midCoord = (normalMin + normalMax) / 2;
-  const probeSlice = collectSegments(
-    meshData, plane, component, midCoord, projectionVisibility, boundsStrategy,
-  );
-  const bounds = probeSlice.bounds;
-  const uRange = bounds.uMax - bounds.uMin;
-  const vRange = bounds.vMax - bounds.vMin;
+  // ── 2. Validate in-plane bounds ────────────────────────────────
+  const uRange = uMax - uMin;
+  const vRange = vMax - vMin;
   if (uRange <= 0 || vRange <= 0) {
     return emptyProjectionResult(plane, resolution);
   }
+  const bounds: Bounds2D = { uMin, uMax, vMin, vMax };
 
   // ── 3. Determine grid resolution (preserve aspect ratio) ──────
+  const MIN_RES = 16; // prevent 1-pixel collapse for thin samples
   let xRes: number;
   let yRes: number;
   if (uRange >= vRange) {
     xRes = resolution;
-    yRes = Math.max(1, Math.round(resolution * (vRange / uRange)));
+    yRes = Math.max(MIN_RES, Math.round(resolution * (vRange / uRange)));
   } else {
     yRes = resolution;
-    xRes = Math.max(1, Math.round(resolution * (uRange / vRange)));
+    xRes = Math.max(MIN_RES, Math.round(resolution * (uRange / vRange)));
   }
 
   const cellWidth = uRange / xRes;
@@ -815,34 +839,45 @@ export function computeProjectionSlice(
       meshData, plane, component, planeCoord, projectionVisibility, boundsStrategy,
     );
 
-    // Rasterize polygon centroids into the grid
+    // Rasterize polygons using polygon-fill (covers all overlapping cells)
     for (const polygon of slice.polygons) {
       if (polygon.points.length < 3) continue;
 
-      // Compute centroid in 2D
-      let cu = 0;
-      let cv = 0;
+      // Compute polygon AABB in grid coords
+      let puMin = Infinity;
+      let puMax = -Infinity;
+      let pvMin = Infinity;
+      let pvMax = -Infinity;
       for (const [pu, pv] of polygon.points) {
-        cu += pu;
-        cv += pv;
+        if (pu < puMin) puMin = pu;
+        if (pu > puMax) puMax = pu;
+        if (pv < pvMin) pvMin = pv;
+        if (pv > pvMax) pvMax = pv;
       }
-      cu /= polygon.points.length;
-      cv /= polygon.points.length;
 
-      // Map to grid cell
-      const ix = Math.floor((cu - bounds.uMin) / cellWidth);
-      const iy = Math.floor((cv - bounds.vMin) / cellHeight);
-      if (ix < 0 || ix >= xRes || iy < 0 || iy >= yRes) continue;
+      const ixMin = Math.max(0, Math.floor((puMin - bounds.uMin) / cellWidth));
+      const ixMax = Math.min(xRes - 1, Math.floor((puMax - bounds.uMin) / cellWidth));
+      const iyMin = Math.max(0, Math.floor((pvMin - bounds.vMin) / cellHeight));
+      const iyMax = Math.min(yRes - 1, Math.floor((pvMax - bounds.vMin) / cellHeight));
 
-      const cellIndex = iy * xRes + ix;
       const area = Math.max(1e-30, polygonArea2D(polygon.points));
-      sumBuf[cellIndex] += polygon.value;
-      cntBuf[cellIndex] += 1;
-      sumSqBuf[cellIndex] += polygon.value * polygon.value;
-      minBuf[cellIndex] = Math.min(minBuf[cellIndex], polygon.value);
-      maxBuf[cellIndex] = Math.max(maxBuf[cellIndex], polygon.value);
-      weightedSumBuf[cellIndex] += polygon.value * area;
-      weightBuf[cellIndex] += area;
+
+      // Test each cell center against polygon
+      for (let iy = iyMin; iy <= iyMax; iy++) {
+        const cy = bounds.vMin + (iy + 0.5) * cellHeight;
+        for (let ix = ixMin; ix <= ixMax; ix++) {
+          const cx = bounds.uMin + (ix + 0.5) * cellWidth;
+          if (!pointInConvexPolygon(cx, cy, polygon.points)) continue;
+          const cellIndex = iy * xRes + ix;
+          sumBuf[cellIndex] += polygon.value;
+          cntBuf[cellIndex] += 1;
+          sumSqBuf[cellIndex] += polygon.value * polygon.value;
+          minBuf[cellIndex] = Math.min(minBuf[cellIndex], polygon.value);
+          maxBuf[cellIndex] = Math.max(maxBuf[cellIndex], polygon.value);
+          weightedSumBuf[cellIndex] += polygon.value * area;
+          weightBuf[cellIndex] += area;
+        }
+      }
     }
 
     planesSampled++;
@@ -850,8 +885,8 @@ export function computeProjectionSlice(
 
   // ── 6. Average and compute value range ────────────────────────
   const values = new Float64Array(totalCells);
-  let vMin = Number.POSITIVE_INFINITY;
-  let vMax = Number.NEGATIVE_INFINITY;
+  let valMin = Number.POSITIVE_INFINITY;
+  let valMax = Number.NEGATIVE_INFINITY;
 
   for (let i = 0; i < totalCells; i++) {
     if (cntBuf[i] > 0) {
@@ -869,30 +904,37 @@ export function computeProjectionSlice(
         includeAirAsZero,
       });
       values[i] = value;
-      if (value < vMin) vMin = value;
-      if (value > vMax) vMax = value;
+      if (value < valMin) valMin = value;
+      if (value > valMax) valMax = value;
     } else if (includeAirAsZero) {
       values[i] = 0;
-      vMin = Math.min(vMin, 0);
-      vMax = Math.max(vMax, 0);
+      valMin = Math.min(valMin, 0);
+      valMax = Math.max(valMax, 0);
     } else {
       values[i] = NaN;
     }
   }
 
-  if (!Number.isFinite(vMin)) vMin = 0;
-  if (!Number.isFinite(vMax)) vMax = 0;
+  if (!Number.isFinite(valMin)) valMin = 0;
+  if (!Number.isFinite(valMax)) valMax = 0;
+
+  // ── 7. Collect geometry outline from mid-plane boundary ────────
+  const midCoord2 = (normalMin + normalMax) / 2;
+  const outlineTopology = collectBoundaryTopology(
+    meshData, plane, midCoord2, projectionVisibility, boundsStrategy,
+  );
 
   return {
     values,
     xRes,
     yRes,
     bounds,
-    valueRange: finalizeRange(vMin, vMax, component),
+    valueRange: finalizeRange(valMin, valMax, component),
     normalLabel: axisLabel(normal),
     uLabel: axisLabel(u),
     vLabel: axisLabel(v),
     nPlanesSampled: planesSampled,
+    outlineSegments: outlineTopology.segments,
   };
 }
 
@@ -964,5 +1006,59 @@ function emptyProjectionResult(plane: SlicePlane, resolution: number): Projectio
     uLabel: axisLabel(u),
     vLabel: axisLabel(v),
     nPlanesSampled: 0,
+    outlineSegments: [],
   };
+}
+
+/**
+ * Test whether a point (px, py) lies inside a convex polygon.
+ * Uses the cross-product sign test: the point must be on the same side
+ * of every edge. Works for convex polygons with any winding.
+ */
+export function pointInConvexPolygon(
+  px: number,
+  py: number,
+  polygon: ReadonlyArray<readonly [number, number]>,
+): boolean {
+  const n = polygon.length;
+  if (n < 3) return false;
+  let sign = 0;
+  for (let i = 0; i < n; i++) {
+    const [ax, ay] = polygon[i];
+    const [bx, by] = polygon[(i + 1) % n];
+    const cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+    if (cross === 0) continue; // on the edge — count as inside
+    const s = cross > 0 ? 1 : -1;
+    if (sign === 0) {
+      sign = s;
+    } else if (sign !== s) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Extract edges from polygon topology for mesh wireframe rendering.
+ * Each polygon's edges become boundary segment topology entries.
+ */
+export function extractEdgesFromPolygons(
+  polygons: PolygonTopology2D[],
+): BoundarySegmentTopology2D[] {
+  const segments: BoundarySegmentTopology2D[] = [];
+  for (const polygon of polygons) {
+    const pts = polygon.points;
+    const refs = polygon.sampleRefs;
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      segments.push({
+        a: pts[i],
+        b: pts[j],
+        sampleA: refs[i],
+        sampleB: refs[j],
+      });
+    }
+  }
+  return segments;
 }

@@ -6600,6 +6600,36 @@ async fn slice_meta_xy_plane_returns_json() {
 }
 
 #[tokio::test]
+async fn slice_meta_xz_plane_returns_json() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/meta?plane=xz&cut_norm=0.0&x_size=8&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["plane"], "xz");
+    assert_eq!(json["cut_norm"], 0.0);
+    assert_eq!(json["x_pixels"], 8);
+    assert_eq!(json["y_pixels"], 4);
+    assert!(json["etag"].is_string(), "slice/meta should include etag");
+    assert!(
+        json["scalar"]["href"]
+            .as_str()
+            .unwrap_or("")
+            .contains("plane=xz"),
+        "slice scalar href should preserve the requested plane: {}",
+        json["scalar"]["href"]
+    );
+}
+
+#[tokio::test]
 async fn slice_scalar_xy_returns_binary() {
     let app = test_router_with_mock_field().await;
     let response = app
@@ -6627,6 +6657,37 @@ async fn slice_scalar_xy_returns_binary() {
     assert!(
         !bytes.is_empty(),
         "slice/scalar binary payload must not be empty"
+    );
+}
+
+#[tokio::test]
+async fn slice_scalar_xz_returns_binary() {
+    let app = test_router_with_mock_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/scalar?plane=xz&component=x&cut_norm=0.0&x_size=8&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.contains("octet-stream"),
+        "slice/scalar content-type should be octet-stream, got: {ct}"
+    );
+
+    let bytes = body_bytes(response).await;
+    assert!(
+        !bytes.is_empty(),
+        "slice/scalar binary payload must not be empty for xz plane"
     );
 }
 

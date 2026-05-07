@@ -125,6 +125,12 @@ function renderNode(node: RibbonMenuNode): React.ReactNode {
       );
 
     case "slider":
+      const highlightStartPercent = node.highlightRange
+        ? ((node.highlightRange.min - node.min) / Math.max(node.max - node.min, 1e-9)) * 100
+        : 0;
+      const highlightEndPercent = node.highlightRange
+        ? ((node.highlightRange.max - node.min) / Math.max(node.max - node.min, 1e-9)) * 100
+        : 0;
       return (
         <div
           key={node.id}
@@ -140,6 +146,20 @@ function renderNode(node: RibbonMenuNode): React.ReactNode {
               {node.formatValue ? node.formatValue(node.value) : `${node.value}${node.unit ?? ""}`}
             </span>
           </div>
+          {node.highlightRange ? (
+            <div className="mb-2 h-1.5 rounded-full bg-muted/70">
+              <div
+                className="h-full rounded-full bg-emerald-400/80"
+                style={{
+                  marginLeft: `${Math.max(0, Math.min(100, highlightStartPercent))}%`,
+                  width: `${Math.max(
+                    0,
+                    Math.min(100, highlightEndPercent) - Math.max(0, Math.min(100, highlightStartPercent)),
+                  )}%`,
+                }}
+              />
+            </div>
+          ) : null}
           <Slider
             disabled={node.disabled}
             min={node.min}
