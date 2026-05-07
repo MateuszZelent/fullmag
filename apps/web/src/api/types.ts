@@ -473,6 +473,21 @@ export type FieldProjectionReduction =
   | "stddev"
   | "abs_max";
 
+export type FieldSliceMatrixMode = "exact" | "slab";
+export type FieldMatrixColorMode = "scalar" | "orientation";
+export type FieldMatrixFormat = "values" | "rgba" | "both";
+export type FieldSlabAggregation = "mean" | "integral" | "min" | "max" | "rms" | "stddev" | "abs_max";
+
+export interface FieldSliceMatrixQuery extends Omit<FieldSliceQuery, "component"> {
+  mode?: FieldSliceMatrixMode;
+  color_mode?: FieldMatrixColorMode;
+  component?: FieldComponent | "orientation";
+  thickness_world?: number;
+  aggregation?: FieldSlabAggregation;
+  samples?: number;
+  format?: FieldMatrixFormat;
+}
+
 export interface FieldProjectionQuery {
   plane: SlicePlane;
   component?: Exclude<FieldComponent, "full"> | "full";
@@ -488,6 +503,29 @@ export interface FieldProjectionQuery {
   tile_x?: number;
   tile_y?: number;
   tile_size?: number;
+}
+
+export interface FieldProjectionMatrixQuery extends Omit<FieldProjectionQuery, "tile_x" | "tile_y" | "tile_size"> {
+  mode?: "projection";
+  color_mode?: "scalar";
+  aggregation?: FieldProjectionReduction;
+  format?: FieldMatrixFormat;
+}
+
+export interface FieldRenderPngQuery extends Omit<FieldSliceMatrixQuery, "mode"> {
+  mode?: FieldSliceMatrixMode | "projection";
+  reduction?: FieldProjectionReduction;
+  include_air_as_zero?: boolean;
+  adaptive?: boolean;
+  error_tolerance?: number;
+  min_samples?: number;
+  colormap?: "viridis" | "coolwarm" | "gray" | "positive" | "negative" | string;
+  vmin?: number;
+  vmax?: number;
+  auto_scale?: "slice" | "global" | "symmetric_zero" | "manual";
+  alpha_mask?: boolean;
+  show_mesh?: boolean;
+  show_arrows?: boolean;
 }
 
 export interface FieldProjectionProfileQuery {
@@ -570,6 +608,32 @@ export interface FieldProjectionProfile {
   sample_count: number;
   truncated: boolean;
   samples: FieldProjectionProfileSample[];
+}
+
+export interface FieldMatrixResponse {
+  schema: "fullmag.field_2d.matrix.v1";
+  quantity_id: string;
+  plane: SlicePlane;
+  mode: "exact" | "slab" | "projection";
+  component: string;
+  color_mode: FieldMatrixColorMode;
+  x_size: number;
+  y_size: number;
+  u_axis: "x" | "y" | "z";
+  v_axis: "x" | "y" | "z";
+  normal_axis: "x" | "y" | "z";
+  cut_world: number | null;
+  bounds: FieldSliceBounds;
+  values: (number | null)[][] | null;
+  rgba: [number, number, number, number][][] | null;
+  mask: number[][];
+  min: number | null;
+  max: number | null;
+  sampling_method: string;
+  aggregation: string | null;
+  effective_thickness_world: number | null;
+  matrix_hash: string;
+  warnings: string[];
 }
 
 export interface FieldProjectionProfileSample {

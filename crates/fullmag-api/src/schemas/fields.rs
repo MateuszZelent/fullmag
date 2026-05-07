@@ -117,6 +117,33 @@ pub struct FieldSliceBounds {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FieldMatrixResponse {
+    pub schema: String,
+    pub quantity_id: String,
+    pub plane: String,
+    pub mode: String,
+    pub component: String,
+    pub color_mode: String,
+    pub x_size: u32,
+    pub y_size: u32,
+    pub u_axis: String,
+    pub v_axis: String,
+    pub normal_axis: String,
+    pub cut_world: Option<f64>,
+    pub bounds: FieldSliceBounds,
+    pub values: Option<Vec<Vec<Option<f64>>>>,
+    pub rgba: Option<Vec<Vec<[u8; 4]>>>,
+    pub mask: Vec<Vec<u8>>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub sampling_method: String,
+    pub aggregation: Option<String>,
+    pub effective_thickness_world: Option<f64>,
+    pub matrix_hash: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldSliceBinaryDescriptor {
     pub available: bool,
     pub n_comp: u8,

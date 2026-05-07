@@ -2,10 +2,14 @@ import type { BinaryResourceResponse } from "../../types";
 import type {
   FieldBinaryResponse,
   FieldProjectionMeta,
+  FieldProjectionMatrixQuery,
   FieldProjectionProfile,
   FieldProjectionProfileQuery,
   FieldProjectionQuery,
+  FieldMatrixResponse,
+  FieldRenderPngQuery,
   FieldSliceMeta,
+  FieldSliceMatrixQuery,
   FieldSliceQuery,
   FieldVectorOptions,
 } from "../../types";
@@ -138,6 +142,29 @@ export class FieldsModule {
     return this._binaryWithEtag(path, etag, opts);
   }
 
+  async getSliceMatrix(
+    quantityId: string,
+    query: FieldSliceMatrixQuery,
+    opts?: RequestOptions,
+  ): Promise<FieldMatrixResponse> {
+    const params = buildSliceMatrixParams(query);
+    return this.client.get<FieldMatrixResponse>(
+      `${sessionApiPaths.data.fieldSliceMatrix(quantityId)}?${params}`,
+      opts,
+    );
+  }
+
+  async getSliceRenderPngResponse(
+    quantityId: string,
+    query: FieldRenderPngQuery,
+    etag?: string,
+    opts?: RequestOptions,
+  ): Promise<FieldBinaryResponse> {
+    const params = buildRenderPngParams(query);
+    const path = `${sessionApiPaths.data.fieldSliceRenderPng(quantityId)}?${params}`;
+    return this._binaryWithEtag(path, etag, opts);
+  }
+
   // ── Projection (all-layer 2-D) ─────────────────────────────────
 
   async getProjectionMeta(
@@ -171,6 +198,29 @@ export class FieldsModule {
   ): Promise<FieldBinaryResponse> {
     const params = buildProjectionParams(query);
     const path = `${sessionApiPaths.data.fieldProjectionEmptyMask(quantityId)}?${params}`;
+    return this._binaryWithEtag(path, etag, opts);
+  }
+
+  async getProjectionMatrix(
+    quantityId: string,
+    query: FieldProjectionMatrixQuery,
+    opts?: RequestOptions,
+  ): Promise<FieldMatrixResponse> {
+    const params = buildProjectionMatrixParams(query);
+    return this.client.get<FieldMatrixResponse>(
+      `${sessionApiPaths.data.fieldProjectionMatrix(quantityId)}?${params}`,
+      opts,
+    );
+  }
+
+  async getProjectionRenderPngResponse(
+    quantityId: string,
+    query: FieldRenderPngQuery,
+    etag?: string,
+    opts?: RequestOptions,
+  ): Promise<FieldBinaryResponse> {
+    const params = buildRenderPngParams({ ...query, mode: "projection" });
+    const path = `${sessionApiPaths.data.fieldProjectionRenderPng(quantityId)}?${params}`;
     return this._binaryWithEtag(path, etag, opts);
   }
 
@@ -224,6 +274,26 @@ function buildSliceParams(
   return p;
 }
 
+function buildSliceMatrixParams(q: FieldSliceMatrixQuery | FieldRenderPngQuery): URLSearchParams {
+  const p = new URLSearchParams({ plane: q.plane });
+  if (q.component && q.component !== "full") p.set("component", q.component);
+  if (q.cut_world !== undefined) p.set("cut_world", String(q.cut_world));
+  if (q.cut_norm !== undefined) p.set("cut_norm", String(q.cut_norm));
+  if (q.x_size !== undefined) p.set("x_size", String(q.x_size));
+  if (q.y_size !== undefined) p.set("y_size", String(q.y_size));
+  if (q.max_points !== undefined) p.set("max_points", String(q.max_points));
+  if (q.include_arrows) p.set("include_arrows", "true");
+  if (q.arrow_every !== undefined) p.set("arrow_every", String(q.arrow_every));
+  if (q.max_arrows !== undefined) p.set("max_arrows", String(q.max_arrows));
+  if (q.mode !== undefined) p.set("mode", q.mode);
+  if (q.color_mode !== undefined) p.set("color_mode", q.color_mode);
+  if (q.thickness_world !== undefined) p.set("thickness_world", String(q.thickness_world));
+  if (q.aggregation !== undefined) p.set("aggregation", q.aggregation);
+  if (q.samples !== undefined) p.set("samples", String(q.samples));
+  if (q.format !== undefined) p.set("format", q.format);
+  return p;
+}
+
 function buildProjectionParams(q: FieldProjectionQuery): URLSearchParams {
   const p = new URLSearchParams({ plane: q.plane });
   if (q.component && q.component !== "full") p.set("component", q.component);
@@ -241,6 +311,34 @@ function buildProjectionParams(q: FieldProjectionQuery): URLSearchParams {
   if (q.tile_x !== undefined) p.set("tile_x", String(q.tile_x));
   if (q.tile_y !== undefined) p.set("tile_y", String(q.tile_y));
   if (q.tile_size !== undefined) p.set("tile_size", String(q.tile_size));
+  return p;
+}
+
+function buildProjectionMatrixParams(q: FieldProjectionMatrixQuery): URLSearchParams {
+  const p = buildProjectionParams(q);
+  if (q.mode !== undefined) p.set("mode", q.mode);
+  if (q.color_mode !== undefined) p.set("color_mode", q.color_mode);
+  if (q.aggregation !== undefined) p.set("aggregation", q.aggregation);
+  if (q.format !== undefined) p.set("format", q.format);
+  return p;
+}
+
+function buildRenderPngParams(q: FieldRenderPngQuery): URLSearchParams {
+  const p = buildSliceMatrixParams(q);
+  if (q.reduction !== undefined) p.set("reduction", q.reduction);
+  if (q.include_air_as_zero !== undefined) {
+    p.set("include_air_as_zero", String(q.include_air_as_zero));
+  }
+  if (q.adaptive !== undefined) p.set("adaptive", String(q.adaptive));
+  if (q.error_tolerance !== undefined) p.set("error_tolerance", String(q.error_tolerance));
+  if (q.min_samples !== undefined) p.set("min_samples", String(q.min_samples));
+  if (q.colormap !== undefined) p.set("colormap", q.colormap);
+  if (q.vmin !== undefined) p.set("vmin", String(q.vmin));
+  if (q.vmax !== undefined) p.set("vmax", String(q.vmax));
+  if (q.auto_scale !== undefined) p.set("auto_scale", q.auto_scale);
+  if (q.alpha_mask !== undefined) p.set("alpha_mask", String(q.alpha_mask));
+  if (q.show_mesh !== undefined) p.set("show_mesh", String(q.show_mesh));
+  if (q.show_arrows !== undefined) p.set("show_arrows", String(q.show_arrows));
   return p;
 }
 

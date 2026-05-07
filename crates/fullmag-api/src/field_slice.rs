@@ -445,6 +445,8 @@ pub struct SliceResult {
     /// Min/max of the scalar output.
     pub min: f64,
     pub max: f64,
+    /// One byte per pixel: 0 = occupied/sampled, 1 = empty.
+    pub empty_mask: Vec<u8>,
     /// Arrows: (u, v) pairs in the slice plane. May be empty.
     pub arrow_values: Vec<f64>,
     pub arrow_count: usize,
@@ -641,6 +643,7 @@ pub fn fdm_slice(field: &FdmField, q: &ResolvedSliceQuery) -> Result<SliceResult
         n_comp_out,
         min,
         max,
+        empty_mask: vec![0; q.x_size as usize * q.y_size as usize],
         arrow_values,
         arrow_count,
         sampling_method: "fdm_nearest",

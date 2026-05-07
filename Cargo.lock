@@ -1098,6 +1098,7 @@ dependencies = [
  "fullmag-runner",
  "fullmag-session",
  "futures-core",
+ "png",
  "serde",
  "serde_json",
  "tokio",

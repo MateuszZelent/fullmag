@@ -4,20 +4,25 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{HeaderMap, HeaderValue};
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::Json;
+use serde::Deserialize;
 
 use crate::error::ApiError;
+use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
+use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::{
     component_etag_token, parse_component, project_values, ComponentSelection,
 };
+use crate::field_render_png::{encode_rgba_matrix_png, encode_scalar_png, AutoScaleMode};
 use crate::field_slice::{
     fdm_projection, fdm_slice, fem_projection_exact, fem_projection_profile, fem_slice_fallback,
     resolve_projection_profile_query, resolve_projection_query, resolve_slice_query,
     slice_etag_token, FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery,
-    FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery,
+    FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery, SlicePlane,
 };
 use crate::field_store::serialize_field_vector_binary_v2;
+use crate::orientation_color::apply_magnetization_hsl_rgba;
 use crate::preview::{quantity_spatial_domain, quantity_unit};
 use crate::quantity_data_plane::{
     projection_empty_mask_cache_key, scalar_projection_cache_key, slice_cache_key,
@@ -968,6 +973,695 @@ fn projection_etag_token(
     )
 }
 
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FieldSliceMatrixQuery {
+    pub plane: SlicePlane,
+    pub component: Option<String>,
+    pub color_mode: Option<String>,
+    pub cut_world: Option<f64>,
+    pub cut_norm: Option<f64>,
+    pub mode: Option<String>,
+    pub thickness_world: Option<f64>,
+    pub aggregation: Option<String>,
+    pub x_size: Option<u32>,
+    pub y_size: Option<u32>,
+    pub max_points: Option<u32>,
+    pub samples: Option<u32>,
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FieldProjectionMatrixQuery {
+    pub plane: SlicePlane,
+    pub component: Option<String>,
+    pub color_mode: Option<String>,
+    pub mode: Option<String>,
+    pub aggregation: Option<String>,
+    pub reduction: Option<String>,
+    pub include_air_as_zero: Option<bool>,
+    pub samples: Option<u32>,
+    pub adaptive: Option<bool>,
+    pub error_tolerance: Option<f64>,
+    pub min_samples: Option<u32>,
+    pub x_size: Option<u32>,
+    pub y_size: Option<u32>,
+    pub max_points: Option<u32>,
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FieldRenderPngQuery {
+    pub plane: SlicePlane,
+    pub component: Option<String>,
+    pub color_mode: Option<String>,
+    pub cut_world: Option<f64>,
+    pub cut_norm: Option<f64>,
+    pub mode: Option<String>,
+    pub thickness_world: Option<f64>,
+    pub aggregation: Option<String>,
+    pub reduction: Option<String>,
+    pub include_air_as_zero: Option<bool>,
+    pub samples: Option<u32>,
+    pub adaptive: Option<bool>,
+    pub error_tolerance: Option<f64>,
+    pub min_samples: Option<u32>,
+    pub x_size: Option<u32>,
+    pub y_size: Option<u32>,
+    pub max_points: Option<u32>,
+    pub colormap: Option<String>,
+    pub vmin: Option<f64>,
+    pub vmax: Option<f64>,
+    pub auto_scale: Option<String>,
+    pub alpha_mask: Option<bool>,
+    pub show_mesh: Option<bool>,
+    pub show_arrows: Option<bool>,
+}
+
+struct MatrixBuild {
+    response: FieldMatrixResponse,
+    scalar_values: Option<Vec<f64>>,
+    rgba_pixels: Option<Vec<[u8; 4]>>,
+    mask_flat: Vec<u8>,
+}
+
+fn slice_matrix_mode(mode: Option<&str>) -> Result<&'static str, ApiError> {
+    match mode.unwrap_or("exact") {
+        "exact" => Ok("exact"),
+        "slab" => Ok("slab"),
+        "projection" => Err(ApiError::bad_request(
+            "invalid_query: use projection/matrix.json for mode=projection",
+        )),
+        other => Err(ApiError::bad_request(format!(
+            "invalid_query: unsupported slice matrix mode '{other}'"
+        ))),
+    }
+}
+
+fn matrix_format(format: Option<&str>) -> Result<&'static str, ApiError> {
+    match format.unwrap_or("values") {
+        "values" => Ok("values"),
+        "rgba" => Ok("rgba"),
+        "both" => Ok("both"),
+        other => Err(ApiError::bad_request(format!(
+            "invalid_query: unsupported matrix format '{other}'"
+        ))),
+    }
+}
+
+fn color_mode(color_mode: Option<&str>, component: Option<&str>) -> Result<&'static str, ApiError> {
+    let inferred = if component == Some("orientation") {
+        "orientation"
+    } else {
+        color_mode.unwrap_or("scalar")
+    };
+    match inferred {
+        "scalar" => Ok("scalar"),
+        "orientation" => Ok("orientation"),
+        other => Err(ApiError::bad_request(format!(
+            "invalid_query: unsupported color_mode '{other}'"
+        ))),
+    }
+}
+
+fn matrix_axes(plane: SlicePlane) -> (&'static str, &'static str, &'static str) {
+    match plane {
+        SlicePlane::Xy => ("x", "y", "z"),
+        SlicePlane::Xz => ("x", "z", "y"),
+        SlicePlane::Yz => ("y", "z", "x"),
+    }
+}
+
+fn matrix_hash(raw: &str) -> String {
+    crate::router_v2::handlers::shared::stable_strong_etag(raw)
+}
+
+fn spatial_index_key(
+    quantity_id: &str,
+    domain_generation_id: u64,
+    normal_axis: usize,
+    field: &FemField,
+) -> String {
+    format!(
+        "fem-spatial:{quantity_id}:{domain_generation_id}:axis={normal_axis}:nodes={}:elements={}:v1",
+        field.nodes.len(),
+        field.elements.len()
+    )
+}
+
+async fn get_or_build_fem_spatial_index(
+    state: &AppState,
+    quantity_id: &str,
+    domain_generation_id: u64,
+    plane: SlicePlane,
+    field: &FemField,
+) -> std::sync::Arc<FemNormalAxisIndex> {
+    let normal_axis = match plane {
+        SlicePlane::Xy => 2,
+        SlicePlane::Xz => 1,
+        SlicePlane::Yz => 0,
+    };
+    let key = spatial_index_key(quantity_id, domain_generation_id, normal_axis, field);
+    let mut cache = state
+        .quantity_data_plane
+        .fem_spatial_index_cache
+        .lock()
+        .await;
+    if let Some(index) = cache.get(&key) {
+        return index.clone();
+    }
+    let bins = (field.elements.len() as f64).sqrt().ceil().max(16.0) as usize;
+    let index = std::sync::Arc::new(FemNormalAxisIndex::build(
+        &field.nodes,
+        &field.elements,
+        normal_axis,
+        bins,
+    ));
+    cache.insert(key, index.clone());
+    index
+}
+
+fn slice_query_from_matrix(query: &FieldSliceMatrixQuery, component: String) -> FieldSliceQuery {
+    FieldSliceQuery {
+        plane: query.plane,
+        component: Some(component),
+        cut_world: query.cut_world,
+        cut_norm: query.cut_norm,
+        x_size: query.x_size,
+        y_size: query.y_size,
+        max_points: query.max_points,
+        include_arrows: None,
+        arrow_every: None,
+        max_arrows: None,
+    }
+}
+
+fn projection_query_from_matrix(query: &FieldProjectionMatrixQuery) -> FieldProjectionQuery {
+    FieldProjectionQuery {
+        plane: query.plane,
+        component: query.component.clone(),
+        reduction: query
+            .reduction
+            .clone()
+            .or_else(|| query.aggregation.clone())
+            .or_else(|| Some("mean_occupied".to_string())),
+        include_air_as_zero: query.include_air_as_zero,
+        samples: query.samples,
+        adaptive: query.adaptive,
+        error_tolerance: query.error_tolerance,
+        min_samples: query.min_samples,
+        x_size: query.x_size,
+        y_size: query.y_size,
+        max_points: query.max_points,
+        tile_x: None,
+        tile_y: None,
+        tile_size: None,
+    }
+}
+
+fn matrix_rows(values: &[f64], mask: &[u8], x_size: u32, y_size: u32) -> Vec<Vec<Option<f64>>> {
+    let width = x_size as usize;
+    (0..y_size as usize)
+        .map(|row| {
+            (0..width)
+                .map(|col| {
+                    let index = row * width + col;
+                    let value = values.get(index).copied().unwrap_or(f64::NAN);
+                    if mask.get(index).copied().unwrap_or(1) == 0 && value.is_finite() {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn mask_rows(mask: &[u8], x_size: u32, y_size: u32) -> Vec<Vec<u8>> {
+    let width = x_size as usize;
+    (0..y_size as usize)
+        .map(|row| {
+            (0..width)
+                .map(|col| mask.get(row * width + col).copied().unwrap_or(1))
+                .collect()
+        })
+        .collect()
+}
+
+fn rgba_rows(rgba: &[[u8; 4]], x_size: u32, y_size: u32) -> Vec<Vec<[u8; 4]>> {
+    let width = x_size as usize;
+    (0..y_size as usize)
+        .map(|row| {
+            (0..width)
+                .map(|col| rgba.get(row * width + col).copied().unwrap_or([0, 0, 0, 0]))
+                .collect()
+        })
+        .collect()
+}
+
+fn finite_min_max(values: &[f64], mask: &[u8]) -> (Option<f64>, Option<f64>) {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for (index, value) in values.iter().copied().enumerate() {
+        if mask.get(index).copied().unwrap_or(1) == 0 && value.is_finite() {
+            min = min.min(value);
+            max = max.max(value);
+        }
+    }
+    if min.is_infinite() || max.is_infinite() {
+        (None, None)
+    } else {
+        (Some(min), Some(max))
+    }
+}
+
+fn orientation_rgba_from_full_values(result: &crate::field_slice::SliceResult) -> Vec<[u8; 4]> {
+    let width = result.x_size as usize;
+    let height = result.y_size as usize;
+    let mut rgba = Vec::with_capacity(width * height);
+    for pixel in 0..width * height {
+        if result.empty_mask.get(pixel).copied().unwrap_or(1) != 0 || result.n_comp_out < 3 {
+            rgba.push([0, 0, 0, 0]);
+            continue;
+        }
+        let base = pixel * result.n_comp_out;
+        let mx = result.scalar_values.get(base).copied().unwrap_or(0.0);
+        let my = result.scalar_values.get(base + 1).copied().unwrap_or(0.0);
+        let mz = result.scalar_values.get(base + 2).copied().unwrap_or(0.0);
+        rgba.push(apply_magnetization_hsl_rgba(mx, my, mz, 255));
+    }
+    rgba
+}
+
+fn magnitude_values_from_full(result: &crate::field_slice::SliceResult) -> Vec<f64> {
+    let pixel_count = result.x_size as usize * result.y_size as usize;
+    (0..pixel_count)
+        .map(|pixel| {
+            if result.empty_mask.get(pixel).copied().unwrap_or(1) != 0 || result.n_comp_out < 3 {
+                return f64::NAN;
+            }
+            let base = pixel * result.n_comp_out;
+            let mx = result.scalar_values.get(base).copied().unwrap_or(0.0);
+            let my = result.scalar_values.get(base + 1).copied().unwrap_or(0.0);
+            let mz = result.scalar_values.get(base + 2).copied().unwrap_or(0.0);
+            (mx * mx + my * my + mz * mz).sqrt()
+        })
+        .collect()
+}
+
+fn matrix_response_from_slice(
+    quantity_id: &str,
+    plane: SlicePlane,
+    mode: &str,
+    component: &str,
+    color_mode: &str,
+    format: &str,
+    aggregation: Option<String>,
+    effective_thickness_world: Option<f64>,
+    result: crate::field_slice::SliceResult,
+    hash: String,
+) -> Result<MatrixBuild, ApiError> {
+    let (u_axis, v_axis, normal_axis) = matrix_axes(plane);
+    let mask_flat = result.empty_mask.clone();
+    let mut scalar_values = None;
+    let mut values = None;
+    let mut rgba_pixels = None;
+    let mut rgba = None;
+
+    if color_mode == "orientation" {
+        if result.n_comp_out < 3 {
+            return Err(ApiError::bad_request(
+                "invalid_query: color_mode=orientation requires a vector field with at least 3 components",
+            ));
+        }
+        let pixels = orientation_rgba_from_full_values(&result);
+        if format == "rgba" || format == "both" || format == "values" {
+            rgba = Some(rgba_rows(&pixels, result.x_size, result.y_size));
+            rgba_pixels = Some(pixels);
+        }
+        if format == "both" {
+            let magnitudes = magnitude_values_from_full(&result);
+            values = Some(matrix_rows(
+                &magnitudes,
+                &mask_flat,
+                result.x_size,
+                result.y_size,
+            ));
+            scalar_values = Some(magnitudes);
+        }
+    } else {
+        if result.n_comp_out != 1 {
+            return Err(ApiError::bad_request(
+                "invalid_query: matrix.json scalar mode requires a scalar component",
+            ));
+        }
+        scalar_values = Some(result.scalar_values.clone());
+        values = Some(matrix_rows(
+            &result.scalar_values,
+            &mask_flat,
+            result.x_size,
+            result.y_size,
+        ));
+    }
+
+    let (min, max) = scalar_values
+        .as_ref()
+        .map(|values| finite_min_max(values, &mask_flat))
+        .unwrap_or((None, None));
+    let response = FieldMatrixResponse {
+        schema: "fullmag.field_2d.matrix.v1".to_string(),
+        quantity_id: quantity_id.to_string(),
+        plane: plane.as_str().to_string(),
+        mode: mode.to_string(),
+        component: component.to_string(),
+        color_mode: color_mode.to_string(),
+        x_size: result.x_size,
+        y_size: result.y_size,
+        u_axis: u_axis.to_string(),
+        v_axis: v_axis.to_string(),
+        normal_axis: normal_axis.to_string(),
+        cut_world: result.cut_world,
+        bounds: FieldSliceBounds {
+            u_min: result.u_min,
+            u_max: result.u_max,
+            v_min: result.v_min,
+            v_max: result.v_max,
+        },
+        values,
+        rgba,
+        mask: mask_rows(&mask_flat, result.x_size, result.y_size),
+        min,
+        max,
+        sampling_method: result.sampling_method.to_string(),
+        aggregation,
+        effective_thickness_world,
+        matrix_hash: hash,
+        warnings: Vec::new(),
+    };
+
+    Ok(MatrixBuild {
+        response,
+        scalar_values,
+        rgba_pixels,
+        mask_flat,
+    })
+}
+
+fn matrix_response_from_projection(
+    quantity_id: &str,
+    plane: SlicePlane,
+    component: &str,
+    aggregation: &str,
+    projection: ProjectionResult,
+    hash: String,
+) -> MatrixBuild {
+    let (u_axis, v_axis, normal_axis) = matrix_axes(plane);
+    let mask_flat = projection.empty_mask.clone();
+    let values = matrix_rows(
+        &projection.scalar_values,
+        &mask_flat,
+        projection.x_size,
+        projection.y_size,
+    );
+    let (min, max) = finite_min_max(&projection.scalar_values, &mask_flat);
+    let response = FieldMatrixResponse {
+        schema: "fullmag.field_2d.matrix.v1".to_string(),
+        quantity_id: quantity_id.to_string(),
+        plane: plane.as_str().to_string(),
+        mode: "projection".to_string(),
+        component: component.to_string(),
+        color_mode: "scalar".to_string(),
+        x_size: projection.x_size,
+        y_size: projection.y_size,
+        u_axis: u_axis.to_string(),
+        v_axis: v_axis.to_string(),
+        normal_axis: normal_axis.to_string(),
+        cut_world: None,
+        bounds: FieldSliceBounds {
+            u_min: projection.u_min,
+            u_max: projection.u_max,
+            v_min: projection.v_min,
+            v_max: projection.v_max,
+        },
+        values: Some(values),
+        rgba: None,
+        mask: mask_rows(&mask_flat, projection.x_size, projection.y_size),
+        min,
+        max,
+        sampling_method: projection.sampling_method.to_string(),
+        aggregation: Some(aggregation.to_string()),
+        effective_thickness_world: None,
+        matrix_hash: hash,
+        warnings: Vec::new(),
+    };
+    MatrixBuild {
+        response,
+        scalar_values: Some(projection.scalar_values),
+        rgba_pixels: None,
+        mask_flat,
+    }
+}
+
+fn matrix_etag_token(
+    quantity_id: &str,
+    field_revision: u64,
+    domain_generation_id: u64,
+    plane: SlicePlane,
+    mode: &str,
+    component: &str,
+    color_mode: &str,
+    x_size: u32,
+    y_size: u32,
+    extra: &str,
+) -> String {
+    format!(
+        "fmmatrix:{quantity_id}:{field_revision}:{domain_generation_id}:{}:{mode}:{component}:{color_mode}:{x_size}x{y_size}:{extra}:v1",
+        plane.as_str()
+    )
+}
+
+fn component_for_matrix(
+    n_comp: usize,
+    color_mode: &str,
+    component: Option<&str>,
+) -> Result<(String, ComponentSelection), ApiError> {
+    if color_mode == "orientation" {
+        if n_comp < 3 {
+            return Err(ApiError::bad_request(
+                "invalid_query: color_mode=orientation requires n_comp >= 3",
+            ));
+        }
+        return Ok(("orientation".to_string(), ComponentSelection::Full));
+    }
+    let raw = component.unwrap_or(if n_comp == 1 { "full" } else { "magnitude" });
+    let parsed = parse_component(Some(raw), n_comp)?;
+    if matches!(parsed, ComponentSelection::Full) && n_comp > 1 {
+        return Err(ApiError::bad_request(
+            "invalid_query: scalar matrix requires a scalar component, not full",
+        ));
+    }
+    Ok((component_label(&parsed), parsed))
+}
+
+async fn build_slice_matrix(
+    state: &AppState,
+    quantity_id: &str,
+    query: &FieldSliceMatrixQuery,
+) -> Result<(String, MatrixBuild), ApiError> {
+    let mode = slice_matrix_mode(query.mode.as_deref())?;
+    let format = matrix_format(query.format.as_deref())?;
+    let color_mode = color_mode(query.color_mode.as_deref(), query.component.as_deref())?;
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let spec = quantity_spec(quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let (component_label, component) =
+        component_for_matrix(n_comp, color_mode, query.component.as_deref())?;
+    let resolved_component = if color_mode == "orientation" {
+        "full".to_string()
+    } else {
+        component_label.clone()
+    };
+    let mut resolved =
+        resolve_slice_query(&slice_query_from_matrix(query, resolved_component), n_comp)?;
+    resolved.component = component;
+
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
+        .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
+    drop(guard);
+
+    let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
+        Some(
+            get_or_build_fem_spatial_index(state, quantity_id, gen_id, query.plane, fem_field)
+                .await,
+        )
+    } else {
+        None
+    };
+    let result = match mode {
+        "exact" => {
+            if let Some(fem_field) = fem_field.as_ref() {
+                fem_tetra_linear_slice(fem_field, &resolved, spatial_index.as_deref())?
+            } else {
+                fdm_slice(&fdm_field, &resolved)?
+            }
+        }
+        "slab" => {
+            let fem_field = fem_field.as_ref().ok_or_else(|| {
+                ApiError::conflict("mode=slab requires a nodal FEM field matching the current mesh")
+            })?;
+            let aggregation = SlabAggregation::parse(query.aggregation.as_deref())?;
+            fem_tetra_slab_slice(
+                fem_field,
+                &resolved,
+                query.thickness_world.unwrap_or(0.0),
+                aggregation,
+                query.samples.unwrap_or(5),
+                spatial_index.as_deref(),
+            )?
+        }
+        _ => unreachable!("slice_matrix_mode only returns exact or slab"),
+    };
+
+    let aggregation = if mode == "slab" {
+        Some(
+            SlabAggregation::parse(query.aggregation.as_deref())?
+                .as_str()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let extra = format!(
+        "cut={}:thickness={}:aggregation={}:samples={}:method={}",
+        resolved
+            .cut_world
+            .map(|value| format!("world:{}", value.to_bits()))
+            .unwrap_or_else(|| format!("norm:{}", resolved.cut_norm.to_bits())),
+        query
+            .thickness_world
+            .map(|value| value.to_bits().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        aggregation.as_deref().unwrap_or("sample"),
+        query.samples.unwrap_or(1),
+        result.sampling_method
+    );
+    let hash = matrix_hash(&matrix_etag_token(
+        quantity_id,
+        field_revision,
+        gen_id,
+        query.plane,
+        mode,
+        &component_label,
+        color_mode,
+        result.x_size,
+        result.y_size,
+        &extra,
+    ));
+    let matrix = matrix_response_from_slice(
+        quantity_id,
+        query.plane,
+        mode,
+        &component_label,
+        color_mode,
+        format,
+        aggregation,
+        if mode == "slab" {
+            query.thickness_world
+        } else {
+            None
+        },
+        result,
+        hash.clone(),
+    )?;
+    Ok((hash, matrix))
+}
+
+async fn build_projection_matrix(
+    state: &AppState,
+    quantity_id: &str,
+    query: &FieldProjectionMatrixQuery,
+) -> Result<(String, MatrixBuild), ApiError> {
+    if query
+        .mode
+        .as_deref()
+        .is_some_and(|mode| mode != "projection")
+    {
+        return Err(ApiError::bad_request(
+            "invalid_query: projection/matrix.json only supports mode=projection",
+        ));
+    }
+    let color_mode = color_mode(query.color_mode.as_deref(), query.component.as_deref())?;
+    if color_mode == "orientation" {
+        return Err(ApiError::bad_request(
+            "invalid_query: projection/matrix.json does not yet support color_mode=orientation",
+        ));
+    }
+    let _ = matrix_format(query.format.as_deref())?;
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let spec = quantity_spec(quantity_id);
+    let n_comp: usize = spec.map(|s| s.n_comp as usize).unwrap_or(3);
+    let resolved = resolve_projection_query(&projection_query_from_matrix(query), n_comp)?;
+    let field_revision = snapshot.state_version;
+    let gen_id: u64 = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|m| m.generation_id.as_deref())
+        .and_then(|g| g.parse().ok())
+        .unwrap_or(0);
+    let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
+        .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
+    drop(guard);
+
+    let projection = compute_projection(&fdm_field, fem_field.as_ref(), &resolved)?;
+    let component = component_label(&resolved.component);
+    let extra = format!(
+        "reduction={}:samples={}:adaptive={}:method={}",
+        resolved.reduction.as_str(),
+        resolved.samples,
+        u8::from(resolved.adaptive),
+        projection.sampling_method
+    );
+    let hash = matrix_hash(&matrix_etag_token(
+        quantity_id,
+        field_revision,
+        gen_id,
+        query.plane,
+        "projection",
+        &component,
+        "scalar",
+        projection.x_size,
+        projection.y_size,
+        &extra,
+    ));
+    let matrix = matrix_response_from_projection(
+        quantity_id,
+        query.plane,
+        &component,
+        resolved.reduction.as_str(),
+        projection,
+        hash.clone(),
+    );
+    Ok((hash, matrix))
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/projection/meta",
@@ -1411,6 +2105,258 @@ pub async fn get_field_projection_empty_mask(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldSliceMatrixQuery,
+    ),
+    responses(
+        (status = 200, description = "Debug JSON 2D slice matrix", body = FieldMatrixResponse),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+        (status = 409, description = "Requested FEM mode requires mesh/field parity"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_slice_matrix_json(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldSliceMatrixQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let (etag, matrix) = build_slice_matrix(&state, &quantity_id, &query).await?;
+    Ok(
+        crate::router_v2::handlers::shared::conditional_json_response(
+            &headers,
+            &etag,
+            &matrix.response,
+        ),
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldProjectionMatrixQuery,
+    ),
+    responses(
+        (status = 200, description = "Debug JSON 2D projection matrix", body = FieldMatrixResponse),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_matrix_json(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldProjectionMatrixQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let (etag, matrix) = build_projection_matrix(&state, &quantity_id, &query).await?;
+    Ok(
+        crate::router_v2::handlers::shared::conditional_json_response(
+            &headers,
+            &etag,
+            &matrix.response,
+        ),
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldRenderPngQuery,
+    ),
+    responses(
+        (status = 200, description = "Diagnostic PNG for a 2D slice", content_type = "image/png"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+        (status = 409, description = "Requested FEM mode requires mesh/field parity"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_slice_render_png(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldRenderPngQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let matrix_query = FieldSliceMatrixQuery {
+        plane: query.plane,
+        component: query.component.clone(),
+        color_mode: query.color_mode.clone(),
+        cut_world: query.cut_world,
+        cut_norm: query.cut_norm,
+        mode: query.mode.clone(),
+        thickness_world: query.thickness_world,
+        aggregation: query.aggregation.clone(),
+        x_size: query.x_size,
+        y_size: query.y_size,
+        max_points: query.max_points,
+        samples: query.samples,
+        format: Some("both".to_string()),
+    };
+    let (matrix_etag, matrix) = build_slice_matrix(&state, &quantity_id, &matrix_query).await?;
+    let png = encode_png_from_matrix(&matrix, &query)?;
+    let render_etag = matrix_hash(&format!(
+        "render:{}:colormap={}:auto={}:vmin={}:vmax={}:alpha={}:mesh={}:arrows={}",
+        matrix_etag,
+        query.colormap.as_deref().unwrap_or("viridis"),
+        query.auto_scale.as_deref().unwrap_or("slice"),
+        query
+            .vmin
+            .map_or_else(|| "none".to_string(), |value| value.to_bits().to_string()),
+        query
+            .vmax
+            .map_or_else(|| "none".to_string(), |value| value.to_bits().to_string()),
+        u8::from(query.alpha_mask.unwrap_or(true)),
+        u8::from(query.show_mesh.unwrap_or(false)),
+        u8::from(query.show_arrows.unwrap_or(false)),
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+            &headers,
+            &render_etag,
+            png,
+            HeaderValue::from_static("image/png"),
+        );
+    insert_matrix_headers(
+        &mut response,
+        &matrix_etag,
+        &matrix.response.sampling_method,
+    );
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/projection/render.png",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        FieldRenderPngQuery,
+    ),
+    responses(
+        (status = 200, description = "Diagnostic PNG for a 2D projection", content_type = "image/png"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid query parameters"),
+        (status = 404, description = "Field not found"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_projection_render_png(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<FieldRenderPngQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let matrix_query = FieldProjectionMatrixQuery {
+        plane: query.plane,
+        component: query.component.clone(),
+        color_mode: query.color_mode.clone(),
+        mode: query
+            .mode
+            .clone()
+            .or_else(|| Some("projection".to_string())),
+        aggregation: query.aggregation.clone(),
+        reduction: query.reduction.clone(),
+        include_air_as_zero: query.include_air_as_zero,
+        samples: query.samples,
+        adaptive: query.adaptive,
+        error_tolerance: query.error_tolerance,
+        min_samples: query.min_samples,
+        x_size: query.x_size,
+        y_size: query.y_size,
+        max_points: query.max_points,
+        format: Some("values".to_string()),
+    };
+    let (matrix_etag, matrix) =
+        build_projection_matrix(&state, &quantity_id, &matrix_query).await?;
+    let png = encode_png_from_matrix(&matrix, &query)?;
+    let render_etag = matrix_hash(&format!(
+        "render:{}:colormap={}:auto={}:vmin={}:vmax={}:alpha={}:mesh={}:arrows={}",
+        matrix_etag,
+        query.colormap.as_deref().unwrap_or("viridis"),
+        query.auto_scale.as_deref().unwrap_or("slice"),
+        query
+            .vmin
+            .map_or_else(|| "none".to_string(), |value| value.to_bits().to_string()),
+        query
+            .vmax
+            .map_or_else(|| "none".to_string(), |value| value.to_bits().to_string()),
+        u8::from(query.alpha_mask.unwrap_or(true)),
+        u8::from(query.show_mesh.unwrap_or(false)),
+        u8::from(query.show_arrows.unwrap_or(false)),
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+            &headers,
+            &render_etag,
+            png,
+            HeaderValue::from_static("image/png"),
+        );
+    insert_matrix_headers(
+        &mut response,
+        &matrix_etag,
+        &matrix.response.sampling_method,
+    );
+    Ok(response)
+}
+
+fn encode_png_from_matrix(
+    matrix: &MatrixBuild,
+    query: &FieldRenderPngQuery,
+) -> Result<Vec<u8>, ApiError> {
+    if let Some(rgba) = matrix.rgba_pixels.as_ref() {
+        return encode_rgba_matrix_png(
+            matrix.response.x_size,
+            matrix.response.y_size,
+            rgba,
+            &matrix.mask_flat,
+            query.alpha_mask.unwrap_or(true),
+        );
+    }
+    let values = matrix.scalar_values.as_ref().ok_or_else(|| {
+        ApiError::internal("render_png: scalar matrix values missing for PNG render")
+    })?;
+    encode_scalar_png(
+        matrix.response.x_size,
+        matrix.response.y_size,
+        values,
+        &matrix.mask_flat,
+        query.colormap.as_deref().unwrap_or("viridis"),
+        AutoScaleMode::parse(query.auto_scale.as_deref())?,
+        query.vmin,
+        query.vmax,
+        query.alpha_mask.unwrap_or(true),
+    )
+}
+
+fn insert_matrix_headers(
+    response: &mut axum::response::Response,
+    matrix_hash: &str,
+    sampling_method: &str,
+) {
+    if let Ok(value) = HeaderValue::from_str(matrix_hash) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-fullmag-matrix-hash"), value);
+    }
+    if let Ok(value) = HeaderValue::from_str(sampling_method) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-fullmag-sampling-method"), value);
+    }
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta",
     params(
         ("quantity_id" = String, Path, description = "Quantity identifier"),
@@ -1457,11 +2403,22 @@ pub async fn get_field_slice_meta(
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
 
     drop(guard);
+    let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
+        Some(
+            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
+                .await,
+        )
+    } else {
+        None
+    };
 
     // Perform slice outside lock
-    let slice_result = if is_fem {
+    let slice_result = if let Some(fem_field) = fem_field.as_ref() {
+        fem_tetra_linear_slice(fem_field, &resolved, spatial_index.as_deref())?
+    } else if is_fem {
         fem_slice_fallback(&fdm_field, &resolved)?
     } else {
         fdm_slice(&fdm_field, &resolved)?
@@ -1618,6 +2575,7 @@ pub async fn get_field_slice_scalar(
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
 
     let component = component_label(&resolved.component);
     let cache_key = slice_cache_key(
@@ -1637,6 +2595,14 @@ pub async fn get_field_slice_scalar(
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 
     drop(guard);
+    let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
+        Some(
+            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
+                .await,
+        )
+    } else {
+        None
+    };
 
     {
         let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
@@ -1654,7 +2620,9 @@ pub async fn get_field_slice_scalar(
         }
     }
 
-    let slice_result = if is_fem {
+    let slice_result = if let Some(fem_field) = fem_field.as_ref() {
+        fem_tetra_linear_slice(fem_field, &resolved, spatial_index.as_deref())?
+    } else if is_fem {
         fem_slice_fallback(&fdm_field, &resolved)?
     } else {
         fdm_slice(&fdm_field, &resolved)?
@@ -1735,6 +2703,7 @@ pub async fn get_field_slice_arrows(
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
+    let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
 
     let cache_key = slice_cache_key(
         &quantity_id,
@@ -1756,6 +2725,14 @@ pub async fn get_field_slice_arrows(
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 
     drop(guard);
+    let spatial_index = if let Some(fem_field) = fem_field.as_ref() {
+        Some(
+            get_or_build_fem_spatial_index(&state, &quantity_id, gen_id, resolved.plane, fem_field)
+                .await,
+        )
+    } else {
+        None
+    };
 
     {
         let mut cache = state.quantity_data_plane.arrow_slice_cache.lock().await;
@@ -1770,7 +2747,9 @@ pub async fn get_field_slice_arrows(
         }
     }
 
-    let slice_result = if is_fem {
+    let slice_result = if let Some(fem_field) = fem_field.as_ref() {
+        fem_tetra_linear_slice(fem_field, &resolved, spatial_index.as_deref())?
+    } else if is_fem {
         fem_slice_fallback(&fdm_field, &resolved)?
     } else {
         fdm_slice(&fdm_field, &resolved)?

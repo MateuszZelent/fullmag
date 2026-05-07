@@ -372,6 +372,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_matrix_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/fields/{quantity_id}/projection/meta": {
         parameters: {
             query?: never;
@@ -396,6 +412,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["data_get_sessions_current_data_fields_quantity_id_projection_profile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/render.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_projection_render_png"];
         put?: never;
         post?: never;
         delete?: never;
@@ -436,6 +468,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_samples_slice_matrix_json"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta": {
         parameters: {
             query?: never;
@@ -444,6 +492,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["data_get_sessions_current_data_fields_quantity_id_samples_slice_meta"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fields_quantity_id_samples_slice_render_png"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2044,6 +2108,37 @@ export interface components {
             location: string;
             quantity_id: string;
             unit: string;
+        };
+        FieldMatrixResponse: {
+            aggregation?: string | null;
+            bounds: components["schemas"]["FieldSliceBounds"];
+            color_mode: string;
+            component: string;
+            /** Format: double */
+            cut_world?: number | null;
+            /** Format: double */
+            effective_thickness_world?: number | null;
+            mask: number[][];
+            matrix_hash: string;
+            /** Format: double */
+            max?: number | null;
+            /** Format: double */
+            min?: number | null;
+            mode: string;
+            normal_axis: string;
+            plane: string;
+            quantity_id: string;
+            rgba?: number[][][] | null;
+            sampling_method: string;
+            schema: string;
+            u_axis: string;
+            v_axis: string;
+            values?: (number | null)[][] | null;
+            warnings: string[];
+            /** Format: int32 */
+            x_size: number;
+            /** Format: int32 */
+            y_size: number;
         };
         FieldMeta: {
             /** Format: int32 */
@@ -4141,6 +4236,66 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_fields_quantity_id_projection_matrix_json: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                component?: string;
+                color_mode?: string;
+                mode?: string;
+                aggregation?: string;
+                reduction?: string;
+                include_air_as_zero?: boolean;
+                samples?: number;
+                adaptive?: boolean;
+                error_tolerance?: number;
+                min_samples?: number;
+                x_size?: number;
+                y_size?: number;
+                max_points?: number;
+                format?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Debug JSON 2D projection matrix */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldMatrixResponse"];
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_fields_quantity_id_projection_meta: {
         parameters: {
             query: {
@@ -4264,6 +4419,75 @@ export interface operations {
             };
             /** @description Projection profile requires nodal FEM field and tetrahedral mesh */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_projection_render_png: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                component?: string;
+                color_mode?: string;
+                cut_world?: number;
+                cut_norm?: number;
+                mode?: string;
+                thickness_world?: number;
+                aggregation?: string;
+                reduction?: string;
+                include_air_as_zero?: boolean;
+                samples?: number;
+                adaptive?: boolean;
+                error_tolerance?: number;
+                min_samples?: number;
+                x_size?: number;
+                y_size?: number;
+                max_points?: number;
+                colormap?: string;
+                vmin?: number;
+                vmax?: number;
+                auto_scale?: string;
+                alpha_mask?: boolean;
+                show_mesh?: boolean;
+                show_arrows?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Diagnostic PNG for a 2D projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4417,6 +4641,71 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_fields_quantity_id_samples_slice_matrix_json: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                component?: string;
+                color_mode?: string;
+                cut_world?: number;
+                cut_norm?: number;
+                mode?: string;
+                thickness_world?: number;
+                aggregation?: string;
+                x_size?: number;
+                y_size?: number;
+                max_points?: number;
+                samples?: number;
+                format?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Debug JSON 2D slice matrix */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldMatrixResponse"];
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FEM mode requires mesh/field parity */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_fields_quantity_id_samples_slice_meta: {
         parameters: {
             query: {
@@ -4483,6 +4772,82 @@ export interface operations {
                 content?: never;
             };
             /** @description Slice requires mesh topology (FEM only) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fields_quantity_id_samples_slice_render_png: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                component?: string;
+                color_mode?: string;
+                cut_world?: number;
+                cut_norm?: number;
+                mode?: string;
+                thickness_world?: number;
+                aggregation?: string;
+                reduction?: string;
+                include_air_as_zero?: boolean;
+                samples?: number;
+                adaptive?: boolean;
+                error_tolerance?: number;
+                min_samples?: number;
+                x_size?: number;
+                y_size?: number;
+                max_points?: number;
+                colormap?: string;
+                vmin?: number;
+                vmax?: number;
+                auto_scale?: string;
+                alpha_mask?: boolean;
+                show_mesh?: boolean;
+                show_arrows?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description Quantity identifier */
+                quantity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Diagnostic PNG for a 2D slice */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid query parameters */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FEM mode requires mesh/field parity */
             409: {
                 headers: {
                     [name: string]: unknown;

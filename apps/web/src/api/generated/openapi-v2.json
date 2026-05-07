@@ -1795,6 +1795,159 @@
         ],
         "type": "object"
       },
+      "FieldMatrixResponse": {
+        "properties": {
+          "aggregation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bounds": {
+            "$ref": "#/components/schemas/FieldSliceBounds"
+          },
+          "color_mode": {
+            "type": "string"
+          },
+          "component": {
+            "type": "string"
+          },
+          "cut_world": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "effective_thickness_world": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mask": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "matrix_hash": {
+            "type": "string"
+          },
+          "max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "normal_axis": {
+            "type": "string"
+          },
+          "plane": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "rgba": {
+            "items": {
+              "items": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sampling_method": {
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "u_axis": {
+            "type": "string"
+          },
+          "v_axis": {
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "x_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "y_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema",
+          "quantity_id",
+          "plane",
+          "mode",
+          "component",
+          "color_mode",
+          "x_size",
+          "y_size",
+          "u_axis",
+          "v_axis",
+          "normal_axis",
+          "bounds",
+          "mask",
+          "sampling_method",
+          "matrix_hash",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "FieldMeta": {
         "properties": {
           "components": {
@@ -7964,6 +8117,177 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_matrix_json",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "aggregation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldMatrixResponse"
+                }
+              }
+            },
+            "description": "Debug JSON 2D projection matrix"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields/{quantity_id}/projection/meta": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_meta",
@@ -8251,6 +8575,250 @@
           },
           "409": {
             "description": "Projection profile requires nodal FEM field and tetrahedral mesh"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/projection/render.png": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_projection_render_png",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_norm",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thickness_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "aggregation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "colormap",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vmin",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vmax",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "auto_scale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "alpha_mask",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_arrows",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "Diagnostic PNG for a 2D projection"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
           }
         },
         "tags": [
@@ -8576,6 +9144,164 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_samples_slice_matrix_json",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_norm",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thickness_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "aggregation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldMatrixResponse"
+                }
+              }
+            },
+            "description": "Debug JSON 2D slice matrix"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          },
+          "409": {
+            "description": "Requested FEM mode requires mesh/field parity"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields_quantity_id_samples_slice_meta",
@@ -8713,6 +9439,253 @@
           },
           "409": {
             "description": "Slice requires mesh topology (FEM only)"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_samples_slice_render_png",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "color_mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_norm",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thickness_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "aggregation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reduction",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_air_as_zero",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "adaptive",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_tolerance",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_samples",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "x_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "y_size",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "colormap",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vmin",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vmax",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "auto_scale",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "alpha_mask",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "show_arrows",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {}
+            },
+            "description": "Diagnostic PNG for a 2D slice"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "description": "Invalid query parameters"
+          },
+          "404": {
+            "description": "Field not found"
+          },
+          "409": {
+            "description": "Requested FEM mode requires mesh/field parity"
           }
         },
         "tags": [

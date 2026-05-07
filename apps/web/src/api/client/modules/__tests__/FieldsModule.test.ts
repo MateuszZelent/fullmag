@@ -125,6 +125,83 @@ describe("FieldsModule", () => {
     expect(path).toContain("max_arrows=2000");
   });
 
+  it("uses v2 slice matrix path with exact and orientation params", async () => {
+    const { client, get } = createClient();
+    get.mockResolvedValue({
+      schema: "fullmag.field_2d.matrix.v1",
+      quantity_id: "m",
+      plane: "xy",
+      mode: "exact",
+      component: "orientation",
+      color_mode: "orientation",
+      x_size: 32,
+      y_size: 32,
+      u_axis: "x",
+      v_axis: "y",
+      normal_axis: "z",
+      cut_world: null,
+      bounds: { u_min: 0, u_max: 1, v_min: 0, v_max: 1 },
+      values: null,
+      rgba: [],
+      mask: [],
+      min: null,
+      max: null,
+      sampling_method: "fem_tetra_linear_slice",
+      aggregation: null,
+      effective_thickness_world: null,
+      matrix_hash: "\"matrix\"",
+      warnings: [],
+    });
+
+    const module = new FieldsModule(client);
+    await module.getSliceMatrix("m", {
+      plane: "xy",
+      mode: "exact",
+      color_mode: "orientation",
+      format: "rgba",
+      cut_norm: 0.5,
+      x_size: 32,
+      y_size: 32,
+    });
+
+    const [path] = get.mock.calls[0];
+    expect(path).toContain("/v2/sessions/current/data/fields/m/samples/slice/matrix.json?");
+    expect(path).toContain("mode=exact");
+    expect(path).toContain("color_mode=orientation");
+    expect(path).toContain("format=rgba");
+  });
+
+  it("uses v2 slice render png path and forwards render params", async () => {
+    const { client, getBinaryResponse } = createClient();
+    getBinaryResponse.mockResolvedValue({
+      status: 200,
+      buffer: new ArrayBuffer(16),
+      headers: new Headers({ ETag: "\"png\"" }),
+    });
+
+    const module = new FieldsModule(client);
+    await module.getSliceRenderPngResponse("m", {
+      plane: "xz",
+      mode: "slab",
+      component: "magnitude",
+      thickness_world: 5e-9,
+      aggregation: "mean",
+      x_size: 128,
+      y_size: 64,
+      colormap: "coolwarm",
+      auto_scale: "symmetric_zero",
+      alpha_mask: true,
+    });
+
+    const [path] = getBinaryResponse.mock.calls[0];
+    expect(path).toContain("/v2/sessions/current/data/fields/m/samples/slice/render.png?");
+    expect(path).toContain("mode=slab");
+    expect(path).toContain("thickness_world=5e-9");
+    expect(path).toContain("aggregation=mean");
+    expect(path).toContain("colormap=coolwarm");
+    expect(path).toContain("auto_scale=symmetric_zero");
+  });
+
   it("uses v2 projection meta path with explicit reduction params", async () => {
     const { client, get } = createClient();
     get.mockResolvedValue({
@@ -228,6 +305,74 @@ describe("FieldsModule", () => {
     expect(path).toContain("/v2/sessions/current/data/fields/m/projection/empty-mask?");
     expect(path).toContain("reduction=sum");
     expect(opts.headers["If-None-Match"]).toBe("\"mask-0\"");
+  });
+
+  it("uses v2 projection matrix path with aggregation params", async () => {
+    const { client, get } = createClient();
+    get.mockResolvedValue({
+      schema: "fullmag.field_2d.matrix.v1",
+      quantity_id: "m",
+      plane: "xy",
+      mode: "projection",
+      component: "magnitude",
+      color_mode: "scalar",
+      x_size: 16,
+      y_size: 16,
+      u_axis: "x",
+      v_axis: "y",
+      normal_axis: "z",
+      cut_world: null,
+      bounds: { u_min: 0, u_max: 1, v_min: 0, v_max: 1 },
+      values: [],
+      rgba: null,
+      mask: [],
+      min: 0,
+      max: 1,
+      sampling_method: "fem_tetra_volume_projection_conservative",
+      aggregation: "mean_occupied",
+      effective_thickness_world: null,
+      matrix_hash: "\"projection\"",
+      warnings: [],
+    });
+
+    const module = new FieldsModule(client);
+    await module.getProjectionMatrix("m", {
+      plane: "xy",
+      mode: "projection",
+      component: "magnitude",
+      aggregation: "mean_occupied",
+      x_size: 16,
+      y_size: 16,
+    });
+
+    const [path] = get.mock.calls[0];
+    expect(path).toContain("/v2/sessions/current/data/fields/m/projection/matrix.json?");
+    expect(path).toContain("mode=projection");
+    expect(path).toContain("aggregation=mean_occupied");
+  });
+
+  it("uses v2 projection render png path", async () => {
+    const { client, getBinaryResponse } = createClient();
+    getBinaryResponse.mockResolvedValue({
+      status: 200,
+      buffer: new ArrayBuffer(16),
+      headers: new Headers({ ETag: "\"projection-png\"" }),
+    });
+
+    const module = new FieldsModule(client);
+    await module.getProjectionRenderPngResponse("m", {
+      plane: "xy",
+      component: "magnitude",
+      reduction: "mean_occupied",
+      x_size: 64,
+      y_size: 64,
+      colormap: "viridis",
+    });
+
+    const [path] = getBinaryResponse.mock.calls[0];
+    expect(path).toContain("/v2/sessions/current/data/fields/m/projection/render.png?");
+    expect(path).toContain("mode=projection");
+    expect(path).toContain("reduction=mean_occupied");
   });
 
   it("passes projection tile query parameters through the typed facade", async () => {

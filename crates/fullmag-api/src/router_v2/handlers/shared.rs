@@ -26,6 +26,20 @@ pub(crate) fn conditional_binary_response(
     etag: &str,
     body: Vec<u8>,
 ) -> Response {
+    conditional_binary_response_with_content_type(
+        headers,
+        etag,
+        body,
+        HeaderValue::from_static("application/octet-stream"),
+    )
+}
+
+pub(crate) fn conditional_binary_response_with_content_type(
+    headers: &HeaderMap,
+    etag: &str,
+    body: Vec<u8>,
+    content_type: HeaderValue,
+) -> Response {
     let mut response = if if_none_match_matches(headers, etag) {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = StatusCode::NOT_MODIFIED;
@@ -33,10 +47,7 @@ pub(crate) fn conditional_binary_response(
     } else {
         let mut response = Response::new(Body::from(body));
         *response.status_mut() = StatusCode::OK;
-        response.headers_mut().insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/octet-stream"),
-        );
+        response.headers_mut().insert(CONTENT_TYPE, content_type);
         response
     };
 

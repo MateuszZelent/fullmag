@@ -68,6 +68,10 @@ export const sessionApiPaths = {
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldProjectionScalar: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/scalar").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionMatrix: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldProjectionRenderPng: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/render.png").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldProjectionEmptyMask: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldProjectionProfile: (quantityId: string) =>
@@ -76,6 +80,10 @@ export const sessionApiPaths = {
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldSliceScalar: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/scalar").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldSliceMatrix: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json").replace("{quantity_id}", encodeURIComponent(quantityId)),
+    fieldSliceRenderPng: (quantityId: string) =>
+      openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldSliceArrows: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/arrows").replace("{quantity_id}", encodeURIComponent(quantityId)),
     scalars: openApiV2Path("/v2/sessions/current/data/scalars"),

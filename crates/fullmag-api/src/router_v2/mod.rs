@@ -306,6 +306,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_field_projection_scalar),
         )
         .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/matrix.json",
+            get(handlers::data::get_field_projection_matrix_json),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/projection/render.png",
+            get(handlers::data::get_field_projection_render_png),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/projection/empty-mask",
             get(handlers::data::get_field_projection_empty_mask),
         )
@@ -320,6 +328,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/samples/slice/scalar",
             get(handlers::data::get_field_slice_scalar),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/samples/slice/matrix.json",
+            get(handlers::data::get_field_slice_matrix_json),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/samples/slice/render.png",
+            get(handlers::data::get_field_slice_render_png),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/samples/slice/arrows",

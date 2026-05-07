@@ -6809,6 +6809,168 @@ async fn field_projection_profile_returns_depth_samples_for_fem_pixel() {
 }
 
 #[tokio::test]
+async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/matrix.json?plane=xy&cut_norm=0.25&mode=exact&component=x&x_size=4&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["schema"], "fullmag.field_2d.matrix.v1");
+    assert_eq!(json["sampling_method"], "fem_tetra_linear_slice");
+    assert_eq!(json["mode"], "exact");
+    assert_eq!(json["component"], "c0");
+    let values = json["values"].as_array().expect("matrix values");
+    let finite_values: Vec<f64> = values
+        .iter()
+        .flat_map(|row| row.as_array().unwrap().iter())
+        .filter_map(|value| value.as_f64())
+        .collect();
+    assert!(!finite_values.is_empty());
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
+}
+
+#[tokio::test]
+async fn field_slice_matrix_json_supports_fem_slab_mean() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/matrix.json?plane=xy&cut_norm=0.25&mode=slab&thickness_world=0.5&aggregation=mean&component=x&x_size=4&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["sampling_method"], "fem_tetra_slab_sampled");
+    assert_eq!(json["mode"], "slab");
+    assert_eq!(json["aggregation"], "mean");
+    assert_eq!(json["effective_thickness_world"], 0.5);
+    let finite_values: Vec<f64> = json["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row.as_array().unwrap().iter())
+        .filter_map(|value| value.as_f64())
+        .collect();
+    assert!(!finite_values.is_empty());
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+}
+
+#[tokio::test]
+async fn field_slice_matrix_json_rejects_slab_without_thickness() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/matrix.json?plane=xy&cut_norm=0.25&mode=slab&component=x&x_size=4&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn field_slice_matrix_json_orientation_returns_rgba() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/matrix.json?plane=xy&cut_norm=0.25&mode=exact&color_mode=orientation&format=rgba&x_size=4&y_size=4")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["color_mode"], "orientation");
+    let rgba = json["rgba"].as_array().expect("rgba rows");
+    let first_visible = rgba
+        .iter()
+        .flat_map(|row| row.as_array().unwrap().iter())
+        .filter_map(|pixel| pixel.as_array())
+        .find(|pixel| pixel.get(3).and_then(|v| v.as_u64()).unwrap_or(0) > 0)
+        .expect("visible orientation pixel");
+    let r = first_visible[0].as_u64().unwrap();
+    let g = first_visible[1].as_u64().unwrap();
+    let b = first_visible[2].as_u64().unwrap();
+    assert!(
+        r > 0 && g == 0 && b == 0,
+        "expected +X orientation red, got {first_visible:?}"
+    );
+}
+
+#[tokio::test]
+async fn field_projection_matrix_json_returns_debug_matrix() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/projection/matrix.json?plane=xy&component=x&mode=projection&aggregation=mean_occupied&x_size=2&y_size=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["mode"], "projection");
+    assert_eq!(
+        json["sampling_method"],
+        "fem_tetra_volume_projection_conservative"
+    );
+    assert_eq!(json["aggregation"], "mean_occupied");
+    assert!(json["values"].is_array());
+}
+
+#[tokio::test]
+async fn field_slice_render_png_returns_png_with_matrix_header() {
+    let app = test_router_with_fem_nodal_field().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/slice/render.png?plane=xy&cut_norm=0.25&mode=exact&component=x&x_size=16&y_size=16&colormap=coolwarm&auto_scale=symmetric_zero")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+    assert!(response.headers().get("x-fullmag-matrix-hash").is_some());
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+}
+
+#[tokio::test]
 async fn field_projection_scalar_returns_binary() {
     let app = test_router_with_mock_field().await;
     let response = app
@@ -7087,6 +7249,18 @@ fn openapi_contains_field_slice_paths() {
         "OpenAPI missing /slice/scalar path"
     );
     assert!(
+        paths.contains_key(
+            "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/matrix.json"
+        ),
+        "OpenAPI missing /slice/matrix.json path"
+    );
+    assert!(
+        paths.contains_key(
+            "/v2/sessions/current/data/fields/{quantity_id}/samples/slice/render.png"
+        ),
+        "OpenAPI missing /slice/render.png path"
+    );
+    assert!(
         paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/arrows"),
         "OpenAPI missing /slice/arrows path"
     );
@@ -7097,6 +7271,14 @@ fn openapi_contains_field_slice_paths() {
     assert!(
         paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/scalar"),
         "OpenAPI missing /projection/scalar path"
+    );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/matrix.json"),
+        "OpenAPI missing /projection/matrix.json path"
+    );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/render.png"),
+        "OpenAPI missing /projection/render.png path"
     );
     assert!(
         paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask"),
@@ -7163,6 +7345,10 @@ fn openapi_contains_field_slice_contract() {
     assert!(
         components.contains_key("FieldProjectionMeta"),
         "OpenAPI missing FieldProjectionMeta schema"
+    );
+    assert!(
+        components.contains_key("FieldMatrixResponse"),
+        "OpenAPI missing FieldMatrixResponse schema"
     );
     assert!(
         components.contains_key("FieldProjectionMaskDescriptor"),

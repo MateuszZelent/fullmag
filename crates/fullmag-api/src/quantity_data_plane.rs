@@ -21,7 +21,9 @@
 //! Simple LRU by access generation with a configurable memory budget.  Entries are evicted when
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
+use crate::fem_spatial_index::FemNormalAxisIndex;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Maximum number of cached projection entries (configurable at construction time).
@@ -256,6 +258,8 @@ pub(crate) struct QuantityDataPlaneStore {
     pub scalar_slice_cache: Mutex<BinaryCache>,
     /// Cache for 2-D arrow glyph slice binaries.
     pub arrow_slice_cache: Mutex<BinaryCache>,
+    /// Cache for mesh-revision keyed FEM normal-axis indexes.
+    pub fem_spatial_index_cache: Mutex<HashMap<String, Arc<FemNormalAxisIndex>>>,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -286,6 +290,7 @@ impl QuantityDataPlaneStore {
             projection_cache: Mutex::new(BinaryCache::new(max_projection, max_bytes_each)),
             scalar_slice_cache: Mutex::new(BinaryCache::new(max_scalar_slices, max_bytes_each)),
             arrow_slice_cache: Mutex::new(BinaryCache::new(max_arrow_slices, max_bytes_each)),
+            fem_spatial_index_cache: Mutex::new(HashMap::new()),
         }
     }
 }
