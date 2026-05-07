@@ -5,7 +5,15 @@ import type {
   ScriptBuilderCurrentModuleEntry,
   ScriptBuilderExcitationAnalysisEntry,
 } from "../../../lib/session/types";
-import { useModel } from "../../runs/control-room/ControlRoomContext";
+import {
+  selectScriptBuilderCurrentModules,
+  selectScriptBuilderExcitationAnalysis,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import {
+  selectFemMesh,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { useViewport } from "../../runs/control-room/context-hooks";
 import { useSelectionActions } from "@/features/selection";
 import { fmtSI, resolveAntennaNodeName } from "../../runs/control-room/shared";
@@ -108,10 +116,27 @@ function ensureUniqueName(
 }
 
 export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
-  const model = useModel();
   const { setSelectedSidebarNodeId } = useSelectionActions();
   const vp = useViewport();
-  const modules = model.scriptBuilderCurrentModules;
+  const modules = useDocumentStore(selectScriptBuilderCurrentModules);
+  const setScriptBuilderCurrentModules = useDocumentStore(
+    (state) => state.setScriptBuilderCurrentModules,
+  );
+  const analysis = useDocumentStore(selectScriptBuilderExcitationAnalysis);
+  const setScriptBuilderExcitationAnalysis = useDocumentStore(
+    (state) => state.setScriptBuilderExcitationAnalysis,
+  );
+  const femMesh = useSessionRuntimeStore(selectFemMesh);
+  const meshTop = useMemo(() => {
+    if (!femMesh?.nodes.length) {
+      return null;
+    }
+    let maxZ = Number.NEGATIVE_INFINITY;
+    for (const node of femMesh.nodes) {
+      maxZ = Math.max(maxZ, node[2]);
+    }
+    return Number.isFinite(maxZ) ? maxZ : null;
+  }, [femMesh]);
   const antennaNames = useMemo(() => modules.map((module) => module.name), [modules]);
   const activeName = useMemo(
     () => resolveAntennaNodeName(nodeId, antennaNames),
@@ -128,7 +153,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
       index: number,
       updater: (module: ScriptBuilderCurrentModuleEntry) => ScriptBuilderCurrentModuleEntry,
     ) => {
-      model.setScriptBuilderCurrentModules((prev) => {
+      setScriptBuilderCurrentModules((prev) => {
         const next = [...prev];
         const target = next[index];
         if (target) {
@@ -137,7 +162,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
         return next;
       });
     },
-    [model],
+    [setScriptBuilderCurrentModules],
   );
 
   const updateActiveModule = useCallback(
@@ -153,10 +178,10 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
   const addModule = useCallback(
     (kind: "MicrostripAntenna" | "CPWAntenna") => {
       const nextModule = makeAntennaModule(kind, modules);
-      model.setScriptBuilderCurrentModules((prev) => [...prev, nextModule]);
+      setScriptBuilderCurrentModules((prev) => [...prev, nextModule]);
       setSelectedSidebarNodeId(`ant-${nextModule.name}`);
     },
-    [model, modules, setSelectedSidebarNodeId],
+    [modules, setScriptBuilderCurrentModules, setSelectedSidebarNodeId],
   );
 
   const selectModule = useCallback(
@@ -174,13 +199,21 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
       const nextName = ensureUniqueName(value, activeIndex, modules);
       updateModuleAt(activeIndex, (module) => ({ ...module, name: nextName }));
       setSelectedSidebarNodeId(`ant-${nextName}`);
-      if (model.scriptBuilderExcitationAnalysis?.source === activeModule.name) {
-        model.setScriptBuilderExcitationAnalysis((prev) =>
+      if (analysis?.source === activeModule.name) {
+        setScriptBuilderExcitationAnalysis((prev) =>
           prev ? { ...prev, source: nextName } : prev,
         );
       }
     },
-    [activeIndex, activeModule, model, modules, updateModuleAt],
+    [
+      activeIndex,
+      activeModule,
+      analysis?.source,
+      modules,
+      setScriptBuilderExcitationAnalysis,
+      setSelectedSidebarNodeId,
+      updateModuleAt,
+    ],
   );
 
   const updateParam = useCallback(
@@ -246,26 +279,33 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
     if (activeIndex < 0 || !activeModule) {
       return;
     }
-    model.setScriptBuilderCurrentModules((prev) => prev.filter((_, index) => index !== activeIndex));
-    if (model.scriptBuilderExcitationAnalysis?.source === activeModule.name) {
-      model.setScriptBuilderExcitationAnalysis(null);
+    setScriptBuilderCurrentModules((prev) => prev.filter((_, index) => index !== activeIndex));
+    if (analysis?.source === activeModule.name) {
+      setScriptBuilderExcitationAnalysis(null);
     }
     setSelectedSidebarNodeId("antennas");
-  }, [activeIndex, activeModule, model]);
+  }, [
+    activeIndex,
+    activeModule,
+    analysis?.source,
+    setScriptBuilderCurrentModules,
+    setScriptBuilderExcitationAnalysis,
+    setSelectedSidebarNodeId,
+  ]);
 
   const enableExcitationAnalysis = useCallback(() => {
     const fallbackSource = activeModule?.name ?? modules[0]?.name ?? null;
     if (!fallbackSource) {
       return;
     }
-    model.setScriptBuilderExcitationAnalysis({
+    setScriptBuilderExcitationAnalysis({
       source: fallbackSource,
       method: "source_k",
       propagation_axis: [1, 0, 0],
       k_max_rad_per_m: null,
       samples: 256,
     });
-  }, [activeModule, model, modules]);
+  }, [activeModule, modules, setScriptBuilderExcitationAnalysis]);
 
   const updateExcitationAnalysis = useCallback(
     (
@@ -273,9 +313,9 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
         analysis: ScriptBuilderExcitationAnalysisEntry,
       ) => ScriptBuilderExcitationAnalysisEntry,
     ) => {
-      model.setScriptBuilderExcitationAnalysis((prev) => (prev ? updater(prev) : prev));
+      setScriptBuilderExcitationAnalysis((prev) => (prev ? updater(prev) : prev));
     },
-    [model],
+    [setScriptBuilderExcitationAnalysis],
   );
 
   const computeAntennaField = useCallback(() => {
@@ -285,7 +325,6 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
     }
   }, [vp]);
 
-  const analysis = model.scriptBuilderExcitationAnalysis;
   const moduleParams = activeModule?.antenna_params ?? {};
   const physicsBadges = [
     "physics 2.5D",
@@ -310,7 +349,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
 
           <div className="grid grid-cols-2 gap-3 py-1">
             <InspectorStatTile label="RF Sources" value={modules.length > 0 ? modules.length : "none"} />
-            <InspectorStatTile label="Mesh Top" value={model.meshBoundsMax?.[2] != null ? fmtSI(model.meshBoundsMax[2], "m") : "waiting"} />
+            <InspectorStatTile label="Mesh Top" value={meshTop != null ? fmtSI(meshTop, "m") : "waiting"} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -676,7 +715,7 @@ export default function AntennaPanel({ nodeId }: { nodeId?: string }) {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => model.setScriptBuilderExcitationAnalysis(null)}
+              onClick={() => setScriptBuilderExcitationAnalysis(null)}
             >
               Disable Analysis
             </Button>

@@ -15,12 +15,12 @@ import {
   sameVisualizationPresets,
   serializeMeshEntityViewStateForScene,
 } from "../controlRoomUtils";
-import type { ViewportVisualizationState } from "../visualizationStateSync";
+import { useVisualizationStore } from "@/features/visualization/store/useVisualizationStore";
+import { selectEffectiveViewportVizState } from "@/features/visualization/store/useVisualizationStore";
 
 export function useSceneEditorDraftSync({
   activeTransformScope,
   activeVisualizationPresetRef,
-  effectiveViewportVisualizationState,
   focusedEntityId,
   meshEntityViewState,
   objectViewMode,
@@ -31,7 +31,6 @@ export function useSceneEditorDraftSync({
 }: {
   activeTransformScope: "object" | "texture" | null;
   activeVisualizationPresetRef: VisualizationPresetRef | null;
-  effectiveViewportVisualizationState: ViewportVisualizationState;
   focusedEntityId: string | null;
   meshEntityViewState: MeshEntityViewStateMap;
   objectViewMode: ObjectViewMode;
@@ -40,6 +39,12 @@ export function useSceneEditorDraftSync({
   selectedObjectId: string | null;
   setSceneDocumentDraft: Dispatch<SetStateAction<SceneDocument | null>>;
 }) {
+  // Read only the 4 fields we need from the effective viz state, via the store.
+  const airMeshOpacity = useVisualizationStore((s) => selectEffectiveViewportVizState(s).airMeshOpacity);
+  const airMeshVisible = useVisualizationStore((s) => selectEffectiveViewportVizState(s).airMeshVisible);
+  const femFerromagnetVisibilityMode = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femFerromagnetVisibilityMode);
+  const femVectorDomainFilter = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femVectorDomainFilter);
+
   useEffect(() => {
     const persistedMeshEntityViewState = serializeMeshEntityViewStateForScene(meshEntityViewState);
     const normalizedActivePresetRef = normalizeVisualizationPresetRef(
@@ -50,18 +55,18 @@ export function useSceneEditorDraftSync({
         return previousScene;
       }
       const previousEditor = previousScene.editor;
-      const nextAirMeshOpacity = Number.isFinite(effectiveViewportVisualizationState.airMeshOpacity)
-        ? effectiveViewportVisualizationState.airMeshOpacity
+      const nextAirMeshOpacity = Number.isFinite(airMeshOpacity)
+        ? airMeshOpacity
         : DEFAULT_AIR_MESH_OPACITY;
       if (
         previousEditor.selected_object_id === selectedObjectId &&
         previousEditor.selected_entity_id === selectedEntityId &&
         previousEditor.focused_entity_id === focusedEntityId &&
         previousEditor.object_view_mode === objectViewMode &&
-        previousEditor.vector_domain_filter === effectiveViewportVisualizationState.femVectorDomainFilter &&
-        previousEditor.ferromagnet_visibility_mode === effectiveViewportVisualizationState.femFerromagnetVisibilityMode &&
+        previousEditor.vector_domain_filter === femVectorDomainFilter &&
+        previousEditor.ferromagnet_visibility_mode === femFerromagnetVisibilityMode &&
         previousEditor.active_transform_scope === activeTransformScope &&
-        previousEditor.air_mesh_visible === effectiveViewportVisualizationState.airMeshVisible &&
+        previousEditor.air_mesh_visible === airMeshVisible &&
         previousEditor.air_mesh_opacity === nextAirMeshOpacity &&
         sameVisualizationPresets(
           previousEditor.visualization_presets,
@@ -86,10 +91,10 @@ export function useSceneEditorDraftSync({
           selected_entity_id: selectedEntityId,
           focused_entity_id: focusedEntityId,
           object_view_mode: objectViewMode,
-          vector_domain_filter: effectiveViewportVisualizationState.femVectorDomainFilter,
-          ferromagnet_visibility_mode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
+          vector_domain_filter: femVectorDomainFilter,
+          ferromagnet_visibility_mode: femFerromagnetVisibilityMode,
           active_transform_scope: activeTransformScope,
-          air_mesh_visible: effectiveViewportVisualizationState.airMeshVisible,
+          air_mesh_visible: airMeshVisible,
           air_mesh_opacity: nextAirMeshOpacity,
           mesh_entity_view_state: persistedMeshEntityViewState,
           visualization_presets: projectVisualizationPresets,
@@ -100,10 +105,10 @@ export function useSceneEditorDraftSync({
   }, [
     activeTransformScope,
     activeVisualizationPresetRef,
-    effectiveViewportVisualizationState.airMeshOpacity,
-    effectiveViewportVisualizationState.airMeshVisible,
-    effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
-    effectiveViewportVisualizationState.femVectorDomainFilter,
+    airMeshOpacity,
+    airMeshVisible,
+    femFerromagnetVisibilityMode,
+    femVectorDomainFilter,
     focusedEntityId,
     meshEntityViewState,
     objectViewMode,

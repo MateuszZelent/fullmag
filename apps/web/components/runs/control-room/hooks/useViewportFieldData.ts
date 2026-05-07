@@ -32,7 +32,7 @@ import {
   vectorHead,
 } from "../controlRoomContextHelpers";
 import { selectViewportVectorField } from "../viewportSelection";
-import type { ViewportVisualizationState } from "../visualizationStateSync";
+import { useVisualizationStore, selectEffectiveViewportVizState } from "@/features/visualization/store/useVisualizationStore";
 
 type LiveFieldApi = {
   getFieldVectorBinary: (
@@ -93,7 +93,6 @@ export function useViewportFieldData({
   effectiveIsFemBackend,
   effectiveStep,
   effectiveViewMode,
-  effectiveViewportVisualizationState,
   femMesh,
   isFemBackend,
   isGlobalScalarQuantity,
@@ -119,7 +118,6 @@ export function useViewportFieldData({
   effectiveIsFemBackend: boolean;
   effectiveStep: number;
   effectiveViewMode: ViewportMode;
-  effectiveViewportVisualizationState: ViewportVisualizationState;
   femMesh: FemLiveMesh | null;
   isFemBackend: boolean;
   isGlobalScalarQuantity: (quantity: string | null | undefined) => boolean;
@@ -137,6 +135,12 @@ export function useViewportFieldData({
   selectedSidebarNodeId: string | null;
   workspaceStatus: string | null;
 }) {
+  // Read effective viz fields from the store directly (no prop drilling).
+  const vizAirMeshVisible = useVisualizationStore((s) => selectEffectiveViewportVizState(s).airMeshVisible);
+  const vizFemVectorDomainFilter = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femVectorDomainFilter);
+  const vizMeshShowArrows = useVisualizationStore((s) => selectEffectiveViewportVizState(s).meshShowArrows);
+  const vizShowQuantity = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femViewportLayers.showQuantity);
+  const vizShowMagneticTexture = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femViewportLayers.showMagneticTexture);
   const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
   const scopedBinaryFieldCacheRef = useRef<Map<string, ScopedBinaryFieldFrame>>(new Map());
   const lastFieldDataRevisionRef = useRef<string | null>(null);
@@ -222,13 +226,13 @@ export function useViewportFieldData({
       deriveFemVectorScopes({
         meshParts: femMesh?.mesh_parts ?? [],
         meshEntityViewState,
-        airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
-        vectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
+        airMeshVisible: vizAirMeshVisible,
+        vectorDomainFilter: vizFemVectorDomainFilter,
         selectedFieldDomain,
       }),
     [
-      effectiveViewportVisualizationState.airMeshVisible,
-      effectiveViewportVisualizationState.femVectorDomainFilter,
+      vizAirMeshVisible,
+      vizFemVectorDomainFilter,
       femMesh?.mesh_parts,
       meshEntityViewState,
       selectedFieldDomain,
@@ -241,9 +245,9 @@ export function useViewportFieldData({
       !isFemBackend ||
       effectiveViewMode !== "3D" ||
       (
-        !effectiveViewportVisualizationState.meshShowArrows &&
-        !effectiveViewportVisualizationState.femViewportLayers.showQuantity &&
-        !(effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture && activeQuantityId === "m")
+        !vizMeshShowArrows &&
+        !vizShowQuantity &&
+        !(vizShowMagneticTexture && activeQuantityId === "m")
       ) ||
       !activeQuantityId ||
       !selectedFieldFrame ||
@@ -269,9 +273,9 @@ export function useViewportFieldData({
     activeQuantityId,
     binaryFieldTransportEnabled,
     effectiveViewMode,
-    effectiveViewportVisualizationState.femViewportLayers.showMagneticTexture,
-    effectiveViewportVisualizationState.femViewportLayers.showQuantity,
-    effectiveViewportVisualizationState.meshShowArrows,
+    vizShowMagneticTexture,
+    vizShowQuantity,
+    vizMeshShowArrows,
     femMesh?.generation_id,
     femMesh?.mesh_id,
     femMesh?.node_count,

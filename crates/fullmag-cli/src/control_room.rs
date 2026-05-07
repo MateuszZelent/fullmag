@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::OnceLock;
@@ -10,6 +9,7 @@ use std::time::{Duration, Instant};
 use std::{io, os::unix::process::CommandExt};
 
 use crate::live_workspace::LocalLiveWorkspace;
+use crate::terminal_logs::{terminal_logger, TerminalLogSource};
 use crate::types::*;
 
 pub(crate) const LOCALHOST_HTTP_HOST: &str = "localhost";
@@ -133,7 +133,10 @@ impl Drop for ControlRoomGuard {
         let Some(web_port) = self.web_port else {
             return;
         };
-        eprintln!("fullmag tearing down control room (port {web_port})");
+        terminal_logger().emit(
+            TerminalLogSource::Cli,
+            format!("tearing down control room (port {web_port})"),
+        );
         stop_control_room_frontend_processes(web_port);
     }
 }
@@ -191,21 +194,41 @@ pub(crate) fn bootstrap_control_plane(
                 value == "1" || value == "true" || value == "yes" || value == "on"
             })
             .unwrap_or(false);
+    let stream_web_logs_to_terminal = dev_mode
+        || std::env::var("FULLMAG_WEB_LOG_TO_TERMINAL")
+            .ok()
+            .map(|raw| {
+                let value = raw.trim().to_ascii_lowercase();
+                value == "1" || value == "true" || value == "yes" || value == "on"
+            })
+            .unwrap_or(false);
 
     let api_child = if api_port() != 0 && api_bridge_is_ready(api_port()) {
-        eprintln!("  reusing fullmag-api on :{} ...", api_port());
+        terminal_logger().emit(
+            TerminalLogSource::Api,
+            format!("reusing fullmag-api on :{} ...", api_port()),
+        );
         None
     } else {
-        eprintln!("  starting fullmag-api on :{} ...", api_port());
+        terminal_logger().emit(
+            TerminalLogSource::Api,
+            format!("starting fullmag-api on :{} ...", api_port()),
+        );
         let api_log = fs::File::create(log_dir.join("fullmag-api.log"))
             .context("failed to create api log")?;
         let api_err = api_log.try_clone()?;
         if stream_api_logs_to_terminal {
-            eprintln!("  streaming fullmag-api logs to terminal (and saving to .fullmag/logs/fullmag-api.log)");
+            terminal_logger().emit(
+                TerminalLogSource::Api,
+                "streaming fullmag-api logs to terminal in compact labeled mode (full log still saved to .fullmag/logs/fullmag-api.log)",
+            );
         } else {
-            eprintln!(
-                "  fullmag-api logs: {}",
-                log_dir.join("fullmag-api.log").display()
+            terminal_logger().emit(
+                TerminalLogSource::Api,
+                format!(
+                    "fullmag-api logs: {}",
+                    log_dir.join("fullmag-api.log").display()
+                ),
             );
         }
 
@@ -238,7 +261,10 @@ pub(crate) fn bootstrap_control_plane(
             && (!frontend_is_ready(web_port)
                 || current_mode.as_deref().map(str::trim) != Some(desired_mode))
         {
-            eprintln!("  restarting control room on :{} ...", web_port);
+            terminal_logger().emit(
+                TerminalLogSource::Web,
+                format!("restarting control room on :{} ...", web_port),
+            );
             stop_control_room_frontend_processes(web_port);
             if dev_mode {
                 let _ = fs::remove_dir_all(&web_cache_dir);
@@ -247,10 +273,22 @@ pub(crate) fn bootstrap_control_plane(
 
         let mut frontend_child = None;
         if !frontend_is_ready(web_port) {
-            eprintln!("  starting control room on :{} ...", web_port);
+            terminal_logger().emit(
+                TerminalLogSource::Web,
+                format!("starting control room on :{} ...", web_port),
+            );
             let web_log = fs::File::create(log_dir.join("control-room.log"))
                 .context("failed to create frontend log")?;
             let web_err = web_log.try_clone()?;
+            let terminal_log_file = if stream_web_logs_to_terminal {
+                Some(
+                    web_log
+                        .try_clone()
+                        .context("failed to clone frontend log file for terminal streaming")?,
+                )
+            } else {
+                None
+            };
 
             let mut command = ProcessCommand::new("node");
             command
@@ -265,9 +303,23 @@ pub(crate) fn bootstrap_control_plane(
                 ])
                 .current_dir(&web_dir)
                 .env("FULLMAG_API_PROXY_TARGET", api_base_url())
-                .stdin(Stdio::null())
-                .stdout(web_log)
-                .stderr(web_err);
+                .stdin(Stdio::null());
+            if stream_web_logs_to_terminal {
+                terminal_logger().emit(
+                    TerminalLogSource::Web,
+                    "streaming control room logs to terminal in compact labeled mode (full log still saved to .fullmag/logs/control-room.log)",
+                );
+                command.stdout(Stdio::piped()).stderr(Stdio::piped());
+            } else {
+                terminal_logger().emit(
+                    TerminalLogSource::Web,
+                    format!(
+                        "control room logs: {}",
+                        log_dir.join("control-room.log").display()
+                    ),
+                );
+                command.stdout(web_log).stderr(web_err);
+            }
             configure_child_process(&mut command);
 
             if !dev_mode {
@@ -277,11 +329,13 @@ pub(crate) fn bootstrap_control_plane(
                     .env("FULLMAG_STATIC_WEB_ROOT", &static_web_root);
             }
 
-            frontend_child = Some(
-                command
-                    .spawn()
-                    .context("failed to spawn control room server")?,
-            );
+            let mut child = command
+                .spawn()
+                .context("failed to spawn control room server")?;
+            if let Some(log_file) = terminal_log_file {
+                terminal_logger().attach_child(&mut child, TerminalLogSource::Web, log_file)?;
+            }
+            frontend_child = Some(child);
 
             let _ = fs::write(&url_file, format!("http://localhost:{}", web_port));
             let _ = fs::write(&mode_file, desired_mode);
@@ -296,7 +350,10 @@ pub(crate) fn bootstrap_control_plane(
                 bail!("control room did not become ready on :{}", web_port);
             }
         } else {
-            eprintln!("  reusing control room on :{}", web_port);
+            terminal_logger().emit(
+                TerminalLogSource::Web,
+                format!("reusing control room on :{}", web_port),
+            );
         }
 
         return Ok(ControlPlaneReady {
@@ -331,9 +388,18 @@ pub(crate) fn bootstrap_control_plane(
 }
 
 pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
-    eprintln!("  gui server: {}", ready.web_url);
-    eprintln!("  swagger ui: {}", swagger_ui_url());
-    eprintln!("  openapi json: {}", openapi_json_url());
+    terminal_logger().emit(
+        TerminalLogSource::Web,
+        format!("gui server: {}", ready.web_url),
+    );
+    terminal_logger().emit(
+        TerminalLogSource::Api,
+        format!("swagger ui: {}", swagger_ui_url()),
+    );
+    terminal_logger().emit(
+        TerminalLogSource::Api,
+        format!("openapi json: {}", openapi_json_url()),
+    );
     if let Ok(opener) = which_opener() {
         let _ = ProcessCommand::new(opener)
             .arg(&ready.web_url)
@@ -806,13 +872,22 @@ pub(crate) fn spawn_fullmag_api(
 
     if let Some(path) = candidates.iter().find(|candidate| candidate.exists()) {
         let mut command = ProcessCommand::new(path);
+        let terminal_log_file = if stream_logs_to_terminal {
+            Some(
+                stdout
+                    .try_clone()
+                    .context("failed to clone api log file for terminal streaming")?,
+            )
+        } else {
+            None
+        };
         command
             .current_dir(root)
             .env("FULLMAG_API_PORT", api_port().to_string())
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
             .stdin(Stdio::null());
         if stream_logs_to_terminal {
-            command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
         } else {
             command.stdout(stdout).stderr(stderr);
         }
@@ -821,12 +896,25 @@ pub(crate) fn spawn_fullmag_api(
         if disable_static_control_room {
             command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
         }
-        return command
+        let mut child = command
             .spawn()
-            .with_context(|| format!("failed to spawn fullmag-api binary {}", path.display()));
+            .with_context(|| format!("failed to spawn fullmag-api binary {}", path.display()))?;
+        if let Some(log_file) = terminal_log_file {
+            terminal_logger().attach_child(&mut child, TerminalLogSource::Api, log_file)?;
+        }
+        return Ok(child);
     }
 
     let mut command = ProcessCommand::new("cargo");
+    let terminal_log_file = if stream_logs_to_terminal {
+        Some(
+            stdout
+                .try_clone()
+                .context("failed to clone api log file for terminal streaming")?,
+        )
+    } else {
+        None
+    };
     command
         .args(["run", "-p", "fullmag-api"])
         .current_dir(root)
@@ -834,7 +922,7 @@ pub(crate) fn spawn_fullmag_api(
         .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
         .stdin(Stdio::null());
     if stream_logs_to_terminal {
-        command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
     } else {
         command.stdout(stdout).stderr(stderr);
     }
@@ -843,9 +931,13 @@ pub(crate) fn spawn_fullmag_api(
     if disable_static_control_room {
         command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
     }
-    command
+    let mut child = command
         .spawn()
-        .context("failed to spawn fullmag-api via cargo")
+        .context("failed to spawn fullmag-api via cargo")?;
+    if let Some(log_file) = terminal_log_file {
+        terminal_logger().attach_child(&mut child, TerminalLogSource::Api, log_file)?;
+    }
+    Ok(child)
 }
 
 #[cfg(unix)]

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 
-import { useCommand, useModel } from "../../runs/control-room/context-hooks";
+import { useCommand } from "../../runs/control-room/context-hooks";
 import { fmtExp, fmtSI } from "../../runs/control-room/shared";
 import { IntegratorSettingsPanel, RelaxationSettingsPanel } from "../SolverSettingsPanel";
 import { Button } from "../../ui/button";
@@ -11,6 +11,8 @@ import TextField from "../../ui/TextField";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import {
   useDocumentActions,
+  useDocumentStore,
+  useModelBuilderGraph,
   useSolverPlan,
   useSolverSettings,
 } from "@/features/document";
@@ -259,10 +261,20 @@ function solverPolicyFieldNumber(
 
 export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   const cmd = useCommand();
-  const model = useModel();
   const solverSettings = useSolverSettings();
   const solverPlan = useSolverPlan();
   const { setSolverSettings } = useDocumentActions();
+  const sceneDocument = useDocumentStore(
+    (state) => state.sceneDocumentDraft ?? state.remoteSceneDocument,
+  );
+  const modelBuilderGraph = useModelBuilderGraph();
+  const setSceneDocument = useDocumentStore((state) => state.setSceneDocument);
+  const scriptBuilderDemagRealization = useDocumentStore(
+    (state) => state.scriptBuilderDemagRealization,
+  );
+  const setScriptBuilderDemagRealization = useDocumentStore(
+    (state) => state.setScriptBuilderDemagRealization,
+  );
   const selectedObjectId = useSelectedObjectId();
   const { setSelectedObjectId, setSelectedSidebarNodeId } = useSelectionActions();
   const sceneAuthoring = useSceneAuthoringActions();
@@ -273,17 +285,17 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   );
 
   const externalField =
-    model.sceneDocument?.study.external_field
-    ?? model.modelBuilderGraph?.study.external_field
+    sceneDocument?.study.external_field
+    ?? modelBuilderGraph?.study.external_field
     ?? solverPlan?.externalField
     ?? null;
   const sceneObjects = useMemo(
-    () => model.sceneDocument?.objects ?? [],
-    [model.sceneDocument?.objects],
+    () => sceneDocument?.objects ?? [],
+    [sceneDocument?.objects],
   );
   const sceneMaterials = useMemo(
-    () => model.sceneDocument?.materials ?? [],
-    [model.sceneDocument?.materials],
+    () => sceneDocument?.materials ?? [],
+    [sceneDocument?.materials],
   );
   const targetObject = useMemo<SceneObject | null>(() => {
     if (sceneObjects.length === 0) return null;
@@ -305,8 +317,8 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   }, [targetObject, targetMaterialDind]);
 
   const physicsSignals = useMemo(() => {
-    const sceneObjects = model.sceneDocument?.objects ?? [];
-    const sceneMaterials = model.sceneDocument?.materials ?? [];
+    const sceneObjects = sceneDocument?.objects ?? [];
+    const sceneMaterials = sceneDocument?.materials ?? [];
     const entries: ScriptBuilderMagneticInteractionEntry[] = [];
     let hasInterfacialDmiFromMaterial = false;
     for (const object of sceneObjects) {
@@ -322,7 +334,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       aggregatePhysicsStack: normalizePhysicsStack(entries),
       hasInterfacialDmiFromMaterial,
     };
-  }, [model.sceneDocument]);
+  }, [sceneDocument]);
 
   const metadata = cmd.metadata ?? null;
   const capabilityEntries = useMemo(() => {
@@ -338,23 +350,23 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       } else if (entry.id === "interfacial_dmi") {
         active = active || physicsSignals.hasInterfacialDmiFromMaterial;
       } else if (entry.id === "thermal_noise") {
-        const thermalFromScene = model.sceneDocument?.study.thermal_noise;
+        const thermalFromScene = sceneDocument?.study.thermal_noise;
         active = metadata?.thermal_active === true
           || (thermalFromScene?.enabled === true);
       } else if (entry.id === "spin_transfer_torque") {
-        const sttFromScene = model.sceneDocument?.study.spin_torque_modules;
+        const sttFromScene = sceneDocument?.study.spin_torque_modules;
         active = metadata?.stt_active === true
           || (Array.isArray(sttFromScene) && sttFromScene.length > 0);
       } else if (entry.id === "spin_orbit_torque") {
-        const sotFromScene = model.sceneDocument?.study.spin_orbit_torque;
+        const sotFromScene = sceneDocument?.study.spin_orbit_torque;
         active = metadata?.sot_active === true
           || (sotFromScene?.enabled === true);
       } else if (entry.id === "magnetoelastic") {
-        const melFromScene = model.sceneDocument?.study.magnetoelastic;
+        const melFromScene = sceneDocument?.study.magnetoelastic;
         active = metadata?.magnetoelastic_active === true
           || (melFromScene?.enabled === true);
       } else if (entry.id === "oersted") {
-        const oerstedFromScene = model.sceneDocument?.study.oersted;
+        const oerstedFromScene = sceneDocument?.study.oersted;
         active = metadata?.oersted_active === true
           || (oerstedFromScene?.enabled === true);
       } else if (entry.id === "demag") {
@@ -400,7 +412,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     updater: (stack: ScriptBuilderMagneticInteractionEntry[]) => ScriptBuilderMagneticInteractionEntry[],
   ) => {
     if (!targetObject) return;
-    model.setSceneDocument((previous) =>
+    setSceneDocument((previous) =>
       previous
         ? {
             ...previous,
@@ -445,8 +457,8 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   };
 
   const femDemagSolverPolicy = asRecord(
-    model.sceneDocument?.study.fem_demag_solver_policy
-    ?? model.modelBuilderGraph?.study.fem_demag_solver_policy
+    sceneDocument?.study.fem_demag_solver_policy
+    ?? modelBuilderGraph?.study.fem_demag_solver_policy
     ?? null,
   );
   const effectiveFemDemagSolverPolicy =
@@ -454,7 +466,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
 
   const setFemDemagSolverPolicy = (patch: Record<string, unknown>) => {
     let nextPolicy: Record<string, unknown> | null = null;
-    model.setSceneDocument((previous) =>
+    setSceneDocument((previous) =>
       {
         if (!previous) return previous;
         nextPolicy = {
@@ -473,7 +485,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     );
     const fallbackPolicy = {
       ...defaultFemSolverPolicyFromPlan(solverPlan),
-      ...(asRecord(model.sceneDocument?.study.fem_demag_solver_policy) ?? {}),
+      ...(asRecord(sceneDocument?.study.fem_demag_solver_policy) ?? {}),
       ...patch,
     };
     patchStudyScene({ fem_demag_solver_policy: nextPolicy ?? fallbackPolicy });
@@ -482,7 +494,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
   const setExternalFieldComponent = (axis: 0 | 1 | 2, rawValue: string) => {
     const parsed = parseOptionalNumber(rawValue);
     let nextField: [number, number, number] | null = null;
-    model.setSceneDocument((previous) => {
+    setSceneDocument((previous) => {
       if (!previous) return previous;
       const baseline = previous.study.external_field ?? [0, 0, 0];
       nextField = [...baseline] as [number, number, number];
@@ -496,14 +508,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       };
     });
     const fallbackField = [
-      ...(model.sceneDocument?.study.external_field ?? [0, 0, 0]),
+      ...(sceneDocument?.study.external_field ?? [0, 0, 0]),
     ] as [number, number, number];
     fallbackField[axis] = parsed ?? 0;
     patchStudyScene({ external_field: nextField ?? fallbackField });
   };
 
   const clearExternalField = () => {
-    model.setSceneDocument((previous) =>
+    setSceneDocument((previous) =>
       previous
         ? {
             ...previous,
@@ -517,7 +529,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     patchStudyScene({ external_field: null });
   };
 
-  const demagRealization = model.scriptBuilderDemagRealization ?? "auto";
+  const demagRealization = scriptBuilderDemagRealization ?? "auto";
   const demagBoundaryOptions = useMemo(() => {
     const supported = new Set(cmd.capabilities?.supported_demag_realizations ?? []);
     const values: string[] = ["auto"];
@@ -673,8 +685,8 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
               value={demagRealization}
               onchange={(value) => {
                 const nextValue = value === "auto" ? null : value;
-                model.setScriptBuilderDemagRealization(nextValue);
-                model.setSceneDocument((previous) =>
+                setScriptBuilderDemagRealization(nextValue);
+                setSceneDocument((previous) =>
                   previous
                     ? {
                         ...previous,
@@ -777,13 +789,13 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     }
 
     if (entry.id === "spin_transfer_torque") {
-      const sttModules = model.sceneDocument?.study.spin_torque_modules ?? null;
+      const sttModules = sceneDocument?.study.spin_torque_modules ?? null;
       const firstModule = sttModules?.[0] ?? null;
       const activeModel: string = firstModule?.kind ?? "none";
 
       const setSttModel = (nextModel: string) => {
         if (nextModel === "none") {
-          model.setSceneDocument((previous) =>
+          setSceneDocument((previous) =>
             previous
               ? {
                   ...previous,
@@ -811,7 +823,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
                 beta: 0.0,
               };
         const nextModules = [defaultModule];
-        model.setSceneDocument((previous) =>
+        setSceneDocument((previous) =>
           previous
             ? {
                 ...previous,
@@ -823,7 +835,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       };
 
       const patchSttModule = (patch: Record<string, unknown>) => {
-        model.setSceneDocument((previous) => {
+        setSceneDocument((previous) => {
           if (!previous) return previous;
           const currentModules = previous.study.spin_torque_modules;
           if (!currentModules || currentModules.length === 0) return previous;
@@ -843,7 +855,7 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
       ) => {
         const parsed = parseOptionalNumber(rawValue);
         if (parsed == null) return;
-        model.setSceneDocument((previous) => {
+        setSceneDocument((previous) => {
           if (!previous) return previous;
           const currentModules = previous.study.spin_torque_modules;
           if (!currentModules || currentModules.length === 0) return previous;
@@ -1008,12 +1020,12 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     }
 
     if (entry.id === "oersted") {
-      const oerstedState = model.sceneDocument?.study.oersted ?? null;
+      const oerstedState = sceneDocument?.study.oersted ?? null;
       const oerstedEnabled = oerstedState?.enabled === true;
 
       const setOerstedEnabled = (enabled: boolean) => {
         if (!enabled) {
-          model.setSceneDocument((prev) =>
+          setSceneDocument((prev) =>
             prev ? { ...prev, study: { ...prev.study, oersted: null } } : prev,
           );
           patchStudyScene({ oersted: null });
@@ -1027,14 +1039,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           center: [0, 0, 0] as [number, number, number],
           axis: [0, 0, 1] as [number, number, number],
         };
-        model.setSceneDocument((prev) =>
+        setSceneDocument((prev) =>
           prev ? { ...prev, study: { ...prev.study, oersted: defaultOersted } } : prev,
         );
         patchStudyScene({ oersted: defaultOersted });
       };
 
       const patchOersted = (patch: Record<string, unknown>) => {
-        model.setSceneDocument((prev) => {
+        setSceneDocument((prev) => {
           if (!prev || !prev.study.oersted) return prev;
           const updated = { ...prev.study.oersted, ...patch };
           patchStudyScene({ oersted: updated });
@@ -1117,12 +1129,12 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     }
 
     if (entry.id === "thermal_noise") {
-      const thermalState = model.sceneDocument?.study.thermal_noise ?? null;
+      const thermalState = sceneDocument?.study.thermal_noise ?? null;
       const thermalEnabled = thermalState?.enabled === true;
 
       const setThermalEnabled = (enabled: boolean) => {
         if (!enabled) {
-          model.setSceneDocument((prev) =>
+          setSceneDocument((prev) =>
             prev ? { ...prev, study: { ...prev.study, thermal_noise: null } } : prev,
           );
           patchStudyScene({ thermal_noise: null });
@@ -1133,14 +1145,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           temperature_k: 300,
           seed: null as number | null,
         };
-        model.setSceneDocument((prev) =>
+        setSceneDocument((prev) =>
           prev ? { ...prev, study: { ...prev.study, thermal_noise: defaultThermal } } : prev,
         );
         patchStudyScene({ thermal_noise: defaultThermal });
       };
 
       const patchThermal = (patch: Record<string, unknown>) => {
-        model.setSceneDocument((prev) => {
+        setSceneDocument((prev) => {
           if (!prev || !prev.study.thermal_noise) return prev;
           const updated = { ...prev.study.thermal_noise, ...patch };
           patchStudyScene({ thermal_noise: updated });
@@ -1201,12 +1213,12 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     }
 
     if (entry.id === "spin_orbit_torque") {
-      const sotState = model.sceneDocument?.study.spin_orbit_torque ?? null;
+      const sotState = sceneDocument?.study.spin_orbit_torque ?? null;
       const sotEnabled = sotState?.enabled === true;
 
       const setSotEnabled = (enabled: boolean) => {
         if (!enabled) {
-          model.setSceneDocument((prev) =>
+          setSceneDocument((prev) =>
             prev ? { ...prev, study: { ...prev.study, spin_orbit_torque: null } } : prev,
           );
           patchStudyScene({ spin_orbit_torque: null });
@@ -1220,14 +1232,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           sigma: [0, 1, 0] as [number, number, number],
           thickness: 1e-9,
         };
-        model.setSceneDocument((prev) =>
+        setSceneDocument((prev) =>
           prev ? { ...prev, study: { ...prev.study, spin_orbit_torque: defaultSot } } : prev,
         );
         patchStudyScene({ spin_orbit_torque: defaultSot });
       };
 
       const patchSot = (patch: Record<string, unknown>) => {
-        model.setSceneDocument((prev) => {
+        setSceneDocument((prev) => {
           if (!prev || !prev.study.spin_orbit_torque) return prev;
           const updated = { ...prev.study.spin_orbit_torque, ...patch };
           patchStudyScene({ spin_orbit_torque: updated });
@@ -1326,12 +1338,12 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
     }
 
     if (entry.id === "magnetoelastic") {
-      const melState = model.sceneDocument?.study.magnetoelastic ?? null;
+      const melState = sceneDocument?.study.magnetoelastic ?? null;
       const melEnabled = melState?.enabled === true;
 
       const setMelEnabled = (enabled: boolean) => {
         if (!enabled) {
-          model.setSceneDocument((prev) =>
+          setSceneDocument((prev) =>
             prev ? { ...prev, study: { ...prev.study, magnetoelastic: null } } : prev,
           );
           patchStudyScene({ magnetoelastic: null });
@@ -1343,14 +1355,14 @@ export default function PhysicsPanel({ nodeId }: { nodeId?: string }) {
           b2: -3.43e6,
           magnet: "",
         };
-        model.setSceneDocument((prev) =>
+        setSceneDocument((prev) =>
           prev ? { ...prev, study: { ...prev.study, magnetoelastic: defaultMel } } : prev,
         );
         patchStudyScene({ magnetoelastic: defaultMel });
       };
 
       const patchMel = (patch: Record<string, unknown>) => {
-        model.setSceneDocument((prev) => {
+        setSceneDocument((prev) => {
           if (!prev || !prev.study.magnetoelastic) return prev;
           const updated = { ...prev.study.magnetoelastic, ...patch };
           patchStudyScene({ magnetoelastic: updated });

@@ -45,7 +45,7 @@ import type {
   OpenAnalyzeSurfaceOptions,
   ResultWorkspaceEntry,
   ResultWorkspaceKind,
-} from "../context-hooks";
+} from "@/features/analyze/model/analyzeTypes";
 import {
   coreTabIdForViewMode,
   useWorkspaceStore,

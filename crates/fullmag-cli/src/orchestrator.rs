@@ -3166,6 +3166,72 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     );
 
     let mut _control_room_guard = ControlRoomGuard::inactive();
+
+    // ── Parallelize: Phase-1 Python (skip geometry assets) + control room bootstrap ──
+    // Phase 1 returns the lightweight ProblemIR without triggering Gmsh.
+    // The control room (API + frontend) starts concurrently.
+    // This gives the frontend early metadata (~300ms) while the mesh builds.
+    live_workspace.publish_snapshot();
+    live_workspace.update(|state| {
+        state.session.status = "materializing_script".to_string();
+        state.run.status = "materializing_script".to_string();
+        set_live_state_status(&mut state.live_state, "materializing_script", Some(false));
+    });
+    live_workspace.push_log(
+        "info",
+        "Materializing Python script, importing geometry, and preparing execution plan",
+    );
+
+    // Phase 1: fast pre-pass without geometry assets, runs concurrently with frontend startup.
+    let phase1_script_path = script_path.clone();
+    let phase1_backend = args.backend;
+    let phase1_mode = args.mode;
+    let phase1_precision = args.precision;
+    let phase1_handle = std::thread::Builder::new()
+        .name("fullmag-materialize-phase1".to_string())
+        .spawn(move || -> Result<ScriptExecutionConfig> {
+            use clap::ValueEnum;
+            let mut helper_args = vec![
+                "-m".to_string(),
+                "fullmag.runtime.helper".to_string(),
+                "export-run-config".to_string(),
+                "--script".to_string(),
+                phase1_script_path.display().to_string(),
+                "--skip-geometry-assets".to_string(),
+            ];
+            if let Some(backend) = phase1_backend {
+                helper_args.push("--backend".to_string());
+                helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
+            }
+            if let Some(mode) = phase1_mode {
+                helper_args.push("--mode".to_string());
+                helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
+            }
+            if let Some(precision) = phase1_precision {
+                helper_args.push("--precision".to_string());
+                helper_args.push(
+                    precision
+                        .to_possible_value()
+                        .unwrap()
+                        .get_name()
+                        .to_string(),
+                );
+            }
+            let output = run_python_helper_with_progress(&helper_args, None)
+                .context("phase-1 python helper failed")?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
+            }
+            let stdout =
+                String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
+            serde_json::from_str(&stdout)
+                .context("failed to deserialize phase-1 script execution config")
+        })
+        .context("failed to spawn phase-1 materialization thread")?;
+
+    eprintln!("fullmag materializing script");
+
     if !args.headless {
         let (web_port, child, frontend_child) =
             spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
@@ -3180,17 +3246,55 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         _control_room_guard = ControlRoomGuard::active(web_port, child, frontend_child);
     }
 
-    live_workspace.publish_snapshot();
-    live_workspace.update(|state| {
-        state.session.status = "materializing_script".to_string();
-        state.run.status = "materializing_script".to_string();
-        set_live_state_status(&mut state.live_state, "materializing_script", Some(false));
-    });
-    live_workspace.push_log(
-        "info",
-        "Materializing Python script, importing geometry, and preparing execution plan",
-    );
-    eprintln!("fullmag materializing script");
+    // Join Phase 1 and push early metadata to the already-loaded frontend.
+    match phase1_handle
+        .join()
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
+    {
+        Ok(early_config) => {
+            let early_problem = early_config
+                .stages
+                .last()
+                .map(|s| &s.ir)
+                .unwrap_or(&early_config.ir);
+            let problem_name = early_problem.problem_meta.name.clone();
+            let stage_names: Vec<String> = early_config
+                .stages
+                .iter()
+                .map(|s| s.ir.problem_meta.name.clone())
+                .collect();
+            let geometry_names: Vec<String> = early_problem
+                .geometry
+                .entries
+                .iter()
+                .map(|e| e.name().to_string())
+                .collect();
+            live_workspace.update(|state| {
+                if state.metadata.is_none() {
+                    state.metadata = Some(serde_json::json!({
+                        "problem_name": problem_name,
+                        "stage_count": early_config.stages.len(),
+                        "stage_names": stage_names,
+                        "geometry_names": geometry_names,
+                        "early_preview": true,
+                    }));
+                }
+            });
+            live_workspace.push_log(
+                "info",
+                format!(
+                    "Problem: {} · {} stage(s) · {} geometry object(s)",
+                    problem_name,
+                    early_config.stages.len().max(1),
+                    geometry_names.len()
+                ),
+            );
+        }
+        Err(err) => {
+            // Phase 1 failure is non-fatal — Phase 2 will produce the real error if needed.
+            eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
+        }
+    }
     let script_config = match export_script_execution_config_via_python(
         &script_path,
         &args,
@@ -3451,6 +3555,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let wait_message = wait_for_solve_prompt(&initial_execution_plan.backend_plan);
         eprintln!("[fullmag] {}", wait_message.to_lowercase());
         live_workspace.push_log("system", wait_message);
+        // Switch to slow publish mode — solver loop will produce its own cadenced updates.
+        live_workspace.set_publish_fast_mode(false);
         live_workspace.update(|state| {
             state.session.status = "waiting_for_compute".to_string();
             state.run.status = "waiting_for_compute".to_string();

@@ -58,7 +58,6 @@ export function useBuilderRibbonActions({
     setFocusedEntityId,
     setSelectedEntityId,
     setSelectedObjectId,
-    setSelectedSidebarNodeId,
   } = useSelectionActions();
   const selectedBuilderPrimitiveId =
     builderSelection.type === "primitive" ? builderSelection.id : null;
@@ -160,7 +159,7 @@ export function useBuilderRibbonActions({
     if (viewport.sidebarCollapsed) {
       viewport.setSidebarCollapsed(false);
     }
-    setSelectedSidebarNodeId(`geo-${update.selectedObjectId}`);
+    model.selectSidebarNode(`geo-${update.selectedObjectId}`);
     setSelectedObjectId(update.selectedObjectId);
     setSelectedEntityId(null);
     setFocusedEntityId(null);

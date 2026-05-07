@@ -1,14 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, startTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
-import { useModel, useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
+import { useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
 import EmptyState from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  selectActiveAnalyzeResultWorkspaceId,
+  selectAnalyzeResultWorkspaceEntries,
+  selectAnalyzeSelection,
+  useAnalyzeStore,
+} from "@/features/analyze/store/useAnalyzeStore";
+import type {
+  AnalyzeSelectionState,
+  OpenAnalyzeSurfaceOptions,
+  ResultWorkspaceKind,
+} from "@/features/analyze/model/analyzeTypes";
+import { useSelectionStore } from "@/features/selection/store/useSelectionStore";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useRuntimeFeatureFlags } from "@/lib/hooks/useRuntimeFeatureFlags";
 import {
@@ -35,6 +47,20 @@ import {
 } from "./center-tabs/tabResourceLifecycle";
 import { useDockCenterTabSelection } from "./center-tabs/useDockCenterTabSelection";
 
+function analyzeSelectionForResultKind(
+  kind: ResultWorkspaceKind,
+): Partial<AnalyzeSelectionState> | null {
+  if (kind === "spectrum") return { domain: "eigenmodes", tab: "spectrum", selectedModeIndex: null };
+  if (kind === "dispersion") return { domain: "eigenmodes", tab: "dispersion", selectedModeIndex: null };
+  if (kind === "modes") return { domain: "eigenmodes", tab: "modes" };
+  if (kind === "time-traces") return { domain: "vortex", tab: "time-traces" };
+  if (kind === "vortex-frequency") return { domain: "vortex", tab: "vortex-frequency" };
+  if (kind === "vortex-trajectory") return { domain: "vortex", tab: "vortex-trajectory" };
+  if (kind === "vortex-orbit") return { domain: "vortex", tab: "vortex-orbit" };
+  if (kind === "table") return { domain: "eigenmodes", tab: "spectrum", selectedModeIndex: null };
+  return null;
+}
+
 export default function DockCenterTabs() {
   const pathname = usePathname();
   const router = useRouter();
@@ -50,7 +76,6 @@ export default function DockCenterTabs() {
   const openTab = useWorkspaceStore((state) => state.openTab);
 
   const vp = useViewport();
-  const model = useModel();
   const tp = useTransport();
   const featureFlags = useRuntimeFeatureFlags();
 
@@ -60,9 +85,13 @@ export default function DockCenterTabs() {
   const setWorkspaceMode = vp.setWorkspaceMode;
   const handleViewModeChange = vp.handleViewModeChange;
   const requestPreviewQuantity = vp.requestPreviewQuantity;
-  const activeResultWorkspaceId = model.activeResultWorkspaceId;
-  const analyzeSelection = model.analyzeSelection;
-  const openAnalyzeSurface = model.openAnalyzeSurface;
+  const setViewMode = vp.setViewMode;
+  const activeResultWorkspaceId = useAnalyzeStore(selectActiveAnalyzeResultWorkspaceId);
+  const resultWorkspaceEntries = useAnalyzeStore(selectAnalyzeResultWorkspaceEntries);
+  const setActiveResultWorkspaceId = useAnalyzeStore((state) => state.setActiveResultWorkspaceId);
+  const analyzeSelection = useAnalyzeStore(selectAnalyzeSelection);
+  const setAnalyzeSelection = useAnalyzeStore((state) => state.setSelection);
+  const setSelectedSidebarNodeId = useSelectionStore((state) => state.setSelectedSidebarNodeId);
   const tabResourceLifecycleRef = useRef<WorkspaceTabResourceLifecycleSnapshot | null>(null);
 
   // Block rendering until feature flags are resolved to avoid mounting Three.js
@@ -115,6 +144,47 @@ export default function DockCenterTabs() {
     dockCenterFlags.enableInternalTree,
     openTab,
     tabs,
+  ]);
+
+  const openAnalyzeSurface = useCallback((options: OpenAnalyzeSurfaceOptions = {}) => {
+    startTransition(() => {
+      if (options.resultWorkspaceId) {
+        setActiveResultWorkspaceId(options.resultWorkspaceId);
+        setSelectedSidebarNodeId(`res-analysis-${options.resultWorkspaceId}`);
+        const entry = resultWorkspaceEntries.find(
+          (candidate) => candidate.id === options.resultWorkspaceId,
+        );
+        if (!entry) {
+          return;
+        }
+        const nextSelection = analyzeSelectionForResultKind(entry.kind);
+        if (nextSelection) {
+          setAnalyzeSelection((prev) => ({ ...prev, ...nextSelection }));
+          setViewMode("Analyze");
+          return;
+        }
+        if (entry.quantityId) {
+          requestPreviewQuantity(entry.quantityId);
+          setViewMode("3D");
+        }
+        return;
+      }
+
+      activateTab(currentStage, "core:analyze");
+      setViewMode("Analyze");
+      if (options.selection) {
+        setAnalyzeSelection((prev) => ({ ...prev, ...options.selection }));
+      }
+    });
+  }, [
+    activateTab,
+    currentStage,
+    requestPreviewQuantity,
+    resultWorkspaceEntries,
+    setActiveResultWorkspaceId,
+    setAnalyzeSelection,
+    setSelectedSidebarNodeId,
+    setViewMode,
   ]);
 
   const selectionApi = useMemo(

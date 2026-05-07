@@ -18,6 +18,7 @@ mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
 mod step_utils;
+mod terminal_logs;
 mod types;
 
 use args::*;

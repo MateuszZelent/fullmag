@@ -27,7 +27,20 @@ import { summarizeMaterializedStage } from "@/lib/study-builder/summaries";
 import type { ScriptBuilderStageState } from "@/lib/session/types";
 import StageInspector from "@/components/workspace/study-builder/StageInspector";
 import StudyBuilderWorkspace from "@/components/workspace/study-builder/StudyBuilderWorkspace";
-import { useTransport, useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
+import { useCommand, useTransport, useViewport } from "../../runs/control-room/context-hooks";
+import {
+  selectSolverPlan,
+  selectSolverSettings,
+  selectStudyPipeline,
+  selectStudyStages,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import {
+  selectFemMesh,
+  selectResourceRevisions,
+  selectSession,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { useSelectionActions } from "@/features/selection";
 import { Button } from "../../ui/button";
 import MetricTile from "../../ui/MetricTile";
@@ -215,12 +228,31 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
   const transport = useTransport();
   const viewport = useViewport();
   const cmd = useCommand();
-  const model = useModel();
   const selectionActions = useSelectionActions();
+  const solverPlan = useDocumentStore(selectSolverPlan);
+  const solverSettings = useDocumentStore(selectSolverSettings);
+  const setSolverSettings = useDocumentStore((state) => state.setSolverSettings);
+  const studyStages = useDocumentStore(selectStudyStages);
+  const studyPipeline = useDocumentStore(selectStudyPipeline);
+  const setStudyStages = useDocumentStore((state) => state.setStudyStages);
+  const setStudyPipeline = useDocumentStore((state) => state.setStudyPipeline);
+  const session = useSessionRuntimeStore(selectSession);
+  const femMesh = useSessionRuntimeStore(selectFemMesh);
+  const resourceRevisions = useSessionRuntimeStore(selectResourceRevisions);
+  const sceneResourceSessionKey = session?.session_id ?? null;
   /* Backward-compatible ctx composed from granular hooks */
   const ctx = {
-    ...model,
     ...selectionActions,
+    solverPlan,
+    solverSettings,
+    setSolverSettings,
+    studyStages,
+    studyPipeline,
+    setStudyStages,
+    setStudyPipeline,
+    femMesh,
+    sceneResourceSessionKey,
+    resourceRevisions,
     totalCells: viewport.totalCells,
     workspaceMode: viewport.workspaceStage,
     setWorkspaceMode: viewport.setWorkspaceStage,
@@ -230,7 +262,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     workspaceStatus: cmd.workspaceStatus,
     sessionFooter: cmd.sessionFooter,
     runtimeEngineLabel: cmd.runtimeEngineLabel,
-    session: cmd.session,
+    session,
     engineLog: cmd.engineLog,
     setRunUntilInput: cmd.setRunUntilInput,
     quantities: cmd.quantities,
@@ -255,14 +287,13 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
     () => parseStudyNodeContext(nodeId) ?? STUDY_ROOT_NODE,
     [nodeId],
   );
-  const solverPlan = ctx.solverPlan;
   const femDiscretization = resolveFemDiscretization(ctx.domainCapabilities, false);
   const femNodeCount = ctx.femMesh ? getFemNodeCount(ctx.femMesh) : 0;
   const femElementCount = ctx.femMesh ? getFemElementCount(ctx.femMesh) : 0;
   const workloadLabel = femDiscretization && ctx.femMesh
-    ? `${femNodeCount.toLocaleString()} nodes · ${femElementCount.toLocaleString()} tets`
+    ? `${femNodeCount.toLocaleString('en-US')} nodes · ${femElementCount.toLocaleString('en-US')} tets`
     : ctx.totalCells && ctx.totalCells > 0
-      ? `${ctx.totalCells.toLocaleString()} cells`
+      ? `${ctx.totalCells.toLocaleString('en-US')} cells`
       : "—";
   const stageMatch = (ctx.activity.label ?? "").match(/stage\s+(\d+)\/(\d+)/i);
   const activeStageIndex = stageMatch ? Math.max(0, Number(stageMatch[1]) - 1) : null;
@@ -355,7 +386,7 @@ export default function StudyPanel({ nodeId }: StudyPanelProps) {
           <InfoRow label="Study kind" value={studyKindForPlan(solverPlan)} />
           <InfoRow label="Stages" value={`${authoringDocument.nodes.length}`} />
           <InfoRow label="Compiled steps" value={`${materialized.stages.length}`} />
-          <InfoRow label="Workspace status" value={ctx.workspaceStatus} />
+          <InfoRow label="Workspace status" value={humanizeToken(ctx.workspaceStatus)} />
           <InfoRow label="Active workload" value={workloadLabel} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">

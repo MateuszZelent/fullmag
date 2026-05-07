@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { useModel } from "../../runs/control-room/ControlRoomContext";
+import {
+  selectSceneDocumentDraft,
+  selectRemoteSceneDocument,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
 import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
 import type { RegionListResource } from "@/src/api/types";
 import { TextField } from "../../ui/TextField";
@@ -10,18 +14,21 @@ import { findSceneObjectByNodeId } from "./objectSelection";
 import { SidebarSection } from "./primitives";
 
 export default function RegionPanel({ nodeId }: { nodeId?: string }) {
-  const model = useModel();
+  const sceneDocumentDraft = useDocumentStore(selectSceneDocumentDraft);
+  const remoteSceneDocument = useDocumentStore(selectRemoteSceneDocument);
+  const setSceneDocument = useDocumentStore((s) => s.setSceneDocument);
+  const sceneDocument = sceneDocumentDraft ?? remoteSceneDocument;
   const sceneAuthoring = useSceneAuthoringActions();
   const [regions, setRegions] = useState<RegionListResource | null>(null);
 
   const { object: sceneObject } = useMemo(
-    () => findSceneObjectByNodeId(nodeId, model.sceneDocument),
-    [model.sceneDocument, nodeId],
+    () => findSceneObjectByNodeId(nodeId, sceneDocument),
+    [sceneDocument, nodeId],
   );
 
   useEffect(() => {
     let cancelled = false;
-    if (!model.sceneDocument) {
+    if (!sceneDocument) {
       setRegions(null);
       return;
     }
@@ -41,7 +48,7 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [model.sceneDocument?.revision, sceneAuthoring]);
+  }, [sceneDocument?.revision, sceneAuthoring]);
 
   if (!sceneObject) {
     return (
@@ -60,7 +67,7 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
     region.source_object_ids.includes(sceneObject.id),
   );
   const updateObject = (updater: (regionName: string | null) => string | null) => {
-    const currentScene = model.sceneDocument;
+    const currentScene = sceneDocument;
     if (!currentScene) return;
     const nextObjects = currentScene.objects.map((object) =>
       object.id === sceneObject.id
@@ -71,7 +78,7 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
           }
         : object,
     );
-    model.setSceneDocument({
+    setSceneDocument({
       ...currentScene,
       revision: currentScene.revision + 1,
       objects: nextObjects,
@@ -81,11 +88,11 @@ export default function RegionPanel({ nodeId }: { nodeId?: string }) {
         name: nextObjects.find((object) => object.id === sceneObject.id)?.region_name ?? "",
       })
       .then((committedScene) => {
-        model.setSceneDocument(committedScene);
+        setSceneDocument(committedScene);
       })
       .catch((error) => {
         console.error("failed to patch authoring region object", error);
-        model.setSceneDocument(currentScene);
+        setSceneDocument(currentScene);
       });
   };
 

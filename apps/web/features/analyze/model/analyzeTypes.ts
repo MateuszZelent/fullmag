@@ -4,6 +4,12 @@
  * Re-exports the canonical AnalyzeSelectionState and extends with
  * feature-local query and result types.
  */
+import type {
+  AnalyzeSelectionState,
+  AnalyzeTab,
+  AnalyzeDomain,
+} from "@/components/runs/control-room/analyzeSelection";
+
 export type {
   AnalyzeSelectionState,
   AnalyzeTab,
@@ -28,6 +34,48 @@ export interface AnalyzeQueryState<T = unknown> {
   error: string | null;
   requestedAt: number | null;
   completedAt: number | null;
+}
+
+/* ── Result workspace entries ── */
+
+export type ResultWorkspaceKind =
+  | "spectrum"
+  | "dispersion"
+  | "modes"
+  | "time-traces"
+  | "vortex-frequency"
+  | "vortex-trajectory"
+  | "vortex-orbit"
+  | "quantity"
+  | "table";
+
+export interface ResultWorkspaceEntry {
+  id: string;
+  key: string;
+  kind: ResultWorkspaceKind;
+  label: string;
+  quantityId: string | null;
+  icon: string;
+  badge: string | null;
+  pinned: boolean;
+  createdAtUnixMs: number;
+}
+
+export interface CreateResultWorkspaceEntryInput {
+  key?: string | null;
+  kind: ResultWorkspaceKind;
+  label: string;
+  quantityId?: string | null;
+  icon?: string;
+  badge?: string | null;
+  pinned?: boolean;
+  openAfterCreate?: boolean;
+}
+
+export interface OpenAnalyzeSurfaceOptions {
+  selection?: Partial<AnalyzeSelectionState>;
+  resultWorkspaceId?: string | null;
+  source?: string;
 }
 
 /* ── Eigen result payloads ── */

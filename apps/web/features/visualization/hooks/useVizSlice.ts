@@ -1,6 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
-import { useVisualizationStore } from "../store/useVisualizationStore";
-import { selectEffectiveViewportVizState } from "../store/useVisualizationStore";
+import { useVisualizationStore, selectEffectiveViewportVizState } from "../store/useVisualizationStore";
 
 export function useRenderMode() {
   return useVisualizationStore((s) => s.meshRenderMode);

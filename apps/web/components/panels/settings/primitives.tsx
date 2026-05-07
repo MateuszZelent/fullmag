@@ -90,7 +90,7 @@ export function SidebarSection({
   const resolvedOpen = Boolean(autoOpenKey) || open;
 
   return (
-    <section className="flex flex-col mb-1 border-b border-border/10 pb-2 last:border-b-0">
+    <section className="flex flex-col mb-2 border-b border-border/20 pb-3 last:border-b-0">
       <button
         type="button"
         className="flex items-center w-full py-2.5 text-left transition-opacity hover:opacity-80 focus:outline-none focus-visible:ring-1 focus-visible:ring-ring group"

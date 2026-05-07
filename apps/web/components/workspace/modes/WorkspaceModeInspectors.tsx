@@ -14,17 +14,23 @@ import {
 } from "@/lib/session/types";
 import { CORE_UI_CAPABILITIES } from "@/lib/workspace/capability-contract";
 import { summarizeCapabilityCoverage } from "@/lib/workspace/capability-audit";
+import { useCommand, useTransport } from "../../runs/control-room/context-hooks";
 import {
-  useCommand,
-  useModel,
-  useTransport,
-} from "../../runs/control-room/context-hooks";
+  selectSolverSettings,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import {
+  selectFemMesh,
+  selectMeshWorkspace,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import {
   useFocusedEntityId,
   useSelectedEntityId,
   useSelectedSidebarNodeId,
   useSelectionActions,
 } from "@/features/selection";
+import { useViewportStore } from "@/features/viewport-core/state/useViewportStore";
 import { DEFAULT_CONVERGENCE_THRESHOLD } from "../../panels/SolverSettingsPanel";
 import { FemPartExplorerPanel } from "@/components/preview/fem/FemPartExplorerPanel";
 import type { PartQualitySummary } from "@/components/preview/fem/FemPartExplorerPanel";
@@ -39,19 +45,22 @@ const ROLE_GROUPS: Array<{ role: FemMeshPart["role"]; label: string }> = [
 export function WorkspaceRightToolbox() {
   const transport = useTransport();
   const command = useCommand();
-  const model = useModel();
   const selectedSidebarNodeId = useSelectedSidebarNodeId();
   const selectedEntityId = useSelectedEntityId();
   const focusedEntityId = useFocusedEntityId();
   const { setSelectedEntityId, setFocusedEntityId } = useSelectionActions();
+  const solverSettings = useDocumentStore(selectSolverSettings);
+  const runtimeFemMesh = useSessionRuntimeStore(selectFemMesh);
+  const meshWorkspace = useSessionRuntimeStore(selectMeshWorkspace);
+  const snapshot = useViewportStore((state) => state.visibleSubmeshSnapshot);
+  const meshEntityViewState = useViewportStore((state) => state.meshEntityViewState);
+  const setMeshEntityViewState = useViewportStore((state) => state.setMeshEntityViewState);
   const rightInspectorTab = useWorkspaceStore((state) => state.rightInspectorTab);
   const setRightInspectorTab = useWorkspaceStore((state) => state.setRightInspectorTab);
   const capabilitySummary = useMemo(() => summarizeCapabilityCoverage(), []);
   const selectedNodeId = selectedSidebarNodeId ?? "study-root";
 
-  const snapshot = model.visibleSubmeshSnapshot;
-  const meshParts = model.meshParts;
-  const meshEntityViewState = model.meshEntityViewState;
+  const meshParts = useMemo(() => runtimeFemMesh?.mesh_parts ?? [], [runtimeFemMesh]);
 
   const meshPartById = useMemo(
     () => new Map(meshParts.map((part) => [part.id, part])),
@@ -123,7 +132,7 @@ export function WorkspaceRightToolbox() {
       if (partIds.length === 0) {
         return;
       }
-      model.setMeshEntityViewState((prev) => {
+      setMeshEntityViewState((prev) => {
         let changed = false;
         const next = { ...prev };
         for (const partId of partIds) {
@@ -147,7 +156,7 @@ export function WorkspaceRightToolbox() {
         return changed ? next : prev;
       });
     },
-    [meshPartById, model],
+    [meshPartById, setMeshEntityViewState],
   );
 
   const handlePartSelect = useCallback(
@@ -286,12 +295,14 @@ export function WorkspaceRightToolbox() {
             connection={command.connection}
             error={command.error}
             presentationMode="current"
-            convergenceThreshold={Number(model.solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD}
+            convergenceThreshold={
+              Number(solverSettings.torqueTolerance) || DEFAULT_CONVERGENCE_THRESHOLD
+            }
             commandStatus={command.commandStatus}
             commandBusy={command.commandBusy}
             commandMessage={command.commandMessage}
             activity={command.activity}
-            meshWorkspace={model.meshWorkspace}
+            meshWorkspace={meshWorkspace}
           />
         </TabsContent>
       </Tabs>

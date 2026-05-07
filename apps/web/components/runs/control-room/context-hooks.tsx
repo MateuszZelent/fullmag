@@ -88,6 +88,18 @@ import type {
 } from "./types";
 import type { MeshWorkspacePresetId } from "./meshWorkspace";
 import type { AnalyzeSelectionState, AnalyzeTab } from "./analyzeSelection";
+import type {
+  CreateResultWorkspaceEntryInput,
+  OpenAnalyzeSurfaceOptions,
+  ResultWorkspaceEntry,
+  ResultWorkspaceKind,
+} from "@/features/analyze/model/analyzeTypes";
+export type {
+  CreateResultWorkspaceEntryInput,
+  OpenAnalyzeSurfaceOptions,
+  ResultWorkspaceEntry,
+  ResultWorkspaceKind,
+} from "@/features/analyze/model/analyzeTypes";
 import type { VisibleSubmeshSnapshot } from "./submeshSnapshot";
 import type { ArrowVisibilityStatus } from "../../../features/viewport-fem/model/femArrowVisibility";
 import type { WorkspaceTab, WorkspaceTabInput, WorkspaceMode as WorkspaceStageMode } from "@/lib/workspace/workspace-store";
@@ -134,35 +146,6 @@ export interface TransportContextValue {
 /* ── Viewport: user-driven UI state ── */
 export type WorkspaceStage = "build" | "study";
 export type WorkspaceMode = WorkspaceStage;
-export type ResultWorkspaceKind =
-  | "spectrum"
-  | "dispersion"
-  | "modes"
-  | "time-traces"
-  | "vortex-frequency"
-  | "vortex-trajectory"
-  | "vortex-orbit"
-  | "quantity"
-  | "table";
-
-export interface ResultWorkspaceEntry {
-  id: string;
-  key: string;
-  kind: ResultWorkspaceKind;
-  label: string;
-  quantityId: string | null;
-  icon: string;
-  badge: string | null;
-  pinned: boolean;
-  createdAtUnixMs: number;
-}
-
-export interface OpenAnalyzeSurfaceOptions {
-  selection?: Partial<AnalyzeSelectionState>;
-  resultWorkspaceId?: string | null;
-  source?: string;
-}
-
 export interface ViewportContextValue {
   workspaceStage: WorkspaceStage;
   setWorkspaceStage: (v: WorkspaceStage | ((prev: WorkspaceStage) => WorkspaceStage)) => void;
@@ -416,16 +399,7 @@ export interface ModelContextValue {
   selectAnalyzeTab: (tab: AnalyzeTab) => void;
   selectAnalyzeMode: (index: number | null) => void;
   refreshAnalyze: () => void;
-  addResultWorkspaceEntry: (entry: {
-    key?: string | null;
-    kind: ResultWorkspaceKind;
-    label: string;
-    quantityId?: string | null;
-    icon?: string;
-    badge?: string | null;
-    pinned?: boolean;
-    openAfterCreate?: boolean;
-  }) => string;
+  addResultWorkspaceEntry: (entry: CreateResultWorkspaceEntryInput) => string;
   openAnalyzeSurface: (options?: OpenAnalyzeSurfaceOptions) => void;
   openResultWorkspaceEntry: (id: string) => void;
   renameResultWorkspaceEntry: (id: string, label: string) => void;
@@ -436,6 +410,7 @@ export interface ModelContextValue {
   activateWorkspaceTab: (stage: WorkspaceStageMode, tabId: string | null) => void;
   closeWorkspaceTab: (stage: WorkspaceStageMode, tabId: string) => void;
   pinWorkspaceTab: (stage: WorkspaceStageMode, tabId: string, pinned: boolean) => void;
+  selectSidebarNode: React.Dispatch<React.SetStateAction<string | null>>;
   requestFocusObject: (objectId: string) => void;
   requestViewportCameraFit: () => void;
   handleStudyDomainMeshGenerate: (meshReason?: string) => Promise<void>;

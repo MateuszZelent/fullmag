@@ -3,7 +3,11 @@
 import dynamic from "next/dynamic";
 import { useCallback, useMemo } from "react";
 
-import { useCommand, useModel, useTransport } from "@/components/runs/control-room/context-hooks";
+import { useCommand, useTransport } from "@/components/runs/control-room/context-hooks";
+import {
+  selectResourceRevisions,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { useScalarSeriesData } from "@/features/plots2d/hooks/useScalarSeriesData";
 import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
@@ -24,7 +28,7 @@ const Plot2DWorkbench = dynamic(
 function ConnectedPlot2DWorkbench() {
   const transport = useTransport();
   const command = useCommand();
-  const model = useModel();
+  const resourceRevisions = useSessionRuntimeStore(selectResourceRevisions);
 
   const sessionId = useMemo(() => {
     const sessionKey = command.session?.session_id ?? "current";
@@ -35,7 +39,7 @@ function ConnectedPlot2DWorkbench() {
   const scalarRowsTotal = Math.max(
     transport.scalarRowsTotal,
     transport.scalarRows.length,
-    model.resourceRevisions?.scalars_revision ?? 0,
+    resourceRevisions?.scalars_revision ?? 0,
   );
 
   const fetchHistory = useCallback(async (): Promise<ScalarRow[]> => {

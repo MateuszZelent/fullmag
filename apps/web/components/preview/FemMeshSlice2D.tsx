@@ -70,6 +70,13 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function canvasTruncate(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (maxW <= 0 || ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+  return t.length > 0 ? t + "…" : "…";
+}
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
@@ -680,10 +687,10 @@ export default function FemMeshSlice2D({
     ctx.fillStyle = TEXT_STRONG;
     ctx.font = compactWidth ? "600 11px IBM Plex Mono, monospace" : "600 13px IBM Plex Mono, monospace";
     ctx.textAlign = "left";
-    ctx.fillText(plotFieldLabel, 24, compactWidth ? 26 : 30);
+    ctx.fillText(canvasTruncate(ctx, plotFieldLabel, width - 100), 24, compactWidth ? 26 : 30);
     ctx.fillStyle = TEXT;
     ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
-    ctx.fillText(`plane ${slice.normalLabel} = ${formatMetricLength(slice.planeCoord)}`, 24, compactWidth ? 40 : 46);
+    ctx.fillText(canvasTruncate(ctx, `plane ${slice.normalLabel} = ${formatMetricLength(slice.planeCoord)}`, width - 100), 24, compactWidth ? 40 : 46);
     if (!tightWidth) {
       ctx.fillText(`${objectViewMode} view`, compactWidth ? 220 : 308, compactWidth ? 40 : 46);
     }
@@ -717,7 +724,7 @@ export default function FemMeshSlice2D({
       ctx.fillStyle = TEXT;
       ctx.font = compactWidth ? "10px IBM Plex Mono, monospace" : "11px IBM Plex Mono, monospace";
       ctx.textAlign = "left";
-      ctx.fillText(quantityLabel, colorbarX - 2, colorbarY - 10);
+      ctx.fillText(canvasTruncate(ctx, quantityLabel, colorbarWidth + (compactWidth ? 50 : 66)), colorbarX - 2, colorbarY - 10);
       const colorTicks = buildNiceTicks(colorScale.min, colorScale.max, compactHeight ? 4 : 5);
       for (const tick of colorTicks) {
         const ratio =

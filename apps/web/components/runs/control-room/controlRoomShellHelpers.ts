@@ -4,7 +4,7 @@ import type { ScriptBuilderCurrentModuleEntry } from "@/lib/session/types";
 import { materializeStudyPipeline } from "@/lib/study-builder/materialize";
 import { parseStudyNodeContext } from "@/lib/study-builder/node-context";
 import type { StudyPipelineDocument } from "@/lib/study-builder/types";
-import type { ResultWorkspaceKind } from "./context-hooks";
+import type { ResultWorkspaceKind } from "@/features/analyze/model/analyzeTypes";
 
 export type RibbonPreviewComponent = "3D" | "x" | "y" | "z" | "magnitude";
 export type ResultAnalysisKind = ResultWorkspaceKind;

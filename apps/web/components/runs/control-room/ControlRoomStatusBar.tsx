@@ -11,7 +11,19 @@ import {
   resolveStudyStageExecutionState,
 } from "./shared";
 import { extractFemCpuThreadSummary } from "./helpers";
-import { useCommand, useModel, useTransport, useViewport } from "./context-hooks";
+import {
+  selectRequestedRuntimeSelection,
+  selectSolverPlan,
+  selectSolverSettings,
+  selectStudyStages,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import {
+  selectFemMesh,
+  selectMeshWorkspace,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
+import { useCommand, useTransport, useViewport } from "./context-hooks";
 
 interface ControlRoomStatusBarProps {
   meshBuildGenerating: boolean;
@@ -40,7 +52,12 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
   const transport = useTransport();
   const viewport = useViewport();
   const command = useCommand();
-  const model = useModel();
+  const solverPlan = useDocumentStore(selectSolverPlan);
+  const solverSettings = useDocumentStore(selectSolverSettings);
+  const studyStages = useDocumentStore(selectStudyStages);
+  const requestedRuntimeSelection = useDocumentStore(selectRequestedRuntimeSelection);
+  const femMesh = useSessionRuntimeStore(selectFemMesh);
+  const meshWorkspace = useSessionRuntimeStore(selectMeshWorkspace);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -63,11 +80,11 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
     () => extractFemCpuThreadSummary(command.engineLog),
     [command.engineLog],
   );
-  const commandSolverIntegrators = model.solverPlan?.integrator ?? model.solverSettings.integrator;
-  const commandAdaptiveDtMin = model.solverPlan?.adaptive?.dtMin;
-  const commandAdaptiveDtMax = model.solverPlan?.adaptive?.dtMax;
-  const commandFixedDtFromPlan = model.solverPlan?.fixedTimestep;
-  const commandFixedDtFromSettings = parsePositiveNumber(model.solverSettings.fixedTimestep);
+  const commandSolverIntegrators = solverPlan?.integrator ?? solverSettings.integrator;
+  const commandAdaptiveDtMin = solverPlan?.adaptive?.dtMin;
+  const commandAdaptiveDtMax = solverPlan?.adaptive?.dtMax;
+  const commandFixedDtFromPlan = solverPlan?.fixedTimestep;
+  const commandFixedDtFromSettings = parsePositiveNumber(solverSettings.fixedTimestep);
   const commandSolverDtSamples = useMemo(
     () =>
       transport.scalarRows
@@ -95,7 +112,7 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
     return commandFixedDtFromSettings;
   }, [commandFixedDtFromPlan, commandFixedDtFromSettings]);
   const footerPipeline = useMemo(() => {
-    const meshPhases = model.meshWorkspace?.mesh_pipeline_status ?? [];
+    const meshPhases = meshWorkspace?.mesh_pipeline_status ?? [];
     const doneMeshPhases = meshPhases.filter((phase) => phase.status === "done").length;
     const activeMeshPhase = meshPhases.find((phase) => phase.status === "active");
     if (command.workspaceStatus === "bootstrapping") {
@@ -133,12 +150,12 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
     };
   }, [
     command.activity.detail,
-    model.meshWorkspace?.mesh_pipeline_status,
+    meshWorkspace?.mesh_pipeline_status,
     command.workspaceStatus,
     meshBuildGenerating,
   ]);
   const footerStage = useMemo(() => {
-    const stages = model.studyStages ?? [];
+    const stages = studyStages ?? [];
     const resolved = resolveStudyStageExecutionState({
       stageExecution: command.stageExecution,
       totalStages: stages.length,
@@ -178,7 +195,7 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
       mode: "determinate" as const,
       value: command.workspaceStatus === "completed" || command.workspaceStatus === "awaiting_command" ? 100 : progress,
     };
-  }, [command.activity.label, command.stageExecution, model.studyStages, command.workspaceStatus]);
+  }, [command.activity.label, command.stageExecution, studyStages, command.workspaceStatus]);
 
   const step = transport.effectiveLiveState?.step ?? command.run?.total_steps ?? 0;
   const time = transport.effectiveLiveState?.time ?? command.run?.final_time ?? 0;
@@ -195,7 +212,7 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
       runtimeEngine={command.runtimeEngineLabel ?? undefined}
       runtimeGpuLabel={command.runtimeEngineGpuLabel ?? undefined}
       precision={command.session?.precision ?? ""}
-      requestedCpuThreads={command.session?.requested_cpu_threads ?? model.requestedRuntimeSelection.requested_cpu_threads ?? null}
+      requestedCpuThreads={command.session?.requested_cpu_threads ?? requestedRuntimeSelection.requested_cpu_threads ?? null}
       resolvedCpuThreads={command.session?.resolved_cpu_threads ?? null}
       requestedFemOmpThreads={femCpuThreadSummary?.requestedOmpThreads ?? null}
       effectiveFemOmpThreads={femCpuThreadSummary?.effectiveOmpThreads ?? null}
@@ -240,8 +257,8 @@ export default function ControlRoomStatusBar({ meshBuildGenerating }: ControlRoo
       solverMaxDt={commandMaxDt}
       solverFixedDt={commandFixedDt}
       solverIntegrator={commandSolverIntegrators}
-      nodeCount={femDiscretization && model.femMesh
-        ? `${model.femMesh.nodes.length.toLocaleString()} nodes`
+      nodeCount={femDiscretization && femMesh
+        ? `${femMesh.nodes.length.toLocaleString()} nodes`
         : viewport.totalCells && viewport.totalCells > 0
           ? `${viewport.totalCells.toLocaleString()} cells`
           : undefined}

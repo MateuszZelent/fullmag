@@ -8,7 +8,12 @@ import {
   type Action,
 } from "flexlayout-react";
 
-import { useCommand, useModel, useTransport } from "@/components/runs/control-room/context-hooks";
+import { useCommand, useTransport } from "@/components/runs/control-room/context-hooks";
+import {
+  selectSolverPlan,
+  selectSolverSettings,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import RunSidebar from "@/components/runs/control-room/RunSidebar";
 import BottomUtilityDock from "@/components/workspace/shell/BottomUtilityDock";
@@ -57,7 +62,8 @@ const RightInspectorPanel = memo(function RightInspectorPanel() {
 
 function BottomDockPanel() {
   const cmd = useCommand();
-  const modelState = useModel();
+  const solverPlan = useDocumentStore(selectSolverPlan);
+  const solverSettings = useDocumentStore(selectSolverSettings);
   const tp = useTransport();
 
   /* Local elapsed / throughput – updated every second via setInterval so that
@@ -76,11 +82,11 @@ function BottomDockPanel() {
   const stepsPerSec = elapsed > 0 ? (tp.effectiveStep / elapsed) * 1000 : 0;
 
   const solverIntegrator =
-    modelState.solverPlan?.integrator ?? modelState.solverSettings.integrator;
-  const solverAdaptiveDtMin = modelState.solverPlan?.adaptive?.dtMin;
-  const solverAdaptiveDtMax = modelState.solverPlan?.adaptive?.dtMax;
-  const fixedDtFromPlan = modelState.solverPlan?.fixedTimestep;
-  const fixedDtFromSettings = parsePositiveNumber(modelState.solverSettings.fixedTimestep);
+    solverPlan?.integrator ?? solverSettings.integrator;
+  const solverAdaptiveDtMin = solverPlan?.adaptive?.dtMin;
+  const solverAdaptiveDtMax = solverPlan?.adaptive?.dtMax;
+  const fixedDtFromPlan = solverPlan?.fixedTimestep;
+  const fixedDtFromSettings = parsePositiveNumber(solverSettings.fixedTimestep);
   const fixedDt = useMemo(() => {
     if (typeof fixedDtFromPlan === "number" && Number.isFinite(fixedDtFromPlan) && fixedDtFromPlan > 0) {
       return fixedDtFromPlan;
@@ -109,11 +115,11 @@ function BottomDockPanel() {
   }, [solverAdaptiveDtMax, tp.hasSolverTelemetry, solverDtSamples]);
 
   const solverMaxError = useMemo(() => {
-    const planAtol = modelState.solverPlan?.adaptive?.atol;
+    const planAtol = solverPlan?.adaptive?.atol;
     if (typeof planAtol === "number" && Number.isFinite(planAtol)) return planAtol;
-    const parsed = Number.parseFloat(modelState.solverSettings.maxError);
+    const parsed = Number.parseFloat(solverSettings.maxError);
     return Number.isFinite(parsed) ? parsed : null;
-  }, [modelState.solverPlan?.adaptive?.atol, modelState.solverSettings.maxError]);
+  }, [solverPlan?.adaptive?.atol, solverSettings.maxError]);
 
   return (
     <div className="flex h-full divide-x divide-border/20 overflow-hidden">

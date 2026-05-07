@@ -23,7 +23,7 @@ interface StageLayoutState {
   bottomDock: string | null;
 }
 
-type WorkspaceStage = "build" | "study" | "analyze";
+type WorkspaceStage = "build" | "study";
 
 interface WorkspaceShellState {
   /** Panel layout per stage */
@@ -68,7 +68,6 @@ export const useWorkspaceShellStore = create<WorkspaceShellState>((set) => ({
   stageLayouts: {
     build: { leftDock: "model", centerDock: "settings", rightDock: "properties", bottomDock: "messages" },
     study: { leftDock: "study-tree", centerDock: "viewport-controls", rightDock: "solver", bottomDock: "jobs" },
-    analyze: { leftDock: "results-tree", centerDock: "plots", rightDock: "display", bottomDock: "charts" },
   },
   rightInspectorOpen: false,
   settingsOpen: false,

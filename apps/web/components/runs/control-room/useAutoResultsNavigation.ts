@@ -9,7 +9,7 @@ export function useAutoResultsNavigation({
   scalarRows,
   selectedSidebarNodeId,
   session,
-  setSelectedSidebarNodeId,
+  selectSidebarNode,
   workspaceStatus,
 }: {
   artifacts: ArtifactEntry[];
@@ -21,7 +21,7 @@ export function useAutoResultsNavigation({
   scalarRows: ScalarRow[];
   selectedSidebarNodeId: string | null;
   session: SessionManifest | null;
-  setSelectedSidebarNodeId: (nodeId: string) => void;
+  selectSidebarNode: (nodeId: string) => void;
   workspaceStatus: string;
 }) {
   const hasEigenArtifacts = useMemo(
@@ -53,7 +53,7 @@ export function useAutoResultsNavigation({
     }
     autoResultsEntryKeyRef.current = currentResultsEntryKey;
     if (!selectedSidebarNodeId || !selectedSidebarNodeId.startsWith("res-")) {
-      setSelectedSidebarNodeId(hasEigenArtifacts ? "res-eigenmodes" : "results");
+      selectSidebarNode(hasEigenArtifacts ? "res-eigenmodes" : "results");
     }
     openAnalyzeCenterTab(
       hasEigenArtifacts ? { tab: "spectrum", selectedModeIndex: null } : undefined,
@@ -64,8 +64,8 @@ export function useAutoResultsNavigation({
     hasEigenArtifacts,
     hasResultsAvailable,
     openAnalyzeCenterTab,
+    selectSidebarNode,
     selectedSidebarNodeId,
-    setSelectedSidebarNodeId,
     workspaceStatus,
   ]);
 }

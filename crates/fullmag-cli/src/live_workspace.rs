@@ -161,6 +161,12 @@ impl LocalLiveWorkspace {
         }
         self.publish_snapshot();
     }
+
+    /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,
+    /// or slow mode (1000ms) during solver execution.
+    pub fn set_publish_fast_mode(&self, enabled: bool) {
+        self.publisher.set_fast_mode(enabled);
+    }
 }
 
 fn merge_preview_field_payloads(
@@ -235,20 +241,24 @@ fn merge_pending_publish_payload(
 pub(crate) struct CurrentLivePublisher {
     pending: Arc<AtomicBool>,
     sending: Arc<AtomicBool>,
+    fast_mode: Arc<AtomicBool>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     wake_tx: mpsc::SyncSender<()>,
 }
 
 const CURRENT_LIVE_MIN_PUBLISH_INTERVAL: Duration = Duration::from_millis(1000);
+const CURRENT_LIVE_FAST_PUBLISH_INTERVAL: Duration = Duration::from_millis(200);
 
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
         let pending = Arc::new(AtomicBool::new(false));
         let sending = Arc::new(AtomicBool::new(false));
+        let fast_mode = Arc::new(AtomicBool::new(true));
         let payload = Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default()));
         let worker_pending = Arc::clone(&pending);
         let worker_sending = Arc::clone(&sending);
+        let worker_fast_mode = Arc::clone(&fast_mode);
         let worker_payload = Arc::clone(&payload);
         let worker_session_id = session_id.to_string();
         let thread_name = format!("fullmag-live-publisher-{session_id}");
@@ -259,6 +269,7 @@ impl CurrentLivePublisher {
                     worker_session_id,
                     worker_pending,
                     worker_sending,
+                    worker_fast_mode,
                     worker_payload,
                     wake_rx,
                 )
@@ -268,9 +279,14 @@ impl CurrentLivePublisher {
         Self {
             pending,
             sending,
+            fast_mode,
             payload,
             wake_tx,
         }
+    }
+
+    pub fn set_fast_mode(&self, enabled: bool) {
+        self.fast_mode.store(enabled, Ordering::Release);
     }
 
     pub fn request_publish(&self) {
@@ -415,6 +431,7 @@ fn current_live_publisher_loop(
     session_id: String,
     pending: Arc<AtomicBool>,
     sending: Arc<AtomicBool>,
+    fast_mode: Arc<AtomicBool>,
     payload: Arc<Mutex<CurrentLiveSnapshotPayload>>,
     wake_rx: mpsc::Receiver<()>,
 ) {
@@ -422,10 +439,15 @@ fn current_live_publisher_loop(
     let mut slow_publish_count: u64 = 0;
     while wake_rx.recv().is_ok() {
         while pending.swap(false, Ordering::AcqRel) {
+            let min_interval = if fast_mode.load(Ordering::Acquire) {
+                CURRENT_LIVE_FAST_PUBLISH_INTERVAL
+            } else {
+                CURRENT_LIVE_MIN_PUBLISH_INTERVAL
+            };
             if let Some(last_publish_at) = last_publish_at {
                 let elapsed = last_publish_at.elapsed();
-                if elapsed < CURRENT_LIVE_MIN_PUBLISH_INTERVAL {
-                    std::thread::sleep(CURRENT_LIVE_MIN_PUBLISH_INTERVAL - elapsed);
+                if elapsed < min_interval {
+                    std::thread::sleep(min_interval - elapsed);
                 }
             }
             let snapshot = payload.lock().map(|slot| slot.clone()).unwrap_or_default();

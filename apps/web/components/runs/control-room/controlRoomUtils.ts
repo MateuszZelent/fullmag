@@ -10,7 +10,7 @@ import type {
   VisualizationPresetFdmState,
   VisualizationPresetRef,
 } from "../../../lib/session/types";
-import type { ResultWorkspaceKind } from "./context-hooks";
+import type { ResultWorkspaceKind } from "@/features/analyze/model/analyzeTypes";
 import type { ObjectViewMode } from "./shared";
 import {
   LOCAL_ACTIVE_VISUALIZATION_PRESET_STORAGE_KEY,

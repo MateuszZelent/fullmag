@@ -24,7 +24,23 @@ import {
   selectModelBuilderStages,
   selectModelBuilderStudyPipeline,
   selectModelBuilderUniverse,
+  buildModelBuilderGraphV2,
+  setModelBuilderCurrentModules as applyModelBuilderCurrentModules,
+  setModelBuilderDemagRealization as applyModelBuilderDemagRealization,
+  setModelBuilderExcitationAnalysis as applyModelBuilderExcitationAnalysis,
+  setModelBuilderRequestedRuntime,
+  setModelBuilderStages,
+  setModelBuilderStudyPipeline,
 } from "@/lib/session/modelBuilderGraph";
+import { buildScriptBuilderFromSceneDocument } from "@/lib/session/sceneDocument";
+
+export interface RequestedRuntimeSelection {
+  requested_backend: string;
+  requested_device: string;
+  requested_precision: string;
+  requested_mode: string;
+  requested_cpu_threads: number | null;
+}
 
 export interface DocumentStoreState {
   solverSettings: SolverSettingsState;
@@ -41,9 +57,23 @@ export interface DocumentStoreState {
   scriptBuilderGeometries: ScriptBuilderGeometryEntry[];
   scriptBuilderCurrentModules: ScriptBuilderCurrentModuleEntry[];
   scriptBuilderExcitationAnalysis: ScriptBuilderExcitationAnalysisEntry | null;
+  requestedRuntimeSelection: RequestedRuntimeSelection;
   setSolverSettings: (settings: SetStateAction<SolverSettingsState>) => void;
   setSolverPlan: (plan: SolverPlanSummary | null) => void;
+  setRequestedRuntimeSelection: (
+    selection: SetStateAction<RequestedRuntimeSelection>
+  ) => RequestedRuntimeSelection;
   setModelBuilderGraph: (graph: SetStateAction<ModelBuilderGraphV2 | null>) => void;
+  setStudyStages: (stages: SetStateAction<ScriptBuilderStageState[]>) => void;
+  setStudyPipeline: (pipeline: SetStateAction<StudyPipelineDocumentState | null>) => void;
+  setScriptBuilderDemagRealization: (realization: SetStateAction<string | null>) => void;
+  setScriptBuilderCurrentModules: (
+    modules: SetStateAction<ScriptBuilderCurrentModuleEntry[]>
+  ) => void;
+  setScriptBuilderExcitationAnalysis: (
+    analysis: SetStateAction<ScriptBuilderExcitationAnalysisEntry | null>
+  ) => void;
+  setSceneDocument: (scene: SetStateAction<SceneDocument | null>) => void;
   setSceneDocumentDraft: (scene: SetStateAction<SceneDocument | null>) => void;
   setRemoteSceneDocument: (scene: SceneDocument | null) => void;
 }
@@ -89,6 +119,13 @@ export const useDocumentStore = create<DocumentStoreState>()(
   scriptBuilderGeometries: [],
   scriptBuilderCurrentModules: [],
   scriptBuilderExcitationAnalysis: null,
+  requestedRuntimeSelection: {
+    requested_backend: "auto",
+    requested_device: "auto",
+    requested_precision: "double",
+    requested_mode: "strict",
+    requested_cpu_threads: null,
+  },
 
   setSolverSettings: (settings) =>
     set((prev) => ({
@@ -100,6 +137,44 @@ export const useDocumentStore = create<DocumentStoreState>()(
 
   setSolverPlan: (plan) => set({ solverPlan: plan }),
 
+  setRequestedRuntimeSelection: (selection) => {
+    let resolvedSelection: RequestedRuntimeSelection = {
+      requested_backend: "auto",
+      requested_device: "auto",
+      requested_precision: "double",
+      requested_mode: "strict",
+      requested_cpu_threads: null,
+    };
+    set((prev) => {
+      const currentSelection = prev.requestedRuntimeSelection;
+      resolvedSelection =
+        typeof selection === "function"
+          ? (selection as (current: RequestedRuntimeSelection) => RequestedRuntimeSelection)(
+              currentSelection,
+            )
+          : selection;
+      const nextGraph = setModelBuilderRequestedRuntime(
+        prev.modelBuilderGraph,
+        resolvedSelection,
+      );
+      const nextScene = prev.sceneDocumentDraft
+        ? {
+            ...prev.sceneDocumentDraft,
+            study: {
+              ...prev.sceneDocumentDraft.study,
+              ...resolvedSelection,
+            },
+          }
+        : prev.sceneDocumentDraft;
+      return {
+        requestedRuntimeSelection: resolvedSelection,
+        modelBuilderGraph: nextGraph,
+        sceneDocumentDraft: nextScene,
+      };
+    });
+    return resolvedSelection;
+  },
+
   setModelBuilderGraph: (graph) =>
     set((prev) => ({
       modelBuilderGraph:
@@ -107,6 +182,65 @@ export const useDocumentStore = create<DocumentStoreState>()(
           ? graph(prev.modelBuilderGraph)
           : graph,
     })),
+
+  setStudyStages: (stages) =>
+    set((prev) => ({
+      modelBuilderGraph: setModelBuilderStages(prev.modelBuilderGraph, stages),
+    })),
+
+  setStudyPipeline: (pipeline) =>
+    set((prev) => ({
+      modelBuilderGraph: setModelBuilderStudyPipeline(prev.modelBuilderGraph, pipeline),
+    })),
+
+  setScriptBuilderDemagRealization: (realization) =>
+    set((prev) => ({
+      modelBuilderGraph: applyModelBuilderDemagRealization(
+        prev.modelBuilderGraph,
+        realization,
+      ),
+    })),
+
+  setScriptBuilderCurrentModules: (modules) =>
+    set((prev) => ({
+      modelBuilderGraph: applyModelBuilderCurrentModules(prev.modelBuilderGraph, modules),
+    })),
+
+  setScriptBuilderExcitationAnalysis: (analysis) =>
+    set((prev) => ({
+      modelBuilderGraph: applyModelBuilderExcitationAnalysis(
+        prev.modelBuilderGraph,
+        analysis,
+      ),
+    })),
+
+  setSceneDocument: (scene) =>
+    set((prev) => {
+      const baseScene = prev.sceneDocumentDraft ?? prev.remoteSceneDocument;
+      const nextScene =
+        typeof scene === "function"
+          ? (scene as (current: SceneDocument | null) => SceneDocument | null)(baseScene)
+          : scene;
+      if (!nextScene) {
+        return {
+          sceneDocumentDraft: null,
+          modelBuilderGraph: null,
+        };
+      }
+      const nextGraph = buildModelBuilderGraphV2(
+        buildScriptBuilderFromSceneDocument(nextScene),
+      );
+      if (nextGraph) {
+        nextGraph.study.requested_backend = nextScene.study.requested_backend;
+        nextGraph.study.requested_device = nextScene.study.requested_device;
+        nextGraph.study.requested_precision = nextScene.study.requested_precision;
+        nextGraph.study.requested_mode = nextScene.study.requested_mode;
+      }
+      return {
+        sceneDocumentDraft: nextScene,
+        modelBuilderGraph: nextGraph ?? null,
+      };
+    }),
 
   setSceneDocumentDraft: (scene) =>
     set((prev) => ({
@@ -148,6 +282,13 @@ useDocumentStore.subscribe(
       scriptBuilderCurrentModules: selectModelBuilderCurrentModules(modelBuilderGraph),
       scriptBuilderExcitationAnalysis:
         selectModelBuilderExcitationAnalysis(modelBuilderGraph),
+      requestedRuntimeSelection: {
+        requested_backend: modelBuilderGraph?.study.requested_backend ?? "auto",
+        requested_device: modelBuilderGraph?.study.requested_device ?? "auto",
+        requested_precision: modelBuilderGraph?.study.requested_precision ?? "double",
+        requested_mode: modelBuilderGraph?.study.requested_mode ?? "strict",
+        requested_cpu_threads: modelBuilderGraph?.study.requested_cpu_threads ?? null,
+      },
     });
   },
   { fireImmediately: true },
@@ -155,6 +296,8 @@ useDocumentStore.subscribe(
 
 export const selectSolverSettings = (s: DocumentStoreState) => s.solverSettings;
 export const selectSolverPlan = (s: DocumentStoreState) => s.solverPlan;
+export const selectRequestedRuntimeSelection = (s: DocumentStoreState) =>
+  s.requestedRuntimeSelection;
 export const selectModelBuilderGraph = (s: DocumentStoreState) => s.modelBuilderGraph;
 export const selectSceneDocumentDraft = (s: DocumentStoreState) => s.sceneDocumentDraft;
 export const selectRemoteSceneDocument = (s: DocumentStoreState) => s.remoteSceneDocument;

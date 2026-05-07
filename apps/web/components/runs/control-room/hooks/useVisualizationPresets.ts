@@ -39,6 +39,8 @@ import {
   visualizationPatchForOpacity,
   visualizationPatchForRenderMode,
 } from "../visualizationStateSync";
+import { useVisualizationStore, selectEffectiveViewportVizState } from "@/features/visualization/store/useVisualizationStore";
+import { useShallow } from "zustand/react/shallow";
 
 export interface UseVisualizationPresetsParams {
   /* Current UI state for building presets */
@@ -46,23 +48,8 @@ export interface UseVisualizationPresetsParams {
   isFemBackend: boolean;
   domainCapabilities?: CapabilityMap | null;
   requestedPreviewQuantity: string;
-  meshRenderMode: RenderMode;
-  meshOpacity: number;
-  meshClipEnabled: boolean;
-  meshClipAxis: ClipAxis;
-  meshClipPos: number;
-  meshShowArrows: boolean;
   requestedPreviewMaxPoints: number;
-  femArrowColorMode: FemArrowColorMode;
-  femArrowMonoColor: string;
-  femArrowAlpha: number;
-  femArrowLengthScale: number;
-  femArrowThickness: number;
   objectViewMode: ObjectViewMode;
-  femVectorDomainFilter: FemVectorDomainFilter;
-  femFerromagnetVisibilityMode: FemFerromagnetVisibilityMode;
-  airMeshVisible: boolean;
-  airMeshOpacity: number;
   meshEntityViewState: MeshEntityViewStateMap;
   fdmVisualizationSettings: VisualizationPresetFdmState;
   component: VectorComponent;
@@ -109,23 +96,8 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     isFemBackend,
     domainCapabilities,
     requestedPreviewQuantity,
-    meshRenderMode,
-    meshOpacity,
-    meshClipEnabled,
-    meshClipAxis,
-    meshClipPos,
-    meshShowArrows,
     requestedPreviewMaxPoints,
-    femArrowColorMode,
-    femArrowMonoColor,
-    femArrowAlpha,
-    femArrowLengthScale,
-    femArrowThickness,
     objectViewMode,
-    femVectorDomainFilter,
-    femFerromagnetVisibilityMode,
-    airMeshVisible,
-    airMeshOpacity,
     meshEntityViewState,
     fdmVisualizationSettings,
     component,
@@ -151,6 +123,15 @@ export function useVisualizationPresets(params: UseVisualizationPresetsParams) {
     setFdmVisualizationSettings,
     patchDisplay,
   } = params;
+
+  // Read effective viz state from the store (no more prop drilling).
+  const effectiveViz = useVisualizationStore(useShallow(selectEffectiveViewportVizState));
+  const {
+    meshRenderMode, meshOpacity, meshClipEnabled, meshClipAxis, meshClipPos,
+    meshShowArrows, femArrowColorMode, femArrowMonoColor, femArrowAlpha,
+    femArrowLengthScale, femArrowThickness, femVectorDomainFilter,
+    femFerromagnetVisibilityMode, airMeshVisible, airMeshOpacity,
+  } = effectiveViz;
   const femDiscretization = domainCapabilities
     ? isFemDiscretization(domainCapabilities)
     : isFemBackend;

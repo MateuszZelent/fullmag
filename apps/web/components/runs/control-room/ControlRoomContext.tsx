@@ -6,7 +6,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
 } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -23,7 +22,12 @@ import {
   useFdmVisualizationSettings,
   useViewportRenderState,
 } from "../../../features/visualization/hooks/useVizSlice";
-import { useVisualizationStore, selectEffectiveViewportVizState } from "../../../features/visualization/store/useVisualizationStore";
+import {
+  selectActiveVisualizationPresetRef,
+  selectEffectiveViewportVizState,
+  selectVisualizationLocalPresets,
+  useVisualizationStore,
+} from "../../../features/visualization/store/useVisualizationStore";
 import { useSelectionStore } from "../../../features/selection/store/useSelectionStore";
 import {
   selectLastBuiltMeshConfigSignature,
@@ -52,6 +56,8 @@ import {
 import {
   selectCommandErrorMessage,
   selectCommandPostInFlight,
+  selectFrontendTraceLog,
+  selectOptimisticDisplaySelection,
   selectPreviewMessage,
   selectPreviewPostInFlight,
   selectRunUntilInput,
@@ -61,6 +67,7 @@ import {
   selectStateIoMessage,
   useCommandStore,
 } from "../../../features/command/store/useCommandStore";
+import { useViewportStore } from "../../../features/viewport-core/state/useViewportStore";
 import {
   DEFAULT_FEM_VIEWPORT_LAYER_STATE,
   type FemViewportLayerState,
@@ -80,13 +87,10 @@ import {
   EMPTY_ENGINE_LOG,
   EMPTY_QUANTITIES,
   EMPTY_SCALAR_ROWS,
-  loadLocalActiveVisualizationRef,
-  loadLocalVisualizationPresets,
 } from "./controlRoomUtils";
 import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
 import type {
   DisplaySelection,
-  EngineLogEntry,
   FemLiveMesh,
   MeshWorkspaceState,
   ScriptBuilderStageState,
@@ -295,14 +299,22 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     },
     [_setPerspective, workspaceStage],
   );
-  const [viewMode, setViewMode] = useState<ViewportMode>("3D");
-  const [component, setComponent] = useState<VectorComponent>("magnitude");
-  const [plane, setPlane] = useState<SlicePlane>("xy");
-  const [sliceIndex, setSliceIndex] = useState(0);
-  const [selectedQuantity, setSelectedQuantity] = useState("m");
-  const [consoleCollapsed, setConsoleCollapsed] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [femDockTab, setFemDockTab] = useState<FemDockTab>("mesh");
+  const viewMode = useViewportStore((s) => s.viewMode);
+  const setViewMode = useViewportStore((s) => s.setViewMode);
+  const component = useViewportStore((s) => s.component);
+  const setComponent = useViewportStore((s) => s.setComponent);
+  const plane = useViewportStore((s) => s.plane);
+  const setPlane = useViewportStore((s) => s.setPlane);
+  const sliceIndex = useViewportStore((s) => s.sliceIndex);
+  const setSliceIndex = useViewportStore((s) => s.setSliceIndex);
+  const selectedQuantity = useViewportStore((s) => s.selectedQuantity);
+  const setSelectedQuantity = useViewportStore((s) => s.setSelectedQuantity);
+  const consoleCollapsed = useViewportStore((s) => s.consoleCollapsed);
+  const setConsoleCollapsed = useViewportStore((s) => s.setConsoleCollapsed);
+  const sidebarCollapsed = useViewportStore((s) => s.sidebarCollapsed);
+  const setSidebarCollapsed = useViewportStore((s) => s.setSidebarCollapsed);
+  const femDockTab = useViewportStore((s) => s.femDockTab);
+  const setFemDockTab = useViewportStore((s) => s.setFemDockTab);
   // ── Viewport chrome: owned by useVisualizationStore (Phase 5.1) ──
   const viz = useViewportRenderState();
   const fdmVisualizationSettings = useFdmVisualizationSettings();
@@ -339,15 +351,19 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useAnalyzeWorkspaceState({
     activateAnalyzeView: () => setViewMode("Analyze"),
   });
-  const [cameraFitRequestSeed, setCameraFitRequestSeed] = useState(0);
+  const cameraFitRequestSeed = useViewportStore((s) => s.cameraFitRequestSeed);
+  const setCameraFitRequestSeed = useViewportStore((s) => s.setCameraFitRequestSeed);
   const requestViewportCameraFit = useCallback(() => {
     setCameraFitRequestSeed((seed) => seed + 1);
   }, []);
-  const [objectViewMode, setObjectViewMode] = useState<ObjectViewMode>("context");
-  const [activeTransformScope, setActiveTransformScope] = useState<"object" | "texture" | null>(null);
-  const [meshEntityViewState, setMeshEntityViewState] = useState<MeshEntityViewStateMap>({});
-  const [visibleSubmeshSnapshot, setVisibleSubmeshSnapshot] =
-    useState<VisibleSubmeshSnapshot | null>(null);
+  const objectViewMode = useViewportStore((s) => s.objectViewMode);
+  const setObjectViewMode = useViewportStore((s) => s.setObjectViewMode);
+  const activeTransformScope = useViewportStore((s) => s.activeTransformScope);
+  const setActiveTransformScope = useViewportStore((s) => s.setActiveTransformScope);
+  const meshEntityViewState = useViewportStore((s) => s.meshEntityViewState);
+  const setMeshEntityViewState = useViewportStore((s) => s.setMeshEntityViewState);
+  const visibleSubmeshSnapshot = useViewportStore((s) => s.visibleSubmeshSnapshot);
+  const setVisibleSubmeshSnapshot = useViewportStore((s) => s.setVisibleSubmeshSnapshot);
   const commandPostInFlight = useCommandStore(selectCommandPostInFlight);
   const commandErrorMessage = useCommandStore(selectCommandErrorMessage);
   const scriptSyncBusy = useCommandStore(selectScriptSyncBusy);
@@ -356,6 +372,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const stateIoMessage = useCommandStore(selectStateIoMessage);
   const previewPostInFlight = useCommandStore(selectPreviewPostInFlight);
   const previewMessage = useCommandStore(selectPreviewMessage);
+  const optimisticDisplaySelection = useCommandStore(selectOptimisticDisplaySelection);
+  const frontendTraceLog = useCommandStore(selectFrontendTraceLog);
   const setCommandPostInFlight = useCommandStore((s) => s.setCommandPostInFlight);
   const setCommandErrorMessage = useCommandStore((s) => s.setCommandErrorMessage);
   const setScriptSyncBusy = useCommandStore((s) => s.setScriptSyncBusy);
@@ -364,8 +382,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const setStateIoMessage = useCommandStore((s) => s.setStateIoMessage);
   const setPreviewPostInFlight = useCommandStore((s) => s.setPreviewPostInFlight);
   const setPreviewMessage = useCommandStore((s) => s.setPreviewMessage);
-  const [optimisticDisplaySelection, setOptimisticDisplaySelection] =
-    useState<DisplaySelection | null>(null);
+  const setOptimisticDisplaySelection = useCommandStore(
+    (s) => s.setOptimisticDisplaySelection,
+  );
+  const setFrontendTraceLog = useCommandStore((s) => s.setFrontendTraceLog);
   const meshOptionsState = useMeshConfigStore(selectMeshOptionsState);
   const meshGenerating = useMeshConfigStore(selectMeshGenerating);
   const lastBuiltMeshConfigSignature = useMeshConfigStore(selectLastBuiltMeshConfigSignature);
@@ -374,7 +394,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const setLastBuiltMeshConfigSignature = useMeshConfigStore(
     (s) => s.setLastBuiltMeshConfigSignature,
   );
-  const [frontendTraceLog, setFrontendTraceLog] = useState<EngineLogEntry[]>([]);
   const femTopologyKeyRef = useRef<string | null>(null);
   const femMeshDataRef = useRef<FemMeshData | null>(null);
   const femFieldBuffersRef = useRef<{
@@ -399,11 +418,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const setModelBuilderGraph = useDocumentStore((s) => s.setModelBuilderGraph);
   const setSceneDocumentDraft = useDocumentStore((s) => s.setSceneDocumentDraft);
   const setRemoteSceneDocument = useDocumentStore((s) => s.setRemoteSceneDocument);
-  const [localVisualizationPresets, setLocalVisualizationPresets] = useState<VisualizationPreset[]>(
-    () => loadLocalVisualizationPresets(),
+  const localVisualizationPresets = useVisualizationStore(selectVisualizationLocalPresets);
+  const activeVisualizationPresetRef = useVisualizationStore(selectActiveVisualizationPresetRef);
+  const setLocalVisualizationPresets = useVisualizationStore(
+    (s) => s.setVisualizationLocalPresets,
   );
-  const [activeVisualizationPresetRef, setActiveVisualizationPresetRef] =
-    useState<VisualizationPresetRef | null>(() => loadLocalActiveVisualizationRef());
+  const setActiveVisualizationPresetRef = useVisualizationStore(
+    (s) => s.setActiveVisualizationPresetRef,
+  );
   const meshSelection = useMeshConfigStore(selectMeshSelection);
   const setMeshSelection = useMeshConfigStore((s) => s.setMeshSelection);
   const stickyViewportObjectIdRef = useRef<string | null>(null);
@@ -411,7 +433,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const fieldDataTimestampRef = useRef<number | null>(null);
   const previewGridRef = useRef<[number, number, number]>([1, 1, 1]);
   const applyVisualizationStateResource = useCallback((state: VisualizationStateResource) => {
-    const plan = resolveRenderPlanFromVisualizationState(state, femViewportLayers);
+    const currentVizState = useVisualizationStore.getState();
+    const plan = resolveRenderPlanFromVisualizationState(state, currentVizState.femViewportLayers);
     const nextPlane = planeFromSliceAxis(plan.slice.axis);
     const nextSliceIndex =
       typeof plan.slice.layerIndex === "number"
@@ -434,12 +457,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     );
     setPlane((previous) => (previous === nextPlane ? previous : nextPlane));
     setSliceIndex((previous) => (previous === nextSliceIndex ? previous : nextSliceIndex));
-    useVisualizationStore
-      .getState()
-      .applyFromRenderPlan(
-        projectResolvedRenderPlanToViewportState(plan, useVisualizationStore.getState()),
-      );
-  }, [femViewportLayers]);
+    currentVizState.applyFromRenderPlan(
+      projectResolvedRenderPlanToViewportState(plan, currentVizState),
+    );
+  }, []);
 
   const resolvedRenderPlan = useMemo(
     () =>
@@ -1080,7 +1101,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   useSceneEditorDraftSync({
     activeTransformScope,
     activeVisualizationPresetRef,
-    effectiveViewportVisualizationState,
     focusedEntityId,
     meshEntityViewState,
     objectViewMode,
@@ -1392,7 +1412,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setViewMode,
     setFemDockTab,
     setComponent,
-    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi,
+    selectSidebarNode: setSelectedSidebarNodeIdFromUi,
     setSelectedQuantity,
     setFocusObjectRequest,
     setScriptBuilderCurrentModules,
@@ -1428,23 +1448,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     isFemBackend,
     domainCapabilities,
     requestedPreviewQuantity,
-    meshRenderMode: effectiveViewportVisualizationState.meshRenderMode,
-    meshOpacity: effectiveViewportVisualizationState.meshOpacity,
-    meshClipEnabled: effectiveViewportVisualizationState.meshClipEnabled,
-    meshClipAxis: effectiveViewportVisualizationState.meshClipAxis,
-    meshClipPos: effectiveViewportVisualizationState.meshClipPos,
-    meshShowArrows: effectiveViewportVisualizationState.meshShowArrows,
     requestedPreviewMaxPoints,
-    femArrowColorMode: effectiveViewportVisualizationState.femArrowColorMode,
-    femArrowMonoColor: effectiveViewportVisualizationState.femArrowMonoColor,
-    femArrowAlpha: effectiveViewportVisualizationState.femArrowAlpha,
-    femArrowLengthScale: effectiveViewportVisualizationState.femArrowLengthScale,
-    femArrowThickness: effectiveViewportVisualizationState.femArrowThickness,
     objectViewMode,
-    femVectorDomainFilter: effectiveViewportVisualizationState.femVectorDomainFilter,
-    femFerromagnetVisibilityMode: effectiveViewportVisualizationState.femFerromagnetVisibilityMode,
-    airMeshVisible: effectiveViewportVisualizationState.airMeshVisible,
-    airMeshOpacity: effectiveViewportVisualizationState.airMeshOpacity,
     meshEntityViewState,
     fdmVisualizationSettings,
     component,
@@ -1530,7 +1535,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     effectiveIsFemBackend,
     effectiveStep,
     effectiveViewMode,
-    effectiveViewportVisualizationState,
     femMesh,
     isFemBackend,
     isGlobalScalarQuantity,
@@ -1863,6 +1867,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshSelection, setMeshOptions, setFemDockTab,
     setObjectViewMode, setActiveTransformScope, setMeshEntityViewState, setVisibleSubmeshSnapshot, setAnalyzeSelection, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, requestFocusObject, requestViewportCameraFit, applyAntennaTranslation, applyGeometryTranslation, handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset,
     openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
+    selectSidebarNode: setSelectedSidebarNodeIdFromUi,
     createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset,
     resetViewportDisplayState,
   }), [
@@ -1880,7 +1885,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     viewportSelectedObjectId, cameraFitRequestSeed, objectViewMode, meshEntityViewState, visibleSubmeshSnapshot, meshParts, visibleMeshPartIds, visibleMagneticObjectIds, selectedMeshPart, focusedMeshPart, magneticParts, airPart, interfaceParts, analyzeSelection, resultWorkspaceEntries, activeResultWorkspaceId, workspaceTabs, activeWorkspaceTabId, requestFocusObject, requestViewportCameraFit,
     setSceneDocument, refreshLiveState, setRequestedRuntimeSelection, setStudyStages, setStudyPipeline, setScriptBuilderDemagRealization, setScriptBuilderUniverse, setScriptBuilderGeometries, setScriptBuilderCurrentModules, setScriptBuilderExcitationAnalysis,
     handleStudyDomainMeshGenerate, handleAirboxMeshGenerate, handleObjectMeshOverrideRebuild, handleLassoRefine, openFemMeshWorkspace, applyMeshWorkspacePreset, createVisualizationPreset, setActiveVisualizationPresetRef, applyVisualizationPreset, renameVisualizationPreset, duplicateVisualizationPreset, deleteVisualizationPreset, copyVisualizationPresetToSource, updateVisualizationPreset, openAnalyze, selectAnalyzeTab, selectAnalyzeMode, refreshAnalyze, addResultWorkspaceEntry, openAnalyzeSurface, openResultWorkspaceEntry, renameResultWorkspaceEntry, removeResultWorkspaceEntry, duplicateResultWorkspaceEntry, setResultWorkspacePinned, openWorkspaceTab, activateWorkspaceTab, closeWorkspaceTab, pinWorkspaceTab,
-    applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSolverSettings, activeTransformScope,
+    applyAntennaTranslation, applyGeometryTranslation, setMeshOptions, setSelectedSidebarNodeIdFromUi, setSolverSettings, activeTransformScope,
     resetViewportDisplayState,
   ]);
 

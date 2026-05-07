@@ -3,7 +3,12 @@
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useRuntimeCapabilities } from "../../lib/hooks/useRuntimeCapabilities";
-import { useCommand, useModel } from "../runs/control-room/context-hooks";
+import {
+  selectRequestedRuntimeSelection,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
+import { useCommand } from "../runs/control-room/context-hooks";
 
 type RuntimeField = "requested_backend" | "requested_device" | "requested_precision" | "requested_mode";
 
@@ -34,9 +39,12 @@ function humanize(value: string): string {
 
 export default function SolverSelector() {
   const cmd = useCommand();
-  const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
+  const requested = useDocumentStore(selectRequestedRuntimeSelection);
+  const setRequestedRuntimeSelection = useDocumentStore(
+    (s) => s.setRequestedRuntimeSelection,
+  );
   const { capabilities, loading, error } = useRuntimeCapabilities();
-  const requested = model.requestedRuntimeSelection;
   const entries = useMemo(() => capabilities?.engines ?? [], [capabilities?.engines]);
 
   const backendOptions = useMemo<OptionState[]>(() => {
@@ -119,10 +127,13 @@ export default function SolverSelector() {
   }, [deviceOptions, precisionOptions]);
 
   const updateField = (field: RuntimeField, value: string) => {
-    model.setRequestedRuntimeSelection((current) => ({
+    const nextSelection = setRequestedRuntimeSelection((current) => ({
       ...current,
       [field]: value,
     }));
+    void sceneAuthoring.patchStudyRuntime(nextSelection).catch((error) => {
+      console.error("failed to patch authoring study runtime", error);
+    });
   };
 
   const selectionSummary = `${humanize(requested.requested_backend)} / ${humanize(requested.requested_device)} / ${humanize(requested.requested_precision)} / ${humanize(requested.requested_mode)}`;

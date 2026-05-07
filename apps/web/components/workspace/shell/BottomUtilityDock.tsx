@@ -184,8 +184,15 @@ export default function BottomTelemetryDock({
     const timestamp = primary3dViewportEntry?.lastFrameAtUnixMs;
     return timestamp != null && timestamp > 0 ? Math.max(0, now - timestamp) : null;
   }, [now, primary3dViewportEntry?.lastFrameAtUnixMs]);
-  const backendAgeClassName = ageValueClassName(ageTone(backendAgeMs));
-  const viewportAgeClassName = ageValueClassName(ageTone(viewportAgeMs));
+  // During idle states the backend intentionally stops sending updates — suppress false warnings.
+  const isIdleWorkspaceState =
+    workspaceStatus === "waiting_for_compute" || workspaceStatus === "materializing_script";
+  const backendAgeClassName = ageValueClassName(
+    isIdleWorkspaceState ? "ok" : ageTone(backendAgeMs),
+  );
+  const viewportAgeClassName = ageValueClassName(
+    isIdleWorkspaceState ? "ok" : ageTone(viewportAgeMs),
+  );
 
   const telemetryCards: Array<{
     label: string;
@@ -200,7 +207,7 @@ export default function BottomTelemetryDock({
         connection === "connected"
           ? "Czas od ostatniego napływu danych z backendu do frontendu."
           : "Backend nie jest obecnie w pełni połączony z frontendem.",
-      accent: telemetryAccentClassName(ageTone(backendAgeMs)),
+      accent: telemetryAccentClassName(isIdleWorkspaceState ? "ok" : ageTone(backendAgeMs)),
       value: formatAgeLabel(backendAgeMs),
       valueClassName: backendAgeClassName,
     },
@@ -210,7 +217,7 @@ export default function BottomTelemetryDock({
         viewport.effectiveViewMode === "3D"
           ? "Czas od ostatniego realnego frame/renderu głównego viewportu 3D."
           : "Czas od ostatniego renderu viewportu 3D; gdy 3D nie jest aktywne, licznik naturalnie rośnie.",
-      accent: telemetryAccentClassName(ageTone(viewportAgeMs)),
+      accent: telemetryAccentClassName(isIdleWorkspaceState ? "ok" : ageTone(viewportAgeMs)),
       value: formatAgeLabel(viewportAgeMs),
       valueClassName: viewportAgeClassName,
     },

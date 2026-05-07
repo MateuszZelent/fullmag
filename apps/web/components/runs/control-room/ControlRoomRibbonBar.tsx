@@ -3,11 +3,24 @@
 import { useMemo } from "react";
 import RibbonBar, { type RibbonBarProps } from "@/components/shell/RibbonBar";
 import { useMagneticTextureDensity } from "@/features/visualization/hooks/useVizSlice";
-import { useSelectedObjectId, useSelectedSidebarNodeId } from "@/features/selection";
+import { useSelectedObjectId, useSelectedSidebarNodeId, useSelectionActions } from "@/features/selection";
+import {
+  selectLastBuiltMeshConfigSignature,
+  selectMeshGenerating,
+  useMeshConfigStore,
+} from "@/features/mesh-config/store/useMeshConfigStore";
+import {
+  selectRemoteSceneDocument,
+  selectSceneDocumentDraft,
+  selectSceneObjects,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import { useViewportStore } from "@/features/viewport-core/state/useViewportStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import { useCommand, useModel, useViewport } from "./context-hooks";
+import { useCommand, useViewport } from "./context-hooks";
 import { resolveSolverControlDisabledReasons } from "./commandControlGuards";
 import { useBuilderRunBlocked } from "./useBuilderRunBlocked";
+import { buildMeshConfigurationSignature } from "./meshWorkspace";
 
 type ControlRoomOwnedRibbonProps =
   | "workspaceMode"
@@ -62,9 +75,24 @@ export type ControlRoomRibbonBarProps = Omit<RibbonBarProps, ControlRoomOwnedRib
 export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
   const viewport = useViewport();
   const command = useCommand();
-  const model = useModel();
   const selectedSidebarNodeId = useSelectedSidebarNodeId();
   const selectedObjectId = useSelectedObjectId();
+  const { requestFocusObject } = useSelectionActions();
+  const meshGenerating = useMeshConfigStore(selectMeshGenerating);
+  const lastBuiltMeshConfigSignature = useMeshConfigStore(selectLastBuiltMeshConfigSignature);
+  const sceneDocumentDraft = useDocumentStore(selectSceneDocumentDraft);
+  const remoteSceneDocument = useDocumentStore(selectRemoteSceneDocument);
+  const sceneDocument = sceneDocumentDraft ?? remoteSceneDocument;
+  const meshConfigSignature = useMemo(
+    () => buildMeshConfigurationSignature(sceneDocument),
+    [sceneDocument],
+  );
+  const meshConfigDirty = meshConfigSignature !== lastBuiltMeshConfigSignature;
+  const sceneObjectCount = useDocumentStore(selectSceneObjects).length;
+  const objectViewMode = useViewportStore((s) => s.objectViewMode);
+  const setObjectViewMode = useViewportStore((s) => s.setObjectViewMode);
+  const activeTransformScope = useViewportStore((s) => s.activeTransformScope);
+  const setCameraFitRequestSeed = useViewportStore((s) => s.setCameraFitRequestSeed);
   const magneticTextureDensity = useMagneticTextureDensity();
   const builderRunBlocked = useBuilderRunBlocked();
   const femDiscretization = resolveFemDiscretization(
@@ -146,21 +174,21 @@ export default function ControlRoomRibbonBar(props: ControlRoomRibbonBarProps) {
       onCapture={viewport.handleCapture}
       onExport={viewport.handleExport}
       onStateExport={() => void command.handleStateExport("compact")}
-      meshGenerating={model.meshGenerating}
-      meshConfigDirty={model.meshConfigDirty}
+      meshGenerating={meshGenerating}
+      meshConfigDirty={meshConfigDirty}
       selectedObjectId={selectedObjectId}
-      objectViewMode={model.objectViewMode}
-      sceneObjectCount={model.sceneDocument?.objects.length ?? 0}
-      onRequestObjectFocus={model.requestFocusObject}
+      objectViewMode={objectViewMode}
+      sceneObjectCount={sceneObjectCount}
+      onRequestObjectFocus={requestFocusObject}
       onRequestViewportCameraFit={() => {
         viewport.handleViewModeChange("3D");
-        model.requestViewportCameraFit();
+        setCameraFitRequestSeed((seed) => seed + 1);
       }}
-      onSetObjectViewMode={model.setObjectViewMode}
+      onSetObjectViewMode={setObjectViewMode}
       canSyncScriptBuilder={Boolean(command.sessionFooter.scriptPath)}
       scriptSyncBusy={command.scriptSyncBusy}
       onSyncScriptBuilder={() => void command.syncScriptBuilder()}
-      activeTransformScope={model.activeTransformScope}
+      activeTransformScope={activeTransformScope}
       {...props}
     />
   );

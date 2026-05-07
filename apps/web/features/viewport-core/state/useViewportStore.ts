@@ -9,8 +9,10 @@
  */
 
 import { create } from "zustand";
+import type { SetStateAction } from "react";
 import type { InteractionMode, ViewportHoverTarget } from "../interaction/interactionMode.types";
 import type { ViewportMode, VectorComponent, SlicePlane, FemDockTab, ViewportScope, ObjectViewMode } from "../../../components/runs/control-room/shared";
+import type { VisibleSubmeshSnapshot } from "../../../components/runs/control-room/submeshSnapshot";
 import type {
   ClipAxis,
   FemArrowColorMode,
@@ -20,6 +22,7 @@ import type {
   MeshSelectionSnapshot,
   RenderMode,
 } from "@/components/preview/FemMeshView3D";
+import type { MeshEntityViewStateMap } from "@/lib/session/types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 /* ── Camera Profile ── */
@@ -56,6 +59,7 @@ export interface ViewportCoreState {
   component: VectorComponent;
   plane: SlicePlane;
   sliceIndex: number;
+  selectedQuantity: string;
 
   /* Console / Sidebar chrome */
   consoleCollapsed: boolean;
@@ -80,9 +84,12 @@ export interface ViewportCoreState {
   femDockTab: FemDockTab;
 
   /* Viewport scope / focus */
+  cameraFitRequestSeed: number;
   viewportScope: ViewportScope;
   objectViewMode: ObjectViewMode;
   activeTransformScope: "object" | "texture" | null;
+  meshEntityViewState: MeshEntityViewStateMap;
+  visibleSubmeshSnapshot: VisibleSubmeshSnapshot | null;
   selectedSidebarNodeId: string | null;
   selectedObjectId: string | null;
   selectedEntityId: string | null;
@@ -108,14 +115,15 @@ export interface ViewportCoreActions {
   setCameraProfile: (partial: Partial<CameraProfile>) => void;
 
   /* View modes */
-  setViewMode: (mode: ViewportMode) => void;
-  setComponent: (c: VectorComponent) => void;
-  setPlane: (p: SlicePlane) => void;
-  setSliceIndex: (i: number) => void;
+  setViewMode: (mode: SetStateAction<ViewportMode>) => void;
+  setComponent: (c: SetStateAction<VectorComponent>) => void;
+  setPlane: (p: SetStateAction<SlicePlane>) => void;
+  setSliceIndex: (i: SetStateAction<number>) => void;
+  setSelectedQuantity: (v: SetStateAction<string>) => void;
 
   /* Chrome */
-  setConsoleCollapsed: (v: boolean) => void;
-  setSidebarCollapsed: (v: boolean) => void;
+  setConsoleCollapsed: (v: SetStateAction<boolean>) => void;
+  setSidebarCollapsed: (v: SetStateAction<boolean>) => void;
 
   /* FEM render */
   setMeshRenderMode: (v: RenderMode) => void;
@@ -133,12 +141,15 @@ export interface ViewportCoreActions {
   setFemFerromagnetVisibilityMode: (v: FemFerromagnetVisibilityMode) => void;
   setFemColorField: (v: FemColorField) => void;
   setFemMagnetization3DActive: (v: boolean) => void;
-  setFemDockTab: (v: FemDockTab) => void;
+  setFemDockTab: (v: SetStateAction<FemDockTab>) => void;
 
   /* Scope / selection */
+  setCameraFitRequestSeed: (v: SetStateAction<number>) => void;
   setViewportScope: (v: ViewportScope) => void;
-  setObjectViewMode: (v: ObjectViewMode) => void;
-  setActiveTransformScope: (v: "object" | "texture" | null) => void;
+  setObjectViewMode: (v: SetStateAction<ObjectViewMode>) => void;
+  setActiveTransformScope: (v: SetStateAction<"object" | "texture" | null>) => void;
+  setMeshEntityViewState: (v: SetStateAction<MeshEntityViewStateMap>) => void;
+  setVisibleSubmeshSnapshot: (v: SetStateAction<VisibleSubmeshSnapshot | null>) => void;
   setSelectedSidebarNodeId: (v: string | null) => void;
   setSelectedObjectId: (v: string | null) => void;
   setSelectedEntityId: (v: string | null) => void;
@@ -164,9 +175,10 @@ const INITIAL_STATE: ViewportCoreState = {
   gizmoActiveAxis: null,
   camera: DEFAULT_CAMERA,
   viewMode: "3D",
-  component: "x",
+  component: "magnitude",
   plane: "xy",
   sliceIndex: 0,
+  selectedQuantity: "m",
   consoleCollapsed: false,
   sidebarCollapsed: false,
   meshRenderMode: "surface",
@@ -185,9 +197,12 @@ const INITIAL_STATE: ViewportCoreState = {
   femColorField: "orientation",
   femMagnetization3DActive: false,
   femDockTab: "mesh",
+  cameraFitRequestSeed: 0,
   viewportScope: "universe",
   objectViewMode: "context",
   activeTransformScope: null,
+  meshEntityViewState: {},
+  visibleSubmeshSnapshot: null,
   selectedSidebarNodeId: null,
   selectedObjectId: null,
   selectedEntityId: null,
@@ -196,6 +211,12 @@ const INITIAL_STATE: ViewportCoreState = {
   airMeshOpacity: 20,
   meshSelection: { selectedFaceIndices: [], primaryFaceIndex: null },
 };
+
+function resolveSetStateAction<T>(value: SetStateAction<T>, previous: T): T {
+  return typeof value === "function"
+    ? (value as (prev: T) => T)(previous)
+    : value;
+}
 
 export const useViewportStore = create<ViewportStore>()((set) => ({
   ...INITIAL_STATE,
@@ -213,14 +234,22 @@ export const useViewportStore = create<ViewportStore>()((set) => ({
     set((s) => ({ camera: { ...s.camera, ...partial } })),
 
   /* View modes */
-  setViewMode: (mode) => set({ viewMode: mode }),
-  setComponent: (c) => set({ component: c }),
-  setPlane: (p) => set({ plane: p }),
-  setSliceIndex: (i) => set({ sliceIndex: i }),
+  setViewMode: (mode) =>
+    set((s) => ({ viewMode: resolveSetStateAction(mode, s.viewMode) })),
+  setComponent: (c) =>
+    set((s) => ({ component: resolveSetStateAction(c, s.component) })),
+  setPlane: (p) =>
+    set((s) => ({ plane: resolveSetStateAction(p, s.plane) })),
+  setSliceIndex: (i) =>
+    set((s) => ({ sliceIndex: resolveSetStateAction(i, s.sliceIndex) })),
+  setSelectedQuantity: (v) =>
+    set((s) => ({ selectedQuantity: resolveSetStateAction(v, s.selectedQuantity) })),
 
   /* Chrome */
-  setConsoleCollapsed: (v) => set({ consoleCollapsed: v }),
-  setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+  setConsoleCollapsed: (v) =>
+    set((s) => ({ consoleCollapsed: resolveSetStateAction(v, s.consoleCollapsed) })),
+  setSidebarCollapsed: (v) =>
+    set((s) => ({ sidebarCollapsed: resolveSetStateAction(v, s.sidebarCollapsed) })),
 
   /* FEM render */
   setMeshRenderMode: (v) => set({ meshRenderMode: v }),
@@ -238,12 +267,29 @@ export const useViewportStore = create<ViewportStore>()((set) => ({
   setFemFerromagnetVisibilityMode: (v) => set({ femFerromagnetVisibilityMode: v }),
   setFemColorField: (v) => set({ femColorField: v }),
   setFemMagnetization3DActive: (v) => set({ femMagnetization3DActive: v }),
-  setFemDockTab: (v) => set({ femDockTab: v }),
+  setFemDockTab: (v) =>
+    set((s) => ({ femDockTab: resolveSetStateAction(v, s.femDockTab) })),
 
   /* Scope / selection */
+  setCameraFitRequestSeed: (v) =>
+    set((s) => ({
+      cameraFitRequestSeed: resolveSetStateAction(v, s.cameraFitRequestSeed),
+    })),
   setViewportScope: (v) => set({ viewportScope: v }),
-  setObjectViewMode: (v) => set({ objectViewMode: v }),
-  setActiveTransformScope: (v) => set({ activeTransformScope: v }),
+  setObjectViewMode: (v) =>
+    set((s) => ({ objectViewMode: resolveSetStateAction(v, s.objectViewMode) })),
+  setActiveTransformScope: (v) =>
+    set((s) => ({
+      activeTransformScope: resolveSetStateAction(v, s.activeTransformScope),
+    })),
+  setMeshEntityViewState: (v) =>
+    set((s) => ({
+      meshEntityViewState: resolveSetStateAction(v, s.meshEntityViewState),
+    })),
+  setVisibleSubmeshSnapshot: (v) =>
+    set((s) => ({
+      visibleSubmeshSnapshot: resolveSetStateAction(v, s.visibleSubmeshSnapshot),
+    })),
   setSelectedSidebarNodeId: (v) => set({ selectedSidebarNodeId: v }),
   setSelectedObjectId: (v) => set({ selectedObjectId: v }),
   setSelectedEntityId: (v) => set({ selectedEntityId: v }),
@@ -289,7 +335,10 @@ export const selectFemRenderSettings = (s: ViewportStore) => ({
 export const selectViewportScope = (s: ViewportStore) => ({
   viewportScope: s.viewportScope,
   objectViewMode: s.objectViewMode,
+  cameraFitRequestSeed: s.cameraFitRequestSeed,
   selectedObjectId: s.selectedObjectId,
   selectedEntityId: s.selectedEntityId,
   focusedEntityId: s.focusedEntityId,
+  meshEntityViewState: s.meshEntityViewState,
+  visibleSubmeshSnapshot: s.visibleSubmeshSnapshot,
 });

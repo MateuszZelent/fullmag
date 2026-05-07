@@ -19,6 +19,7 @@
  */
 
 import { create } from "zustand";
+import type { SetStateAction } from "react";
 import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import type {
   ResolvedRenderPlan,
@@ -46,6 +47,8 @@ import type {
 import {
   DEFAULT_AIR_MESH_OPACITY,
   DEFAULT_FDM_VISUALIZATION_SETTINGS,
+  loadLocalActiveVisualizationRef,
+  loadLocalVisualizationPresets,
 } from "@/components/runs/control-room/controlRoomUtils";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -122,9 +125,9 @@ export interface VisualizationStoreState extends ViewportVizCore {
   setResolvedRenderPlan: (v: ResolvedRenderPlan | null) => void;
 
   /* Preset management */
-  setVisualizationProjectPresets: (v: VisualizationPreset[]) => void;
-  setVisualizationLocalPresets: (v: VisualizationPreset[]) => void;
-  setActiveVisualizationPresetRef: (v: VisualizationPresetRef | null) => void;
+  setVisualizationProjectPresets: (v: SetStateAction<VisualizationPreset[]>) => void;
+  setVisualizationLocalPresets: (v: SetStateAction<VisualizationPreset[]>) => void;
+  setActiveVisualizationPresetRef: (v: SetStateAction<VisualizationPresetRef | null>) => void;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -169,9 +172,38 @@ const INITIAL_STATE: Omit<VisualizationStoreState,
   fdmVisualizationSettings: DEFAULT_FDM_VISUALIZATION_SETTINGS,
   resolvedRenderPlan: null,
   visualizationProjectPresets: [],
-  visualizationLocalPresets: [],
-  activeVisualizationPresetRef: null,
+  visualizationLocalPresets: loadLocalVisualizationPresets(),
+  activeVisualizationPresetRef: loadLocalActiveVisualizationRef(),
 };
+
+function resolveSetStateAction<T>(value: SetStateAction<T>, previous: T): T {
+  return typeof value === "function"
+    ? (value as (prev: T) => T)(previous)
+    : value;
+}
+
+function stableSerialize(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function sameResolvedRenderPlan(
+  left: ResolvedRenderPlan | null,
+  right: ResolvedRenderPlan | null,
+): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (!left || !right) {
+    return left === right;
+  }
+  const serializedLeft = stableSerialize(left);
+  const serializedRight = stableSerialize(right);
+  return serializedLeft !== null && serializedLeft === serializedRight;
+}
 
 /* ══════════════════════════════════════════════════════════════════
  * Store
@@ -244,11 +276,26 @@ export const useVisualizationStore = create<VisualizationStoreState>((set) => ({
   setViewportAxesScope: (v) => set({ viewportAxesScope: v }),
   setUniverseWireframeVisible: (v) => set({ universeWireframeVisible: v }),
   setFdmVisualizationSettings: (v) => set({ fdmVisualizationSettings: v }),
-  setResolvedRenderPlan: (v) => set({ resolvedRenderPlan: v }),
+  setResolvedRenderPlan: (v) =>
+    set((prev) => {
+      if (sameResolvedRenderPlan(prev.resolvedRenderPlan, v)) {
+        return prev;
+      }
+      return { resolvedRenderPlan: v };
+    }),
 
-  setVisualizationProjectPresets: (v) => set({ visualizationProjectPresets: v }),
-  setVisualizationLocalPresets: (v) => set({ visualizationLocalPresets: v }),
-  setActiveVisualizationPresetRef: (v) => set({ activeVisualizationPresetRef: v }),
+  setVisualizationProjectPresets: (v) =>
+    set((prev) => ({
+      visualizationProjectPresets: resolveSetStateAction(v, prev.visualizationProjectPresets),
+    })),
+  setVisualizationLocalPresets: (v) =>
+    set((prev) => ({
+      visualizationLocalPresets: resolveSetStateAction(v, prev.visualizationLocalPresets),
+    })),
+  setActiveVisualizationPresetRef: (v) =>
+    set((prev) => ({
+      activeVisualizationPresetRef: resolveSetStateAction(v, prev.activeVisualizationPresetRef),
+    })),
 }));
 
 /* ══════════════════════════════════════════════════════════════════

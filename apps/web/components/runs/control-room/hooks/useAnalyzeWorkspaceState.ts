@@ -1,15 +1,15 @@
-import { startTransition, useCallback, useState } from "react";
+import { startTransition, useCallback } from "react";
 import {
-  DEFAULT_ANALYZE_SELECTION,
   nextAnalyzeRefresh,
   type AnalyzeSelectionState,
   type AnalyzeTab,
 } from "../analyzeSelection";
-import { resultWorkspaceIcon } from "../controlRoomUtils";
-import type {
-  ResultWorkspaceEntry,
-  ResultWorkspaceKind,
-} from "../context-hooks";
+import {
+  selectActiveAnalyzeResultWorkspaceId,
+  selectAnalyzeResultWorkspaceEntries,
+  selectAnalyzeSelection,
+  useAnalyzeStore,
+} from "@/features/analyze/store/useAnalyzeStore";
 
 function analyzeSelectionEquals(
   a: AnalyzeSelectionState,
@@ -29,10 +29,13 @@ function analyzeSelectionEquals(
 export function useAnalyzeWorkspaceState(options: {
   activateAnalyzeView: () => void;
 }) {
-  const [analyzeSelection, setAnalyzeSelection] =
-    useState<AnalyzeSelectionState>(DEFAULT_ANALYZE_SELECTION);
-  const [resultWorkspaceEntries, setResultWorkspaceEntries] = useState<ResultWorkspaceEntry[]>([]);
-  const [activeResultWorkspaceId, setActiveResultWorkspaceId] = useState<string | null>(null);
+  const analyzeSelection = useAnalyzeStore(selectAnalyzeSelection);
+  const setAnalyzeSelection = useAnalyzeStore((s) => s.setSelection);
+  const resultWorkspaceEntries = useAnalyzeStore(selectAnalyzeResultWorkspaceEntries);
+  const activeResultWorkspaceId = useAnalyzeStore(selectActiveAnalyzeResultWorkspaceId);
+  const setResultWorkspaceEntries = useAnalyzeStore((s) => s.setResultWorkspaceEntries);
+  const setActiveResultWorkspaceId = useAnalyzeStore((s) => s.setActiveResultWorkspaceId);
+  const addResultWorkspaceEntry = useAnalyzeStore((s) => s.addResultWorkspaceEntry);
 
   const openAnalyze = useCallback((next?: Partial<AnalyzeSelectionState>) => {
     startTransition(options.activateAnalyzeView);
@@ -40,7 +43,7 @@ export function useAnalyzeWorkspaceState(options: {
       const resolved = next ? { ...prev, ...next } : prev;
       return analyzeSelectionEquals(prev, resolved) ? prev : resolved;
     });
-  }, [options.activateAnalyzeView]);
+  }, [options.activateAnalyzeView, setAnalyzeSelection]);
 
   const selectAnalyzeTab = useCallback((tab: AnalyzeTab) => {
     setAnalyzeSelection((prev) => {
@@ -49,7 +52,7 @@ export function useAnalyzeWorkspaceState(options: {
       }
       return { ...prev, tab };
     });
-  }, []);
+  }, [setAnalyzeSelection]);
 
   const selectAnalyzeMode = useCallback((index: number | null) => {
     setAnalyzeSelection((prev) => {
@@ -58,51 +61,11 @@ export function useAnalyzeWorkspaceState(options: {
       }
       return { ...prev, tab: "modes", selectedModeIndex: index };
     });
-  }, []);
+  }, [setAnalyzeSelection]);
 
   const refreshAnalyze = useCallback(() => {
     setAnalyzeSelection((prev) => nextAnalyzeRefresh(prev));
-  }, []);
-
-  const addResultWorkspaceEntry = useCallback(
-    (entry: {
-      key?: string | null;
-      kind: ResultWorkspaceKind;
-      label: string;
-      quantityId?: string | null;
-      icon?: string;
-      badge?: string | null;
-      pinned?: boolean;
-      openAfterCreate?: boolean;
-    }) => {
-      const key = entry.key?.trim().length ? entry.key.trim() : `${entry.kind}:${entry.label}`;
-      const existing = resultWorkspaceEntries.find((candidate) => candidate.key === key);
-      if (existing) {
-        if (entry.openAfterCreate) {
-          setActiveResultWorkspaceId(existing.id);
-        }
-        return existing.id;
-      }
-      const now = Date.now();
-      const created: ResultWorkspaceEntry = {
-        id: `${entry.kind}-${now}-${Math.floor(Math.random() * 10000)}`,
-        key,
-        kind: entry.kind,
-        label: entry.label,
-        quantityId: entry.quantityId ?? null,
-        icon: entry.icon ?? resultWorkspaceIcon(entry.kind),
-        badge: entry.badge ?? null,
-        pinned: entry.pinned ?? !key.startsWith("auto:"),
-        createdAtUnixMs: now,
-      };
-      setResultWorkspaceEntries((prev) => [...prev, created]);
-      if (entry.openAfterCreate) {
-        setActiveResultWorkspaceId(created.id);
-      }
-      return created.id;
-    },
-    [resultWorkspaceEntries],
-  );
+  }, [setAnalyzeSelection]);
 
   return {
     activeResultWorkspaceId,

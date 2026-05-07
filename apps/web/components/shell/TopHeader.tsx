@@ -229,7 +229,9 @@ export default function TopHeader(props: TopHeaderProps) {
           </span>
         </div>
 
-        {props.commandMessage && (
+        {props.commandMessage &&
+          props.commandMessage.toLowerCase().replace(/[\s_]+/g, '_') !==
+            (props.status ?? '').toLowerCase().replace(/[\s_]+/g, '_') && (
           <div
             className={cn(
               "hidden max-w-[12rem] truncate rounded-full border px-2 py-0.5 text-[0.58rem] font-medium tracking-wider uppercase xl:block",

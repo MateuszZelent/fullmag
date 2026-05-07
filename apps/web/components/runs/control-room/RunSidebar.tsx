@@ -156,7 +156,6 @@ export default function RunSidebar() {
     setFocusedEntityId,
     setSelectedEntityId,
     setSelectedObjectId,
-    setSelectedSidebarNodeId,
   } = useSelectionActions();
   const cmd = useCommand();
   const tp = useTransport();
@@ -594,7 +593,7 @@ export default function RunSidebar() {
       return;
     }
     if (selection.selectedSidebarNodeId !== nextBuilderSidebarNodeId) {
-      setSelectedSidebarNodeId(nextBuilderSidebarNodeId);
+      model.selectSidebarNode(nextBuilderSidebarNodeId);
     }
     if (selection.selectedObjectId != null) {
       setSelectedObjectId(null);
@@ -628,7 +627,7 @@ export default function RunSidebar() {
       setFocusedEntityId(null);
       if (id === "builder-universe") {
         selectBuilderTarget({ type: "universe", id: "universe" });
-        setSelectedSidebarNodeId(id);
+        model.selectSidebarNode(id);
         return;
       }
       if (
@@ -637,7 +636,7 @@ export default function RunSidebar() {
         id === "builder-lifecycle"
       ) {
         clearBuilderSelection();
-        setSelectedSidebarNodeId(id);
+        model.selectSidebarNode(id);
         return;
       }
       if (id.startsWith("builder-prim-")) {
@@ -645,7 +644,7 @@ export default function RunSidebar() {
         const primitiveId = primitiveSegment.split("/")[0];
         if (primitiveId.length > 0) {
           selectBuilderTarget({ type: "primitive", id: primitiveId });
-          setSelectedSidebarNodeId(`builder-prim-${primitiveId}`);
+          model.selectSidebarNode(`builder-prim-${primitiveId}`);
           return;
         }
       }
@@ -653,7 +652,7 @@ export default function RunSidebar() {
         const boolId = id.slice("builder-bool-".length);
         if (boolId.length > 0) {
           selectBuilderTarget({ type: "boolean", id: boolId });
-          setSelectedSidebarNodeId(`builder-bool-${boolId}`);
+          model.selectSidebarNode(`builder-bool-${boolId}`);
           return;
         }
       }
@@ -701,7 +700,7 @@ export default function RunSidebar() {
     }
     const visualizationPresetNode = parseVisualizationPresetNodeId(id);
     if (visualizationPresetNode) {
-      setSelectedSidebarNodeId(id);
+      model.selectSidebarNode(id);
       setSelectedObjectId(null);
       setSelectedEntityId(null);
       setFocusedEntityId(null);
@@ -712,7 +711,7 @@ export default function RunSidebar() {
       return;
     }
     if (isVisualizationTreeNode(id)) {
-      setSelectedSidebarNodeId(id);
+      model.selectSidebarNode(id);
       setSelectedObjectId(null);
       setSelectedEntityId(null);
       setFocusedEntityId(null);
@@ -720,7 +719,7 @@ export default function RunSidebar() {
     }
     const analyzeTarget = parseAnalyzeTreeNode(id);
     if (analyzeTarget) {
-      setSelectedSidebarNodeId(id);
+      model.selectSidebarNode(id);
       model.openAnalyzeSurface({ selection: analyzeTarget, source: "run-sidebar" });
       return;
     }
@@ -738,7 +737,7 @@ export default function RunSidebar() {
       resultContext.kind !== "results-solutions" &&
       resultContext.kind !== "results-analyses"
     ) {
-      setSelectedSidebarNodeId(id);
+      model.selectSidebarNode(id);
       setSelectedObjectId(null);
       setSelectedEntityId(null);
       setFocusedEntityId(null);
@@ -746,7 +745,7 @@ export default function RunSidebar() {
       return;
     }
     const objectId = resolveSelectedObjectId(id, model.sceneDocument ?? model.modelBuilderGraph);
-    setSelectedSidebarNodeId(id);
+    model.selectSidebarNode(id);
     setSelectedObjectId(objectId);
     if (id === "universe-airbox" || id === "universe-airbox-mesh") {
       const airPartId = model.airPart?.id ?? null;
@@ -961,7 +960,7 @@ export default function RunSidebar() {
       if (action === "duplicate") {
         const duplicateId = model.duplicateResultWorkspaceEntry(id);
         if (duplicateId) {
-          setSelectedSidebarNodeId(`res-analysis-${duplicateId}`);
+          model.selectSidebarNode(`res-analysis-${duplicateId}`);
           model.openAnalyzeSurface({
             resultWorkspaceId: duplicateId,
             source: "run-sidebar-context-menu",
@@ -989,7 +988,7 @@ export default function RunSidebar() {
       } as const;
       if (action === "apply") {
         model.applyVisualizationPreset(ref);
-        setSelectedSidebarNodeId(nodeId);
+        model.selectSidebarNode(nodeId);
         return;
       }
       if (action === "rename") {
@@ -1007,7 +1006,7 @@ export default function RunSidebar() {
       if (action === "duplicate") {
         const created = model.duplicateVisualizationPreset(ref);
         if (created) {
-          setSelectedSidebarNodeId(
+          model.selectSidebarNode(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }
@@ -1023,7 +1022,7 @@ export default function RunSidebar() {
       if (action === "save-project") {
         const created = model.copyVisualizationPresetToSource(ref, "project");
         if (created) {
-          setSelectedSidebarNodeId(
+          model.selectSidebarNode(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }
@@ -1032,7 +1031,7 @@ export default function RunSidebar() {
       if (action === "save-local") {
         const created = model.copyVisualizationPresetToSource(ref, "local");
         if (created) {
-          setSelectedSidebarNodeId(
+          model.selectSidebarNode(
             buildVisualizationPresetNodeId(created.source, created.preset_id),
           );
         }

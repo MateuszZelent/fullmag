@@ -215,8 +215,8 @@ function TreeNode({
             {node.label}
           </span>
 
-          {/* Status icon */}
-          {node.status && (
+          {/* Status icon — only for states not already conveyed by the row background */}
+          {node.status && node.status !== "ready" && node.status !== "active" && (
             <span className="ml-1 shrink-0 opacity-90">
               <StatusIcon status={node.status} />
             </span>
@@ -225,7 +225,7 @@ function TreeNode({
           {/* Badge */}
           {showBadge ? (
             <span className={cn(
-              "ml-1 shrink-0 rounded px-1.5 py-[1px] text-[0.55rem] font-medium font-mono opacity-80",
+              "ml-1 shrink-0 rounded px-1.5 py-[1px] text-[0.625rem] font-medium font-mono opacity-80",
               isActive
                 ? "bg-primary/10 text-primary border border-primary/10"
                 : "bg-card/40 text-muted-foreground/70 border border-border/10"

@@ -80,6 +80,7 @@ export const VIEWPORT_STATE_OWNERSHIP: StateOwnershipMap = {
   "component":              "workspace",
   "plane":                  "workspace",
   "sliceIndex":             "workspace",
+  "selectedQuantity":       "workspace",
 
   // Chrome — workspace
   "consoleCollapsed":       "workspace",
@@ -104,9 +105,12 @@ export const VIEWPORT_STATE_OWNERSHIP: StateOwnershipMap = {
   "femDockTab":             "workspace",
 
   // Scope / selection — transient (local navigation)
+  "cameraFitRequestSeed":   "transient",
   "viewportScope":          "transient",
   "objectViewMode":         "transient",
   "activeTransformScope":   "transient",
+  "meshEntityViewState":    "workspace",
+  "visibleSubmeshSnapshot": "transient",
   "selectedSidebarNodeId":  "transient",
   "selectedObjectId":       "transient",
   "selectedEntityId":       "transient",

@@ -4,7 +4,7 @@ import type {
   ModelContextValue,
   ViewportContextValue,
 } from "./context-hooks";
-import { useSelectedSidebarNodeId, useSelectionActions } from "@/features/selection";
+import { useSelectedSidebarNodeId } from "@/features/selection";
 import {
   buildMeshBuildStages,
   deriveEffectiveMeshTargets,
@@ -62,7 +62,6 @@ export function useMeshBuildFlow({
   setRightInspectorTab,
 }: UseMeshBuildFlowInput) {
   const selectedSidebarNodeId = useSelectedSidebarNodeId();
-  const { setSelectedSidebarNodeId } = useSelectionActions();
   const [meshBuildDialogOpen, setMeshBuildDialogOpen] = useState(false);
   const [meshBuildIntent, setMeshBuildIntent] = useState<MeshBuildIntent | null>(null);
   const [meshBuildError, setMeshBuildError] = useState<string | null>(null);
@@ -226,10 +225,10 @@ export function useMeshBuildFlow({
 
   const handleOpenMeshStatistics = useCallback(() => {
     const nodeId = hasSharedAirboxDomain ? "mesh-statistics" : "universe-mesh-statistics";
-    setSelectedSidebarNodeId(nodeId);
+    selectModelNode(nodeId);
     setRightInspectorOpen(true);
     setRightInspectorTab("properties");
-  }, [hasSharedAirboxDomain, model, setRightInspectorOpen, setRightInspectorTab]);
+  }, [hasSharedAirboxDomain, selectModelNode, setRightInspectorOpen, setRightInspectorTab]);
 
   const handleOpenMeshQuality = useCallback(() => {
     openMeshNode(hasSharedAirboxDomain ? "mesh-quality" : "universe-mesh-quality");

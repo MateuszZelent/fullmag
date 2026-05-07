@@ -11,6 +11,12 @@ describe("inspectorRegistry", () => {
     expect(inspectorForNodeKind(resolveNodeHandle("reg-ring")).panelKey).toBe(PanelKey.REGION);
   });
 
+  it("routes magnetization texture tree nodes to the magnetic texture inspector", () => {
+    expect(inspectorForNodeKind(resolveNodeHandle("mag-free")).panelKey).toBe(PanelKey.MATERIAL_MAG);
+    expect(inspectorForNodeKind(resolveNodeHandle("mag-free-kind")).panelKey).toBe(PanelKey.MATERIAL_MAG);
+    expect(inspectorForNodeKind(resolveNodeHandle("mag-free-transform-scale")).panelKey).toBe(PanelKey.MATERIAL_MAG);
+  });
+
   it("routes builder nodes to dedicated geometry-builder inspectors", () => {
     expect(inspectorForNodeKind(resolveNodeHandle("builder-root")).panelKey).toBe(PanelKey.BUILDER_OVERVIEW);
     expect(inspectorForNodeKind(resolveNodeHandle("builder-universe")).panelKey).toBe(PanelKey.BUILDER_UNIVERSE);

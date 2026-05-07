@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { startTransition, useCallback, useEffect, useMemo } from "react";
 import { RefreshCw } from "lucide-react";
 
 import DispersionBranchPlot from "@/components/analyze/DispersionBranchPlot";
@@ -16,13 +16,21 @@ import VortexAnalyzeWorkbench from "@/components/analyze/VortexAnalyzeWorkbench"
 import type { VortexTimeSample } from "@/components/analyze/vortexTypes";
 import EmptyState from "@/components/ui/EmptyState";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  selectAnalyzeSelection,
+  useAnalyzeStore,
+} from "@/features/analyze/store/useAnalyzeStore";
+import {
+  selectFemMesh,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { useWorkspaceGraphStore } from "@/features/workspace-graph";
 import { findResultNode } from "@/features/analyze/model/resultsWorkspace";
 import { parseAnalyzeTreeNode } from "./analyzeSelection";
 
 import AnalyzeDiagnosticsPanel from "./AnalyzeDiagnosticsPanel";
 import AnalyzeRuntimeBadges from "./AnalyzeRuntimeBadges";
-import { useCommand, useModel, useTransport } from "./ControlRoomContext";
+import { useCommand, useTransport } from "./ControlRoomContext";
 import { useAnalyzeWorkspaceState } from "./useAnalyzeWorkspaceState";
 import { useAnalyzeRuntimeDiagnostics } from "./useAnalyzeRuntimeDiagnostics";
 
@@ -60,19 +68,41 @@ function compactList(values: string[] | undefined): string | null {
 }
 
 export default function AnalyzeViewport() {
-  const model = useModel();
   const cmd = useCommand();
   const tp = useTransport();
-  const {
-    analyzeSelection,
-    openAnalyze,
-    setAnalyzeSelection,
-    selectAnalyzeTab,
-    refreshAnalyze,
-    magneticParts,
-    airPart,
-    interfaceParts,
-  } = model;
+  const analyzeSelection = useAnalyzeStore(selectAnalyzeSelection);
+  const setAnalyzeSelection = useAnalyzeStore((state) => state.setSelection);
+  const refreshAnalyze = useAnalyzeStore((state) => state.refresh);
+  const runtimeFemMesh = useSessionRuntimeStore(selectFemMesh);
+  const meshParts = useMemo(() => runtimeFemMesh?.mesh_parts ?? [], [runtimeFemMesh]);
+  const magneticParts = useMemo(
+    () => meshParts.filter((part) => part.role === "magnetic_object"),
+    [meshParts],
+  );
+  const airPart = useMemo(
+    () => meshParts.find((part) => part.role === "air") ?? null,
+    [meshParts],
+  );
+  const interfaceParts = useMemo(
+    () => meshParts.filter((part) => part.role === "interface"),
+    [meshParts],
+  );
+  const openAnalyze = useCallback(
+    (next?: Partial<typeof analyzeSelection>) => {
+      startTransition(() => {
+        if (next) {
+          setAnalyzeSelection((prev) => ({ ...prev, ...next }));
+        }
+      });
+    },
+    [setAnalyzeSelection],
+  );
+  const selectAnalyzeTab = useCallback(
+    (tab: typeof analyzeSelection.tab) => {
+      setAnalyzeSelection((prev) => (prev.tab === tab ? prev : { ...prev, tab }));
+    },
+    [setAnalyzeSelection],
+  );
   // P-26: Narrow selectors to primitive fields to avoid reference-identity
   // churn from workspace graph snapshot rebuilds during solver relaxation.
   const graphActiveNodeId = useWorkspaceGraphStore(

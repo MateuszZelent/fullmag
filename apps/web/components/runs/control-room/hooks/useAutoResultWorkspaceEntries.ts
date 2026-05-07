@@ -5,7 +5,7 @@ import type { AnalyzeSelectionState } from "../analyzeSelection";
 import type {
   ResultWorkspaceEntry,
   ResultWorkspaceKind,
-} from "../context-hooks";
+} from "@/features/analyze/model/analyzeTypes";
 
 export function useAutoResultWorkspaceEntries(opts: {
   activeResultWorkspaceId: string | null;

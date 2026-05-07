@@ -4,7 +4,17 @@ import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import { getFemElementCount, getFemNodeCount } from "@/lib/session/femTopology";
 
-import { useCommand, useModel, useViewport } from "../../runs/control-room/context-hooks";
+import {
+  selectRequestedRuntimeSelection,
+  selectSolverPlan,
+  useDocumentStore,
+} from "@/features/document/store/useDocumentStore";
+import {
+  selectFemMesh,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
+import { useSceneAuthoringActions } from "@/src/hooks/resources/useSceneDocument";
+import { useCommand, useViewport } from "../../runs/control-room/context-hooks";
 import { extractFemCpuThreadSummary } from "../../runs/control-room/helpers";
 import SolverSelector from "../../solver/SolverSelector";
 import TextField from "../../ui/TextField";
@@ -27,22 +37,27 @@ function formatCpuThreads(value: number | null): string {
 export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
   void nodeId;
   const cmd = useCommand();
-  const model = useModel();
+  const sceneAuthoring = useSceneAuthoringActions();
+  const solverPlan = useDocumentStore(selectSolverPlan);
+  const requestedRuntimeSelection = useDocumentStore(selectRequestedRuntimeSelection);
+  const setRequestedRuntimeSelection = useDocumentStore(
+    (s) => s.setRequestedRuntimeSelection,
+  );
+  const femMesh = useSessionRuntimeStore(selectFemMesh);
   const viewport = useViewport();
-  const solverPlan = model.solverPlan;
 
   const femCpuThreadSummary = useMemo(
     () => extractFemCpuThreadSummary(cmd.engineLog),
     [cmd.engineLog],
   );
   const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
-  const femNodeCount = model.femMesh ? getFemNodeCount(model.femMesh) : 0;
-  const femElementCount = model.femMesh ? getFemElementCount(model.femMesh) : 0;
+  const femNodeCount = femMesh ? getFemNodeCount(femMesh) : 0;
+  const femElementCount = femMesh ? getFemElementCount(femMesh) : 0;
 
-  const workloadLabel = femDiscretization && model.femMesh
-    ? `${femNodeCount.toLocaleString()} nodes · ${femElementCount.toLocaleString()} tets`
+  const workloadLabel = femDiscretization && femMesh
+    ? `${femNodeCount.toLocaleString('en-US')} nodes · ${femElementCount.toLocaleString('en-US')} tets`
     : viewport.totalCells && viewport.totalCells > 0
-      ? `${viewport.totalCells.toLocaleString()} cells`
+      ? `${viewport.totalCells.toLocaleString('en-US')} cells`
       : "—";
 
   return (
@@ -57,18 +72,21 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
         </div>
         <div className="mt-3 grid gap-3">
           <TextField
-            label="Requested CPU threads"
-            value={
-              model.requestedRuntimeSelection.requested_cpu_threads != null
-                ? String(model.requestedRuntimeSelection.requested_cpu_threads)
+              label="Requested CPU threads"
+              value={
+              requestedRuntimeSelection.requested_cpu_threads != null
+                ? String(requestedRuntimeSelection.requested_cpu_threads)
                 : ""
             }
             onchange={(event) => {
               const nextValue = parseOptionalPositiveInteger(event.target.value);
-              model.setRequestedRuntimeSelection((current) => ({
+              const nextSelection = setRequestedRuntimeSelection((current) => ({
                 ...current,
                 requested_cpu_threads: nextValue,
               }));
+              void sceneAuthoring.patchStudyRuntime(nextSelection).catch((error) => {
+                console.error("failed to patch authoring study runtime", error);
+              });
             }}
             placeholder="auto"
             mono
@@ -76,7 +94,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
           <div className="grid gap-1">
             <InfoRow
               label="Current request"
-              value={formatCpuThreads(model.requestedRuntimeSelection.requested_cpu_threads)}
+              value={formatCpuThreads(requestedRuntimeSelection.requested_cpu_threads)}
             />
             <InfoRow
               label="Apply timing"
@@ -89,7 +107,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
 
       <SidebarSection title="Resolved Runtime" icon="🧠" defaultOpen={true}>
         <div className="grid gap-1">
-          <InfoRow label="State" value={cmd.workspaceStatus} />
+          <InfoRow label="State" value={humanizeToken(cmd.workspaceStatus)} />
           <InfoRow label="Engine" value={cmd.runtimeEngineLabel ?? cmd.sessionFooter.requestedBackend ?? "—"} />
           <InfoRow
             label="Backend"
@@ -99,7 +117,7 @@ export default function RuntimePanel({ nodeId }: { nodeId?: string }) {
           <InfoRow label="Precision" value={humanizeToken(solverPlan?.precision ?? cmd.session?.precision)} />
           <InfoRow
             label="Requested CPU threads"
-            value={formatCpuThreads(model.requestedRuntimeSelection.requested_cpu_threads)}
+            value={formatCpuThreads(requestedRuntimeSelection.requested_cpu_threads)}
           />
           <InfoRow label="Resolved Rayon threads" value={formatCpuThreads(cmd.session?.resolved_cpu_threads ?? null)} />
           <InfoRow

@@ -2,8 +2,20 @@
 
 import { useMemo } from "react";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
-import { useViewport, useCommand, useModel } from "../runs/control-room/context-hooks";
+import { useViewport, useCommand } from "../runs/control-room/context-hooks";
+import type { MeshQualityData } from "@/lib/mesh/options";
+import {
+  selectMeshGenerating,
+  selectMeshOptionsState,
+  useMeshConfigStore,
+} from "@/features/mesh-config/store/useMeshConfigStore";
+import {
+  selectFemMesh,
+  selectMeshWorkspace,
+  useSessionRuntimeStore,
+} from "@/features/session-runtime/store/useSessionRuntimeStore";
 import { useSelectedObjectId, useSelectionActions } from "@/features/selection";
+import { useViewportStore } from "@/features/viewport-core/state/useViewportStore";
 import { Button } from "../ui/button";
 import MeshSettingsPanel from "./MeshSettingsPanel";
 import MeshStatisticsPanel from "./settings/MeshStatisticsPanel";
@@ -38,6 +50,29 @@ import {
 /* ── Main SettingsPanel ── */
 interface SettingsPanelProps {
   nodeId: string;
+}
+
+function meshQualityDataFromSummary(
+  meshWorkspace: ReturnType<typeof selectMeshWorkspace>,
+): MeshQualityData | null {
+  const summary = meshWorkspace?.mesh_quality_summary;
+  if (!summary) return null;
+  return {
+    nElements: summary.n_elements,
+    sicnMin: summary.sicn_min,
+    sicnMax: summary.sicn_max,
+    sicnMean: summary.sicn_mean,
+    sicnP5: summary.sicn_p5,
+    sicnHistogram: [],
+    gammaMin: summary.gamma_min,
+    gammaMean: summary.gamma_mean,
+    gammaHistogram: [],
+    volumeMin: 0,
+    volumeMax: 0,
+    volumeMean: 0,
+    volumeStd: 0,
+    avgQuality: summary.avg_quality,
+  };
 }
 
 function SessionInfoPanel() {
@@ -136,7 +171,23 @@ function ScriptBuilderInfoPanel() {
 export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const viewport = useViewport();
   const cmd = useCommand();
-  const model = useModel();
+  const runtimeFemMesh = useSessionRuntimeStore(selectFemMesh);
+  const meshWorkspace = useSessionRuntimeStore(selectMeshWorkspace);
+  const meshParts = useMemo(() => runtimeFemMesh?.mesh_parts ?? [], [runtimeFemMesh]);
+  const airPart = useMemo(
+    () => meshParts.find((part) => part.role === "air") ?? null,
+    [meshParts],
+  );
+  const meshOptions = useMeshConfigStore(selectMeshOptionsState);
+  const setMeshOptions = useMeshConfigStore((state) => state.setMeshOptions);
+  const meshGenerating = useMeshConfigStore(selectMeshGenerating);
+  const objectViewMode = useViewportStore((state) => state.objectViewMode);
+  const setObjectViewMode = useViewportStore((state) => state.setObjectViewMode);
+  const setMeshEntityViewState = useViewportStore((state) => state.setMeshEntityViewState);
+  const meshQualityData = useMemo(
+    () => meshQualityDataFromSummary(meshWorkspace),
+    [meshWorkspace],
+  );
   const selectedObjectId = useSelectedObjectId();
   const { requestFocusObject, setFocusedEntityId, setSelectedEntityId } = useSelectionActions();
   const femDiscretization = resolveFemDiscretization(cmd.domainCapabilities, false);
@@ -149,7 +200,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
     nodeId === "universe-airbox" || nodeId === "universe-airbox-mesh";
   const selectedObjectPartId =
     selectedObjectId
-      ? model.meshParts.find(
+      ? meshParts.find(
           (part) =>
             part.role === "magnetic_object" && part.object_id === selectedObjectId,
         )?.id ?? null
@@ -157,10 +208,10 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
 
   const showFullFemContext = () => {
     viewport.handleViewModeChange("3D");
-    model.setObjectViewMode("context");
-    model.setMeshEntityViewState((prev) => {
+    setObjectViewMode("context");
+    setMeshEntityViewState((prev) => {
       const next = { ...prev };
-      for (const part of model.meshParts) {
+      for (const part of meshParts) {
         const current = next[part.id];
         if (!current) continue;
         next[part.id] = { ...current, visible: true };
@@ -172,10 +223,10 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   const isolateSelectedObject = () => {
     if (!selectedObjectId) return;
     viewport.handleViewModeChange("3D");
-    model.setObjectViewMode("isolate");
-    model.setMeshEntityViewState((prev) => {
+    setObjectViewMode("isolate");
+    setMeshEntityViewState((prev) => {
       const next = { ...prev };
-      for (const part of model.meshParts) {
+      for (const part of meshParts) {
         const current = next[part.id];
         if (!current) continue;
         next[part.id] = {
@@ -191,14 +242,14 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
   };
 
   const isolateAirbox = () => {
-    const airPartId = model.airPart?.id ?? null;
+    const airPartId = airPart?.id ?? null;
     viewport.handleViewModeChange("3D");
-    model.setObjectViewMode("isolate");
+    setObjectViewMode("isolate");
     setSelectedEntityId(airPartId);
     setFocusedEntityId(airPartId);
-    model.setMeshEntityViewState((prev) => {
+    setMeshEntityViewState((prev) => {
       const next = { ...prev };
-      for (const part of model.meshParts) {
+      for (const part of meshParts) {
         const current = next[part.id];
         if (!current) continue;
         next[part.id] = { ...current, visible: part.role === "air" };
@@ -216,11 +267,11 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       : nodeId.includes("size") || nodeId.includes("airbox-mesh") ? "size"
       : "all";
     const meshSettingsProps = {
-      options: model.meshOptions,
-      onChange: model.setMeshOptions,
-      quality: model.meshQualityData,
-      nodeCount: model.effectiveFemMesh?.nodes.length,
-      disabled: model.meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute),
+      options: meshOptions,
+      onChange: setMeshOptions,
+      quality: meshQualityData,
+      nodeCount: runtimeFemMesh?.nodes.length,
+      disabled: meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute),
       waitMode: cmd.isWaitingForCompute,
       focus: meshSettingsFocus,
     };
@@ -314,7 +365,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
                 <>
                   <Button
                     size="sm"
-                    variant={model.objectViewMode === "context" ? "default" : "outline"}
+                    variant={objectViewMode === "context" ? "default" : "outline"}
                     type="button"
                     onClick={showFullFemContext}
                   >
@@ -322,7 +373,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
                   </Button>
                   <Button
                     size="sm"
-                    variant={model.objectViewMode === "isolate" ? "default" : "outline"}
+                    variant={objectViewMode === "isolate" ? "default" : "outline"}
                     type="button"
                     onClick={isolateSelectedObject}
                   >
@@ -347,7 +398,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
             <div className="flex items-center gap-1.5 shrink-0">
               <Button
                 size="sm"
-                variant={model.objectViewMode === "context" ? "default" : "outline"}
+                variant={objectViewMode === "context" ? "default" : "outline"}
                 type="button"
                 onClick={showFullFemContext}
               >
@@ -355,7 +406,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
               </Button>
               <Button
                 size="sm"
-                variant={model.objectViewMode === "isolate" ? "default" : "outline"}
+                variant={objectViewMode === "isolate" ? "default" : "outline"}
                 type="button"
                 onClick={isolateAirbox}
               >
