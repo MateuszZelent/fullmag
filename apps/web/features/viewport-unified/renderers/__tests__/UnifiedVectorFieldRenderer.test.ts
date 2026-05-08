@@ -9,14 +9,14 @@ import {
 import type { Viewport3DModel } from "../../model/viewport3dContracts";
 
 describe("shouldRenderVectorSurfaceCanvas", () => {
-  it("does not keep a VectorSurface WebGL canvas mounted when hidden", () => {
+  it("keeps a hidden VectorSurface canvas mounted so frameloop=never can preserve GPU state", () => {
     expect(
       shouldRenderVectorSurfaceCanvas({
         canvasEnabled: true,
         hostReady: true,
         viewportVisible: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("renders only when the canvas feature, event host, and visible viewport are all active", () => {
@@ -138,6 +138,17 @@ describe("shouldShowVectorSurfaceOrientationReference", () => {
     expect(
       shouldShowVectorSurfaceOrientationReference({
         viewportVisible: true,
+        geometryMode: false,
+        viewport3DModel: baseModel,
+        orientationReferenceKillSwitch: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the HSL sphere mounted while the warm 3D tab is hidden", () => {
+    expect(
+      shouldShowVectorSurfaceOrientationReference({
+        viewportVisible: false,
         geometryMode: false,
         viewport3DModel: baseModel,
         orientationReferenceKillSwitch: true,

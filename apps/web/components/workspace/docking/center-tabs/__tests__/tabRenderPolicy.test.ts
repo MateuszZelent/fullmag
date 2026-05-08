@@ -18,14 +18,25 @@ describe("workspace center tab render policy", () => {
         { id: "core:3d", kind: "viewport-3d", mountPolicy: "hidden-mounted" },
         "core:3d",
       ).forceMount,
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("never renders hidden WebGL tabs", () => {
+  it("keeps only hidden core 3D mounted and invisible", () => {
     expect(
       resolveWorkspaceTabRenderDecision(
         { id: "core:3d", kind: "viewport-3d", mountPolicy: "hidden-mounted" },
         "core:2d",
+      ),
+    ).toEqual({
+      render: true,
+      visible: false,
+      forceMount: true,
+      reason: "hidden-mounted",
+    });
+    expect(
+      resolveWorkspaceTabRenderDecision(
+        { id: "core:2d", kind: "viewport-2d", mountPolicy: "hidden-mounted" },
+        "core:3d",
       ),
     ).toEqual({
       render: false,

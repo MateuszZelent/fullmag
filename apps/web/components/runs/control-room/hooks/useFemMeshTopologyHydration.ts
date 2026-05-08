@@ -1,9 +1,37 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useState } from "react";
 import type { FemLiveMesh } from "@/lib/session/types";
 import { decodeTopology } from "@/src/api/codecs/topologyCodec";
 import { buildFemMeshFromDecodedTopology } from "@/src/hooks/resources/meshFemResource";
 import type { createControlRoomApi } from "../controlRoomApi";
 import { femMeshTransportKey } from "../binaryFieldCache";
+
+const GLOBAL_FEM_MESH_TOPOLOGY_CACHE_MAX_ENTRIES = 2;
+const globalFemMeshTopologyCache = new Map<string, FemLiveMesh>();
+
+export function getGlobalFemMeshTopologyFrame(key: string): FemLiveMesh | null {
+  const frame = globalFemMeshTopologyCache.get(key) ?? null;
+  if (!frame) {
+    return null;
+  }
+  globalFemMeshTopologyCache.delete(key);
+  globalFemMeshTopologyCache.set(key, frame);
+  return frame;
+}
+
+export function putGlobalFemMeshTopologyFrame(key: string, mesh: FemLiveMesh): void {
+  globalFemMeshTopologyCache.set(key, mesh);
+  while (globalFemMeshTopologyCache.size > GLOBAL_FEM_MESH_TOPOLOGY_CACHE_MAX_ENTRIES) {
+    const oldestKey = globalFemMeshTopologyCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    globalFemMeshTopologyCache.delete(oldestKey);
+  }
+}
+
+export function clearGlobalFemMeshTopologyCache(): void {
+  globalFemMeshTopologyCache.clear();
+}
 
 export function useFemMeshTopologyHydration(opts: {
   enabled: boolean;
@@ -11,7 +39,6 @@ export function useFemMeshTopologyHydration(opts: {
   streamFemMesh: FemLiveMesh | null;
 }): FemLiveMesh | null {
   const { enabled, liveApi, streamFemMesh } = opts;
-  const femMeshTopologyCacheRef = useRef<Map<string, FemLiveMesh>>(new Map());
   const [hydratedFemMesh, setHydratedFemMesh] = useState<FemLiveMesh | null>(null);
   const streamFemMeshKey = useMemo(() => femMeshTransportKey(streamFemMesh), [streamFemMesh]);
   const needsBinaryFemTopologyHydration =
@@ -24,7 +51,7 @@ export function useFemMeshTopologyHydration(opts: {
       setHydratedFemMesh(null);
       return;
     }
-    const cached = femMeshTopologyCacheRef.current.get(streamFemMeshKey) ?? null;
+    const cached = getGlobalFemMeshTopologyFrame(streamFemMeshKey);
     if (cached) {
       setHydratedFemMesh(cached);
       return;
@@ -51,15 +78,7 @@ export function useFemMeshTopologyHydration(opts: {
           domain_mesh_mode: streamFemMesh.domain_mesh_mode ?? decodedMesh.domain_mesh_mode ?? null,
           domain_frame: streamFemMesh.domain_frame ?? decodedMesh.domain_frame ?? null,
         };
-        const cache = femMeshTopologyCacheRef.current;
-        cache.set(streamFemMeshKey, nextMesh);
-        while (cache.size > 2) {
-          const oldestKey = cache.keys().next().value;
-          if (!oldestKey) {
-            break;
-          }
-          cache.delete(oldestKey);
-        }
+        putGlobalFemMeshTopologyFrame(streamFemMeshKey, nextMesh);
         if (!controller.signal.aborted) {
           startTransition(() => setHydratedFemMesh(nextMesh));
         }

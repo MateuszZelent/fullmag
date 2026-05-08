@@ -2,7 +2,7 @@
 
 import { memo, useMemo } from "react";
 import type { QuantityDescriptor, ScalarRow } from "@/lib/session/types";
-import Plot from "./DynamicPlot";
+import DynamicEChart, { ECHARTS_THEME } from "./DynamicEChart";
 import { scalarSeriesList, type ScalarSeriesMeta } from "../../lib/quantities/scalars";
 import { normalizeUnitLabel } from "../../lib/format";
 import { scalarRowsTipFingerprint } from "@/lib/plots/scalarRows";
@@ -128,7 +128,6 @@ function decimateRows(
   if (mode === "min-max-bucket") {
     return decimateRowsMinMaxBucket(rows, maxVisiblePoints, bucketCount, yColumns);
   }
-  // "lttb" is still not implemented in this component; keep stride fallback.
   return decimateRowsStride(rows, maxVisiblePoints);
 }
 
@@ -137,12 +136,10 @@ function decimateRows(
  * Returns false if every row yields null for this key.
  */
 function columnHasData(rows: ScalarRow[], key: string): boolean {
-  // Sample up to 50 rows evenly spaced for performance on large datasets.
   const step = Math.max(1, Math.floor(rows.length / 50));
   for (let i = 0; i < rows.length; i += step) {
     if (accessor(rows[i], key) !== null) return true;
   }
-  // Always check the last row in case sampling missed it.
   if (rows.length > 0 && accessor(rows[rows.length - 1], key) !== null) return true;
   return false;
 }
@@ -167,14 +164,6 @@ function chooseTimeScale(maxAbsSeconds: number): TimeScale {
     if (maxAbsSeconds * scale.factor >= 0.09) return scale;
   }
   return TIME_SCALES[TIME_SCALES.length - 1];
-}
-
-function fingerprintRevision(fingerprint: string): number {
-  let hash = 0;
-  for (let index = 0; index < fingerprint.length; index += 1) {
-    hash = (hash * 31 + fingerprint.charCodeAt(index)) >>> 0;
-  }
-  return hash;
 }
 
 const THEME = {
@@ -211,18 +200,10 @@ const ScalarPlot = memo(function ScalarPlot({
   yColumns = DEFAULT_Y_COLUMNS,
   seriesColors,
   chartTitle,
-  uiRevisionKey = "charts",
   yAxisScale = "linear",
   showMarkers = false,
   showRangeSlider = false,
-  alwaysShowModeBar = false,
 }: Props) {
-  const rowsFingerprint = useMemo(() => scalarRowsTipFingerprint(rows), [rows]);
-  const revision = useMemo(
-    () => fingerprintRevision(rowsFingerprint),
-    [rowsFingerprint],
-  );
-
   const rowsForPlot = useMemo(() => {
     return decimateRows(
       rows,
@@ -245,8 +226,7 @@ const ScalarPlot = memo(function ScalarPlot({
     [quantities, yColumns],
   );
 
-  // CH-001 fix: filter out series whose columns have no data in the rows,
-  // so we don't draw misleading zero lines for missing quantities.
+  // CH-001 fix: filter out series whose columns have no data in the rows
   const availableSeriesMeta = useMemo(
     () => seriesMeta.filter((meta) => columnHasData(rowsForPlot, meta.key)),
     [seriesMeta, rowsForPlot],
@@ -268,19 +248,6 @@ const ScalarPlot = memo(function ScalarPlot({
     return rowsForPlot.map((r) => accessor(r, xColumn));
   }, [rowsForPlot, xColumn, timeScale]);
 
-  const yByKey = useMemo(() => {
-    const grouped = new Map<string, (number | null)[]>();
-    for (const series of availableSeriesMeta) {
-      grouped.set(series.key, rowsForPlot.map((r) => accessor(r, series.key)));
-    }
-    return grouped;
-  }, [rowsForPlot, availableSeriesMeta]);
-
-  const xLabel = useMemo(() => {
-    if (timeScale) return `Time (${timeScale.unit})`;
-    return buildAxisLabel(xMeta);
-  }, [timeScale, xMeta]);
-
   const unitGroups = useMemo(() => {
     const grouped = new Map<string, string[]>();
     const unitByKey = new Map<string, string>();
@@ -299,230 +266,171 @@ const ScalarPlot = memo(function ScalarPlot({
     };
   }, [availableSeriesMeta]);
 
-  const traces = useMemo(() => {
-    const mode =
-      rowsForPlot.length > 1
-        ? (showMarkers ? ("lines+markers" as const) : ("lines" as const))
-        : ("markers" as const);
+  const xLabel = useMemo(() => {
+    if (timeScale) return `Time (${timeScale.unit})`;
+    return buildAxisLabel(xMeta);
+  }, [timeScale, xMeta]);
 
-    return availableSeriesMeta.map((series, i) => ({
-      x: xValues,
-      y: yByKey.get(series.key) ?? [],
-      type: "scattergl" as const,
-      mode,
-      name: buildAxisLabel(series),
-      yaxis:
-        unitGroups.rightUnit &&
-        unitGroups.unitByKey.get(series.key) === unitGroups.rightUnit
-          ? "y2"
-          : "y",
-      line: {
-        color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
-        width: 1.5,
+  const option = useMemo((): echarts.EChartsOption => {
+    const series: echarts.SeriesOption[] = availableSeriesMeta.map((meta, i) => {
+      const yData = rowsForPlot.map((r) => accessor(r, meta.key));
+      const isRight = unitGroups.rightUnit && unitGroups.unitByKey.get(meta.key) === unitGroups.rightUnit;
+      const color = seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length];
+
+      return {
+        type: "line",
+        name: buildAxisLabel(meta),
+        data: xValues.map((x, j) => [x, yData[j]]),
+        yAxisIndex: isRight ? 1 : 0,
+        lineStyle: { color, width: 1.5 },
+        itemStyle: { color },
+        symbol: showMarkers ? "circle" : "none",
+        symbolSize: showMarkers ? 4 : 0,
+        large: true,
+        sampling: "lttb",
+      };
+    });
+
+    const echartsYAxisType = yAxisScale === "log" ? "log" : "value" as const;
+
+    const yAxes: echarts.YAXisComponentOption[] = [{
+      type: echartsYAxisType,
+      name: availableSeriesMeta.length === 1
+        ? buildAxisLabel(availableSeriesMeta[0])
+        : unitGroups.leftUnit
+          ? `Value (${unitGroups.leftUnit})`
+          : "Value",
+      nameLocation: "middle",
+      nameGap: 48,
+      nameTextStyle: { color: THEME.axisText, fontSize: 12 },
+      axisLine: { show: true, lineStyle: { color: THEME.axisLine } },
+      axisLabel: {
+        color: THEME.axisText,
+        fontSize: 11,
+        formatter: magnetizationOnly ? (v: number) => v.toFixed(2) : (v: number) => v.toExponential(1),
       },
-      marker: {
-        color: seriesColors?.[i] ?? SERIES_COLORS[i % SERIES_COLORS.length],
-        size: rowsForPlot.length > 1 ? (showMarkers ? 4 : 0) : 7,
+      splitLine: { lineStyle: { color: THEME.gridLine, type: "dotted" } },
+    }];
+
+    if (unitGroups.rightUnit) {
+      yAxes.push({
+        type: echartsYAxisType,
+        name: `Value (${unitGroups.rightUnit})`,
+        nameLocation: "middle",
+        nameGap: 48,
+        nameTextStyle: { color: THEME.axisText, fontSize: 12 },
+        position: "right",
+        axisLine: { show: true, lineStyle: { color: THEME.axisLine } },
+        axisLabel: { color: THEME.axisText, fontSize: 11 },
+        splitLine: { show: false },
+      });
+    }
+
+    return {
+      backgroundColor: THEME.paper,
+      animation: false,
+      title: chartTitle ? {
+        text: chartTitle,
+        left: "center",
+        top: 4,
+        textStyle: { color: THEME.text, fontSize: 14, fontWeight: 600 },
+      } : undefined,
+      grid: {
+        left: 60,
+        right: unitGroups.rightUnit ? 70 : 26,
+        top: series.length > 1 ? (chartTitle ? 70 : 52) : (chartTitle ? 42 : 20),
+        bottom: showRangeSlider ? 88 : 46,
       },
-      hovertemplate: magnetizationOnly
-        ? `%{y:.4f}<extra>${buildAxisLabel(series)}</extra>`
-        : `%{y:.4e}<extra>${buildAxisLabel(series)}</extra>`,
-    }));
+      xAxis: {
+        type: "value",
+        name: xLabel,
+        nameLocation: "middle",
+        nameGap: 28,
+        nameTextStyle: { color: THEME.axisText, fontSize: 12 },
+        axisLine: { show: true, lineStyle: { color: THEME.axisLine } },
+        axisLabel: {
+          color: THEME.axisText,
+          fontSize: 11,
+          formatter: timeScale
+            ? undefined
+            : magnetizationOnly ? (v: number) => v.toFixed(3) : undefined,
+        },
+        splitLine: { lineStyle: { color: THEME.gridLine, type: "dotted" } },
+      },
+      yAxis: yAxes,
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: THEME.hoverLabel,
+        borderColor: THEME.hoverBorder,
+        borderWidth: 1,
+        textStyle: { color: THEME.hoverText, fontSize: 12 },
+        axisPointer: { type: "cross", lineStyle: { color: "rgba(96,165,250,0.45)", width: 1 } },
+      },
+      legend: series.length > 1 ? {
+        show: true,
+        type: "scroll",
+        orient: "horizontal",
+        top: chartTitle ? 28 : 4,
+        left: 0,
+        textStyle: { color: THEME.axisText, fontSize: 11 },
+        backgroundColor: "rgba(8, 12, 24, 0.72)",
+        borderColor: "rgba(148, 163, 184, 0.18)",
+        borderWidth: 1,
+        padding: [4, 8],
+      } : undefined,
+      dataZoom: showRangeSlider && rowsForPlot.length > 2 ? [{
+        type: "slider",
+        xAxisIndex: 0,
+        bottom: 8,
+        height: 24,
+        borderColor: THEME.axisLine,
+        backgroundColor: "rgba(15,23,42,0.45)",
+        dataBackground: { lineStyle: { color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.15)" } },
+        selectedDataBackground: { lineStyle: { color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.3)" } },
+        handleStyle: { color: "#60a5fa", borderColor: THEME.axisLine },
+        textStyle: { color: THEME.axisText, fontSize: 10 },
+      }, {
+        type: "inside",
+        xAxisIndex: 0,
+      }] : [{
+        type: "inside",
+        xAxisIndex: 0,
+      }],
+      toolbox: {
+        show: true,
+        top: 4,
+        right: 4,
+        itemSize: 18,
+        iconStyle: { borderColor: THEME.axisText, borderWidth: 1 },
+        emphasis: { iconStyle: { borderColor: "#60a5fa" } },
+        feature: {
+          dataZoom: {},
+          restore: { show: true },
+          saveAsImage: { type: "png", name: "fullmag_scalar_plot", pixelRatio: 2 },
+        },
+      },
+      series,
+    };
   }, [
-    xValues,
-    yByKey,
-    rowsForPlot.length,
     availableSeriesMeta,
+    rowsForPlot,
+    xValues,
+    chartTitle,
     magnetizationOnly,
     seriesColors,
     showMarkers,
+    showRangeSlider,
+    timeScale,
     unitGroups,
+    xLabel,
+    yAxisScale,
   ]);
 
-  const layout = useMemo(
-    (): Partial<Plotly.Layout> => ({
-      paper_bgcolor: THEME.paper,
-      plot_bgcolor: THEME.bg,
-      font: {
-        family:
-          "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        size: 12,
-        color: THEME.axisText,
-      },
-      title: chartTitle
-        ? {
-            text: chartTitle,
-            font: { size: 14, color: THEME.text, weight: 600 },
-            x: 0.5,
-            xanchor: "center" as const,
-            y: 0.97,
-          }
-        : undefined,
-      margin: {
-        l: 60,
-        r: unitGroups.rightUnit ? 70 : 26,
-        t: traces.length > 1 ? (chartTitle ? 70 : 52) : (chartTitle ? 42 : 20),
-        b: showRangeSlider ? 88 : 46,
-        pad: 4,
-      },
-      xaxis: {
-        title: { text: xLabel, standoff: 14, font: { size: 12, color: THEME.axisText } },
-        color: THEME.axisText,
-        showgrid: true,
-        gridcolor: THEME.gridLine,
-        gridwidth: 1,
-        griddash: "dot",
-        zeroline: true,
-        zerolinecolor: THEME.zeroLine,
-        zerolinewidth: 1,
-        automargin: true,
-        showline: true,
-        linecolor: THEME.axisLine,
-        tickfont: { size: 11, color: THEME.axisText },
-        exponentformat: timeScale ? "none" : "e",
-        showspikes: true,
-        spikemode: "across",
-        spikethickness: 1,
-        spikecolor: "rgba(96,165,250,0.45)",
-        rangeslider: showRangeSlider && rowsForPlot.length > 2
-          ? {
-              visible: true,
-              thickness: 0.08,
-              bgcolor: "rgba(15,23,42,0.45)",
-              bordercolor: THEME.axisLine,
-            }
-          : undefined,
-        tickformat: timeScale
-          ? timeScale.tickformat
-          : magnetizationOnly ? ".3f" : undefined,
-      },
-      yaxis: {
-        title: {
-          text:
-            availableSeriesMeta.length === 1
-              ? buildAxisLabel(availableSeriesMeta[0])
-              : unitGroups.leftUnit
-                ? `Value (${unitGroups.leftUnit})`
-                : "Value",
-          standoff: 12,
-          font: { size: 12, color: THEME.axisText }
-        },
-        color: THEME.axisText,
-        showgrid: true,
-        gridcolor: THEME.gridLine,
-        gridwidth: 1,
-        griddash: "dot",
-        zeroline: true,
-        zerolinecolor: THEME.zeroLine,
-        zerolinewidth: 1,
-        automargin: true,
-        showline: true,
-        linecolor: THEME.axisLine,
-        tickfont: { size: 11, color: THEME.axisText },
-        type: yAxisScale,
-        showspikes: true,
-        spikemode: "across",
-        spikethickness: 1,
-        spikecolor: "rgba(96,165,250,0.4)",
-        exponentformat: "e",
-        tickformat: magnetizationOnly ? ".2f" : undefined,
-      },
-      yaxis2: unitGroups.rightUnit
-        ? {
-            title: {
-              text: `Value (${unitGroups.rightUnit})`,
-              standoff: 12,
-              font: { size: 12, color: THEME.axisText }
-            },
-            overlaying: "y",
-            side: "right",
-            color: THEME.axisText,
-            showgrid: false,
-            zeroline: false,
-            automargin: true,
-            showline: true,
-            linecolor: THEME.axisLine,
-            tickfont: { size: 11, color: THEME.axisText },
-            type: yAxisScale,
-            exponentformat: "e",
-          }
-        : undefined,
-      showlegend: traces.length > 1,
-      legend: {
-        orientation: "h",
-        yanchor: "bottom",
-        y: 1.02,
-        xanchor: "left",
-        x: 0,
-        font: { size: 11, color: THEME.axisText },
-        bgcolor: "rgba(8, 12, 24, 0.72)",
-        bordercolor: "rgba(148, 163, 184, 0.18)",
-        borderwidth: 1,
-      },
-      hovermode: "x unified",
-      hoverlabel: {
-        bgcolor: THEME.hoverLabel,
-        bordercolor: THEME.hoverBorder,
-        font: { color: THEME.hoverText, size: 12 },
-        namelength: -1,
-      },
-      dragmode: "pan",
-      uirevision: `scalar-plot:${uiRevisionKey}`,
-      modebar: {
-        bgcolor: "transparent",
-        color: THEME.axisText,
-        activecolor: "#60a5fa",
-        orientation: "v",
-      },
-    }),
-    [
-      xLabel,
-      magnetizationOnly,
-      availableSeriesMeta,
-      chartTitle,
-      timeScale,
-      unitGroups.leftUnit,
-      unitGroups.rightUnit,
-      uiRevisionKey,
-      rowsForPlot.length,
-      traces.length,
-      showRangeSlider,
-      yAxisScale,
-    ],
-  );
-
-  const config = useMemo(
-    (): Partial<Plotly.Config> => {
-      const nextConfig: Partial<Plotly.Config> = {
-        responsive: true,
-        displaylogo: false,
-        scrollZoom: true,
-        doubleClick: "reset+autosize",
-        modeBarButtonsToRemove: ["sendDataToCloud"],
-        toImageButtonOptions: {
-          format: "png",
-          filename: "fullmag_scalar_plot",
-          scale: 2,
-        },
-      };
-      if (alwaysShowModeBar) {
-        nextConfig.displayModeBar = true;
-      }
-      return nextConfig;
-    },
-    [alwaysShowModeBar],
-  );
-
   return (
-    <Plot
-      key={`scalar-plot:${uiRevisionKey}`}
-      data={traces}
-      layout={layout}
-      config={config}
-      revision={revision}
-      useResizeHandler
+    <DynamicEChart
+      option={option}
       className="h-full w-full"
-      style={{ width: "100%", height: "100%" }}
+      notMerge
     />
   );
 });

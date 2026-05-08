@@ -11,6 +11,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { VisualizationStateResource } from "@/src/api/types";
 import { createControlRoomApi } from "./controlRoomApi";
+import { mergeProjectedSceneIntoDraft } from "./sceneDraftProjectionMerge";
 import { useSceneDocument } from "@/src/hooks/resources/useSceneDocument";
 import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
@@ -18,6 +19,7 @@ import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelecti
 import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
+import { resolveWorkspaceRuntimeIdentity } from "../../../features/workspace-runtime-lifecycle";
 import {
   useFdmVisualizationSettings,
   useViewportRenderState,
@@ -135,6 +137,7 @@ import {
   resolveViewportScope,
 } from "./shared";
 import {
+  buildSceneDocumentSignature,
   buildScriptBuilderSignature,
   buildScriptBuilderUpdatePayload,
   extractSolverPlan,
@@ -564,9 +567,23 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     typeof metadata?.source_hash === "string"
       ? metadata.source_hash
       : (typeof problemMeta?.source_hash === "string" ? problemMeta.source_hash : null);
-  const workspaceHydrationKey = session
-    ? `${session.started_at_unix_ms}:${session.run_id}:${session.script_path}:${sourceHash ?? "no-source-hash"}`
-    : null;
+  const workspaceRuntimeIdentity = useMemo(
+    () =>
+      resolveWorkspaceRuntimeIdentity({
+        sessionId: session?.session_id ?? null,
+        runId: runtimeRun?.run_id ?? session?.run_id ?? null,
+        scriptPath: session?.script_path ?? null,
+        sourceHash,
+      }),
+    [
+      runtimeRun?.run_id,
+      session?.run_id,
+      session?.script_path,
+      session?.session_id,
+      sourceHash,
+    ],
+  );
+  const workspaceHydrationKey = workspaceRuntimeIdentity.documentIdentity;
   const markPendingWorkspaceSelection = useCallback(
     (nextNodeId: string | null) => {
       const source = sceneDocumentDraft ?? modelBuilderGraph;
@@ -998,7 +1015,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const localBuilderSignature = useMemo(
     () =>
       sceneDocumentDraft != null
-        ? JSON.stringify(sceneDocumentDraft)
+        ? buildSceneDocumentSignature(sceneDocumentDraft)
         : buildScriptBuilderSignature(modelBuilderGraph, {
             solverSettings,
             meshOptions,
@@ -1039,7 +1056,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       if (!scriptBuilder) {
         return null;
       }
-      return JSON.stringify(
+      return buildSceneDocumentSignature(
         remoteSceneDocument ?? buildSceneDocumentFromScriptBuilder(scriptBuilder),
       );
     },
@@ -1124,71 +1141,13 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     projectedScene.study.requested_precision = modelBuilderGraph.study.requested_precision;
     projectedScene.study.requested_mode = modelBuilderGraph.study.requested_mode;
     setSceneDocumentDraft((previousScene) => {
-      if (!previousScene) {
-        return projectedScene;
-      }
-      return {
-        ...projectedScene,
-        scene: previousScene.scene,
-        outputs: previousScene.outputs,
-        editor: previousScene.editor,
-        objects: projectedScene.objects.map((object) => {
-          const existing = previousScene.objects.find(
-            (candidate) => candidate.id === object.id || candidate.name === object.name,
-          );
-          if (!existing) {
-            return object;
-          }
-          return {
-            ...existing,
-            id: object.id,
-            name: object.name,
-            geometry: object.geometry,
-            transform: {
-              ...existing.transform,
-              translation: object.transform.translation,
-            },
-            material_ref: object.material_ref,
-            region_name: object.region_name,
-            magnetization_ref: object.magnetization_ref,
-            physics_stack: object.physics_stack,
-            mesh_override: object.mesh_override,
-          };
-        }),
-        materials: projectedScene.materials.map((material) => {
-          const existing = previousScene.materials.find(
-            (candidate) => candidate.id === material.id,
-          );
-          return existing
-            ? {
-                ...existing,
-                id: material.id,
-                properties: material.properties,
-              }
-            : material;
-        }),
-        magnetization_assets: projectedScene.magnetization_assets.map((asset) => {
-          const existing = previousScene.magnetization_assets.find(
-            (candidate) => candidate.id === asset.id,
-          );
-          if (!existing) {
-            return asset;
-          }
-          const samePreset =
-            existing.kind === asset.kind &&
-            existing.preset_kind === asset.preset_kind;
-          return {
-            ...asset,
-            id: asset.id,
-            mapping: samePreset ? existing.mapping : asset.mapping,
-            texture_transform: samePreset
-              ? existing.texture_transform
-              : asset.texture_transform,
-          };
-        }),
-      };
+      return mergeProjectedSceneIntoDraft({
+        previousScene,
+        projectedScene,
+        remoteScene: remoteSceneDocument,
+      });
     });
-  }, [modelBuilderGraph, workspaceHydrationKey]);
+  }, [modelBuilderGraph, remoteSceneDocument, workspaceHydrationKey]);
 
   /* Scene draft sync is explicit (manual/script sync) — no hidden auto-push effect. */
 
@@ -1412,7 +1371,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setViewMode,
     setFemDockTab,
     setComponent,
-    selectSidebarNode: setSelectedSidebarNodeIdFromUi,
+    setSelectedSidebarNodeId: setSelectedSidebarNodeIdFromUi,
     setSelectedQuantity,
     setFocusObjectRequest,
     setScriptBuilderCurrentModules,
@@ -1541,6 +1500,8 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     isWaitingForCompute,
     latestFieldFrames: runtimeLatestFieldFrames,
     liveApi,
+    fieldDataCacheRunId: runtimeRun?.run_id ?? session?.run_id ?? null,
+    fieldDataCacheSessionId: workspaceRuntimeIdentity.runtimeIdentity,
     meshEntityViewState,
     quantityDescriptorById,
     remoteSceneDocument,

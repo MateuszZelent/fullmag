@@ -48,7 +48,7 @@ export function applyLiveBufferTransition({
   requestFrame,
   cancelFrame,
   reducedMotion = prefersReducedMotion(),
-}: LiveBufferTransitionOptions): () => void {
+}: LiveBufferTransitionOptions): (finish?: boolean) => void {
   const length = Math.min(destination.length, target.length);
   const copyImmediate = () => {
     destination.set(target.subarray(0, length), 0);
@@ -102,10 +102,13 @@ export function applyLiveBufferTransition({
 
   frame = request(step);
 
-  return () => {
+  return (finish = false) => {
     cancelled = true;
     if (frame && cancel) {
       cancel(frame);
+    }
+    if (finish) {
+      copyImmediate();
     }
   };
 }

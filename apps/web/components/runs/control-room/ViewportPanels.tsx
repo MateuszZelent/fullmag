@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 
 import { useViewportDataBridge } from "@/features/viewport-unified/hooks/useViewportDataBridge";
 import { ViewportTabContent } from "@/features/viewport-unified/renderers/ViewportTabContent";
@@ -16,9 +16,16 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea({
   onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
 }) {
   const bridge = useViewportDataBridge();
+  const visibleBridgeRef = useRef(bridge);
+  useEffect(() => {
+    if (viewportVisible) {
+      visibleBridgeRef.current = bridge;
+    }
+  }, [bridge, viewportVisible]);
+  const renderedBridge = viewportVisible ? bridge : visibleBridgeRef.current;
   return (
     <ViewportTabContent
-      bridge={bridge}
+      bridge={renderedBridge}
       viewportVisible={viewportVisible}
       onViewportHealthChange={onViewportHealthChange}
     />

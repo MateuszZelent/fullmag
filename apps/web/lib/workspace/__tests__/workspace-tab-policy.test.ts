@@ -14,10 +14,28 @@ describe("workspace tab mount policy", () => {
     expect(isWebGLWorkspaceTabKind("analyze")).toBe(false);
   });
 
-  it("forces WebGL tabs to active-only even when warm mounting is requested", () => {
+  it("keeps only the primary 3D viewport warm", () => {
     expect(
       resolveWorkspaceTabMountPolicy({
+        id: "core:3d",
         kind: "viewport-3d",
+        requestedMountPolicy: "active-only",
+      }),
+    ).toBe("hidden-mounted");
+  });
+
+  it("forces non-primary WebGL tabs to active-only even when warm mounting is requested", () => {
+    expect(
+      resolveWorkspaceTabMountPolicy({
+        id: "core:2d",
+        kind: "viewport-2d",
+        requestedMountPolicy: "hidden-mounted",
+      }),
+    ).toBe("active-only");
+    expect(
+      resolveWorkspaceTabMountPolicy({
+        id: "result:quantity",
+        kind: "result-quantity",
         requestedMountPolicy: "hidden-mounted",
       }),
     ).toBe("active-only");

@@ -1,10 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
-import Plot from "../plots/DynamicPlot";
+import DynamicEChart, { ECHARTS_THEME } from "../plots/DynamicEChart";
 
 import type { VortexTimeSample, VortexChannel } from "./vortexTypes";
-
 
 const CHANNEL_CONFIG: Record<VortexChannel, { color: string; label: string }> = {
   mx: { color: "#8ec5ff", label: "mₓ(t)" },
@@ -27,8 +26,8 @@ export default function VortexTimeTracePlot({
   selectedChannel,
   timeRangeNs,
 }: VortexTimeTracePlotProps) {
-  const data = useMemo(() => {
-    if (samples.length === 0) return [];
+  const option = useMemo((): echarts.EChartsOption => {
+    if (samples.length === 0) return {};
 
     let filtered = samples;
     if (timeRangeNs) {
@@ -38,23 +37,65 @@ export default function VortexTimeTracePlot({
       );
     }
 
-    return channels.map((ch) => {
+    const series: echarts.SeriesOption[] = channels.map((ch) => {
       const cfg = CHANNEL_CONFIG[ch];
       const isActive = !selectedChannel || selectedChannel === ch;
       return {
-        x: filtered.map((s) => s.time * 1e9), // ns
-        y: filtered.map((s) => s[ch]),
-        type: "scattergl" as const,
-        mode: "lines" as const,
+        type: "line",
         name: cfg.label,
-        line: {
-          color: cfg.color,
-          width: isActive ? 1.5 : 0.8,
-        },
-        opacity: isActive ? 1 : 0.3,
-        hovertemplate: `${cfg.label}: %{y:.6f}<br>t = %{x:.4f} ns<extra></extra>`,
+        data: filtered.map((s) => [s.time * 1e9, s[ch]]),
+        lineStyle: { color: cfg.color, width: isActive ? 1.5 : 0.8, opacity: isActive ? 1 : 0.3 },
+        symbol: "none",
+        large: true,
+        sampling: "lttb",
       };
     });
+
+    return {
+      backgroundColor: "transparent",
+      animation: false,
+      grid: { left: 55, right: 20, top: 30, bottom: 45 },
+      xAxis: {
+        type: "value",
+        name: "Time [ns]",
+        nameLocation: "middle",
+        nameGap: 28,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
+      },
+      yAxis: {
+        type: "value",
+        name: "Magnetization",
+        nameLocation: "middle",
+        nameGap: 38,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 11 },
+        min: -1.05,
+        max: 1.05,
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
+      },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: ECHARTS_THEME.tooltipBg,
+        borderColor: ECHARTS_THEME.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: ECHARTS_THEME.tooltipText, fontSize: 11 },
+      },
+      legend: {
+        show: true,
+        right: 0,
+        top: 0,
+        textStyle: { color: "rgba(200,210,230,0.8)", fontSize: 10 },
+        backgroundColor: "rgba(10,16,28,0.8)",
+        borderColor: "rgba(120,140,170,0.2)",
+        borderWidth: 1,
+        padding: [4, 8],
+      },
+      series,
+    };
   }, [samples, channels, selectedChannel, timeRangeNs]);
 
   if (samples.length === 0) {
@@ -65,46 +106,5 @@ export default function VortexTimeTracePlot({
     );
   }
 
-  return (
-    <Plot
-      data={data}
-      layout={{
-        paper_bgcolor: "transparent",
-        plot_bgcolor: "transparent",
-        margin: { l: 55, r: 20, t: 30, b: 45 },
-        xaxis: {
-          title: { text: "Time [ns]", font: { size: 11, color: "rgba(200,210,230,0.7)" } },
-          gridcolor: "rgba(120,140,170,0.12)",
-          zerolinecolor: "rgba(120,140,170,0.2)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-        },
-        yaxis: {
-          title: { text: "Magnetization", font: { size: 11, color: "rgba(200,210,230,0.7)" } },
-          gridcolor: "rgba(120,140,170,0.12)",
-          zerolinecolor: "rgba(120,140,170,0.2)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-          range: [-1.05, 1.05],
-        },
-        legend: {
-          x: 1,
-          y: 1,
-          xanchor: "right",
-          yanchor: "top",
-          bgcolor: "rgba(10,16,28,0.8)",
-          bordercolor: "rgba(120,140,170,0.2)",
-          font: { size: 10, color: "rgba(200,210,230,0.8)" },
-        },
-        hovermode: "x unified",
-        hoverlabel: {
-          bgcolor: "rgba(10,16,28,0.96)",
-          bordercolor: "rgba(132,156,240,0.55)",
-          font: { size: 11, color: "rgba(225,232,245,0.9)" },
-        },
-        autosize: true,
-      }}
-      config={{ responsive: true, displayModeBar: false }}
-      useResizeHandler
-      className="w-full h-full"
-    />
-  );
+  return <DynamicEChart option={option} className="w-full h-full" />;
 }

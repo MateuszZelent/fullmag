@@ -1,19 +1,12 @@
-export function shouldRenderViewportWebglCanvas({
-  hidden,
-  hostReady,
-  bareCanvas,
-}: {
+export function shouldRenderViewportWebglCanvas(args: {
   hidden: boolean;
   hostReady: boolean;
   bareCanvas: boolean;
 }): boolean {
-  if (hidden) {
-    return false;
-  }
-  if (bareCanvas) {
+  if (args.bareCanvas) {
     return true;
   }
-  return hostReady;
+  return args.hostReady;
 }
 
 export function shouldRenderVectorSurfaceCanvas({

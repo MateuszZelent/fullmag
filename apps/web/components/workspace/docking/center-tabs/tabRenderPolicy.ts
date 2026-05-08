@@ -1,5 +1,8 @@
 import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
-import { isWebGLWorkspaceTabKind } from "@/lib/workspace/workspace-tab-policy";
+import {
+  isCore3DWorkspaceTab,
+  isWebGLWorkspaceTabKind,
+} from "@/lib/workspace/workspace-tab-policy";
 
 type RenderPolicyTab = Pick<WorkspaceTab, "id" | "kind" | "mountPolicy">;
 
@@ -20,6 +23,10 @@ export function isWebGLWorkspaceTab(tab: Pick<WorkspaceTab, "kind">): boolean {
   return isWebGLWorkspaceTabKind(tab.kind);
 }
 
+export function isKeepAliveWorkspaceTab(tab: Pick<WorkspaceTab, "id" | "kind">): boolean {
+  return isCore3DWorkspaceTab(tab);
+}
+
 export function resolveWorkspaceTabRenderDecision(
   tab: RenderPolicyTab,
   activeTabId: string | null | undefined,
@@ -31,9 +38,12 @@ export function resolveWorkspaceTabRenderDecision(
     return {
       render: true,
       visible: true,
-      forceMount: !isWebGLWorkspaceTab(tab) && tab.mountPolicy === "hidden-mounted",
+      forceMount: tab.mountPolicy === "hidden-mounted",
       reason: "active",
     };
+  }
+  if (isKeepAliveWorkspaceTab(tab)) {
+    return { render: true, visible: false, forceMount: true, reason: "hidden-mounted" };
   }
   if (isWebGLWorkspaceTab(tab)) {
     return {
@@ -51,11 +61,9 @@ export function resolveWorkspaceTabRenderDecision(
 
 /**
  * Center-tab panels can own WebGL canvases, Plotly charts, timers, observers,
- * and live subscriptions. Hidden panels must unmount so changing tabs releases
- * CPU/GPU work and browser memory instead of running in the background. WebGL
- * viewport tabs keep their camera/presentation state in stores by default.
- * Hidden WebGL tabs are intentionally active-only: keeping hidden canvases warm
- * retains GPU contexts and has caused tab-switch memory growth.
+ * and live subscriptions. Only the primary 3D viewport stays mounted while
+ * hidden; it receives viewportVisible=false so its render loop pauses. Other
+ * WebGL tabs remain active-only to avoid GPU memory growth.
  */
 export function shouldRenderWorkspaceTabPanel(
   tab: RenderPolicyTab,

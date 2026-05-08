@@ -45,7 +45,7 @@ describe("resolveWorkspaceTabResourceDisposals", () => {
     ]);
   });
 
-  it("disposes the previous active WebGL tab when switching to another WebGL tab", () => {
+  it("does not dispose the keep-alive core 3D viewport on tab-hide", () => {
     expect(
       resolveWorkspaceTabResourceDisposals(
         {
@@ -65,9 +65,32 @@ describe("resolveWorkspaceTabResourceDisposals", () => {
           activeTabId: "core:2d",
         },
       ),
+    ).toEqual([]);
+  });
+
+  it("still disposes non-primary WebGL tabs when they are hidden", () => {
+    expect(
+      resolveWorkspaceTabResourceDisposals(
+        {
+          stage,
+          tabs: [
+            makeTab({ id: "core:3d", kind: "viewport-3d" }),
+            makeTab({ id: "core:2d", key: "core:2d", kind: "viewport-2d" }),
+          ],
+          activeTabId: "core:2d",
+        },
+        {
+          stage,
+          tabs: [
+            makeTab({ id: "core:3d", kind: "viewport-3d" }),
+            makeTab({ id: "core:2d", key: "core:2d", kind: "viewport-2d" }),
+          ],
+          activeTabId: "core:3d",
+        },
+      ),
     ).toEqual([
       {
-        ownerId: "workspace:study:core:3d",
+        ownerId: "workspace:study:core:2d",
         reason: "tab-hide",
       },
     ]);

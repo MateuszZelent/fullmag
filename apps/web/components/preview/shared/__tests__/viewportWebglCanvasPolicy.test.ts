@@ -6,21 +6,21 @@ import {
 } from "../viewportWebglCanvasPolicy";
 
 describe("viewport WebGL canvas policy", () => {
-  it("does not keep hidden WebGL canvases mounted", () => {
+  it("keeps hidden WebGL canvases mounted so frameloop can pause without losing GPU state", () => {
     expect(
       shouldRenderViewportWebglCanvas({
         hidden: true,
         hostReady: true,
         bareCanvas: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRenderVectorSurfaceCanvas({
         canvasEnabled: true,
         hostReady: true,
         viewportVisible: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("shares the same host readiness gate for shell and vector surface canvases", () => {

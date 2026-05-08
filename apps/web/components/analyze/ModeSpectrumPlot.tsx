@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
-import Plot from "../plots/DynamicPlot";
+import { useCallback, useMemo } from "react";
+import DynamicEChart, { ECHARTS_THEME } from "../plots/DynamicEChart";
+import type * as echarts from "echarts";
 
 import type { EigenModeSummary } from "./eigenTypes";
-
 
 const C = {
   bg: "transparent",
@@ -34,25 +34,8 @@ function polColor(pol: string): string {
   return POL_COLOR[key] ?? POL_COLOR.default;
 }
 
-/** Compact legend pills rendered via Plotly annotations */
-function buildLegendAnnotations(): Partial<Plotly.Annotations>[] {
-  const entries: [string, string][] = [
-    ["ip", "#8ec5ff"],
-    ["op", "#c3a6ff"],
-    ["z", "#6ee7b7"],
-    ["mixed", "#fcd34d"],
-  ];
-  return entries.map(([label, color], i) => ({
-    x: 0 + i * 0.18,
-    y: 1.065,
-    xref: "paper" as const,
-    yref: "paper" as const,
-    text: `<span style="color:${color}">●</span> ${label}`,
-    showarrow: false,
-    font: { size: 9.5, color: "rgba(200,210,230,0.6)", family: "ui-monospace, Menlo, Consolas, monospace" },
-    xanchor: "left" as const,
-    yanchor: "bottom" as const,
-  }));
+function toFrequencyGHz(valueHz: number): number {
+  return valueHz / 1e9;
 }
 
 interface ModeSpectrumPlotProps {
@@ -61,182 +44,139 @@ interface ModeSpectrumPlotProps {
   onSelectMode?: (modeIndex: number) => void;
 }
 
-function toFrequencyGHz(valueHz: number): number {
-  return valueHz / 1e9;
-}
-
 export default function ModeSpectrumPlot({
   modes,
   selectedMode,
   onSelectMode,
 }: ModeSpectrumPlotProps) {
-  const plotData = useMemo(() => {
-    const normalStemX: (number | null)[] = [];
-    const normalStemY: (number | null)[] = [];
-    const selStemX: (number | null)[] = [];
-    const selStemY: (number | null)[] = [];
-
-    for (const mode of modes) {
-      const fGHz = toFrequencyGHz(mode.frequency_hz);
-      if (mode.index === selectedMode) {
-        selStemX.push(mode.index, mode.index, null);
-        selStemY.push(0, fGHz, null);
-      } else {
-        normalStemX.push(mode.index, mode.index, null);
-        normalStemY.push(0, fGHz, null);
-      }
-    }
-
-    const markerX = modes.map((m) => m.index);
-    const markerY = modes.map((m) => toFrequencyGHz(m.frequency_hz));
-    const customData = modes.map((m) => m.index);
-    const hoverText = modes.map(
-      (m) =>
-        `<b>Mode ${m.index}</b>  ${(m.frequency_hz / 1e9).toFixed(4)} GHz` +
-        `<br>pol: ${m.dominant_polarization}` +
-        `<br>max amp: ${m.max_amplitude.toExponential(2)}` +
-        (m.k_vector
-          ? `<br>k: (${m.k_vector.map((v) => v.toExponential(1)).join(", ")})`
-          : "<br>k: Γ"),
-    );
-
-    const traces: Partial<Plotly.PlotData>[] = [
-      // Normal stem lines
-      {
-        x: normalStemX,
-        y: normalStemY,
-        type: "scatter",
-        mode: "lines",
-        hoverinfo: "skip",
-        line: { color: C.stem, width: 1 },
-        showlegend: false,
+  const option = useMemo((): echarts.EChartsOption => {
+    // Stem lines: use a custom series for vertical stems
+    const stemData = modes.map((m) => ({
+      value: [m.index, toFrequencyGHz(m.frequency_hz)],
+      itemStyle: {
+        color: m.index === selectedMode ? C.stemSel : C.stem,
       },
-      // Selected stem (highlighted)
-      {
-        x: selStemX,
-        y: selStemY,
-        type: "scatter",
-        mode: "lines",
-        hoverinfo: "skip",
-        line: { color: C.stemSel, width: 2.5 },
-        showlegend: false,
+    }));
+
+    // Marker data with custom data for click handling
+    const markerData = modes.map((m) => ({
+      value: [m.index, toFrequencyGHz(m.frequency_hz)],
+      itemStyle: {
+        color: m.index === selectedMode ? C.sel : polColor(m.dominant_polarization),
+        borderColor: "rgba(8,12,24,0.5)",
+        borderWidth: 1,
       },
-      // All mode markers
-      {
-        x: markerX,
-        y: markerY,
-        type: "scatter",
-        mode: "markers",
-        name: "Modes",
-        customdata: customData as Plotly.Datum[],
-        text: hoverText,
-        hovertemplate: "%{text}<extra></extra>",
-        marker: {
-          color: modes.map((m) =>
-            m.index === selectedMode ? C.sel : polColor(m.dominant_polarization),
-          ),
-          size: modes.map((m) => (m.index === selectedMode ? 14 : 9)),
-          line: { color: "rgba(8,12,24,0.5)", width: 1 },
-          symbol: "circle",
+      symbolSize: m.index === selectedMode ? 14 : 9,
+      _modeIndex: m.index,
+    }));
+
+    const tickVals = modes.length <= 32 ? modes.map((m) => m.index) : undefined;
+
+    return {
+      backgroundColor: C.bg,
+      animation: false,
+      grid: { left: 60, right: 20, top: 36, bottom: 52 },
+      xAxis: {
+        type: "value",
+        name: "Mode index",
+        nameLocation: "middle",
+        nameGap: 30,
+        nameTextStyle: { color: C.text, fontSize: 10.5 },
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: {
+          color: C.text,
+          fontSize: 10,
+          ...(tickVals ? { interval: 0 } : {}),
         },
-        showlegend: false,
+        splitLine: { lineStyle: { color: C.grid } },
+        min: modes.length > 0 ? modes[0].index - 0.5 : 0,
+        max: modes.length > 0 ? modes[modes.length - 1].index + 0.5 : 1,
       },
-    ];
-
-    return traces;
+      yAxis: {
+        type: "value",
+        name: "f (GHz)",
+        nameLocation: "middle",
+        nameGap: 42,
+        nameTextStyle: { color: C.text, fontSize: 10.5 },
+        min: 0,
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: C.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      tooltip: {
+        trigger: "item",
+        backgroundColor: C.hovBg,
+        borderColor: C.hovBorder,
+        borderWidth: 1,
+        textStyle: { color: "#eef4ff", fontSize: 12 },
+        formatter: (params: unknown) => {
+          const p = params as { dataIndex?: number };
+          if (p?.dataIndex == null || !modes[p.dataIndex]) return "";
+          const m = modes[p.dataIndex];
+          return [
+            `<b>Mode ${m.index}</b>  ${(m.frequency_hz / 1e9).toFixed(4)} GHz`,
+            `pol: ${m.dominant_polarization}`,
+            `max amp: ${m.max_amplitude.toExponential(2)}`,
+            m.k_vector
+              ? `k: (${m.k_vector.map((v) => v.toExponential(1)).join(", ")})`
+              : "k: Γ",
+          ].join("<br/>");
+        },
+      },
+      series: [
+        // Stem lines via custom series
+        {
+          type: "custom",
+          data: stemData,
+          renderItem: (_params: unknown, api: echarts.CustomSeriesRenderItemAPI) => {
+            const modeIdx = api.value(0) as number;
+            const fGHz = api.value(1) as number;
+            const bottom = api.coord([modeIdx, 0]);
+            const top = api.coord([modeIdx, fGHz]);
+            const isSelected = modes.find((m) => m.index === modeIdx)?.index === selectedMode;
+            return {
+              type: "line",
+              shape: { x1: bottom[0], y1: bottom[1], x2: top[0], y2: top[1] },
+              style: {
+                stroke: isSelected ? C.stemSel : C.stem,
+                lineWidth: isSelected ? 2.5 : 1,
+              },
+            };
+          },
+          silent: true,
+          z: 1,
+        } as echarts.SeriesOption,
+        // Markers
+        {
+          type: "scatter",
+          data: markerData,
+          symbolSize: (data: unknown) => {
+            const d = data as { symbolSize?: number };
+            return d?.symbolSize ?? 9;
+          },
+          z: 2,
+        },
+      ],
+    };
   }, [modes, selectedMode]);
 
-  const tickVals = modes.length <= 32 ? modes.map((m) => m.index) : undefined;
-
-  const layout = useMemo(
-    (): Partial<Plotly.Layout> => ({
-      paper_bgcolor: C.bg,
-      plot_bgcolor: C.bg,
-      margin: { l: 60, r: 20, t: 36, b: 52 },
-      font: {
-        family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        size: 11,
-        color: C.text,
-      },
-      xaxis: {
-        title: { text: "Mode index", standoff: 6, font: { size: 10.5 } },
-        color: C.text,
-        gridcolor: C.grid,
-        zeroline: false,
-        tickmode: tickVals ? "array" : "auto",
-        tickvals: tickVals,
-        tickfont: { size: 10 },
-      },
-      yaxis: {
-        title: { text: "f (GHz)", standoff: 6, font: { size: 10.5 } },
-        color: C.text,
-        gridcolor: C.grid,
-        zeroline: false,
-        rangemode: "nonnegative",
-        tickfont: { size: 10 },
-      },
-      hovermode: "closest",
-      dragmode: "pan",
-      hoverlabel: {
-        bgcolor: C.hovBg,
-        bordercolor: C.hovBorder,
-        font: { color: "#eef4ff", size: 12 },
-        align: "left",
-      },
-      modebar: { bgcolor: "transparent", color: C.text, activecolor: C.sel },
-      annotations: [
-        ...buildLegendAnnotations(),
-        {
-          x: 1,
-          y: 1.065,
-          xref: "paper",
-          yref: "paper",
-          text: `${modes.length} modes`,
-          showarrow: false,
-          font: { size: 9.5, color: "rgba(190,205,230,0.45)" },
-          xanchor: "right",
-          yanchor: "bottom",
-        },
-      ],
-    }),
-     
-    [modes.length, tickVals],
-  );
-
-  const config = useMemo(
-    (): Partial<Plotly.Config> => ({
-      responsive: true,
-      displaylogo: false,
-      modeBarButtonsToRemove: [
-        "lasso2d",
-        "select2d",
-        "hoverClosestCartesian",
-        "hoverCompareCartesian",
-        "sendDataToCloud",
-      ],
-      toImageButtonOptions: {
-        format: "png",
-        filename: "fullmag_eigen_spectrum",
-        scale: 2,
-      },
-    }),
-    [],
+  const handleClick = useCallback(
+    (params: echarts.ECElementEvent) => {
+      if (params.seriesIndex === 1 && params.dataIndex != null) {
+        const mode = modes[params.dataIndex];
+        if (mode) {
+          onSelectMode?.(mode.index);
+        }
+      }
+    },
+    [modes, onSelectMode],
   );
 
   return (
-    <Plot
-      data={plotData}
-      layout={layout}
-      config={config}
-      useResizeHandler
+    <DynamicEChart
+      option={option}
       className="h-full w-full"
-      style={{ width: "100%", height: "100%" }}
-      onClick={(event: Readonly<Plotly.PlotMouseEvent>) => {
-        const cd = event.points?.[0]?.customdata;
-        if (typeof cd === "number") {
-          onSelectMode?.(cd);
-        }
-      }}
+      onClick={handleClick}
     />
   );
 }

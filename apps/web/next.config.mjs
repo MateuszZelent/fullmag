@@ -18,7 +18,7 @@ const nextConfig = {
   // a function` at runtime. Listing them here forces Next.js's SWC pipeline to
   // transpile them to CJS-compatible modules that webpack handles reliably.
   transpilePackages: ["echarts", "zrender"],
-  webpack(config) {
+  webpack(config, { isServer }) {
     config.resolve = config.resolve ?? {};
     config.resolve.alias = {
       ...(config.resolve.alias ?? {}),
@@ -27,6 +27,10 @@ const nextConfig = {
         "lib/radix/react-compose-refs-shim.ts",
       ),
     };
+    if (isServer) {
+      config.output = config.output ?? {};
+      config.output.chunkFilename = "chunks/[name].js";
+    }
     return config;
   },
 };

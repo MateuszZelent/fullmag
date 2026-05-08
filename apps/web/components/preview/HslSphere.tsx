@@ -50,6 +50,7 @@ interface HslSphereProps {
   className?: string;
   anchorClassName?: string;
   embedded?: boolean;
+  visible?: boolean;
   onOrientationSnapshot?: (snapshot: OrientationDebugSnapshot) => void;
 }
 
@@ -116,6 +117,36 @@ function CameraSync({
   return null;
 }
 
+function CanvasVisibilityInvalidator({ visible }: { visible: boolean }) {
+  const { camera, gl, invalidate, scene } = useThree();
+  const previousVisibleRef = useRef(false);
+  useEffect(() => {
+    const wasVisible = previousVisibleRef.current;
+    previousVisibleRef.current = visible;
+    if (!visible || wasVisible) {
+      return;
+    }
+    let frame = 0;
+    let disposed = false;
+    const kick = () => {
+      if (disposed) {
+        return;
+      }
+      invalidate();
+      gl.render(scene, camera);
+      frame += 1;
+      if (frame < 6) {
+        window.requestAnimationFrame(kick);
+      }
+    };
+    kick();
+    return () => {
+      disposed = true;
+    };
+  }, [camera, gl, invalidate, scene, visible]);
+  return null;
+}
+
 /* ── Component ─────────────────────────────────────────────── */
 
 export default function HslSphere({
@@ -126,6 +157,7 @@ export default function HslSphere({
   className = "",
   anchorClassName,
   embedded = false,
+  visible = true,
   onOrientationSnapshot,
 }: HslSphereProps) {
   const sphereSize = compact ? Math.round(size * 0.82) : size;
@@ -177,6 +209,7 @@ export default function HslSphere({
             mainCameraRef={sceneRef}
             axisConvention={axisConvention}
             compact={compact}
+            visible={visible}
             onOrientationSnapshot={onOrientationSnapshot}
           />
         </Canvas>
@@ -191,11 +224,13 @@ function HslSphereScene({
   mainCameraRef,
   axisConvention,
   compact,
+  visible,
   onOrientationSnapshot,
 }: {
   mainCameraRef: MutableRefObject<{ camera: THREE.Camera } | null>;
   axisConvention: AxisConvention;
   compact: boolean;
+  visible: boolean;
   onOrientationSnapshot?: (snapshot: OrientationDebugSnapshot) => void;
 }) {
   const glowGeo = useMemo(
@@ -262,6 +297,7 @@ function HslSphereScene({
   return (
     <>
       <CameraSync mainCameraRef={mainCameraRef} onOrientationSnapshot={onOrientationSnapshot} />
+      <CanvasVisibilityInvalidator visible={visible} />
 
       <mesh geometry={glowGeo} material={glowMat} />
 

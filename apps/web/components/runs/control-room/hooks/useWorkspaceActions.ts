@@ -562,6 +562,15 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
         if (normalizedMode === "2D") {
           setComponent((prev) => (prev === "magnitude" ? "x" : prev));
         }
+        if (normalizedMode === "3D") {
+          setComponent((prev) => (prev === "x" || prev === "y" || prev === "z" ? "magnitude" : prev));
+        }
+        if (normalizedMode === "3D" || normalizedMode === "2D") {
+          void patchDisplay({
+            view_mode: normalizedMode === "3D" ? "3d" : "2d",
+            field_component: normalizedMode === "3D" ? "magnitude" : "x",
+          });
+        }
       },
     });
   }, [

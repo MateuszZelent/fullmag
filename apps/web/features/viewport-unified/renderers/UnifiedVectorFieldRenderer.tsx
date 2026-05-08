@@ -112,11 +112,40 @@ export function shouldShowVectorSurfaceOrientationReference(args: {
   orientationReferenceKillSwitch: boolean;
 }): boolean {
   return Boolean(
-    args.viewportVisible &&
-      !args.geometryMode &&
+    !args.geometryMode &&
       args.orientationReferenceKillSwitch &&
       args.viewport3DModel?.overlays.orientationReferenceVisible,
   );
+}
+
+function WarmRevealInvalidator({ visible }: { visible: boolean }) {
+  const { camera, gl, invalidate, scene } = useThree();
+  const previousVisibleRef = useRef(false);
+  useEffect(() => {
+    const wasVisible = previousVisibleRef.current;
+    previousVisibleRef.current = visible;
+    if (wasVisible || !visible) {
+      return;
+    }
+    let frame = 0;
+    let disposed = false;
+    const kick = () => {
+      if (disposed) {
+        return;
+      }
+      invalidate();
+      gl.render(scene, camera);
+      frame += 1;
+      if (frame < 6) {
+        window.requestAnimationFrame(kick);
+      }
+    };
+    kick();
+    return () => {
+      disposed = true;
+    };
+  }, [camera, gl, invalidate, scene, visible]);
+  return null;
 }
 
 function formatCameraFitNumber(value: number): string {
@@ -961,7 +990,7 @@ function UnifiedVectorFieldRendererInner({
     modelVectorData?.grid && modelVectorData.grid.every((value) => value > 0)
       ? modelVectorData.grid
       : grid;
-  const deferredVectors = useDeferredValue(viewportVisible ? effectiveVectors : null);
+  const deferredVectors = useDeferredValue(effectiveVectors);
   const deferredGrid = useDeferredValue(effectiveGrid);
   const deferredSettings = useDeferredValue(settings);
   // Vectors-visible flag from toolbar (glyph mode toggle).
@@ -1182,6 +1211,9 @@ function UnifiedVectorFieldRendererInner({
     }
   }, [rotationSnapshotsEnabled, syncViewportRotationSnapshot]);
   const persistCameraState = useCallback(() => {
+    if (!viewportVisible) {
+      return;
+    }
     if (cameraInteractionActiveRef.current) {
       return;
     }
@@ -1217,7 +1249,7 @@ function UnifiedVectorFieldRendererInner({
       up: state.up,
       target: state.target,
     });
-  }, [cameraPersistenceKey, onPersistCameraState, telemetry]);
+  }, [cameraPersistenceKey, onPersistCameraState, telemetry, viewportVisible]);
   const cameraPersistenceController = useViewportCameraPersistenceController(persistCameraState);
   const handleCameraInteractionChange = useCallback((active: boolean) => {
     cameraInteractionActiveRef.current = active;
@@ -1231,9 +1263,12 @@ function UnifiedVectorFieldRendererInner({
     handleCameraInteractionChange(false);
   }, [handleCameraInteractionChange]);
   const handleSceneCameraChange = useCallback(() => {
+    if (!viewportVisible) {
+      return;
+    }
     syncViewportRotationSnapshot();
     cameraPersistenceController.schedule();
-  }, [cameraPersistenceController, syncViewportRotationSnapshot]);
+  }, [cameraPersistenceController, syncViewportRotationSnapshot, viewportVisible]);
   useSceneCameraChange(viewCubeSceneRef, handleSceneCameraChange, {
     onInteractionStart: handleCameraInteractionStart,
     onInteractionEnd: handleCameraInteractionEnd,
@@ -1907,6 +1942,7 @@ function UnifiedVectorFieldRendererInner({
               sceneRef={viewCubeSceneRef}
               axisConvention={VECTOR_SURFACE_AXIS_CONVENTION}
               size={156}
+              visible={viewportVisible}
               onOrientationSnapshot={(snapshot) => updateRotationSnapshot("hsl", snapshot)}
             />
           ) : null}
@@ -2139,6 +2175,7 @@ function UnifiedVectorFieldRendererInner({
               hidden={!viewportVisible}
               onStats={telemetry.update}
             />
+            <WarmRevealInvalidator visible={viewportVisible} />
             <color attach="background" args={[BG_COLOR]} />
             <SceneConfig toneMapping={settings.quality !== "low"} />
 

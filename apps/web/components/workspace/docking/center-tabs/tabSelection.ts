@@ -26,6 +26,21 @@ export function isAnalyzeLikeTab(tab: WorkspaceTab): boolean {
   return tab.kind.startsWith("result-");
 }
 
+export function viewportModeForWorkspaceTab(
+  tab: WorkspaceTab | null,
+): "3D" | "2D" | "Mesh" | "Analyze" | null {
+  if (!tab) return null;
+  if (tab.kind === "viewport-3d") return "3D";
+  if (tab.kind === "viewport-2d") return "2D";
+  if (tab.kind === "viewport-mesh") return "Mesh";
+  if (tab.kind === "analyze") return "Analyze";
+  const payloadMode = tab.payload?.viewMode;
+  if (payloadMode === "3D" || payloadMode === "2D" || payloadMode === "Mesh" || payloadMode === "Analyze") {
+    return payloadMode;
+  }
+  return null;
+}
+
 function analyzeSelectionForTab(tab: WorkspaceTab):
   | { domain: "eigenmodes" | "vortex"; tab: AnalyzeTab; selectedModeIndex?: number | null }
   | null {

@@ -307,7 +307,7 @@ function FdmInstances({
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const displayToCellRef = useRef<Uint32Array | null>(null);
   const renderSignatureRef = useRef<string | null>(null);
-  const transitionCleanupRef = useRef<(() => void) | null>(null);
+  const transitionCleanupRef = useRef<((finish?: boolean) => void) | null>(null);
   const scheduleInvalidate = useBatchedInvalidate();
   const [nx, ny, nz] = grid;
   const count = nx * ny * nz;
@@ -512,7 +512,7 @@ function FdmInstances({
 
     // Toolbar "vectors off" — clear instances without rebuilding geometry.
     if (!vectorsVisible) {
-      transitionCleanupRef.current?.();
+      transitionCleanupRef.current?.(true);
       transitionCleanupRef.current = null;
       mesh.count = 0;
       renderSignatureRef.current = renderSignature;
@@ -540,7 +540,7 @@ function FdmInstances({
     const commitInstanceUpdate = (visible: number, animateLiveUpdate: boolean) => {
       mesh.count = visible;
       onVisibleCount?.(visible);
-      transitionCleanupRef.current?.();
+      transitionCleanupRef.current?.(true);
       const canAnimate = Boolean(
         animateLiveUpdate &&
         previousMatrices &&
@@ -602,7 +602,7 @@ function FdmInstances({
     const { minIx, maxIx, minIy, maxIy, minIz, maxIz } = gridBounds;
 
     if (gridBounds.empty) {
-      transitionCleanupRef.current?.();
+      transitionCleanupRef.current?.(true);
       transitionCleanupRef.current = null;
       mesh.count = 0;
       renderSignatureRef.current = renderSignature;
@@ -627,7 +627,7 @@ function FdmInstances({
     }
 
     if (!hasVectors && !geometryMode) {
-      transitionCleanupRef.current?.();
+      transitionCleanupRef.current?.(true);
       transitionCleanupRef.current = null;
       mesh.count = 0;
       renderSignatureRef.current = renderSignature;
@@ -861,7 +861,7 @@ function FdmInstances({
       colors[outBase + 1] = _color.g;
       colors[outBase + 2] = _color.b;
     }
-    transitionCleanupRef.current?.();
+    transitionCleanupRef.current?.(true);
     if (!canAnimateColorPatch || !previousColors) {
       mesh.instanceColor.needsUpdate = true;
       scheduleInvalidate();

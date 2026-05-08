@@ -39,12 +39,12 @@
     "nanoid": "^5.1.9",
     "next": "^15.5.14",
     "openapi-fetch": "^0.17.0",
-    "plotly.js": "^3.4.0",
+
     "postcss": "^8.5.8",
     "radix-ui": "^1.4.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "react-plotly.js": "^2.6.0",
+
     "react-resizable-panels": "^4.7.6",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
@@ -53,10 +53,10 @@
   },
   "devDependencies": {
     "@types/node": "22.15.0",
-    "@types/plotly.js": "^3.0.10",
+
     "@types/react": "19.1.2",
     "@types/react-dom": "19.1.2",
-    "@types/react-plotly.js": "^2.6.4",
+
     "@types/three": "^0.183.1",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.1",

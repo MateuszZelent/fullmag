@@ -53,6 +53,38 @@ describe("liveBufferAnimation", () => {
     expect(scheduleInvalidate).toHaveBeenCalledTimes(2);
   });
 
+  it("can finish the target buffer when an interrupted transition is superseded", () => {
+    const destination = new Float32Array([0, 0]);
+    const target = new Float32Array([10, 20]);
+    const frames: FrameRequestCallback[] = [];
+    const markNeedsUpdate = vi.fn();
+    const scheduleInvalidate = vi.fn();
+    const cancelFrame = vi.fn();
+
+    const cleanup = applyLiveBufferTransition({
+      destination,
+      target,
+      durationMs: 100,
+      reducedMotion: false,
+      now: () => 0,
+      requestFrame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame,
+      markNeedsUpdate,
+      scheduleInvalidate,
+    });
+
+    frames.shift()?.(25);
+    expect(Array.from(destination)).not.toEqual([10, 20]);
+    cleanup(true);
+    expect(Array.from(destination)).toEqual([10, 20]);
+    expect(cancelFrame).toHaveBeenCalledTimes(1);
+    expect(markNeedsUpdate).toHaveBeenCalledTimes(2);
+    expect(scheduleInvalidate).toHaveBeenCalledTimes(2);
+  });
+
   it("respects the animation value budget", () => {
     expect(shouldAnimateLiveBuffer({ length: 8, maxAnimatedValues: 8 })).toBe(true);
     expect(shouldAnimateLiveBuffer({ length: 9, maxAnimatedValues: 8 })).toBe(false);

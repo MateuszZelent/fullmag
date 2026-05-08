@@ -510,6 +510,75 @@ export function buildScriptBuilderUpdatePayload(
   );
 }
 
+/**
+ * Fast DJB2-style string hash — O(n) on string length, not deep object size.
+ * Used to produce compact fingerprints from small key strings.
+ */
+function djb2(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+/**
+ * Build a lightweight structural signature from a SceneDocument.
+ *
+ * Instead of `JSON.stringify(document)` (O(document_size), megabytes of GC
+ * pressure), we hash a small fingerprint string composed of:
+ *   - revision number
+ *   - object count + names
+ *   - study config hash (backend, device, precision, mode)
+ *   - stage count + stage kinds
+ *   - module count + module names
+ *   - key solver settings
+ *   - key mesh settings
+ *
+ * Any meaningful document change will flip at least one of these fields.
+ */
+export function buildSceneDocumentSignature(
+  scene: {
+    revision?: number;
+    objects?: Array<{ name?: string; id?: string }>;
+    study?: {
+      requested_backend?: unknown;
+      requested_device?: unknown;
+      requested_precision?: unknown;
+      requested_mode?: unknown;
+    };
+  } | null,
+): string {
+  if (!scene) return "null";
+  const parts: string[] = [
+    `r:${scene.revision ?? 0}`,
+    `o:${scene.objects?.length ?? 0}`,
+  ];
+  if (scene.objects) {
+    for (const obj of scene.objects) {
+      parts.push(obj.name ?? obj.id ?? "?");
+    }
+  }
+  if (scene.study) {
+    const s = scene.study;
+    parts.push(
+      `sb:${s.requested_backend ?? ""}`,
+      `sd:${s.requested_device ?? ""}`,
+      `sp:${s.requested_precision ?? ""}`,
+      `sm:${s.requested_mode ?? ""}`,
+    );
+  }
+  const fingerprint = parts.join("|");
+  return `sig:${djb2(fingerprint)}:${fingerprint.length}:${scene.revision ?? 0}`;
+}
+
+/**
+ * Build a cheap structural signature from the model builder graph and/or
+ * fallback state. Replaces the old `JSON.stringify(buildScriptBuilderUpdatePayload(...))`
+ * which was serializing the entire deep document on every recompute.
+ *
+ * The signature changes whenever any structural property of the model changes.
+ */
 export function buildScriptBuilderSignature(
   modelBuilderGraph: ModelBuilderGraphV2 | null,
   fallback: {
@@ -523,9 +592,61 @@ export function buildScriptBuilderSignature(
     excitationAnalysis: ScriptBuilderExcitationAnalysisEntry | null;
   },
 ): string {
-  return JSON.stringify(
-    buildScriptBuilderUpdatePayload(modelBuilderGraph, fallback),
-  );
+  if (modelBuilderGraph) {
+    const g = modelBuilderGraph;
+    const parts: string[] = [
+      `rev:${g.revision ?? 0}`,
+      `obj:${g.objects?.items?.length ?? 0}`,
+      `stg:${g.study?.stages?.length ?? 0}`,
+      `geo:${g.objects?.items?.length ?? 0}`,
+      `be:${g.study?.requested_backend ?? ""}`,
+      `dev:${g.study?.requested_device ?? ""}`,
+      `prec:${g.study?.requested_precision ?? ""}`,
+      `mode:${g.study?.requested_mode ?? ""}`,
+      `demag:${g.study?.demag_realization ?? ""}`,
+      `int:${g.study?.solver?.integrator ?? ""}`,
+      `dt:${g.study?.solver?.fixed_timestep ?? ""}`,
+    ];
+    // Include object names for identity
+    if (g.objects?.items) {
+      for (const obj of g.objects.items) {
+        parts.push(`n:${obj.name ?? obj.id ?? "?"}`);
+      }
+    }
+    // Include mesh hmax/hmin for mesh-config sensitivity
+    parts.push(`hx:${fallback.meshOptions.hmax ?? ""}`);
+    parts.push(`hn:${fallback.meshOptions.hmin ?? ""}`);
+    parts.push(`a2d:${fallback.meshOptions.algorithm2d ?? ""}`);
+    parts.push(`a3d:${fallback.meshOptions.algorithm3d ?? ""}`);
+    const fingerprint = parts.join("|");
+    return `bsig:${djb2(fingerprint)}:${fingerprint.length}:${g.revision ?? 0}`;
+  }
+
+  // Fallback path: no model builder graph — hash the fallback fields
+  const parts: string[] = [
+    `int:${fallback.solverSettings.integrator ?? ""}`,
+    `dt:${fallback.solverSettings.fixedTimestep ?? ""}`,
+    `relax:${fallback.solverSettings.relaxAlgorithm ?? ""}`,
+    `demag:${fallback.demagRealization ?? ""}`,
+    `stg:${fallback.stages.length}`,
+    `geo:${fallback.geometries.length}`,
+    `mod:${fallback.currentModules.length}`,
+    `exc:${fallback.excitationAnalysis != null ? "1" : "0"}`,
+    `hx:${fallback.meshOptions.hmax ?? ""}`,
+    `hn:${fallback.meshOptions.hmin ?? ""}`,
+    `a2d:${fallback.meshOptions.algorithm2d ?? ""}`,
+    `a3d:${fallback.meshOptions.algorithm3d ?? ""}`,
+  ];
+  // Include geometry names
+  for (const geo of fallback.geometries) {
+    parts.push(`gn:${geo.name ?? "?"}`);
+  }
+  // Include module names
+  for (const mod of fallback.currentModules) {
+    parts.push(`mn:${mod.name ?? "?"}`);
+  }
+  const fingerprint = parts.join("|");
+  return `fbsig:${djb2(fingerprint)}:${fingerprint.length}`;
 }
 
 /* ── File I/O helpers ── */

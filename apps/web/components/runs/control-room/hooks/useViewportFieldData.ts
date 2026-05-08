@@ -16,13 +16,15 @@ import {
   type ScopedFemVectorFrame,
 } from "../femVectorScopes";
 import {
-  BINARY_FIELD_CACHE_MAX_BYTES,
-  SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
-  estimateBinaryFieldCacheBytes,
-  estimateBinaryFieldFrameBytes,
-  estimateScopedBinaryFieldFrameBytes,
   femVectorScopeKey,
-  pruneBinaryFieldCache,
+  femMeshTransportKey,
+  buildViewportFieldDataCacheKey,
+  getGlobalBinaryFieldCacheStats,
+  getGlobalBinaryFieldFrame,
+  getGlobalScopedBinaryFieldCacheStats,
+  getGlobalScopedBinaryFieldFrame,
+  putGlobalBinaryFieldFrame,
+  putGlobalScopedBinaryFieldFrame,
   type BinaryFieldFrame,
   type ScopedBinaryFieldFrame,
 } from "../binaryFieldCache";
@@ -99,6 +101,8 @@ export function useViewportFieldData({
   isWaitingForCompute,
   latestFieldFrames,
   liveApi,
+  fieldDataCacheRunId,
+  fieldDataCacheSessionId,
   meshEntityViewState,
   quantityDescriptorById,
   remoteSceneDocument,
@@ -124,6 +128,8 @@ export function useViewportFieldData({
   isWaitingForCompute: boolean;
   latestFieldFrames: Record<string, LatestFieldFrame>;
   liveApi: LiveFieldApi;
+  fieldDataCacheRunId: string | null;
+  fieldDataCacheSessionId: string | null;
   meshEntityViewState: Parameters<typeof deriveFemVectorScopes>[0]["meshEntityViewState"];
   quantityDescriptorById: Map<string, QuantityDescriptor>;
   remoteSceneDocument: SceneDocument | null;
@@ -141,8 +147,6 @@ export function useViewportFieldData({
   const vizMeshShowArrows = useVisualizationStore((s) => selectEffectiveViewportVizState(s).meshShowArrows);
   const vizShowQuantity = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femViewportLayers.showQuantity);
   const vizShowMagneticTexture = useVisualizationStore((s) => selectEffectiveViewportVizState(s).femViewportLayers.showMagneticTexture);
-  const binaryFieldCacheRef = useRef<Map<string, BinaryFieldFrame>>(new Map());
-  const scopedBinaryFieldCacheRef = useRef<Map<string, ScopedBinaryFieldFrame>>(new Map());
   const lastFieldDataRevisionRef = useRef<string | null>(null);
   const fieldDataTimestampRef = useRef<number | null>(null);
   const lastQuantitySwitchTraceKeyRef = useRef<string | null>(null);
@@ -213,13 +217,32 @@ export function useViewportFieldData({
       ?? selectedFieldFrame.source_step
       ?? selectedFieldFrame.source_time
       ?? "none";
-    return [
-      activeQuantityId,
-      revision,
-      selectedFieldFrame.n_comp,
-      selectedFieldFrame.grid.join("x"),
-    ].join(":");
-  }, [activeQuantityId, binaryFieldTransportEnabled, selectedFieldFrame]);
+    return buildViewportFieldDataCacheKey({
+      identity: {
+        sessionId: fieldDataCacheSessionId,
+        runId: fieldDataCacheRunId,
+        meshGenerationId:
+          femMeshTransportKey(femMesh) ??
+          activeFemGenerationSignature ??
+          selectedFieldFrame.topology_signature ??
+          "no-mesh",
+      },
+      fieldRevision: revision,
+      quantityId: activeQuantityId,
+      component: "full",
+      scopeKey: "full",
+      nComp: selectedFieldFrame.n_comp,
+      grid: selectedFieldFrame.grid,
+    });
+  }, [
+    activeFemGenerationSignature,
+    activeQuantityId,
+    binaryFieldTransportEnabled,
+    femMesh,
+    fieldDataCacheRunId,
+    fieldDataCacheSessionId,
+    selectedFieldFrame,
+  ]);
 
   const scopedFemVectorScopes = useMemo(
     () =>
@@ -261,24 +284,35 @@ export function useViewportFieldData({
       selectedFieldFrame.source_step ??
       selectedFieldFrame.source_time ??
       "none";
-    return [
-      activeQuantityId,
-      revision,
-      selectedFieldFrame.n_comp,
-      femMesh?.generation_id ?? femMesh?.mesh_id ?? "no-mesh",
-      femMesh?.node_count ?? 0,
-      femVectorScopeKey(scopedFemVectorScopes),
-    ].join(":");
+    const scopeKey = femVectorScopeKey(scopedFemVectorScopes);
+    return buildViewportFieldDataCacheKey({
+      identity: {
+        sessionId: fieldDataCacheSessionId,
+        runId: fieldDataCacheRunId,
+        meshGenerationId:
+          femMeshTransportKey(femMesh) ??
+          activeFemGenerationSignature ??
+          selectedFieldFrame.topology_signature ??
+          "no-mesh",
+      },
+      fieldRevision: revision,
+      quantityId: activeQuantityId,
+      component: "full",
+      scopeKey,
+      nComp: selectedFieldFrame.n_comp,
+      grid: selectedFieldFrame.grid,
+    });
   }, [
+    activeFemGenerationSignature,
     activeQuantityId,
     binaryFieldTransportEnabled,
     effectiveViewMode,
     vizShowMagneticTexture,
     vizShowQuantity,
     vizMeshShowArrows,
-    femMesh?.generation_id,
-    femMesh?.mesh_id,
-    femMesh?.node_count,
+    femMesh,
+    fieldDataCacheRunId,
+    fieldDataCacheSessionId,
     isFemBackend,
     scopedFemVectorScopes,
     selectedFieldFrame,
@@ -306,35 +340,38 @@ export function useViewportFieldData({
       selectedFieldFrame.values.length > 0
     ) {
       setSelectedBinaryFieldFrame(null);
+      const cacheStats = getGlobalBinaryFieldCacheStats();
       updateFrontendResourceBucket({
         id: "binary-field-cache",
         label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
+        entries: cacheStats.entries,
+        estimatedBytes: cacheStats.estimatedBytes,
+        capacity: cacheStats.capacity,
       });
       return;
     }
     if (!selectedFieldTransportKey) {
       setSelectedBinaryFieldFrame(null);
+      const cacheStats = getGlobalBinaryFieldCacheStats();
       updateFrontendResourceBucket({
         id: "binary-field-cache",
         label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
+        entries: cacheStats.entries,
+        estimatedBytes: cacheStats.estimatedBytes,
+        capacity: cacheStats.capacity,
       });
       return;
     }
-    const cached = binaryFieldCacheRef.current.get(selectedFieldTransportKey) ?? null;
+    const cached = getGlobalBinaryFieldFrame(selectedFieldTransportKey);
     if (cached) {
       setSelectedBinaryFieldFrame(cached);
+      const cacheStats = getGlobalBinaryFieldCacheStats();
       updateFrontendResourceBucket({
         id: "binary-field-cache",
         label: "Binary field cache",
-        entries: binaryFieldCacheRef.current.size,
-        estimatedBytes: estimateBinaryFieldCacheBytes(binaryFieldCacheRef.current),
-        capacity: BINARY_FIELD_CACHE_MAX_BYTES,
+        entries: cacheStats.entries,
+        estimatedBytes: cacheStats.estimatedBytes,
+        capacity: cacheStats.capacity,
       });
       return;
     }
@@ -352,19 +389,13 @@ export function useViewportFieldData({
           nComp: decoded.nComp,
           grid: decoded.grid,
         };
-        const cache = binaryFieldCacheRef.current;
-        cache.set(selectedFieldTransportKey, nextFrame);
-        const estimatedBytes = pruneBinaryFieldCache(
-          cache,
-          estimateBinaryFieldFrameBytes,
-          BINARY_FIELD_CACHE_MAX_BYTES,
-        );
+        const cacheStats = putGlobalBinaryFieldFrame(nextFrame);
         updateFrontendResourceBucket({
           id: "binary-field-cache",
           label: "Binary field cache",
-          entries: cache.size,
-          estimatedBytes,
-          capacity: BINARY_FIELD_CACHE_MAX_BYTES,
+          entries: cacheStats.entries,
+          estimatedBytes: cacheStats.estimatedBytes,
+          capacity: cacheStats.capacity,
         });
         if (!controller.signal.aborted) {
           setSelectedBinaryFieldFrame(nextFrame);
@@ -399,7 +430,7 @@ export function useViewportFieldData({
       setSelectedScopedBinaryFieldFrame(null);
       return;
     }
-    const cached = scopedBinaryFieldCacheRef.current.get(scopedFieldTransportKey) ?? null;
+    const cached = getGlobalScopedBinaryFieldFrame(scopedFieldTransportKey);
     if (cached) {
       setSelectedScopedBinaryFieldFrame(cached);
       return;
@@ -434,19 +465,13 @@ export function useViewportFieldData({
           activeMask: dense.activeMask,
           scopes: scopedFemVectorScopes,
         };
-        const cache = scopedBinaryFieldCacheRef.current;
-        cache.set(scopedFieldTransportKey, nextFrame);
-        const estimatedBytes = pruneBinaryFieldCache(
-          cache,
-          estimateScopedBinaryFieldFrameBytes,
-          SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
-        );
+        const cacheStats = putGlobalScopedBinaryFieldFrame(nextFrame);
         updateFrontendResourceBucket({
           id: "scoped-binary-field-cache",
           label: "Scoped binary field cache",
-          entries: cache.size,
-          estimatedBytes,
-          capacity: SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
+          entries: cacheStats.entries,
+          estimatedBytes: cacheStats.estimatedBytes,
+          capacity: cacheStats.capacity,
         });
         return nextFrame;
       })

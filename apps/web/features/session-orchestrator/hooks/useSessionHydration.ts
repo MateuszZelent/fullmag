@@ -113,14 +113,10 @@ export function useSessionHydration({
     pendingMeshConfigSignatureRef.current = null;
     setLastBuiltMeshConfigSignature(null);
     setSolverSettingsHydrated(false);
-    setModelBuilderGraph(null);
-    setSceneDocumentDraft(null);
   }, [
     pendingMeshConfigSignatureRef,
     resetAutoSync,
     setLastBuiltMeshConfigSignature,
-    setModelBuilderGraph,
-    setSceneDocumentDraft,
     workspaceHydrationKey,
   ]);
 

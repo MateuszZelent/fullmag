@@ -7,7 +7,7 @@
  *
  *   Query (toolbar) → Engine (femSliceExact) → Renderer (Plotly) → Probe
  *
- * It wraps the existing `FemMeshSlice2DPlotly` renderer but drives it
+ * It wraps the existing `FemMeshSlice2DECharts` renderer but drives it
  * through the canonical `FemSliceQuery` model instead of ad-hoc props.
  *
  * The old prop interface is still supported via the `legacy` prop group

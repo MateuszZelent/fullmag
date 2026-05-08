@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { applyWorkspaceTabSelection, type WorkspaceTabSelectionApi } from "../tabSelection";
+import {
+  applyWorkspaceTabSelection,
+  viewportModeForWorkspaceTab,
+  type WorkspaceTabSelectionApi,
+} from "../tabSelection";
 import type { WorkspaceMode, WorkspaceTab } from "@/lib/workspace/workspace-store";
 
 function makeTab(patch: Partial<WorkspaceTab>): WorkspaceTab {
@@ -181,5 +185,33 @@ describe("applyWorkspaceTabSelection", () => {
 
     expect(api.handleViewModeChange).not.toHaveBeenCalled();
     expect(api.setWorkspaceMode).toHaveBeenCalledWith(stage);
+  });
+});
+
+describe("viewportModeForWorkspaceTab", () => {
+  it("resolves core viewport tab mode for atomic tab-click transitions", () => {
+    expect(viewportModeForWorkspaceTab(makeTab({ id: "core:3d", kind: "viewport-3d" }))).toBe("3D");
+    expect(viewportModeForWorkspaceTab(makeTab({ id: "core:2d", kind: "viewport-2d" }))).toBe("2D");
+    expect(
+      viewportModeForWorkspaceTab(
+        makeTab({
+          id: "core:mesh",
+          kind: "viewport-mesh",
+          payload: { viewMode: "Mesh" },
+        }),
+      ),
+    ).toBe("Mesh");
+  });
+
+  it("does not treat result quantity tabs as core viewport mode changes", () => {
+    expect(
+      viewportModeForWorkspaceTab(
+        makeTab({
+          id: "result:m",
+          kind: "result-quantity",
+          payload: { quantityId: "m" },
+        }),
+      ),
+    ).toBeNull();
   });
 });

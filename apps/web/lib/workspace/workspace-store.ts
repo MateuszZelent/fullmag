@@ -90,7 +90,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "3D Viewport",
       closable: false,
       pinned: true,
-      mountPolicy: "active-only",
+      mountPolicy: "hidden-mounted",
       payload: { viewMode: "3D" },
     },
     {
@@ -137,6 +137,7 @@ export function normalizeWorkspaceTab(tab: WorkspaceTabNormalizerInput): Workspa
   const requestedMountPolicy: WorkspaceTabMountPolicy =
     tab.mountPolicy ?? (tab.lifecycle === "warm" || tab.keepAlive ? "hidden-mounted" : "active-only");
   const mountPolicy = resolveWorkspaceTabMountPolicy({
+    id: tab.id,
     kind: tab.kind,
     requestedMountPolicy,
   });

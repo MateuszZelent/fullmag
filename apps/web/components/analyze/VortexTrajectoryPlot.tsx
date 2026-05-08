@@ -1,10 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
-import Plot from "../plots/DynamicPlot";
+import DynamicEChart, { ECHARTS_THEME } from "../plots/DynamicEChart";
 
 import type { VortexTimeSample } from "./vortexTypes";
-
 
 interface VortexTrajectoryPlotProps {
   samples: VortexTimeSample[];
@@ -22,69 +21,93 @@ interface VortexTrajectoryPlotProps {
  */
 export default function VortexTrajectoryPlot({
   samples,
-  diskRadiusNm,
 }: VortexTrajectoryPlotProps) {
-  const data = useMemo(() => {
-    if (samples.length === 0) return [];
+  const option = useMemo((): echarts.EChartsOption => {
+    if (samples.length === 0) return {};
 
-    const traces: Plotly.Data[] = [];
-
-    // Full trajectory (color-coded by time)
-    traces.push({
-      x: samples.map((s) => s.mx),
-      y: samples.map((s) => s.my),
-      type: "scattergl",
-      mode: "lines",
-      name: "Trajectory",
-      line: {
-        color: "rgba(142,197,255,0.75)",
-        width: 1.2,
-      },
-      hovertemplate:
-        "mₓ = %{x:.6f}<br>m_y = %{y:.6f}<extra></extra>",
-    });
-
-    // Start marker
-    traces.push({
-      x: [samples[0].mx],
-      y: [samples[0].my],
-      type: "scatter",
-      mode: "markers",
-      name: "Start",
-      marker: { color: "#4c6ef5", size: 8, symbol: "circle" },
-      showlegend: true,
-    });
-
-    // End marker
+    const mx = samples.map((s) => s.mx);
+    const my = samples.map((s) => s.my);
     const last = samples[samples.length - 1];
-    traces.push({
-      x: [last.mx],
-      y: [last.my],
-      type: "scatter",
-      mode: "markers",
-      name: "End",
-      marker: { color: "#ffb86c", size: 8, symbol: "diamond" },
-      showlegend: true,
-    });
 
-    return traces;
+    return {
+      backgroundColor: "transparent",
+      animation: false,
+      grid: { left: 55, right: 20, top: 30, bottom: 50 },
+      xAxis: {
+        type: "value",
+        name: "mₓ",
+        nameLocation: "middle",
+        nameGap: 32,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 12 },
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
+      },
+      yAxis: {
+        type: "value",
+        name: "m_y",
+        nameLocation: "middle",
+        nameGap: 38,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 12 },
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
+      },
+      tooltip: {
+        trigger: "item",
+        backgroundColor: ECHARTS_THEME.tooltipBg,
+        borderColor: ECHARTS_THEME.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: ECHARTS_THEME.tooltipText, fontSize: 11 },
+        formatter: (params: unknown) => {
+          const p = params as { data?: [number, number] };
+          if (!p?.data) return "";
+          return `mₓ = ${p.data[0].toFixed(6)}<br/>m_y = ${p.data[1].toFixed(6)}`;
+        },
+      },
+      graphic: [{
+        type: "circle",
+        shape: { cx: 0, cy: 0, r: 1 },
+        style: { stroke: "rgba(120,140,170,0.15)", lineWidth: 1, lineDash: [4, 4], fill: "none" },
+        // Position will be computed by ECharts coordinate system
+      }],
+      series: [
+        {
+          type: "line",
+          name: "Trajectory",
+          data: mx.map((x, i) => [x, my[i]]),
+          lineStyle: { color: "rgba(142,197,255,0.75)", width: 1.2 },
+          symbol: "none",
+          silent: true,
+        },
+        {
+          type: "scatter",
+          name: "Start",
+          data: [[samples[0].mx, samples[0].my]],
+          symbolSize: 8,
+          itemStyle: { color: "#4c6ef5" },
+        },
+        {
+          type: "scatter",
+          name: "End",
+          data: [[last.mx, last.my]],
+          symbolSize: 8,
+          symbol: "diamond",
+          itemStyle: { color: "#ffb86c" },
+        },
+      ],
+      legend: {
+        show: true,
+        right: 0,
+        top: 0,
+        textStyle: { color: "rgba(200,210,230,0.8)", fontSize: 10 },
+        backgroundColor: "rgba(10,16,28,0.8)",
+        borderColor: "rgba(120,140,170,0.2)",
+        borderWidth: 1,
+        padding: [4, 8],
+      },
+    };
   }, [samples]);
-
-  const shapes = useMemo(() => {
-    const s: Partial<Plotly.Shape>[] = [];
-    // Unit circle boundary (magnetization must lie inside |m| <= 1)
-    s.push({
-      type: "circle",
-      xref: "x",
-      yref: "y",
-      x0: -1,
-      y0: -1,
-      x1: 1,
-      y1: 1,
-      line: { color: "rgba(120,140,170,0.15)", width: 1, dash: "dot" },
-    });
-    return s;
-  }, []);
 
   if (samples.length === 0) {
     return (
@@ -94,48 +117,5 @@ export default function VortexTrajectoryPlot({
     );
   }
 
-  return (
-    <Plot
-      data={data}
-      layout={{
-        paper_bgcolor: "transparent",
-        plot_bgcolor: "transparent",
-        margin: { l: 55, r: 20, t: 30, b: 50 },
-        xaxis: {
-          title: { text: "mₓ", font: { size: 12, color: "rgba(200,210,230,0.7)" } },
-          gridcolor: "rgba(120,140,170,0.12)",
-          zerolinecolor: "rgba(120,140,170,0.25)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-          scaleanchor: "y",
-          scaleratio: 1,
-        },
-        yaxis: {
-          title: { text: "m_y", font: { size: 12, color: "rgba(200,210,230,0.7)" } },
-          gridcolor: "rgba(120,140,170,0.12)",
-          zerolinecolor: "rgba(120,140,170,0.25)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-        },
-        shapes,
-        legend: {
-          x: 1,
-          y: 1,
-          xanchor: "right",
-          yanchor: "top",
-          bgcolor: "rgba(10,16,28,0.8)",
-          bordercolor: "rgba(120,140,170,0.2)",
-          font: { size: 10, color: "rgba(200,210,230,0.8)" },
-        },
-        hovermode: "closest",
-        hoverlabel: {
-          bgcolor: "rgba(10,16,28,0.96)",
-          bordercolor: "rgba(132,156,240,0.55)",
-          font: { size: 11, color: "rgba(225,232,245,0.9)" },
-        },
-        autosize: true,
-      }}
-      config={{ responsive: true, displayModeBar: false }}
-      useResizeHandler
-      className="w-full h-full"
-    />
-  );
+  return <DynamicEChart option={option} className="w-full h-full" />;
 }

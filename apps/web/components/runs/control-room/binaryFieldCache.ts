@@ -23,6 +23,49 @@ const BINARY_FIELD_CACHE_MAX_ENTRIES = 4;
 export const BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 export const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 
+export interface ViewportFieldDataCacheStats {
+  entries: number;
+  estimatedBytes: number;
+  capacity: number;
+}
+
+export interface ViewportFieldDataCacheIdentity {
+  sessionId: string | null | undefined;
+  runId: string | null | undefined;
+  meshGenerationId: string | null | undefined;
+}
+
+const globalBinaryFieldCache = new Map<string, BinaryFieldFrame>();
+const globalScopedBinaryFieldCache = new Map<string, ScopedBinaryFieldFrame>();
+
+function cacheToken(value: string | number | null | undefined): string {
+  const token = String(value ?? "none").trim();
+  return token.length > 0 ? token : "none";
+}
+
+export function buildViewportFieldDataCacheKey(args: {
+  identity: ViewportFieldDataCacheIdentity;
+  fieldRevision: string | number | null | undefined;
+  quantityId: string;
+  component?: string | null;
+  scopeKey?: string | null;
+  nComp?: number | null;
+  grid?: readonly number[] | null;
+}): string {
+  return [
+    "viewport-field",
+    cacheToken(args.identity.sessionId),
+    cacheToken(args.identity.runId),
+    cacheToken(args.identity.meshGenerationId),
+    cacheToken(args.fieldRevision),
+    cacheToken(args.quantityId),
+    cacheToken(args.component ?? "full"),
+    cacheToken(args.scopeKey ?? "full"),
+    cacheToken(args.nComp ?? null),
+    cacheToken(args.grid?.join("x") ?? null),
+  ].join(":");
+}
+
 export function estimateBinaryFieldFrameBytes(frame: BinaryFieldFrame): number {
   return frame.values.byteLength + frame.key.length * 2 + frame.quantityId.length * 2 + 128;
 }
@@ -50,6 +93,73 @@ export function estimateScopedBinaryFieldCacheBytes(cache: Map<string, ScopedBin
     bytes += estimateScopedBinaryFieldFrameBytes(frame);
   }
   return bytes;
+}
+
+export function getGlobalBinaryFieldFrame(key: string): BinaryFieldFrame | null {
+  const frame = globalBinaryFieldCache.get(key) ?? null;
+  if (!frame) {
+    return null;
+  }
+  globalBinaryFieldCache.delete(key);
+  globalBinaryFieldCache.set(key, frame);
+  return frame;
+}
+
+export function putGlobalBinaryFieldFrame(frame: BinaryFieldFrame): ViewportFieldDataCacheStats {
+  globalBinaryFieldCache.set(frame.key, frame);
+  return getGlobalBinaryFieldCacheStats(true);
+}
+
+export function getGlobalBinaryFieldCacheStats(prune = false): ViewportFieldDataCacheStats {
+  const estimatedBytes = prune
+    ? pruneBinaryFieldCache(
+        globalBinaryFieldCache,
+        estimateBinaryFieldFrameBytes,
+        BINARY_FIELD_CACHE_MAX_BYTES,
+      )
+    : estimateBinaryFieldCacheBytes(globalBinaryFieldCache);
+  return {
+    entries: globalBinaryFieldCache.size,
+    estimatedBytes,
+    capacity: BINARY_FIELD_CACHE_MAX_BYTES,
+  };
+}
+
+export function getGlobalScopedBinaryFieldFrame(key: string): ScopedBinaryFieldFrame | null {
+  const frame = globalScopedBinaryFieldCache.get(key) ?? null;
+  if (!frame) {
+    return null;
+  }
+  globalScopedBinaryFieldCache.delete(key);
+  globalScopedBinaryFieldCache.set(key, frame);
+  return frame;
+}
+
+export function putGlobalScopedBinaryFieldFrame(
+  frame: ScopedBinaryFieldFrame,
+): ViewportFieldDataCacheStats {
+  globalScopedBinaryFieldCache.set(frame.key, frame);
+  return getGlobalScopedBinaryFieldCacheStats(true);
+}
+
+export function getGlobalScopedBinaryFieldCacheStats(prune = false): ViewportFieldDataCacheStats {
+  const estimatedBytes = prune
+    ? pruneBinaryFieldCache(
+        globalScopedBinaryFieldCache,
+        estimateScopedBinaryFieldFrameBytes,
+        SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
+      )
+    : estimateScopedBinaryFieldCacheBytes(globalScopedBinaryFieldCache);
+  return {
+    entries: globalScopedBinaryFieldCache.size,
+    estimatedBytes,
+    capacity: SCOPED_BINARY_FIELD_CACHE_MAX_BYTES,
+  };
+}
+
+export function clearGlobalViewportFieldDataCache(): void {
+  globalBinaryFieldCache.clear();
+  globalScopedBinaryFieldCache.clear();
 }
 
 export function pruneBinaryFieldCache<T>(

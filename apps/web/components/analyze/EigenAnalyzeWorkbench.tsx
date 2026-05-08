@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { PlotMouseEvent } from "plotly.js";
-import Plot from "../plots/DynamicPlot";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import DynamicEChart, { ECHARTS_THEME } from "../plots/DynamicEChart";
+import type * as echarts from "echarts";
 import type {
   AnyModeArtifact,
   AnySpectrumArtifact,
@@ -94,17 +94,168 @@ export default function EigenAnalyzeWorkbench({
     [branches, selection],
   );
 
-  const pathTickLabels = useMemo(() => {
-    return buildEigenPathTickLabels(normalizedSpectrum);
-  }, [normalizedSpectrum]);
-
-  const spectrumTrace = useMemo(() => {
+  // Build ECharts options from the existing model functions
+  const spectrumTraces = useMemo(() => {
     return buildEigenSpectrumTrace(normalizedSpectrum, selection, C);
   }, [normalizedSpectrum, selection]);
 
   const dispersionTraces = useMemo(() => {
     return buildEigenDispersionTraces(normalizedSpectrum, branches, selection, C);
   }, [branches, normalizedSpectrum, selection]);
+
+  const pathTickLabels = useMemo(() => {
+    return buildEigenPathTickLabels(normalizedSpectrum);
+  }, [normalizedSpectrum]);
+
+  // Spectrum ECharts option
+  const spectrumOption = useMemo((): echarts.EChartsOption => {
+    if (!spectrumTraces || spectrumTraces.length === 0) return {};
+
+    const series: echarts.SeriesOption[] = spectrumTraces.map((trace: Record<string, unknown>) => {
+      const traceMode = trace.mode as string;
+      const traceType = traceMode === "markers" ? "scatter" as const : "line" as const;
+      return {
+        type: traceType,
+        name: trace.name as string ?? "",
+        data: (trace.x as number[])?.map((x: number, i: number) => ({
+          value: [x, (trace.y as number[])?.[i]],
+          _customdata: Array.isArray(trace.customdata) ? trace.customdata[i] : undefined,
+        })) ?? [],
+        lineStyle: trace.line ? { color: (trace.line as Record<string, unknown>).color as string, width: (trace.line as Record<string, unknown>).width as number } : undefined,
+        itemStyle: trace.marker ? { color: Array.isArray((trace.marker as Record<string, unknown>).color) ? undefined : (trace.marker as Record<string, unknown>).color as string } : undefined,
+        symbolSize: trace.marker ? (trace.marker as Record<string, unknown>).size as number ?? 6 : 6,
+        showSymbol: traceMode === "markers",
+        symbol: "circle",
+      };
+    });
+
+    return {
+      backgroundColor: C.bg,
+      animation: false,
+      grid: { left: 56, right: 16, top: 8, bottom: 44 },
+      xAxis: {
+        type: "value",
+        name: "raw mode index",
+        nameLocation: "middle",
+        nameGap: 28,
+        nameTextStyle: { color: C.text, fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: C.border } },
+        axisLabel: { color: C.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      yAxis: {
+        type: "value",
+        name: "f (GHz)",
+        nameLocation: "middle",
+        nameGap: 38,
+        nameTextStyle: { color: C.text, fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: C.border } },
+        axisLabel: { color: C.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      tooltip: {
+        trigger: "item",
+        backgroundColor: ECHARTS_THEME.tooltipBg,
+        borderColor: ECHARTS_THEME.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: ECHARTS_THEME.tooltipText, fontSize: 11 },
+      },
+      series,
+    };
+  }, [spectrumTraces]);
+
+  // Dispersion ECharts option
+  const dispersionOption = useMemo((): echarts.EChartsOption | null => {
+    if (!dispersionTraces || dispersionTraces.length === 0) return null;
+
+    const series: echarts.SeriesOption[] = dispersionTraces.map((trace: Record<string, unknown>) => ({
+      type: "line",
+      name: trace.name as string ?? "",
+      data: (trace.x as number[])?.map((x: number, i: number) => ({
+        value: [x, (trace.y as number[])?.[i]],
+        _customdata: Array.isArray(trace.customdata) ? trace.customdata[i] : undefined,
+      })) ?? [],
+      lineStyle: trace.line ? { color: (trace.line as Record<string, unknown>).color as string, width: (trace.line as Record<string, unknown>).width as number } : undefined,
+      itemStyle: trace.marker ? { color: (trace.marker as Record<string, unknown>).color as string } : undefined,
+      symbolSize: trace.marker ? (trace.marker as Record<string, unknown>).size as number ?? 6 : 6,
+      showSymbol: true,
+    }));
+
+    return {
+      backgroundColor: C.bg,
+      animation: false,
+      grid: { left: 56, right: 16, top: 8, bottom: 44 },
+      xAxis: {
+        type: "value",
+        name: "path_s",
+        nameLocation: "middle",
+        nameGap: 28,
+        nameTextStyle: { color: C.text, fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: C.border } },
+        axisLabel: {
+          color: C.text,
+          fontSize: 10,
+          ...(pathTickLabels.length > 0 ? {
+            formatter: (val: number) => {
+              const tick = pathTickLabels.find((t) => Math.abs(t.value - val) < 1e-6);
+              return tick?.label ?? "";
+            },
+          } : {}),
+        },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      yAxis: {
+        type: "value",
+        name: "f (GHz)",
+        nameLocation: "middle",
+        nameGap: 38,
+        nameTextStyle: { color: C.text, fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: C.border } },
+        axisLabel: { color: C.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+      tooltip: {
+        trigger: "item",
+        backgroundColor: ECHARTS_THEME.tooltipBg,
+        borderColor: ECHARTS_THEME.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: ECHARTS_THEME.tooltipText, fontSize: 11 },
+      },
+      legend: {
+        type: "scroll",
+        orient: "horizontal",
+        bottom: 0,
+        textStyle: { color: C.text, fontSize: 10 },
+      },
+      series,
+    };
+  }, [dispersionTraces, pathTickLabels]);
+
+  const handleSpectrumClick = useCallback(
+    (params: echarts.ECElementEvent) => {
+      const data = params.data as { _customdata?: unknown } | undefined;
+      const next = eigenSelectionFromSpectrumCustomData(
+        data?._customdata,
+        normalizedSpectrum,
+        selection,
+      );
+      if (next) {
+        updateSelection(next);
+      }
+    },
+    [normalizedSpectrum, selection],
+  );
+
+  const handleDispersionClick = useCallback(
+    (params: echarts.ECElementEvent) => {
+      const data = params.data as { _customdata?: unknown } | undefined;
+      const next = eigenSelectionFromDispersionCustomData(data?._customdata);
+      if (next) {
+        updateSelection(next);
+      }
+    },
+    [],
+  );
 
   if (!normalizedSpectrum) {
     return (
@@ -130,63 +281,24 @@ export default function EigenAnalyzeWorkbench({
             solver: {normalizedSpectrum.solver_model}
           </div>
         </div>
-        <Plot
-          data={spectrumTrace as Plotly.Data[]}
-          layout={{
-            paper_bgcolor: C.bg,
-            plot_bgcolor: C.bg,
-            margin: { l: 56, r: 16, t: 8, b: 44 },
-            font: { color: C.text, size: 11 },
-            xaxis: { title: { text: "raw mode index" }, gridcolor: C.grid },
-            yaxis: { title: { text: "f (GHz)" }, gridcolor: C.grid },
-            hovermode: "closest",
-          }}
-          config={{ responsive: true, displaylogo: false }}
-          style={{ width: "100%", height: "var(--chart-height)" }}
-          onClick={(event: Readonly<PlotMouseEvent>) => {
-            const next = eigenSelectionFromSpectrumCustomData(
-              event.points?.[0]?.customdata,
-              normalizedSpectrum,
-              selection,
-            );
-            if (next) {
-              updateSelection(next);
-            }
-          }}
-        />
+        <div style={{ width: "100%", height: "var(--chart-height, 300px)" }}>
+          <DynamicEChart
+            option={spectrumOption}
+            className="w-full h-full"
+            onClick={handleSpectrumClick}
+          />
+        </div>
 
-        {dispersionTraces.length > 0 && (
+        {dispersionOption && (
           <div className="mt-5 rounded-xl border border-white/10 bg-black/10 p-3">
             <div className="mb-2 text-sm font-medium text-white/90">Dispersion / branches</div>
-            <Plot
-              data={dispersionTraces as Plotly.Data[]}
-              layout={{
-                paper_bgcolor: C.bg,
-                plot_bgcolor: C.bg,
-                margin: { l: 56, r: 16, t: 8, b: 44 },
-                font: { color: C.text, size: 11 },
-                xaxis: {
-                  title: { text: "path_s" },
-                  gridcolor: C.grid,
-                  tickmode: pathTickLabels.length > 0 ? "array" : "auto",
-                  tickvals: pathTickLabels.map((tick) => tick.value),
-                  ticktext: pathTickLabels.map((tick) => tick.label),
-                },
-                yaxis: { title: { text: "f (GHz)" }, gridcolor: C.grid },
-                hovermode: "closest",
-                legend: { orientation: "h", y: -0.22 },
-              }}
-              config={{ responsive: true, displaylogo: false }}
-              style={{ width: "100%", height: "var(--chart-height)" }}
-              onClick={(event: Readonly<PlotMouseEvent>) => {
-                const next = eigenSelectionFromDispersionCustomData(
-                  event.points?.[0]?.customdata,
-                );
-                if (next) {
-                  updateSelection(next);
-                }
-              }}
-            />
+            <div style={{ width: "100%", height: "var(--chart-height, 300px)" }}>
+              <DynamicEChart
+                option={dispersionOption}
+                className="w-full h-full"
+                onClick={handleDispersionClick}
+              />
+            </div>
           </div>
         )}
       </section>

@@ -41,6 +41,7 @@ import {
   isWebGLWorkspaceTab,
   resolveWorkspaceTabRenderDecision,
 } from "./center-tabs/tabRenderPolicy";
+import { viewportModeForWorkspaceTab } from "./center-tabs/tabSelection";
 import {
   resolveWorkspaceTabResourceDisposals,
   type WorkspaceTabResourceLifecycleSnapshot,
@@ -86,6 +87,8 @@ export default function DockCenterTabs() {
   const handleViewModeChange = vp.handleViewModeChange;
   const requestPreviewQuantity = vp.requestPreviewQuantity;
   const setViewMode = vp.setViewMode;
+  const setComponent = vp.setComponent;
+  const patchDisplay = vp.patchDisplay;
   const activeResultWorkspaceId = useAnalyzeStore(selectActiveAnalyzeResultWorkspaceId);
   const resultWorkspaceEntries = useAnalyzeStore(selectAnalyzeResultWorkspaceEntries);
   const setActiveResultWorkspaceId = useAnalyzeStore((state) => state.setActiveResultWorkspaceId);
@@ -277,8 +280,29 @@ export default function DockCenterTabs() {
 
   const handleTabValueChange = useCallback(
     (nextId: string) => {
-      activateTab(currentStage, nextId);
       const nextTab = tabs.find((tab) => tab.id === nextId) ?? null;
+      const nextMode = viewportModeForWorkspaceTab(nextTab);
+      if (nextMode === "3D" || nextMode === "2D" || nextMode === "Mesh") {
+        startTransition(() => {
+          activateTab(currentStage, nextId);
+          if (nextMode === "2D") {
+            setComponent((prev) => (prev === "magnitude" ? "x" : prev));
+          }
+          if (nextMode === "3D") {
+            setComponent((prev) => (prev === "x" || prev === "y" || prev === "z" ? "magnitude" : prev));
+          }
+          const normalizedMode = nextMode === "Mesh" ? "3D" : nextMode;
+          if (effectiveViewMode !== normalizedMode) {
+            setViewMode(normalizedMode);
+          }
+          void patchDisplay({
+            view_mode: normalizedMode === "3D" ? "3d" : "2d",
+            field_component: normalizedMode === "3D" ? "magnitude" : "x",
+          });
+        });
+      } else {
+        activateTab(currentStage, nextId);
+      }
       const slug = workspaceRouteSlugForTab(nextTab);
       if (!slug) {
         return;
@@ -288,7 +312,7 @@ export default function DockCenterTabs() {
         router.replace(nextHref, { scroll: false });
       }
     },
-    [activateTab, currentStage, pathname, router, tabs],
+    [activateTab, currentStage, effectiveViewMode, patchDisplay, pathname, router, setComponent, setViewMode, tabs],
   );
 
   if (!dockCenterFlags.enableInternalTree) {

@@ -1,10 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
-import Plot from "../plots/DynamicPlot";
+import DynamicEChart, { ECHARTS_THEME } from "../plots/DynamicEChart";
 
 import type { VortexTimeSample } from "./vortexTypes";
-
 
 interface VortexOrbitPlotProps {
   samples: VortexTimeSample[];
@@ -17,8 +16,8 @@ interface VortexOrbitPlotProps {
  * when full spatial data isn't available.
  */
 export default function VortexOrbitPlot({ samples }: VortexOrbitPlotProps) {
-  const data = useMemo(() => {
-    if (samples.length === 0) return [];
+  const option = useMemo((): echarts.EChartsOption => {
+    if (samples.length === 0) return {};
 
     const t = samples.map((s) => s.time * 1e9);
     const radius = samples.map((s) => Math.sqrt(s.mx * s.mx + s.my * s.my));
@@ -34,27 +33,69 @@ export default function VortexOrbitPlot({ samples }: VortexOrbitPlotProps) {
       envelope.push(maxVal);
     }
 
-    return [
-      {
-        x: t,
-        y: radius,
-        type: "scattergl" as const,
-        mode: "lines" as const,
-        name: "√(mₓ² + m_y²)",
-        line: { color: "#8ec5ff", width: 1 },
-        opacity: 0.6,
-        hovertemplate: "r = %{y:.6f}<br>t = %{x:.4f} ns<extra></extra>",
+    return {
+      backgroundColor: "transparent",
+      animation: false,
+      grid: { left: 55, right: 20, top: 30, bottom: 45 },
+      xAxis: {
+        type: "value",
+        name: "Time [ns]",
+        nameLocation: "middle",
+        nameGap: 28,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 11 },
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
       },
-      {
-        x: t,
-        y: envelope,
-        type: "scattergl" as const,
-        mode: "lines" as const,
-        name: "Envelope",
-        line: { color: "#ffb86c", width: 1.8 },
-        hovertemplate: "Envelope: %{y:.6f}<br>t = %{x:.4f} ns<extra></extra>",
+      yAxis: {
+        type: "value",
+        name: "Oscillation amplitude",
+        nameLocation: "middle",
+        nameGap: 38,
+        nameTextStyle: { color: "rgba(200,210,230,0.7)", fontSize: 11 },
+        min: 0,
+        axisLine: { show: true, lineStyle: { color: ECHARTS_THEME.border } },
+        axisLabel: { color: "rgba(200,210,230,0.6)", fontSize: 10 },
+        splitLine: { lineStyle: { color: "rgba(120,140,170,0.12)" } },
       },
-    ];
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: ECHARTS_THEME.tooltipBg,
+        borderColor: ECHARTS_THEME.tooltipBorder,
+        borderWidth: 1,
+        textStyle: { color: ECHARTS_THEME.tooltipText, fontSize: 11 },
+      },
+      legend: {
+        show: true,
+        right: 0,
+        top: 0,
+        textStyle: { color: "rgba(200,210,230,0.8)", fontSize: 10 },
+        backgroundColor: "rgba(10,16,28,0.8)",
+        borderColor: "rgba(120,140,170,0.2)",
+        borderWidth: 1,
+        padding: [4, 8],
+      },
+      series: [
+        {
+          type: "line",
+          name: "√(mₓ² + m_y²)",
+          data: t.map((ti, i) => [ti, radius[i]]),
+          lineStyle: { color: "#8ec5ff", width: 1, opacity: 0.6 },
+          symbol: "none",
+          large: true,
+          sampling: "lttb",
+        },
+        {
+          type: "line",
+          name: "Envelope",
+          data: t.map((ti, i) => [ti, envelope[i]]),
+          lineStyle: { color: "#ffb86c", width: 1.8 },
+          symbol: "none",
+          large: true,
+          sampling: "lttb",
+        },
+      ],
+    };
   }, [samples]);
 
   if (samples.length === 0) {
@@ -65,47 +106,5 @@ export default function VortexOrbitPlot({ samples }: VortexOrbitPlotProps) {
     );
   }
 
-  return (
-    <Plot
-      data={data}
-      layout={{
-        paper_bgcolor: "transparent",
-        plot_bgcolor: "transparent",
-        margin: { l: 55, r: 20, t: 30, b: 45 },
-        xaxis: {
-          title: { text: "Time [ns]", font: { size: 11, color: "rgba(200,210,230,0.7)" } },
-          gridcolor: "rgba(120,140,170,0.12)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-        },
-        yaxis: {
-          title: {
-            text: "Oscillation amplitude",
-            font: { size: 11, color: "rgba(200,210,230,0.7)" },
-          },
-          gridcolor: "rgba(120,140,170,0.12)",
-          tickfont: { size: 10, color: "rgba(200,210,230,0.6)" },
-          rangemode: "tozero",
-        },
-        legend: {
-          x: 1,
-          y: 1,
-          xanchor: "right",
-          yanchor: "top",
-          bgcolor: "rgba(10,16,28,0.8)",
-          bordercolor: "rgba(120,140,170,0.2)",
-          font: { size: 10, color: "rgba(200,210,230,0.8)" },
-        },
-        hovermode: "x unified",
-        hoverlabel: {
-          bgcolor: "rgba(10,16,28,0.96)",
-          bordercolor: "rgba(132,156,240,0.55)",
-          font: { size: 11, color: "rgba(225,232,245,0.9)" },
-        },
-        autosize: true,
-      }}
-      config={{ responsive: true, displayModeBar: false }}
-      useResizeHandler
-      className="w-full h-full"
-    />
-  );
+  return <DynamicEChart option={option} className="w-full h-full" />;
 }
