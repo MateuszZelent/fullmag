@@ -391,12 +391,13 @@ def _add_airbox_and_fragment(
 
 def add_air_box(
     geometry: Geometry,
-    hmax: float,
+    hmax: float | None = None,
     factor: float = 3.0,
     grading: float = 0.3,
     order: int = 1,
     boundary_marker: int = 99,
     options: MeshOptions | None = None,
+    maximum_element_size: float | None = None,
 ) -> MeshData:
     """Generate a tetrahedral mesh with an air-box surrounding the magnetic region.
 
@@ -411,7 +412,8 @@ def add_air_box(
 
     Args:
         geometry: Magnetic body geometry (Box, Cylinder, Sphere, etc.).
-        hmax: Maximum element size on the magnetic body (SI metres).
+        maximum_element_size: Maximum element size on the magnetic body
+            (SI metres). ``hmax`` is accepted as a compatibility alias.
         factor: Air-box size as a multiple of the magnetic bounding-box diagonal.
         grading: Mesh grading factor (0–1).  Higher = coarser air far from magnet.
         order: FE order (1 = linear P1, 2 = quadratic P2).
@@ -431,6 +433,10 @@ def add_air_box(
         raise ValueError(f"air_box factor must be >= 1.5, got {factor}")
     if not 0.0 <= grading <= 1.0:
         raise ValueError(f"grading must be in [0, 1], got {grading}")
+    resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
+    if resolved_hmax is None:
+        raise TypeError("add_air_box() requires maximum_element_size")
+    hmax = float(resolved_hmax)
 
     opts = options or MeshOptions()
     gmsh = _import_gmsh()

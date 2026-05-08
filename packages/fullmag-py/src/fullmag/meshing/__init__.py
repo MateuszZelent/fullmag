@@ -42,6 +42,13 @@ from .quality import MeshValidationReport, validate_mesh
 from .periodic import PeriodicBoundaryPair, periodic_x, periodic_y, periodic_z
 from .surface_assets import SurfaceAsset, export_geometry_to_stl, load_surface_asset
 from .voxelization import VoxelMaskData, voxelize_geometry
+from .mesh_controls import (
+    boundary_layers,
+    edge_distance_threshold,
+    interface_shell,
+    object_core_relaxation,
+    surface_shell,
+)
 
 __all__ = [
     "MESH_SIZE_CALIBRATIONS",
@@ -60,6 +67,8 @@ __all__ = [
     "SurfaceAsset",
     "VoxelMaskData",
     "add_air_box",
+    "boundary_layers",
+    "edge_distance_threshold",
     "export_geometry_to_stl",
     "extract_per_domain_quality",
     "generate_box_mesh",
@@ -68,7 +77,9 @@ __all__ = [
     "generate_mesh",
     "generate_mesh_from_file",
     "generate_shared_domain_mesh_from_components",
+    "interface_shell",
     "load_surface_asset",
+    "object_core_relaxation",
     "periodic_x",
     "periodic_y",
     "periodic_z",
@@ -85,6 +96,7 @@ __all__ = [
     "realize_fem_mesh_asset",
     "remesh_with_size_field",
     "resolve_mesh_size_controls",
+    "surface_shell",
     "validate_mesh",
     "voxelize_geometry",
 ]

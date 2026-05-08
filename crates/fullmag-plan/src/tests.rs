@@ -4042,9 +4042,14 @@ fn fem_domain_mesh_asset_accepts_optional_build_report() {
         build_report: Some(fullmag_ir::FemSharedDomainBuildReportIR {
             build_mode: "component_aware".to_string(),
             fallbacks_triggered: vec![],
+            effective_airbox_target: None,
             effective_airbox_hmax: Some(100e-9),
             effective_per_object_targets: std::collections::HashMap::new(),
+            region_markers: vec![],
             used_size_field_kinds: vec!["ComponentVolumeConstant".to_string()],
+            size_fields_realized: vec![],
+            operation_statuses: vec![],
+            thin_film_diagnostics: vec![],
             degraded: false,
         }),
     };

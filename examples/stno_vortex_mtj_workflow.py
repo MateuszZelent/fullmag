@@ -27,7 +27,7 @@ if mesh_profile in {"validation", "fine"}:
         maximum_element_growth_rate=1.14,
         narrow_regions=4,
         narrow_region_resolution=1.0,
-        interface_hmax=2.2e-09,
+        interface_maximum_element_size=2.2e-09,
         interface_thickness=4.5e-09,
         transition_distance=36e-09,
         transition_growth=1.14,
@@ -51,7 +51,7 @@ else:
         maximum_element_growth_rate=1.25,
         narrow_regions=0,
         narrow_region_resolution=0.7,
-        interface_hmax=4.0e-09,
+        interface_maximum_element_size=4.0e-09,
         interface_thickness=5.0e-09,
         transition_distance=12.0e-09,
         transition_growth=1.25,
@@ -128,7 +128,7 @@ body.mesh(
     # Heuristic narrow-gap refinement strength used when narrow_regions is 0.
     # Positive float clamped to 0.1-2.0; higher requests more elements through gaps.
     narrow_region_resolution=body_mesh["narrow_region_resolution"],
-    interface_hmax=body_mesh["interface_hmax"],
+    interface_maximum_element_size=body_mesh["interface_maximum_element_size"],
     interface_thickness=body_mesh["interface_thickness"],
     transition_distance=body_mesh["transition_distance"],
     transition_growth=body_mesh["transition_growth"],

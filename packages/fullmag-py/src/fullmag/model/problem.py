@@ -1223,7 +1223,7 @@ class Problem:
         # FDM reference cell, derive a first mesh size from the finest FDM
         # spacing. This keeps one script runnable on both backends, while more
         # advanced meshing controls remain an explicit FEM API feature.
-        derived_fem = FEM(order=1, hmax=min(fdm.default_cell))
+        derived_fem = FEM(order=1, maximum_element_size=min(fdm.default_cell))
         return DiscretizationHints(
             fdm=self.discretization.fdm,
             fem=derived_fem,

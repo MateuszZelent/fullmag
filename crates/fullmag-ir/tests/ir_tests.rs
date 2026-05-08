@@ -695,15 +695,116 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
             build_report: Some(FemSharedDomainBuildReportIR {
                 build_mode: "shared_domain".to_string(),
                 fallbacks_triggered: Vec::new(),
+                effective_airbox_target: None,
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
+                region_markers: Vec::new(),
                 used_size_field_kinds: vec!["curvature".to_string()],
+                size_fields_realized: Vec::new(),
+                operation_statuses: Vec::new(),
+                thin_film_diagnostics: Vec::new(),
                 degraded: false,
             }),
         }),
     });
 
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn shared_domain_build_report_preserves_full_mesh_v2_fields() {
+    let payload = serde_json::json!({
+        "build_mode": "component_aware",
+        "fallbacks_triggered": [],
+        "effective_airbox_target": {
+            "hmax": 180e-9,
+            "hmin": 8e-9,
+            "growth_rate": 1.65
+        },
+        "effective_airbox_hmax": 180e-9,
+        "effective_per_object_targets": {
+            "arch_waveguide": {
+                "marker": 1,
+                "hmax": 6e-9,
+                "interface_hmax": 3e-9,
+                "interface_thickness": 8e-9,
+                "transition_distance": 12e-9,
+                "transition_distance_requested": 12e-9,
+                "transition_distance_effective": 12e-9,
+                "transition_realization": "explicit",
+                "transition_growth": 1.22,
+                "edge_hmax": 1.8e-9,
+                "edge_thickness": 12e-9,
+                "corner_hmax": 1.6e-9,
+                "corner_extent": 5e-9,
+                "source": "per_geometry"
+            }
+        },
+        "region_markers": [{"geometry_name": "arch_waveguide", "marker": 1}],
+        "used_size_field_kinds": [
+            "ComponentVolumeConstant",
+            "SurfaceDistanceThreshold",
+            "EdgeDistanceThreshold"
+        ],
+        "size_fields_realized": [{
+            "kind": "EdgeDistanceThreshold",
+            "status": "applied"
+        }],
+        "operation_statuses": [{
+            "kind": "boundary_layer",
+            "scope": "global",
+            "requested": true,
+            "status": "ignored",
+            "reason": "no explicit boundary-layer target surfaces or curves were provided",
+            "details": {"experimental": true}
+        }],
+        "thin_film_diagnostics": [{
+            "geometry_name": "arch_waveguide",
+            "scope": "arch_waveguide",
+            "is_thin_film": true,
+            "thickness": 2e-9,
+            "requested_layers": 1,
+            "estimated_layers_from_hmax": 1,
+            "actual_method": "layered_surface_tetrahedral",
+            "warnings": ["requested through-thickness layer count is below 4"]
+        }],
+        "degraded": false
+    });
+
+    let report: FemSharedDomainBuildReportIR =
+        serde_json::from_value(payload).expect("full mesh v2 report should deserialize");
+    let target = report
+        .effective_per_object_targets
+        .get("arch_waveguide")
+        .expect("arch target should be preserved");
+    assert_eq!(target.edge_hmax, Some(1.8e-9));
+    assert_eq!(target.edge_thickness, Some(12e-9));
+    assert_eq!(target.interface_thickness, Some(8e-9));
+    assert_eq!(target.transition_realization.as_deref(), Some("explicit"));
+    assert_eq!(report.operation_statuses[0].status, "ignored");
+    assert_eq!(
+        report.thin_film_diagnostics[0].actual_method.as_deref(),
+        Some("layered_surface_tetrahedral")
+    );
+
+    let round_trip = serde_json::to_value(&report).expect("full mesh v2 report should serialize");
+    assert_eq!(
+        round_trip["effective_per_object_targets"]["arch_waveguide"]["edge_maximum_element_size"],
+        1.8e-9
+    );
+    assert_eq!(
+        round_trip["effective_airbox_target"]["maximum_element_size"],
+        180e-9
+    );
+    assert_eq!(
+        round_trip["thin_film_diagnostics"][0]["estimated_layers_from_maximum_element_size"],
+        1
+    );
+    assert_eq!(round_trip["operation_statuses"][0]["status"], "ignored");
+    assert_eq!(
+        round_trip["thin_film_diagnostics"][0]["warnings"][0],
+        "requested through-thickness layer count is below 4"
+    );
 }
 
 #[test]

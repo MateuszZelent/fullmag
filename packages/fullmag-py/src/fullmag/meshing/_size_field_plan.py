@@ -55,9 +55,9 @@ def _perimeter_refinement_config(
     if entry is None:
         return None
 
-    edge_hmax = _coerce_positive_float(entry.get("edge_hmax"))
+    edge_hmax = _coerce_positive_float(entry.get("edge_maximum_element_size") or entry.get("edge_hmax"))
     edge_thickness = _coerce_positive_float(entry.get("edge_thickness"))
-    corner_hmax = _coerce_positive_float(entry.get("corner_hmax"))
+    corner_hmax = _coerce_positive_float(entry.get("corner_maximum_element_size") or entry.get("corner_hmax"))
     corner_extent = _coerce_positive_float(entry.get("corner_extent"))
 
     if all(value is None for value in (edge_hmax, edge_thickness, corner_hmax, corner_extent)):
@@ -70,25 +70,26 @@ def _perimeter_refinement_config(
 
     if (edge_hmax is None) != (edge_thickness is None):
         raise ValueError(
-            f"{geometry.geometry_name}: edge_hmax and edge_thickness must be set together"
+            f"{geometry.geometry_name}: edge_maximum_element_size and edge_thickness must be set together"
         )
     if (corner_hmax is None) != (corner_extent is None):
         raise ValueError(
-            f"{geometry.geometry_name}: corner_hmax and corner_extent must be set together"
+            f"{geometry.geometry_name}: corner_maximum_element_size and corner_extent must be set together"
         )
-    if (
-        _coerce_positive_float(entry.get("interface_hmax")) is not None
-        or _coerce_positive_float(entry.get("interface_thickness")) is not None
-    ):
-        raise ValueError(
-            f"{geometry.geometry_name}: edge/corner refinement cannot be combined with interface_hmax or interface_thickness"
-        )
-
     box = _unwrap_translated_box_geometry(geometry)
     if box is None:
-        raise ValueError(
-            f"{geometry.geometry_name}: edge/corner refinement is currently supported only for Box geometries"
-        )
+        if corner_hmax is not None or corner_extent is not None:
+            raise ValueError(
+                f"{geometry.geometry_name}: corner refinement requires Box geometry or explicit named corner selectors"
+            )
+        return {
+            key: value
+            for key, value in {
+                "edge_hmax": edge_hmax,
+                "edge_thickness": edge_thickness,
+            }.items()
+            if value is not None
+        }
 
     sx, sy, sz = (float(component) for component in box.size)
     in_plane_dims = sorted((sx, sy, sz), reverse=True)[:2]
@@ -109,7 +110,7 @@ def _perimeter_refinement_config(
         and corner_hmax > edge_hmax
     ):
         raise ValueError(
-            f"{geometry.geometry_name}: corner_hmax must be less than or equal to edge_hmax"
+            f"{geometry.geometry_name}: corner_maximum_element_size must be less than or equal to edge_maximum_element_size"
         )
 
     return {
@@ -159,6 +160,22 @@ def _build_perimeter_refinement_fields(
 
         box = _unwrap_translated_box_geometry(geometry)
         if box is None:
+            if "edge_hmax" in refinement and "edge_thickness" in refinement:
+                fields.append(
+                    {
+                        "kind": "EdgeDistanceThreshold",
+                        "params": {
+                            "GeometryName": geometry.geometry_name,
+                            "Selector": {"mode": "all_boundary_curves"},
+                            "SizeMin": float(refinement["edge_hmax"]),
+                            "SizeMax": float(default_hmax),
+                            "DistMin": 0.0,
+                            "DistMax": float(refinement["edge_thickness"]),
+                            "Sampling": 40,
+                            "Source": "per_geometry.edge_maximum_element_size",
+                        },
+                    }
+                )
             continue
         size_by_axis = [float(component) for component in box.size]
         in_plane_axes = sorted(range(3), key=lambda axis: size_by_axis[axis], reverse=True)[:2]
@@ -597,15 +614,39 @@ def _expand_object_core_relaxation(
     )
     if not isinstance(geometry_name, str) or not geometry_name.strip():
         return []
-    core_hmax = _coerce_positive_float(params.get("core_hmax") or params.get("CoreHmax"))
-    surface_hmax = _coerce_positive_float(params.get("surface_hmax") or params.get("SurfaceHmax"))
+    core_hmax = _coerce_positive_float(
+        params.get("core_maximum_element_size")
+        or params.get("core_hmax")
+        or params.get("CoreHmax")
+    )
+    surface_hmax = _coerce_positive_float(
+        params.get("surface_maximum_element_size")
+        or params.get("surface_hmax")
+        or params.get("SurfaceHmax")
+    )
     surface_distance = _coerce_positive_float(
         params.get("surface_distance") or params.get("SurfaceDistance")
     )
     if core_hmax is None or surface_hmax is None or surface_distance is None:
         return []
-    edge_hmax = _coerce_positive_float(params.get("edge_hmax") or params.get("EdgeHmax")) or surface_hmax
+    edge_hmax = _coerce_positive_float(
+        params.get("edge_maximum_element_size")
+        or params.get("edge_hmax")
+        or params.get("EdgeHmax")
+    ) or surface_hmax
     edge_distance = _coerce_positive_float(params.get("edge_distance") or params.get("edge_thickness")) or surface_distance
+    surface_sampling = int(
+        params.get("sampling_surface")
+        or params.get("SamplingSurface")
+        or params.get("Sampling")
+        or 20
+    )
+    edge_sampling = int(
+        params.get("sampling_edge")
+        or params.get("SamplingEdge")
+        or params.get("Sampling")
+        or 40
+    )
     return [
         {
             "kind": "ComponentVolumeConstant",
@@ -624,7 +665,7 @@ def _expand_object_core_relaxation(
                 "SizeMax": float(core_hmax),
                 "DistMin": 0.0,
                 "DistMax": float(surface_distance),
-                "Sampling": 20,
+                "Sampling": max(2, surface_sampling),
                 "Source": "ObjectCoreRelaxation",
             },
         },
@@ -636,7 +677,7 @@ def _expand_object_core_relaxation(
                 "SizeMax": float(core_hmax),
                 "DistMin": 0.0,
                 "DistMax": float(edge_distance),
-                "Sampling": 40,
+                "Sampling": max(2, edge_sampling),
                 "Source": "ObjectCoreRelaxation",
             },
         },
@@ -825,6 +866,12 @@ def _mesh_options_from_runtime_metadata(
             return None
         return entries[0].get(key)
 
+    def _first_non_none(*values: object) -> object | None:
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
     size_fields = (
         [field for field in raw_mesh_options.get("size_fields", []) if isinstance(field, Mapping)]
         if isinstance(raw_mesh_options.get("size_fields"), list)
@@ -863,6 +910,32 @@ def _mesh_options_from_runtime_metadata(
     raw_sweep_face_meshing = raw_mesh_options.get("sweep_face_meshing") or _single_geometry_value(
         "sweep_face_meshing"
     )
+    raw_boundary_layer_count = _first_non_none(
+        raw_mesh_options.get("boundary_layer_count"),
+        _single_geometry_value("boundary_layer_count"),
+    )
+    raw_boundary_layer_thickness = _first_non_none(
+        raw_mesh_options.get("boundary_layer_thickness"),
+        _single_geometry_value("boundary_layer_thickness"),
+    )
+    raw_boundary_layer_stretching = _first_non_none(
+        raw_mesh_options.get("boundary_layer_stretching"),
+        _single_geometry_value("boundary_layer_stretching"),
+    )
+    raw_boundary_layer_surface_tags = _first_non_none(
+        raw_mesh_options.get("boundary_layer_target_surface_tags"),
+        _single_geometry_value("boundary_layer_target_surface_tags"),
+    )
+    raw_boundary_layer_curve_tags = _first_non_none(
+        raw_mesh_options.get("boundary_layer_target_curve_tags"),
+        _single_geometry_value("boundary_layer_target_curve_tags"),
+    )
+
+    def _int_list(value: object) -> list[int] | None:
+        if not isinstance(value, list):
+            return None
+        return [int(item) for item in value]
+
     return MeshOptions(
         algorithm_2d=int(raw_mesh_options.get("algorithm_2d", 6)),
         algorithm_3d=int(raw_mesh_options.get("algorithm_3d", 1)),
@@ -916,4 +989,13 @@ def _mesh_options_from_runtime_metadata(
             if isinstance(raw_sweep_face_meshing, str) and raw_sweep_face_meshing.strip()
             else None
         ),
+        boundary_layer_count=(
+            int(raw_boundary_layer_count)
+            if raw_boundary_layer_count is not None and int(raw_boundary_layer_count) > 0
+            else None
+        ),
+        boundary_layer_thickness=_coerce_positive_float(raw_boundary_layer_thickness),
+        boundary_layer_stretching=_coerce_positive_float(raw_boundary_layer_stretching),
+        boundary_layer_target_surface_tags=_int_list(raw_boundary_layer_surface_tags),
+        boundary_layer_target_curve_tags=_int_list(raw_boundary_layer_curve_tags),
     )

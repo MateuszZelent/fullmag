@@ -96,7 +96,7 @@ class ProblemApiTests(unittest.TestCase):
             ),
             discretization=fm.DiscretizationHints(
                 fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
-                fem=fm.FEM(order=1, hmax=2e-9),
+                fem=fm.FEM(order=1, maximum_element_size=2e-9),
                 hybrid=fm.Hybrid(demag="fft_aux_grid"),
             ),
         )
@@ -276,7 +276,7 @@ class ProblemApiTests(unittest.TestCase):
             magnets=[magnet],
             energy=[fm.Exchange()],
             study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=10e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=10e-9)),
         )
 
         with patch(
@@ -325,7 +325,7 @@ class ProblemApiTests(unittest.TestCase):
             magnets=[magnet],
             energy=[fm.Exchange()],
             study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=10e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=10e-9)),
         )
 
         with patch(
@@ -380,7 +380,7 @@ class ProblemApiTests(unittest.TestCase):
             magnets=[magnet],
             energy=[fm.Exchange()],
             study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=10e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=10e-9)),
         )
 
         with patch(
@@ -434,7 +434,7 @@ class ProblemApiTests(unittest.TestCase):
             magnets=[magnet],
             energy=[fm.Exchange()],
             study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=10e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=10e-9)),
         )
 
         with patch(
@@ -719,6 +719,29 @@ class ProblemApiTests(unittest.TestCase):
             self.assertEqual(params["height"], 2e-9)
             self.assertEqual(params["arch_height"], 50e-9)
             self.assertEqual(params["z0"], -25e-9)
+
+    def test_arch_waveguide_example_uses_public_mesh_control_contract(self) -> None:
+        example_path = Path(__file__).resolve().parents[3] / "examples" / "arch_waveguide_relax_50nm.py"
+        loaded = load_problem_from_script(example_path, lightweight_assets=True)
+
+        self.assertEqual(loaded.entrypoint_kind, "flat_workspace")
+        self.assertEqual(len(loaded.stages), 1)
+        mesh_workflow = loaded.problem.runtime_metadata["mesh_workflow"]
+        per_geometry = mesh_workflow["per_geometry"]
+        self.assertEqual(len(per_geometry), 1)
+        arch_mesh = per_geometry[0]
+        self.assertEqual(arch_mesh["geometry"], "arch_waveguide")
+        self.assertEqual(arch_mesh["maximum_element_size"], 6e-9)
+        self.assertEqual(arch_mesh["minimum_element_size"], 1.8e-9)
+        self.assertEqual(arch_mesh["maximum_element_growth_rate"], 1.22)
+        size_fields = arch_mesh["size_fields"]
+        self.assertEqual(len(size_fields), 1)
+        self.assertEqual(size_fields[0]["kind"], "ObjectCoreRelaxation")
+        params = size_fields[0]["params"]
+        self.assertEqual(params["GeometryName"], "arch_waveguide")
+        self.assertEqual(params["core_maximum_element_size"], 6e-9)
+        self.assertEqual(params["surface_maximum_element_size"], 2e-9)
+        self.assertEqual(params["edge_maximum_element_size"], 1.8e-9)
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
@@ -1677,7 +1700,7 @@ class ProblemApiTests(unittest.TestCase):
         )
 
     def test_fem_hint_accepts_optional_mesh_reference(self) -> None:
-        fem = fm.FEM(order=1, hmax=2e-9, mesh="meshes/sample.msh")
+        fem = fm.FEM(order=1, maximum_element_size=2e-9, mesh="meshes/sample.msh")
 
         self.assertEqual(
             fem.to_ir(),
@@ -1819,7 +1842,7 @@ class ProblemApiTests(unittest.TestCase):
                 dynamics=fm.LLG(),
                 outputs=[fm.SaveField("m", every=1e-12)],
             ),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=2e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
         mesh = MeshData(
@@ -2005,7 +2028,7 @@ class ProblemApiTests(unittest.TestCase):
                 dynamics=fm.LLG(),
                 outputs=[fm.SaveField("m", every=1e-12)],
             ),
-            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=2e-9)),
+            discretization=fm.DiscretizationHints(fem=fm.FEM(order=1, maximum_element_size=2e-9)),
         )
 
         surface_mesh = MeshData(
@@ -3364,8 +3387,8 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
-            hmax=20e-9,
-            hmin=5e-9,
+            maximum_element_size=20e-9,
+            minimum_element_size=5e-9,
             order=2,
             algorithm_2d=5,
             algorithm_3d=10,
@@ -3373,7 +3396,7 @@ class ProblemApiTests(unittest.TestCase):
             size_from_curvature=24,
             growth_rate=1.4,
             narrow_regions=3,
-            interface_hmax=3e-9,
+            interface_maximum_element_size=3e-9,
             interface_thickness=6e-9,
             transition_distance=24e-9,
             transition_growth=1.2,
@@ -3408,7 +3431,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(mesh_entry["size_from_curvature"], 24)
         self.assertEqual(mesh_entry["growth_rate"], "1.4")
         self.assertEqual(mesh_entry["narrow_regions"], 3)
-        self.assertEqual(mesh_entry["interface_hmax"], "3e-09")
+        self.assertEqual(mesh_entry["interface_maximum_element_size"], "3e-09")
         self.assertEqual(mesh_entry["interface_thickness"], "6e-09")
         self.assertEqual(mesh_entry["transition_distance"], "2.4e-08")
         self.assertEqual(mesh_entry["transition_growth"], 1.2)
@@ -3432,7 +3455,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("optimize_iterations=3", rewritten)
         self.assertIn("maximum_element_growth_rate=1.4", rewritten)
         self.assertIn("narrow_regions=3", rewritten)
-        self.assertIn("interface_hmax=3e-09", rewritten)
+        self.assertIn("interface_maximum_element_size=3e-09", rewritten)
         self.assertIn("interface_thickness=6e-09", rewritten)
         self.assertIn("transition_distance=2.4e-08", rewritten)
         self.assertIn("transition_growth=1.2", rewritten)
@@ -3458,9 +3481,9 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
             maximum_element_size=20e-9,
-            edge_hmax=5e-9,
+            edge_maximum_element_size=5e-9,
             edge_thickness=9e-9,
-            corner_hmax=3e-9,
+            corner_maximum_element_size=3e-9,
             corner_extent=8e-9,
         )
 
@@ -3474,22 +3497,22 @@ class ProblemApiTests(unittest.TestCase):
                 loaded = fm.load_problem_from_script(path)
 
         mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
-        self.assertEqual(mesh_entry["edge_hmax"], "5e-09")
+        self.assertEqual(mesh_entry["edge_maximum_element_size"], "5e-09")
         self.assertEqual(mesh_entry["edge_thickness"], "9e-09")
-        self.assertEqual(mesh_entry["corner_hmax"], "3e-09")
+        self.assertEqual(mesh_entry["corner_maximum_element_size"], "3e-09")
         self.assertEqual(mesh_entry["corner_extent"], "8e-09")
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("edge_hmax=5e-09", rewritten)
+        self.assertIn("edge_maximum_element_size=5e-09", rewritten)
         self.assertIn("edge_thickness=9e-09", rewritten)
-        self.assertIn("corner_hmax=3e-09", rewritten)
+        self.assertIn("corner_maximum_element_size=3e-09", rewritten)
         self.assertIn("corner_extent=8e-09", rewritten)
 
-    def test_box_perimeter_refinement_rejects_interface_shell_conflict(self) -> None:
+    def test_box_perimeter_refinement_allows_interface_shell_coexistence(self) -> None:
         script = """
         import fullmag as fm
 
-        study = fm.study("object_mesh_perimeter_refinement_conflict")
+        study = fm.study("object_mesh_perimeter_refinement_interface")
         study.engine("fem")
 
         body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
@@ -3499,18 +3522,59 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
             maximum_element_size=20e-9,
-            edge_hmax=5e-9,
+            edge_maximum_element_size=5e-9,
             edge_thickness=9e-9,
-            interface_hmax=3e-9,
+            interface_maximum_element_size=3e-9,
         )
         """
 
         with TemporaryDirectory() as tmp_dir:
-            path = Path(tmp_dir) / "script_study_object_mesh_perimeter_refinement_conflict.py"
+            path = Path(tmp_dir) / "script_study_object_mesh_perimeter_refinement_interface.py"
             path.write_text(textwrap.dedent(script), encoding="utf-8")
             with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
-                with self.assertRaisesRegex(ValueError, "cannot be combined with interface_hmax"):
-                    fm.load_problem_from_script(path)
+                loaded = fm.load_problem_from_script(path)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        self.assertEqual(mesh_entry["edge_maximum_element_size"], "5e-09")
+        self.assertEqual(mesh_entry["edge_thickness"], "9e-09")
+        self.assertEqual(mesh_entry["interface_maximum_element_size"], "3e-09")
+
+    def test_public_boundary_layers_helper_exports_runtime_metadata(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("boundary_layers_public_helper")
+        study.engine("fem")
+
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(
+            maximum_element_size=20e-9,
+            **fm.mesh.boundary_layers(
+                count=3,
+                first_layer_thickness=1e-9,
+                stretching=1.25,
+                target_surface_tags=[11, 12],
+                target_curve_tags=[21],
+            ),
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_object_mesh_boundary_layers.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        self.assertEqual(mesh_entry["boundary_layer_count"], 3)
+        self.assertEqual(mesh_entry["boundary_layer_thickness"], "1e-09")
+        self.assertEqual(mesh_entry["boundary_layer_stretching"], 1.25)
+        self.assertEqual(mesh_entry["boundary_layer_target_surface_tags"], [11, 12])
+        self.assertEqual(mesh_entry["boundary_layer_target_curve_tags"], [21])
 
     def test_study_mesh_builder_exports_comsol_like_size_semantics(self) -> None:
         script = """
@@ -3519,7 +3583,7 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("comsol_size_semantics")
         study.engine("fem")
         study.objects.mesh.defaults(
-            hmax=25e-9,
+            maximum_element_size=25e-9,
             calibrate_for="general_physics",
             size_preset="finer",
             curvature_factor=0.4,
@@ -3532,7 +3596,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         body.mesh(
-            hmax=20e-9,
+            maximum_element_size=20e-9,
             calibrate_for="general_physics",
             size_preset="fine",
             curvature_factor=0.5,
@@ -3566,15 +3630,15 @@ class ProblemApiTests(unittest.TestCase):
         study = fm.study("legacy_mesh_entrypoints")
         study.engine("fem")
         with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
-            study.object_mesh_defaults(hmax=12e-9, order=2, growth_rate=1.6)
+            study.object_mesh_defaults(maximum_element_size=12e-9, order=2, growth_rate=1.6)
         with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
             study.mesh(maximum_element_size=12e-9, order=2)
         with self.assertRaisesRegex(ValueError, "study.universe.mesh"):
-            study.airbox(hmax=80e-9)
+            study.airbox(maximum_element_size=80e-9)
         with self.assertRaisesRegex(ValueError, "study.universe.mesh"):
             study.universe(mode="auto", airbox_hmax=80e-9)
         with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
-            fm.object_mesh_defaults(hmax=12e-9)
+            fm.object_mesh_defaults(maximum_element_size=12e-9)
         with self.assertRaisesRegex(ValueError, "study.objects.mesh.defaults"):
             fm.mesh(maximum_element_size=12e-9)
 

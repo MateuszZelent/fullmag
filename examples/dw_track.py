@@ -44,7 +44,7 @@ def build() -> fm.Problem:
         ),
         discretization=fm.DiscretizationHints(
             fdm=fm.FDM(cell=(2e-9, 2e-9, 1e-9)),
-            fem=fm.FEM(order=1, hmax=2e-9),
+            fem=fm.FEM(order=1, maximum_element_size=2e-9),
             hybrid=fm.Hybrid(demag="fft_aux_grid"),
         ),
     )

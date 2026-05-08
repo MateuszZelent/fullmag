@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRowsFromMeshStatisticsReport,
   parseOperationStatuses,
+  parseRealizedSizeFields,
   parseThinFilmDiagnostics,
   parseWorstElements,
 } from "../MeshStatisticsPanel";
@@ -46,8 +47,8 @@ describe("MeshStatisticsPanel backend truth parsers", () => {
           lateral_size: 100e-9,
           aspect_ratio: 11.1,
           requested_layers: 3,
-          estimated_layers_from_hmax: 1,
-          hmax_to_thickness_ratio: 0.89,
+          estimated_layers_from_maximum_element_size: 1,
+          maximum_element_size_to_thickness_ratio: 0.89,
           requested_method: "swept_prism",
           actual_method: "free_tetrahedral",
           warnings: ["requested swept/prism meshing fell back to free tetrahedral"],
@@ -62,6 +63,67 @@ describe("MeshStatisticsPanel backend truth parsers", () => {
         requestedLayers: 3,
         actualMethod: "free_tetrahedral",
         warnings: ["requested swept/prism meshing fell back to free tetrahedral"],
+      },
+    ]);
+  });
+
+  it("reads realized size fields from last build summary", () => {
+    const fields = parseRealizedSizeFields({
+      size_fields_realized: [
+        {
+          kind: "EdgeDistanceThreshold",
+          status: "applied",
+          source: "per_geometry.edge_maximum_element_size",
+          gmsh_field_id: 12,
+          params: {
+            GeometryName: "arch_waveguide",
+            SizeMin: 1.8e-9,
+            SizeMax: 6e-9,
+          },
+        },
+        {
+          kind: "InterfaceShellThreshold",
+          status: "ignored",
+          reason: "component surface tags are unavailable",
+        },
+      ],
+    });
+
+    expect(fields).toMatchObject([
+      {
+        kind: "EdgeDistanceThreshold",
+        status: "applied",
+        source: "per_geometry.edge_maximum_element_size",
+        gmshFieldId: 12,
+        params: {
+          GeometryName: "arch_waveguide",
+          SizeMin: 1.8e-9,
+        },
+      },
+      {
+        kind: "InterfaceShellThreshold",
+        status: "ignored",
+        reason: "component surface tags are unavailable",
+      },
+    ]);
+  });
+
+  it("reads realized size fields from wrapped endpoint payloads", () => {
+    const fields = parseRealizedSizeFields({
+      size_fields_realized: {
+        fields: [
+          {
+            kind: "SurfaceDistanceThreshold",
+            applied: true,
+          },
+        ],
+      },
+    });
+
+    expect(fields).toMatchObject([
+      {
+        kind: "SurfaceDistanceThreshold",
+        status: "applied",
       },
     ]);
   });

@@ -21,7 +21,7 @@ HEIGHT = float(os.environ.get("BENCH_HEIGHT", "9e-9"))
 CPU_THREADS = os.environ.get("FULLMAG_CPU_THREADS", "auto")
 
 print("[bench] FEM CPU clean benchmark", file=sys.stderr)
-print(f"[bench]   hmax          = {HMAX:.2e} m", file=sys.stderr)
+print(f"[bench]   maximum element size = {HMAX:.2e} m", file=sys.stderr)
 print(f"[bench]   max_steps     = {MAX_STEPS}", file=sys.stderr)
 print(f"[bench]   radius        = {RADIUS:.2e} m", file=sys.stderr)
 print(f"[bench]   height        = {HEIGHT:.2e} m", file=sys.stderr)
@@ -55,7 +55,7 @@ study.b_ext(0, 0, 0.02)
 study.demag(realization="poisson_robin")
 
 body.mesh(
-    hmax=HMAX,
+    maximum_element_size=HMAX,
     order=1,
     algorithm_2d=8,
     algorithm_3d=1,

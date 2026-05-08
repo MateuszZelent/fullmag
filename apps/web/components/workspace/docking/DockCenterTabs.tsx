@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, startTransition } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 import { ViewportBar } from "@/components/runs/control-room/ViewportPanels";
 import { useTransport, useViewport } from "@/components/runs/control-room/context-hooks";
@@ -64,7 +64,6 @@ function analyzeSelectionForResultKind(
 
 export default function DockCenterTabs() {
   const pathname = usePathname();
-  const router = useRouter();
   const dockCenterFlags = FRONTEND_DIAGNOSTIC_FLAGS.dockCenterTabs;
   const currentStage = useWorkspaceStore((state) => state.currentStage);
   const tabs = useWorkspaceStore((state) => state.workspaceTabsByStage[state.currentStage]);
@@ -309,10 +308,10 @@ export default function DockCenterTabs() {
       }
       const nextHref = workspaceHrefForTabSlug(slug);
       if (pathname !== nextHref) {
-        router.replace(nextHref, { scroll: false });
+        window.history.replaceState(window.history.state, "", nextHref);
       }
     },
-    [activateTab, currentStage, effectiveViewMode, patchDisplay, pathname, router, setComponent, setViewMode, tabs],
+    [activateTab, currentStage, effectiveViewMode, patchDisplay, pathname, setComponent, setViewMode, tabs],
   );
 
   if (!dockCenterFlags.enableInternalTree) {

@@ -169,23 +169,28 @@ def _sanitize_volume_mesh_options(
 
 def generate_mesh(
     geometry: Geometry,
-    hmax: float,
+    hmax: float | None = None,
     order: int = 1,
     air_padding: float = 0.0,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    maximum_element_size: float | None = None,
 ) -> MeshData:
     """Generate a tetrahedral mesh for the given geometry.
 
     Args:
         geometry: Fullmag geometry descriptor.
-        hmax: Maximum element size (SI metres).
+        maximum_element_size: Maximum element size (SI metres). ``hmax`` is
+                accepted as a compatibility alias.
         order: Finite-element order (1 = linear, 2 = quadratic).
         air_padding: Scalar padding factor (legacy). Use *airbox* instead.
         airbox: Structured airbox configuration. When given, takes precedence
                 over *air_padding*.
         options: Advanced Gmsh options (algorithms, quality, size fields).
     """
+    resolved_hmax = maximum_element_size if maximum_element_size is not None else hmax
+    if resolved_hmax is None:
+        raise TypeError("generate_mesh() requires maximum_element_size")
     resolved_airbox = airbox or (
         AirboxOptions(padding_factor=air_padding) if air_padding > 0 else None
     )
@@ -206,19 +211,19 @@ def generate_mesh(
             f"for '{getattr(geometry, 'geometry_name', type(geometry).__name__)}'"
         )
         return generate_swept_mesh(
-            geometry, hmax, n_layers,
+            geometry, resolved_hmax, n_layers,
             order=order, distribution=distribution,
             element_ratio=element_ratio, symmetric=symmetric,
             recombine=recombine, airbox=resolved_airbox, options=opts,
         )
 
     if isinstance(geometry, Box):
-        return generate_box_mesh(geometry.size, hmax=hmax, order=order, airbox=resolved_airbox, options=opts)
+        return generate_box_mesh(geometry.size, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
     if isinstance(geometry, Cylinder):
         return generate_cylinder_mesh(
             geometry.radius,
             geometry.height,
-            hmax=hmax,
+            hmax=resolved_hmax,
             order=order,
             airbox=resolved_airbox,
             options=opts,
@@ -233,7 +238,7 @@ def generate_mesh(
             if isinstance(inner, ImportedGeometry):
                 mesh = generate_mesh_from_file(
                     inner.source,
-                    hmax=hmax,
+                    hmax=resolved_hmax,
                     order=order,
                     airbox=resolved_airbox,
                     scale=inner.scale,
@@ -251,11 +256,11 @@ def generate_mesh(
                         quality=mesh.quality,
                     )
                 return mesh
-        return _generate_csg_mesh(geometry, hmax=hmax, order=order, airbox=resolved_airbox, options=opts)
+        return _generate_csg_mesh(geometry, hmax=resolved_hmax, order=order, airbox=resolved_airbox, options=opts)
     if isinstance(geometry, ImportedGeometry):
         return generate_mesh_from_file(
             geometry.source,
-            hmax=hmax,
+            hmax=resolved_hmax,
             order=order,
             air_padding=air_padding,
             airbox=resolved_airbox,

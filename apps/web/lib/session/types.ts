@@ -750,7 +750,7 @@ export interface ScriptBuilderPerGeometryMeshEntry {
   corner_extent: string | null;
   // Boundary layer extrusion
   boundary_layer_count: number | null;
-  boundary_layer_thickness: string | null;   // SI metres as string (matches hmax/hmin pattern)
+  boundary_layer_thickness: string | null;   // SI metres as string (matches mesh-size fields)
   boundary_layer_stretching: number | null;
   // Swept / through-thickness meshing
   mesh_strategy: string | null;
@@ -1275,6 +1275,7 @@ export interface MeshCapabilitiesState {
   supports_adaptive_remesh: boolean;
   supports_compare_snapshots: boolean;
   supports_size_field_remesh: boolean;
+  supports_edge_distance_fields?: boolean;
   supports_selected_surface_size_fields?: boolean;
   supports_boundary_layers?: boolean;
   supports_mesh_convergence_workflow?: boolean;

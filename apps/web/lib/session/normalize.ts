@@ -1923,6 +1923,7 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
             supports_adaptive_remesh: Boolean(raw.mesh_capabilities.supports_adaptive_remesh),
             supports_compare_snapshots: Boolean(raw.mesh_capabilities.supports_compare_snapshots),
             supports_size_field_remesh: Boolean(raw.mesh_capabilities.supports_size_field_remesh),
+            supports_edge_distance_fields: Boolean(raw.mesh_capabilities.supports_edge_distance_fields),
             supports_selected_surface_size_fields: Boolean(raw.mesh_capabilities.supports_selected_surface_size_fields),
             supports_boundary_layers: Boolean(raw.mesh_capabilities.supports_boundary_layers),
             supports_mesh_convergence_workflow: Boolean(raw.mesh_capabilities.supports_mesh_convergence_workflow),
@@ -1972,20 +1973,25 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
       : [],
     effective_airbox_target:
       raw.effective_airbox_target && typeof raw.effective_airbox_target === "object"
-        ? {
-            hmax:
-              raw.effective_airbox_target.hmax != null
-                ? Number(raw.effective_airbox_target.hmax)
-                : null,
-            hmin:
-              raw.effective_airbox_target.hmin != null
-                ? Number(raw.effective_airbox_target.hmin)
-                : null,
+        ? (() => {
+            const target = raw.effective_airbox_target as Record<string, unknown>;
+            const maximumElementSize = target.maximum_element_size ?? target.hmax;
+            const minimumElementSize = target.minimum_element_size ?? target.hmin;
+            return {
+              hmax:
+                maximumElementSize != null
+                  ? Number(maximumElementSize)
+                  : null,
+              hmin:
+                minimumElementSize != null
+                  ? Number(minimumElementSize)
+                  : null,
             growth_rate:
               raw.effective_airbox_target.growth_rate != null
                 ? Number(raw.effective_airbox_target.growth_rate)
                 : null,
-          }
+            };
+          })()
         : null,
     active_build: normalizeMeshBuildIntent(raw.active_build),
     effective_per_object_targets:
@@ -1995,23 +2001,30 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
               const target = entry && typeof entry === "object"
                 ? entry as Record<string, unknown>
                 : {};
+              const maximumElementSize = target.maximum_element_size ?? target.hmax;
+              const interfaceMaximumElementSize =
+                target.interface_maximum_element_size ?? target.interface_hmax;
+              const edgeMaximumElementSize =
+                target.edge_maximum_element_size ?? target.edge_hmax;
+              const cornerMaximumElementSize =
+                target.corner_maximum_element_size ?? target.corner_hmax;
               return [
                 geometryName,
                 {
                   marker:
                     target.marker != null ? Number(target.marker) : null,
                   hmax:
-                    target.hmax != null ? Number(target.hmax) : null,
+                    maximumElementSize != null ? Number(maximumElementSize) : null,
                   interface_hmax:
-                    target.interface_hmax != null ? Number(target.interface_hmax) : null,
+                    interfaceMaximumElementSize != null ? Number(interfaceMaximumElementSize) : null,
                   transition_distance:
                     target.transition_distance != null ? Number(target.transition_distance) : null,
                   edge_hmax:
-                    target.edge_hmax != null ? Number(target.edge_hmax) : null,
+                    edgeMaximumElementSize != null ? Number(edgeMaximumElementSize) : null,
                   edge_thickness:
                     target.edge_thickness != null ? Number(target.edge_thickness) : null,
                   corner_hmax:
-                    target.corner_hmax != null ? Number(target.corner_hmax) : null,
+                    cornerMaximumElementSize != null ? Number(cornerMaximumElementSize) : null,
                   corner_extent:
                     target.corner_extent != null ? Number(target.corner_extent) : null,
                   source:

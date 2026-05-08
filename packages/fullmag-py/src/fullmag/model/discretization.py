@@ -378,24 +378,53 @@ class SweptMeshControls:
 # ---------------------------------------------------------------------------
 # FEM discretization hints
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class FEM:
     order: int
-    hmax: float
+    maximum_element_size: float
     mesh: str | None = None
     demag_solver_policy: FemLinearSolverPolicy | None = None
+
+    def __init__(
+        self,
+        order: int,
+        maximum_element_size: float | None = None,
+        *,
+        hmax: float | None = None,
+        mesh: str | None = None,
+        demag_solver_policy: FemLinearSolverPolicy | None = None,
+    ) -> None:
+        resolved_maximum_element_size = (
+            maximum_element_size if maximum_element_size is not None else hmax
+        )
+        if resolved_maximum_element_size is None:
+            raise TypeError("FEM requires maximum_element_size")
+        if hmax is not None and maximum_element_size is not None:
+            if float(hmax) != float(maximum_element_size):
+                raise ValueError("hmax must match maximum_element_size when both are provided")
+        object.__setattr__(self, "order", order)
+        object.__setattr__(
+            self, "maximum_element_size", float(resolved_maximum_element_size)
+        )
+        object.__setattr__(self, "mesh", mesh)
+        object.__setattr__(self, "demag_solver_policy", demag_solver_policy)
+        self.__post_init__()
+
+    @property
+    def hmax(self) -> float:
+        return self.maximum_element_size
 
     def __post_init__(self) -> None:
         if self.order < 1:
             raise ValueError("order must be >= 1")
-        require_positive(self.hmax, "hmax")
+        require_positive(self.maximum_element_size, "maximum_element_size")
         if self.mesh is not None and not self.mesh.strip():
             raise ValueError("mesh must not be empty when provided")
 
     def to_ir(self) -> dict[str, object]:
         ir: dict[str, object] = {
             "order": self.order,
-            "hmax": self.hmax,
+            "hmax": self.maximum_element_size,
             "mesh": self.mesh,
         }
         if self.demag_solver_policy is not None:
@@ -502,7 +531,7 @@ class PerObjectMeshRecipe:
     Example::
 
         recipe = fm.PerObjectMeshRecipe(
-            hmax=4e-9,
+            maximum_element_size=4e-9,
             size_from_curvature=20,
             boundary_layer_count=3,
             boundary_layer_thickness=2e-9,
@@ -513,6 +542,8 @@ class PerObjectMeshRecipe:
     """
 
     # ── element size ──
+    maximum_element_size: float | None = None
+    minimum_element_size: float | None = None
     hmax: float | None = None
     hmin: float | None = None
 
@@ -565,9 +596,17 @@ class PerObjectMeshRecipe:
     operations: list[MeshOperation] = field(default_factory=list)
 
     def to_ir(self) -> dict[str, Any]:
+        resolved_maximum_element_size = (
+            self.maximum_element_size if self.maximum_element_size is not None else self.hmax
+        )
+        resolved_minimum_element_size = (
+            self.minimum_element_size if self.minimum_element_size is not None else self.hmin
+        )
         return {
-            "hmax": self.hmax,
-            "hmin": self.hmin,
+            "hmax": resolved_maximum_element_size,
+            "hmin": resolved_minimum_element_size,
+            "maximum_element_size": resolved_maximum_element_size,
+            "minimum_element_size": resolved_minimum_element_size,
             "order": self.order,
             "source": self.source,
             "calibrate_for": self.calibrate_for,
@@ -608,11 +647,11 @@ class SharedMeshAssemblyPolicy:
 
     Attributes:
         interface_hmax_factor: Size factor at domain interfaces relative to
-            the local object hmax (< 1 = finer at boundaries).
+            the local object maximum element size (< 1 = finer at boundaries).
         enforce_conforming: Require a conforming mesh (shared vertices at
             domain boundaries) via OCC ``fragment``.
         airbox_hmax_factor: Element size in the airbox as a multiple of the
-            global hmax.  Larger = coarser airbox.
+            global maximum element size.  Larger = coarser airbox.
     """
 
     interface_hmax_factor: float = 0.5

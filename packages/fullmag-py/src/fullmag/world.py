@@ -390,6 +390,11 @@ class _MeshSpecState:
     edge_thickness: float | None = None
     corner_hmax: float | None = None
     corner_extent: float | None = None
+    boundary_layer_count: int | None = None
+    boundary_layer_thickness: float | None = None
+    boundary_layer_stretching: float | None = None
+    boundary_layer_target_surface_tags: list[int] | None = None
+    boundary_layer_target_curve_tags: list[int] | None = None
     size_fields: list[dict[str, object]] = field(default_factory=list)
     # Quality
     compute_quality: bool = False
@@ -429,6 +434,11 @@ class _MeshSpecState:
             or self.edge_thickness is not None
             or self.corner_hmax is not None
             or self.corner_extent is not None
+            or self.boundary_layer_count is not None
+            or self.boundary_layer_thickness is not None
+            or self.boundary_layer_stretching is not None
+            or self.boundary_layer_target_surface_tags is not None
+            or self.boundary_layer_target_curve_tags is not None
             or self.compute_quality
             or self.per_element_quality
             or bool(self.size_fields)
@@ -454,26 +464,23 @@ def _validate_perimeter_refinement_spec(
 
     if edge_pair_active and (spec.edge_hmax is None or spec.edge_thickness is None):
         raise ValueError(
-            f"{context}: edge_hmax and edge_thickness must be set together"
+            f"{context}: edge_maximum_element_size and edge_thickness must be set together"
         )
     if corner_pair_active and (spec.corner_hmax is None or spec.corner_extent is None):
         raise ValueError(
-            f"{context}: corner_hmax and corner_extent must be set together"
+            f"{context}: corner_maximum_element_size and corner_extent must be set together"
         )
 
     if not edge_pair_active and not corner_pair_active:
         return
 
-    if spec.interface_hmax is not None or spec.interface_thickness is not None:
-        raise ValueError(
-            f"{context}: edge/corner refinement cannot be combined with interface_hmax or interface_thickness"
-        )
-
     box = _unwrap_translated_box(geometry)
     if box is None:
-        raise ValueError(
-            f"{context}: edge/corner refinement is currently supported only for Box geometries"
-        )
+        if corner_pair_active:
+            raise ValueError(
+                f"{context}: corner refinement is currently supported only for Box geometries"
+            )
+        return
 
     sx, sy, sz = (float(value) for value in box.size)
     in_plane_dims = sorted((sx, sy, sz), reverse=True)[:2]
@@ -494,8 +501,17 @@ def _validate_perimeter_refinement_spec(
         and spec.corner_hmax > spec.edge_hmax
     ):
         raise ValueError(
-            f"{context}: corner_hmax must be less than or equal to edge_hmax"
+            f"{context}: corner_maximum_element_size must be less than or equal to edge_maximum_element_size"
         )
+
+
+def _normalize_int_tags(value: Sequence[int] | None, *, context: str) -> list[int] | None:
+    if value is None:
+        return None
+    tags = [int(tag) for tag in value]
+    if any(tag <= 0 for tag in tags):
+        raise ValueError(f"{context} must contain positive integer tags")
+    return tags
 
 
 class GeometryMeshHandle:
@@ -504,7 +520,7 @@ class GeometryMeshHandle:
     Usage::
 
         flower = fm.geometry(fm.ImportedGeometry(source="nanoflower.stl"))
-        flower.mesh(hmax=5e-9, algorithm_3d=10, optimize="Netgen")
+        flower.mesh(maximum_element_size=5e-9, algorithm_3d=10, optimize="Netgen")
         flower.mesh.size_field("Ball", VIn=1e-9, VOut=5e-9, Radius=20e-9)
         flower.mesh.build()
         report = flower.mesh.quality()
@@ -536,14 +552,22 @@ class GeometryMeshHandle:
         maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
+        interface_maximum_element_size: float | None = None,
         interface_hmax: float | None = None,
         interface_thickness: float | None = None,
         transition_distance: float | None = None,
         transition_growth: float | None = None,
+        edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
+        corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
+        boundary_layer_count: int | None = None,
+        boundary_layer_thickness: float | None = None,
+        boundary_layer_stretching: float | None = None,
+        boundary_layer_target_surface_tags: Sequence[int] | None = None,
+        boundary_layer_target_curve_tags: Sequence[int] | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -568,14 +592,22 @@ class GeometryMeshHandle:
             maximum_element_growth_rate=maximum_element_growth_rate,
             narrow_regions=narrow_regions,
             narrow_region_resolution=narrow_region_resolution,
+            interface_maximum_element_size=interface_maximum_element_size,
             interface_hmax=interface_hmax,
             interface_thickness=interface_thickness,
             transition_distance=transition_distance,
             transition_growth=transition_growth,
+            edge_maximum_element_size=edge_maximum_element_size,
             edge_hmax=edge_hmax,
             edge_thickness=edge_thickness,
+            corner_maximum_element_size=corner_maximum_element_size,
             corner_hmax=corner_hmax,
             corner_extent=corner_extent,
+            boundary_layer_count=boundary_layer_count,
+            boundary_layer_thickness=boundary_layer_thickness,
+            boundary_layer_stretching=boundary_layer_stretching,
+            boundary_layer_target_surface_tags=boundary_layer_target_surface_tags,
+            boundary_layer_target_curve_tags=boundary_layer_target_curve_tags,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
@@ -609,14 +641,22 @@ class GeometryMeshHandle:
         maximum_element_growth_rate: float | None = None,
         narrow_regions: int | None = None,
         narrow_region_resolution: float | None = None,
+        interface_maximum_element_size: float | None = None,
         interface_hmax: float | None = None,
         interface_thickness: float | None = None,
         transition_distance: float | None = None,
         transition_growth: float | None = None,
+        edge_maximum_element_size: float | None = None,
         edge_hmax: float | None = None,
         edge_thickness: float | None = None,
+        corner_maximum_element_size: float | None = None,
         corner_hmax: float | None = None,
         corner_extent: float | None = None,
+        boundary_layer_count: int | None = None,
+        boundary_layer_thickness: float | None = None,
+        boundary_layer_stretching: float | None = None,
+        boundary_layer_target_surface_tags: Sequence[int] | None = None,
+        boundary_layer_target_curve_tags: Sequence[int] | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -630,10 +670,12 @@ class GeometryMeshHandle:
 
         Parameters
         ----------
-        hmax : float, optional
-            Maximum element size (SI metres).
-        hmin : float, optional
-            Minimum element size (SI metres).
+        maximum_element_size : float, optional
+            Maximum element size (SI metres). ``hmax`` remains accepted as a
+            compatibility alias.
+        minimum_element_size : float, optional
+            Minimum element size (SI metres). ``hmin`` remains accepted as a
+            compatibility alias.
         order : int, optional
             FEM basis order used by the solver (1 = linear, 2 = quadratic).
             The stored mesh topology remains first-order.
@@ -723,9 +765,27 @@ class GeometryMeshHandle:
             spec.narrow_regions = narrow_regions
         if narrow_region_resolution is not None:
             spec.narrow_region_resolution = float(narrow_region_resolution)
-        if interface_hmax is not None:
-            require_positive(float(interface_hmax), f"{self._owner._name}.mesh.interface_hmax")
-            spec.interface_hmax = float(interface_hmax)
+        resolved_interface_maximum_element_size = (
+            interface_maximum_element_size
+            if interface_maximum_element_size is not None
+            else interface_hmax
+        )
+        resolved_edge_maximum_element_size = (
+            edge_maximum_element_size
+            if edge_maximum_element_size is not None
+            else edge_hmax
+        )
+        resolved_corner_maximum_element_size = (
+            corner_maximum_element_size
+            if corner_maximum_element_size is not None
+            else corner_hmax
+        )
+        if resolved_interface_maximum_element_size is not None:
+            require_positive(
+                float(resolved_interface_maximum_element_size),
+                f"{self._owner._name}.mesh.interface_maximum_element_size",
+            )
+            spec.interface_hmax = float(resolved_interface_maximum_element_size)
         if interface_thickness is not None:
             require_positive(float(interface_thickness), f"{self._owner._name}.mesh.interface_thickness")
             spec.interface_thickness = float(interface_thickness)
@@ -735,18 +795,51 @@ class GeometryMeshHandle:
         if transition_growth is not None:
             require_positive(float(transition_growth), f"{self._owner._name}.mesh.transition_growth")
             spec.transition_growth = float(transition_growth)
-        if edge_hmax is not None:
-            require_positive(float(edge_hmax), f"{self._owner._name}.mesh.edge_hmax")
-            spec.edge_hmax = float(edge_hmax)
+        if resolved_edge_maximum_element_size is not None:
+            require_positive(
+                float(resolved_edge_maximum_element_size),
+                f"{self._owner._name}.mesh.edge_maximum_element_size",
+            )
+            spec.edge_hmax = float(resolved_edge_maximum_element_size)
         if edge_thickness is not None:
             require_positive(float(edge_thickness), f"{self._owner._name}.mesh.edge_thickness")
             spec.edge_thickness = float(edge_thickness)
-        if corner_hmax is not None:
-            require_positive(float(corner_hmax), f"{self._owner._name}.mesh.corner_hmax")
-            spec.corner_hmax = float(corner_hmax)
+        if resolved_corner_maximum_element_size is not None:
+            require_positive(
+                float(resolved_corner_maximum_element_size),
+                f"{self._owner._name}.mesh.corner_maximum_element_size",
+            )
+            spec.corner_hmax = float(resolved_corner_maximum_element_size)
         if corner_extent is not None:
             require_positive(float(corner_extent), f"{self._owner._name}.mesh.corner_extent")
             spec.corner_extent = float(corner_extent)
+        if boundary_layer_count is not None:
+            count = int(boundary_layer_count)
+            if count < 1:
+                raise ValueError(f"{self._owner._name}.mesh.boundary_layer_count must be >= 1")
+            spec.boundary_layer_count = count
+        if boundary_layer_thickness is not None:
+            require_positive(
+                float(boundary_layer_thickness),
+                f"{self._owner._name}.mesh.boundary_layer_thickness",
+            )
+            spec.boundary_layer_thickness = float(boundary_layer_thickness)
+        if boundary_layer_stretching is not None:
+            require_positive(
+                float(boundary_layer_stretching),
+                f"{self._owner._name}.mesh.boundary_layer_stretching",
+            )
+            spec.boundary_layer_stretching = float(boundary_layer_stretching)
+        if boundary_layer_target_surface_tags is not None:
+            spec.boundary_layer_target_surface_tags = _normalize_int_tags(
+                boundary_layer_target_surface_tags,
+                context=f"{self._owner._name}.mesh.boundary_layer_target_surface_tags",
+            )
+        if boundary_layer_target_curve_tags is not None:
+            spec.boundary_layer_target_curve_tags = _normalize_int_tags(
+                boundary_layer_target_curve_tags,
+                context=f"{self._owner._name}.mesh.boundary_layer_target_curve_tags",
+            )
         if compute_quality is not None:
             spec.compute_quality = compute_quality
         if per_element_quality is not None:
@@ -923,11 +1016,11 @@ class StudyUniverseConfig:
                     "airbox_grading must be one of 'auto', 'geometric', or 'linear'"
                 )
             object.__setattr__(self, "airbox_grading", normalized_grading)
-        # Validate that hmin <= hmax if both are set
+        # Validate that minimum_element_size <= maximum_element_size if both are set
         if self.airbox_hmin is not None and self.airbox_hmax is not None:
             if self.airbox_hmin > self.airbox_hmax:
                 raise ValueError(
-                    f"airbox_hmin ({self.airbox_hmin}) cannot be greater than airbox_hmax ({self.airbox_hmax})"
+                    f"airbox minimum_element_size ({self.airbox_hmin}) cannot be greater than airbox maximum_element_size ({self.airbox_hmax})"
                 )
         if self.mode == "manual" and self.size is None:
             raise ValueError("manual universe mode requires an explicit size")
@@ -1750,7 +1843,7 @@ def _gamma_from_g_factor(g_factor: float) -> float:
 
 
 def _estimate_auto_hmax() -> float:
-    """Estimate optimal hmax from the exchange length of registered magnets.
+    """Estimate optimal maximum element size from the exchange length of registered magnets.
 
     Uses ``l_ex = sqrt(2A / (mu0 * Ms^2))`` — the fundamental length scale
     below which exchange dominates.  Returns ``min(l_ex)`` across all magnets
@@ -1764,12 +1857,12 @@ def _estimate_auto_hmax() -> float:
     if l_ex_values:
         chosen = min(l_ex_values)
         emit_progress(
-            f"hmax='auto': exchange length(s) {[f'{v*1e9:.2f} nm' for v in l_ex_values]}, "
-            f"using hmax = {chosen*1e9:.2f} nm"
+            f"maximum_element_size='auto': exchange length(s) {[f'{v*1e9:.2f} nm' for v in l_ex_values]}, "
+            f"using maximum_element_size = {chosen*1e9:.2f} nm"
         )
         return chosen
     raise ValueError(
-        "hmax='auto' requires at least one magnetic geometry with explicit Ms and Aex. "
+        "maximum_element_size='auto' requires at least one magnetic geometry with explicit Ms and Aex. "
         "Fullmag no longer applies an implicit fallback mesh size."
     )
 
@@ -2698,10 +2791,16 @@ def _configure_object_mesh_defaults(
     maximum_element_growth_rate: float | None = None,
     narrow_regions: int | None = None,
     narrow_region_resolution: float | None = None,
+    interface_maximum_element_size: float | None = None,
     interface_hmax: float | None = None,
     interface_thickness: float | None = None,
     transition_distance: float | None = None,
     transition_growth: float | None = None,
+    boundary_layer_count: int | None = None,
+    boundary_layer_thickness: float | None = None,
+    boundary_layer_stretching: float | None = None,
+    boundary_layer_target_surface_tags: Sequence[int] | None = None,
+    boundary_layer_target_curve_tags: Sequence[int] | None = None,
     compute_quality: bool | None = None,
     per_element_quality: bool | None = None,
 ) -> None:
@@ -2758,9 +2857,19 @@ def _configure_object_mesh_defaults(
         _state._default_mesh_spec.narrow_regions = narrow_regions
     if narrow_region_resolution is not None:
         _state._default_mesh_spec.narrow_region_resolution = float(narrow_region_resolution)
-    if interface_hmax is not None:
-        require_positive(float(interface_hmax), "study.objects.mesh.defaults.interface_hmax")
-        _state._default_mesh_spec.interface_hmax = float(interface_hmax)
+    resolved_interface_maximum_element_size = (
+        interface_maximum_element_size
+        if interface_maximum_element_size is not None
+        else interface_hmax
+    )
+    if resolved_interface_maximum_element_size is not None:
+        require_positive(
+            float(resolved_interface_maximum_element_size),
+            "study.objects.mesh.defaults.interface_maximum_element_size",
+        )
+        _state._default_mesh_spec.interface_hmax = float(
+            resolved_interface_maximum_element_size
+        )
     if interface_thickness is not None:
         require_positive(float(interface_thickness), "study.objects.mesh.defaults.interface_thickness")
         _state._default_mesh_spec.interface_thickness = float(interface_thickness)
@@ -2770,6 +2879,33 @@ def _configure_object_mesh_defaults(
     if transition_growth is not None:
         require_positive(float(transition_growth), "study.objects.mesh.defaults.transition_growth")
         _state._default_mesh_spec.transition_growth = float(transition_growth)
+    if boundary_layer_count is not None:
+        count = int(boundary_layer_count)
+        if count < 1:
+            raise ValueError("study.objects.mesh.defaults.boundary_layer_count must be >= 1")
+        _state._default_mesh_spec.boundary_layer_count = count
+    if boundary_layer_thickness is not None:
+        require_positive(
+            float(boundary_layer_thickness),
+            "study.objects.mesh.defaults.boundary_layer_thickness",
+        )
+        _state._default_mesh_spec.boundary_layer_thickness = float(boundary_layer_thickness)
+    if boundary_layer_stretching is not None:
+        require_positive(
+            float(boundary_layer_stretching),
+            "study.objects.mesh.defaults.boundary_layer_stretching",
+        )
+        _state._default_mesh_spec.boundary_layer_stretching = float(boundary_layer_stretching)
+    if boundary_layer_target_surface_tags is not None:
+        _state._default_mesh_spec.boundary_layer_target_surface_tags = _normalize_int_tags(
+            boundary_layer_target_surface_tags,
+            context="study.objects.mesh.defaults.boundary_layer_target_surface_tags",
+        )
+    if boundary_layer_target_curve_tags is not None:
+        _state._default_mesh_spec.boundary_layer_target_curve_tags = _normalize_int_tags(
+            boundary_layer_target_curve_tags,
+            context="study.objects.mesh.defaults.boundary_layer_target_curve_tags",
+        )
     if compute_quality is not None:
         _state._default_mesh_spec.compute_quality = compute_quality
     if per_element_quality is not None:
@@ -3002,7 +3138,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
     explicit_mesh_api = _mesh_api_explicitly_declared()
     if not fem_backend_requested and not explicit_mesh_api:
         # Pure FDM/auto paths with no FEM mesh declarations should not be
-        # forced through FEM hmax validation.
+        # forced through FEM maximum-element-size validation.
         return None
 
     def _explicit_object_hmaxs() -> list[float | str]:
@@ -3045,7 +3181,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
                     shared_hmax = explicit_hmaxs[0]
                 else:
                     raise ValueError(
-                        "Per-geometry FEM hmax values currently support either all-numeric values "
+                        "Per-geometry FEM maximum_element_size values currently support either all-numeric values "
                         "or one shared symbolic value (for example, all 'auto')."
                     )
     else:
@@ -3126,14 +3262,14 @@ def _resolve_flat_fem_hint() -> FEM | None:
             if all(isinstance(value, (int, float)) for value in explicit_hmaxs):
                 resolved_hmax = max(float(value) for value in explicit_hmaxs)
                 emit_progress(
-                    "Using the coarsest explicit object hmax as the mesh base size "
+                    "Using the coarsest explicit object maximum_element_size as the mesh base size "
                     f"({resolved_hmax * 1e9:.2f} nm)"
                 )
             elif len(set(explicit_hmaxs)) == 1 and explicit_hmaxs[0] == "auto":
                 resolved_hmax = "auto"
 
     if resolved_hmax is None and (shared_source is not None or explicit_domain_mesh):
-        # A prebuilt mesh source does not need a generator-side hmax, but the
+        # A prebuilt mesh source does not need a generator-side maximum_element_size, but the
         # current FEM hint contract still requires one numeric placeholder.
         resolved_hmax = 5e-9
 
@@ -3142,7 +3278,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
         # provided, derive it from material exchange length heuristics.
         resolved_hmax = "auto"
         emit_progress(
-            "No explicit FEM mesh hmax configured; falling back to implicit auto mesh-size heuristic"
+            "No explicit FEM mesh maximum_element_size configured; falling back to implicit auto mesh-size heuristic"
         )
 
     # Resolve "auto" sentinel → exchange-length-based float
@@ -3218,6 +3354,16 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["corner_hmax"] = spec.corner_hmax
     if spec.corner_extent is not None:
         payload["corner_extent"] = spec.corner_extent
+    if spec.boundary_layer_count is not None:
+        payload["boundary_layer_count"] = spec.boundary_layer_count
+    if spec.boundary_layer_thickness is not None:
+        payload["boundary_layer_thickness"] = spec.boundary_layer_thickness
+    if spec.boundary_layer_stretching is not None:
+        payload["boundary_layer_stretching"] = spec.boundary_layer_stretching
+    if spec.boundary_layer_target_surface_tags is not None:
+        payload["boundary_layer_target_surface_tags"] = list(spec.boundary_layer_target_surface_tags)
+    if spec.boundary_layer_target_curve_tags is not None:
+        payload["boundary_layer_target_curve_tags"] = list(spec.boundary_layer_target_curve_tags)
     if spec.compute_quality:
         payload["compute_quality"] = True
     if spec.per_element_quality:
@@ -3339,6 +3485,20 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["through_thickness_symmetric"] = True
     if primary_spec.sweep_face_meshing is not None:
         mesh_options["sweep_face_meshing"] = primary_spec.sweep_face_meshing
+    if primary_spec.boundary_layer_count is not None:
+        mesh_options["boundary_layer_count"] = primary_spec.boundary_layer_count
+    if primary_spec.boundary_layer_thickness is not None:
+        mesh_options["boundary_layer_thickness"] = primary_spec.boundary_layer_thickness
+    if primary_spec.boundary_layer_stretching is not None:
+        mesh_options["boundary_layer_stretching"] = primary_spec.boundary_layer_stretching
+    if primary_spec.boundary_layer_target_surface_tags is not None:
+        mesh_options["boundary_layer_target_surface_tags"] = list(
+            primary_spec.boundary_layer_target_surface_tags
+        )
+    if primary_spec.boundary_layer_target_curve_tags is not None:
+        mesh_options["boundary_layer_target_curve_tags"] = list(
+            primary_spec.boundary_layer_target_curve_tags
+        )
 
     per_geometry = []
     for handle in _state._magnets:

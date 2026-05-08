@@ -3140,11 +3140,48 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "shared_domain_build_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
+                "description": "Typed shared-domain build report extracted from the latest build summary when present."
+              }
+            ]
           }
         },
         "required": [
           "revision"
         ],
+        "type": "object"
+      },
+      "MeshAirboxTargetResource": {
+        "properties": {
+          "growth_rate": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "minimum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshBuildCommandRequest": {
@@ -3323,6 +3360,23 @@
             "type": "object"
           }
         ]
+      },
+      "MeshDomainRegionMarkerResource": {
+        "properties": {
+          "geometry_name": {
+            "type": "string"
+          },
+          "marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "geometry_name",
+          "marker"
+        ],
+        "type": "object"
       },
       "MeshInterfaceConfigReplaceRequest": {
         "properties": {
@@ -3633,6 +3687,53 @@
         ],
         "type": "object"
       },
+      "MeshOperationStatusResource": {
+        "properties": {
+          "actual_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested": {
+            "type": "boolean"
+          },
+          "requested_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "scope",
+          "requested",
+          "status"
+        ],
+        "type": "object"
+      },
       "MeshPartResource": {
         "properties": {
           "boundary_face_count": {
@@ -3751,6 +3852,105 @@
           "node_start",
           "node_count"
         ],
+        "type": "object"
+      },
+      "MeshPerObjectTargetResource": {
+        "properties": {
+          "corner_extent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "corner_maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "edge_maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "edge_thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "interface_maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "interface_thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "transition_distance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "transition_distance_effective": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "transition_distance_requested": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "transition_growth": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "transition_realization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshPeriodicPairResource": {
@@ -3877,13 +4077,79 @@
         ],
         "type": "object"
       },
-      "MeshRealizedSizeFieldsResource": {
+      "MeshRealizedSizeFieldResource": {
         "properties": {
-          "realized_size_fields": {
+          "applied": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "gmsh_field_id": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "params": {
             "type": [
               "object",
               "null"
             ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MeshRealizedSizeFieldsPayload": {
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/MeshRealizedSizeFieldResource"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "MeshRealizedSizeFieldsResource": {
+        "properties": {
+          "realized_size_fields": {
+            "$ref": "#/components/schemas/MeshRealizedSizeFieldsPayload"
           },
           "revision": {
             "format": "int64",
@@ -3892,7 +4158,8 @@
           }
         },
         "required": [
-          "revision"
+          "revision",
+          "realized_size_fields"
         ],
         "type": "object"
       },
@@ -4029,6 +4296,82 @@
           "revision",
           "shared_domain_config",
           "render_only_controls_do_not_change_solver_domain"
+        ],
+        "type": "object"
+      },
+      "MeshSharedDomainBuildReportResource": {
+        "properties": {
+          "build_mode": {
+            "type": "string"
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "effective_airbox_maximum_element_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "effective_airbox_target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshAirboxTargetResource"
+              }
+            ]
+          },
+          "effective_per_object_targets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MeshPerObjectTargetResource"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "fallbacks_triggered": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "operation_statuses": {
+            "items": {
+              "$ref": "#/components/schemas/MeshOperationStatusResource"
+            },
+            "type": "array"
+          },
+          "region_markers": {
+            "items": {
+              "$ref": "#/components/schemas/MeshDomainRegionMarkerResource"
+            },
+            "type": "array"
+          },
+          "size_fields_realized": {
+            "items": {
+              "$ref": "#/components/schemas/MeshRealizedSizeFieldResource"
+            },
+            "type": "array"
+          },
+          "thin_film_diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/MeshThinFilmDiagnosticResource"
+            },
+            "type": "array"
+          },
+          "used_size_field_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "build_mode"
         ],
         "type": "object"
       },
@@ -4244,6 +4587,88 @@
         },
         "required": [
           "revision"
+        ],
+        "type": "object"
+      },
+      "MeshThinFilmDiagnosticResource": {
+        "properties": {
+          "actual_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "aspect_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "estimated_layers_from_maximum_element_size": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "geometry_name": {
+            "type": "string"
+          },
+          "is_thin_film": {
+            "type": "boolean"
+          },
+          "lateral_size": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "maximum_element_size_to_thickness_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "requested_layers": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requested_method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "geometry_name"
         ],
         "type": "object"
       },

@@ -286,15 +286,6 @@ function buildCustomMeshState(
     Number(options.transitionGrowth) > 0
       ? Number(options.transitionGrowth)
       : null;
-  const hasPerimeterRefinement =
-    options.edgeHMax.trim().length > 0
-    || options.edgeThickness.trim().length > 0
-    || options.cornerHMax.trim().length > 0
-    || options.cornerExtent.trim().length > 0;
-  const hasInterfaceShell =
-    options.interfaceHMax.trim().length > 0
-    || options.interfaceThickness.trim().length > 0;
-
   return {
     mode: "custom",
     size_mode: options.sizeControlMode === "custom" ? "custom" : "predefined",
@@ -326,44 +317,20 @@ function buildCustomMeshState(
     bulk_hmax: current?.bulk_hmax ?? null,
     bulk_hmin: current?.bulk_hmin ?? null,
     interface_hmax:
-      hasPerimeterRefinement
-        ? null
-        : options.interfaceHMax.trim().length > 0
-          ? options.interfaceHMax
-          : null,
+      options.interfaceHMax.trim().length > 0 ? options.interfaceHMax : null,
     interface_thickness:
-      hasPerimeterRefinement
-        ? null
-        : options.interfaceThickness.trim().length > 0
-          ? options.interfaceThickness
-          : null,
+      options.interfaceThickness.trim().length > 0 ? options.interfaceThickness : null,
     transition_distance:
       options.transitionDistance.trim().length > 0 ? options.transitionDistance : null,
     transition_growth: transitionGrowthParsed,
     edge_hmax:
-      hasInterfaceShell
-        ? null
-        : options.edgeHMax.trim().length > 0
-          ? options.edgeHMax
-          : null,
+      options.edgeHMax.trim().length > 0 ? options.edgeHMax : null,
     edge_thickness:
-      hasInterfaceShell
-        ? null
-        : options.edgeThickness.trim().length > 0
-          ? options.edgeThickness
-          : null,
+      options.edgeThickness.trim().length > 0 ? options.edgeThickness : null,
     corner_hmax:
-      hasInterfaceShell
-        ? null
-        : options.cornerHMax.trim().length > 0
-          ? options.cornerHMax
-          : null,
+      options.cornerHMax.trim().length > 0 ? options.cornerHMax : null,
     corner_extent:
-      hasInterfaceShell
-        ? null
-        : options.cornerExtent.trim().length > 0
-          ? options.cornerExtent
-          : null,
+      options.cornerExtent.trim().length > 0 ? options.cornerExtent : null,
     boundary_layer_count: extras.boundaryLayerCount ?? current?.boundary_layer_count ?? null,
     boundary_layer_thickness: extras.boundaryLayerThickness ?? current?.boundary_layer_thickness ?? null,
     boundary_layer_stretching: extras.boundaryLayerStretching ?? current?.boundary_layer_stretching ?? null,
@@ -386,36 +353,60 @@ function objectCoreRelaxationField(mesh: ScriptBuilderPerGeometryMeshEntry): Scr
   return mesh.size_fields.find((field) => field.kind === "ObjectCoreRelaxation") ?? null;
 }
 
-function coreRelaxationParam(field: ScriptBuilderMeshSizeFieldEntry | null, key: string): string {
-  const value = field?.params?.[key];
+function coreRelaxationParam(
+  field: ScriptBuilderMeshSizeFieldEntry | null,
+  key: string,
+  legacyKey?: string,
+): string {
+  const value = field?.params?.[key] ?? (legacyKey ? field?.params?.[legacyKey] : undefined);
   return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
 
 function updateObjectCoreRelaxationField(
   mesh: ScriptBuilderPerGeometryMeshEntry,
   geometryName: string,
-  patch: Partial<{ core_hmax: string; surface_hmax: string; surface_distance: string }>,
+  patch: Partial<{
+    core_maximum_element_size: string;
+    surface_maximum_element_size: string;
+    surface_distance: string;
+    edge_maximum_element_size: string;
+    edge_distance: string;
+  }>,
 ): ScriptBuilderPerGeometryMeshEntry {
   const current = objectCoreRelaxationField(mesh);
   const nextParams = {
-    core_hmax: coreRelaxationParam(current, "core_hmax"),
-    surface_hmax: coreRelaxationParam(current, "surface_hmax"),
+    core_maximum_element_size: coreRelaxationParam(current, "core_maximum_element_size", "core_hmax"),
+    surface_maximum_element_size: coreRelaxationParam(current, "surface_maximum_element_size", "surface_hmax"),
     surface_distance: coreRelaxationParam(current, "surface_distance"),
+    edge_maximum_element_size: coreRelaxationParam(current, "edge_maximum_element_size", "edge_hmax"),
+    edge_distance: coreRelaxationParam(current, "edge_distance"),
     ...patch,
   };
   const nextFields = mesh.size_fields.filter((field) => field.kind !== "ObjectCoreRelaxation");
-  const hasCompleteValue = Object.values(nextParams).every((value) => Number(value) > 0);
-  if (!hasCompleteValue) {
+  const requiredComplete = [
+    nextParams.core_maximum_element_size,
+    nextParams.surface_maximum_element_size,
+    nextParams.surface_distance,
+  ].every((value) => Number(value) > 0);
+  const edgePairComplete =
+    (nextParams.edge_maximum_element_size === "" && nextParams.edge_distance === "")
+    || (Number(nextParams.edge_maximum_element_size) > 0 && Number(nextParams.edge_distance) > 0);
+  if (!requiredComplete || !edgePairComplete) {
     return { ...mesh, size_fields: nextFields };
+  }
+  const params: Record<string, number | string> = {
+    GeometryName: geometryName,
+    core_maximum_element_size: Number(nextParams.core_maximum_element_size) || 0,
+    surface_maximum_element_size: Number(nextParams.surface_maximum_element_size) || 0,
+    surface_distance: Number(nextParams.surface_distance) || 0,
+  };
+  if (Number(nextParams.edge_maximum_element_size) > 0) {
+    params.edge_maximum_element_size = Number(nextParams.edge_maximum_element_size);
+    params.edge_distance = Number(nextParams.edge_distance);
   }
   nextFields.push({
     kind: "ObjectCoreRelaxation",
-    params: {
-      GeometryName: geometryName,
-      core_hmax: Number(nextParams.core_hmax) || 0,
-      surface_hmax: Number(nextParams.surface_hmax) || 0,
-      surface_distance: Number(nextParams.surface_distance) || 0,
-    },
+    params,
   });
   return { ...mesh, mode: "custom", size_fields: nextFields };
 }
@@ -492,9 +483,11 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
 
   const mesh = useMemo(() => coerceObjectMeshState(geo?.mesh), [geo?.mesh]);
   const coreRelaxationField = useMemo(() => objectCoreRelaxationField(mesh), [mesh]);
-  const coreRelaxationCoreHmax = coreRelaxationParam(coreRelaxationField, "core_hmax");
-  const coreRelaxationSurfaceHmax = coreRelaxationParam(coreRelaxationField, "surface_hmax");
+  const coreRelaxationCoreHmax = coreRelaxationParam(coreRelaxationField, "core_maximum_element_size", "core_hmax");
+  const coreRelaxationSurfaceHmax = coreRelaxationParam(coreRelaxationField, "surface_maximum_element_size", "surface_hmax");
   const coreRelaxationSurfaceDistance = coreRelaxationParam(coreRelaxationField, "surface_distance");
+  const coreRelaxationEdgeHmax = coreRelaxationParam(coreRelaxationField, "edge_maximum_element_size", "edge_hmax");
+  const coreRelaxationEdgeDistance = coreRelaxationParam(coreRelaxationField, "edge_distance");
   const effectiveOptions = useMemo(
     () => mapObjectMeshToOptions(mesh, model.meshOptions),
     [mesh, model.meshOptions],
@@ -569,7 +562,11 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
     };
   }, [geo?.bounds_min, geo?.bounds_max, meshBoundsMin, meshBoundsMax]);
   const geometryKind = geo?.geometry_kind.trim().toLowerCase() ?? "";
-  const supportsPerimeterRefinement = geometryKind === "box" && sharedDomainMesh;
+  const meshCapabilities = meshWorkspace?.mesh_capabilities ?? null;
+  const supportsGenericEdgeRefinement =
+    Boolean(sharedDomainMesh) && meshCapabilities?.supports_edge_distance_fields === true;
+  const supportsCornerRefinement = geometryKind === "box" && Boolean(sharedDomainMesh);
+  const supportsPerimeterRefinement = supportsGenericEdgeRefinement || supportsCornerRefinement;
   const perimeterRefinementActive =
     effectiveOptions.edgeHMax.trim().length > 0
     || effectiveOptions.edgeThickness.trim().length > 0
@@ -578,7 +575,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
   const interfaceShellActive =
     effectiveOptions.interfaceHMax.trim().length > 0
     || effectiveOptions.interfaceThickness.trim().length > 0;
-  const meshCapabilities = meshWorkspace?.mesh_capabilities ?? null;
   const boundaryLayerEditable =
     mesh.mode === "custom"
     && meshCapabilities?.supports_boundary_layers === true
@@ -791,18 +787,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     updateGeo((currentMesh) =>
                         mesh.mode === "custom"
                           ? applyObjectMeshOptions(
-                              (
-                                nextOptions.interfaceHMax.trim().length > 0
-                                || nextOptions.interfaceThickness.trim().length > 0
-                              )
-                                ? {
-                                    ...nextOptions,
-                                    edgeHMax: "",
-                                    edgeThickness: "",
-                                    cornerHMax: "",
-                                    cornerExtent: "",
-                                  }
-                                : nextOptions,
+                              nextOptions,
                               currentMesh,
                             )
                           : currentMesh ?? createInheritedMeshState(),
@@ -823,25 +808,24 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       Edge / Corner Refinement
                     </div>
                     <HelpTip>
-                      Box-only in-plane refinement for rectangular waveguides. Edge bands and
-                      corner zones stay inside the ferromagnet; the object center remains
-                      controlled by the bulk maximum element size.
+                      Edge refinement uses recovered component boundary curves when supported.
+                      Corner zones are limited to rectangular Box objects.
                     </HelpTip>
                   </div>
                   {!supportsPerimeterRefinement ? (
                     <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-                      Edge and corner refinement is currently available only for Box geometries in the shared-domain FEM mesh path.
+                      Edge refinement requires shared-domain FEM mesh capabilities. Corner refinement is available only for Box geometries.
                     </div>
                   ) : null}
-                  {interfaceShellActive ? (
-                    <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning/90">
-                      Interface shell refinement is active. Editing edge or corner refinement will replace the interface shell settings for this object.
+                  {interfaceShellActive && perimeterRefinementActive ? (
+                    <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-xs text-info/90">
+                      Interface shell and edge/corner refinement are both active. The backend combines size fields through the most restrictive local target.
                     </div>
                   ) : null}
                   <div className="grid grid-cols-2 gap-3">
                     <TextField
                       key={`${geo.name}-edge-hmax-${effectiveOptions.edgeHMax}`}
-                      label="Edge hmax"
+                      label="Edge maximum element size"
                       unit="nm"
                       defaultValue={metersTextToNanometersInput(effectiveOptions.edgeHMax)}
                       onchange={(e) => {
@@ -851,8 +835,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                             ? applyObjectMeshOptions(
                                 {
                                   ...effectiveOptions,
-                                  interfaceHMax: "",
-                                  interfaceThickness: "",
                                   edgeHMax: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
                                 },
                                 currentMesh,
@@ -863,7 +845,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       mono
                       disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
                       placeholder="5"
-                      tooltip="Target element size inside the four in-plane edge refinement bands."
+                      tooltip="Maximum element size inside the edge refinement bands."
                     />
                     <TextField
                       key={`${geo.name}-edge-thickness-${effectiveOptions.edgeThickness}`}
@@ -877,8 +859,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                             ? applyObjectMeshOptions(
                                 {
                                   ...effectiveOptions,
-                                  interfaceHMax: "",
-                                  interfaceThickness: "",
                                   edgeThickness: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
                                 },
                                 currentMesh,
@@ -893,7 +873,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     />
                     <TextField
                       key={`${geo.name}-corner-hmax-${effectiveOptions.cornerHMax}`}
-                      label="Corner hmax"
+                      label="Corner maximum element size"
                       unit="nm"
                       defaultValue={metersTextToNanometersInput(effectiveOptions.cornerHMax)}
                       onchange={(e) => {
@@ -903,8 +883,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                             ? applyObjectMeshOptions(
                                 {
                                   ...effectiveOptions,
-                                  interfaceHMax: "",
-                                  interfaceThickness: "",
                                   cornerHMax: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
                                 },
                                 currentMesh,
@@ -913,9 +891,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         );
                       }}
                       mono
-                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      disabled={mesh.mode !== "custom" || !supportsCornerRefinement}
                       placeholder="3"
-                      tooltip="Target element size inside the four in-plane corner refinement zones."
+                      tooltip="Maximum element size inside the corner refinement zones."
                     />
                     <TextField
                       key={`${geo.name}-corner-extent-${effectiveOptions.cornerExtent}`}
@@ -929,8 +907,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                             ? applyObjectMeshOptions(
                                 {
                                   ...effectiveOptions,
-                                  interfaceHMax: "",
-                                  interfaceThickness: "",
                                   cornerExtent: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
                                 },
                                 currentMesh,
@@ -939,7 +915,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         );
                       }}
                       mono
-                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      disabled={mesh.mode !== "custom" || !supportsCornerRefinement}
                       placeholder="15"
                       tooltip="In-plane extent of each corner refinement zone along both lateral axes."
                     />
@@ -960,10 +936,10 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       Keeps the object core coarse while preserving finer shell and edge sizing through the realized ObjectCoreRelaxation size-field composition.
                     </HelpTip>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-5 gap-2">
                     <TextField
                       key={`${geo.name}-core-relax-core-${coreRelaxationCoreHmax}`}
-                      label="Core hmax"
+                      label="Core maximum element size"
                       unit="nm"
                       defaultValue={metersTextToNanometersInput(coreRelaxationCoreHmax)}
                       onchange={(e) => {
@@ -972,18 +948,18 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                           updateObjectCoreRelaxationField(
                             currentMesh ?? createInheritedMeshState(),
                             geo.name,
-                            { core_hmax: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                            { core_maximum_element_size: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
                           ),
                         );
                       }}
                       mono
                       disabled={mesh.mode !== "custom"}
                       placeholder="5"
-                      tooltip="Coarser target element size for the object interior."
+                      tooltip="Maximum element size for the object interior."
                     />
                     <TextField
                       key={`${geo.name}-core-relax-surface-${coreRelaxationSurfaceHmax}`}
-                      label="Surface hmax"
+                      label="Surface maximum element size"
                       unit="nm"
                       defaultValue={metersTextToNanometersInput(coreRelaxationSurfaceHmax)}
                       onchange={(e) => {
@@ -992,14 +968,14 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                           updateObjectCoreRelaxationField(
                             currentMesh ?? createInheritedMeshState(),
                             geo.name,
-                            { surface_hmax: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                            { surface_maximum_element_size: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
                           ),
                         );
                       }}
                       mono
                       disabled={mesh.mode !== "custom"}
                       placeholder="1"
-                      tooltip="Finer target element size near the object surface."
+                      tooltip="Maximum element size near the object surface."
                     />
                     <TextField
                       key={`${geo.name}-core-relax-distance-${coreRelaxationSurfaceDistance}`}
@@ -1020,6 +996,46 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                       disabled={mesh.mode !== "custom"}
                       placeholder="6"
                       tooltip="Distance over which the surface shell transitions into the relaxed core."
+                    />
+                    <TextField
+                      key={`${geo.name}-core-relax-edge-${coreRelaxationEdgeHmax}`}
+                      label="Edge maximum element size"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(coreRelaxationEdgeHmax)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          updateObjectCoreRelaxationField(
+                            currentMesh ?? createInheritedMeshState(),
+                            geo.name,
+                            { edge_maximum_element_size: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                          ),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="0.8"
+                      tooltip="Optional maximum element size near recovered object edges."
+                    />
+                    <TextField
+                      key={`${geo.name}-core-relax-edge-distance-${coreRelaxationEdgeDistance}`}
+                      label="Edge distance"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(coreRelaxationEdgeDistance)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          updateObjectCoreRelaxationField(
+                            currentMesh ?? createInheritedMeshState(),
+                            geo.name,
+                            { edge_distance: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                          ),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="8"
+                      tooltip="Optional distance over which edge refinement transitions into the object core."
                     />
                   </div>
                 </div>
@@ -1188,7 +1204,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     <tbody className="divide-y divide-border/20">
                       {[
                         {
-                          param: "hmax",
+                          param: "Maximum element size",
                           studyVal: formatMetersTextAsNanometers(model.meshOptions.hmax, "auto"),
                           overrideVal:
                             mesh.mode === "custom" && mesh.hmax.trim()
@@ -1198,7 +1214,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                           overrideActive: mesh.mode === "custom" && mesh.hmax.trim().length > 0,
                         },
                         {
-                          param: "hmin",
+                          param: "Minimum element size",
                           studyVal: formatMetersTextAsNanometers(model.meshOptions.hmin, "auto"),
                           overrideVal:
                             mesh.mode === "custom" && mesh.hmin.trim()

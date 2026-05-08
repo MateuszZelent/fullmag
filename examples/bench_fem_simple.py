@@ -21,7 +21,7 @@ print("", file=sys.stderr)
 print("┌──────────────────────────────────────────────────────────────┐", file=sys.stderr)
 print("│  FEM CPU Benchmark - Simple Profiling Run                   │", file=sys.stderr)
 print("├──────────────────────────────────────────────────────────────┤", file=sys.stderr)
-print(f"│  hmax       = {HMAX:.2e} m", file=sys.stderr)
+print(f"│  maximum element size = {HMAX:.2e} m", file=sys.stderr)
 print(f"│  max_steps  = {MAX_STEPS}", file=sys.stderr)
 print(f"│  threads.request = {THREADS}", file=sys.stderr)
 print("│  threads.resolve = see [fullmag-fem] cpu runtime log", file=sys.stderr)
@@ -54,7 +54,7 @@ study.b_ext(0, 0, 0.02)
 study.demag(realization="poisson_robin")
 
 body.mesh(
-    hmax=HMAX,
+    maximum_element_size=HMAX,
     order=1,
     algorithm_2d=8,
     algorithm_3d=1,

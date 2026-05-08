@@ -151,6 +151,24 @@ pub struct FemDomainRegionMarkerIR {
     pub marker: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct FemAirboxTargetIR {
+    #[serde(
+        rename = "maximum_element_size",
+        alias = "hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmax: Option<f64>,
+    #[serde(
+        rename = "minimum_element_size",
+        alias = "hmin",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmin: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub growth_rate: Option<f64>,
+}
+
 /// Through-thickness sweep distribution for a single object.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SweepDistributionIR {
@@ -177,17 +195,102 @@ pub struct SweptMeshHintsIR {
 pub struct FemPerObjectTargetIR {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "maximum_element_size",
+        alias = "hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub hmax: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "interface_maximum_element_size",
+        alias = "interface_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub interface_hmax: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface_thickness: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transition_distance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition_distance_requested: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition_distance_effective: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition_realization: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transition_growth: Option<f64>,
+    #[serde(
+        rename = "edge_maximum_element_size",
+        alias = "edge_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub edge_hmax: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_thickness: Option<f64>,
+    #[serde(
+        rename = "corner_maximum_element_size",
+        alias = "corner_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub corner_hmax: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corner_extent: Option<f64>,
     #[serde(default)]
     pub source: String,
     /// Optional swept (through-thickness) mesh controls for this object.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swept: Option<SweptMeshHintsIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemMeshOperationStatusIR {
+    pub kind: String,
+    pub scope: String,
+    pub requested: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub details: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemThinFilmDiagnosticIR {
+    pub geometry_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub is_thin_film: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lateral_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_layers: Option<u32>,
+    #[serde(
+        rename = "estimated_layers_from_maximum_element_size",
+        alias = "estimated_layers_from_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub estimated_layers_from_hmax: Option<u32>,
+    #[serde(
+        rename = "maximum_element_size_to_thickness_ratio",
+        alias = "hmax_to_thickness_ratio",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmax_to_thickness_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_method: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Build report for a shared-domain FEM mesh, propagated from the Python
@@ -198,11 +301,25 @@ pub struct FemSharedDomainBuildReportIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fallbacks_triggered: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_airbox_target: Option<FemAirboxTargetIR>,
+    #[serde(
+        rename = "effective_airbox_maximum_element_size",
+        alias = "effective_airbox_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub effective_airbox_hmax: Option<f64>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub effective_per_object_targets: HashMap<String, FemPerObjectTargetIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_markers: Vec<FemDomainRegionMarkerIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub used_size_field_kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub size_fields_realized: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_statuses: Vec<FemMeshOperationStatusIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thin_film_diagnostics: Vec<FemThinFilmDiagnosticIR>,
     /// ``true`` when the mesh was built via a degraded path (fallback, simplified
     /// size fields, or lost component identity).
     #[serde(default)]

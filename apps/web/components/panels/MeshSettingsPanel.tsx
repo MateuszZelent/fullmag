@@ -783,7 +783,7 @@ export default function MeshSettingsPanel({
                 ? "bg-destructive/10 border border-destructive/30 text-destructive"
                 : "bg-amber-500/10 border border-amber-500/30 text-amber-500")}>
               {nodeCount > 50000
-                ? "Mesh too large for CPU dense solver. Increase hmax to reduce node count."
+                ? "Mesh too large for CPU dense solver. Increase maximum element size to reduce node count."
                 : "Large mesh — may be slow. Target <10,000 nodes for CPU reference solver."}
             </div>
           )}

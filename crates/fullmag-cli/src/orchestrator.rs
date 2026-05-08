@@ -853,6 +853,7 @@ fn current_fem_mesh_workspace(
             "supports_adaptive_remesh": adaptive_enabled,
             "supports_compare_snapshots": true,
             "supports_size_field_remesh": true,
+            "supports_edge_distance_fields": true,
             "supports_boundary_layers": true,
             "boundary_layer_status": "explicit_target_selectors_required",
             "supports_mesh_convergence_workflow": adaptive_enabled && adaptive_policy == "auto",

@@ -56,7 +56,7 @@ def build() -> fm.Problem:
             ],
         ),
         discretization=fm.DiscretizationHints(
-            fem=fm.FEM(order=1, hmax=5e-9, mesh=str(MESH_PATH)),
+            fem=fm.FEM(order=1, maximum_element_size=5e-9, mesh=str(MESH_PATH)),
         ),
     )
 

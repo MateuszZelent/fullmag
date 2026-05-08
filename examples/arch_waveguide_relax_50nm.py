@@ -92,7 +92,15 @@ waveguide.mesh(
     compute_quality=True,
     per_element_quality=True,
 )
-
+core_relaxation = fm.mesh.object_core_relaxation(
+    "arch_waveguide",
+    maximum_element_size=6e-9,
+    surface_maximum_element_size=2e-9,
+    surface_distance=80e-9,
+    edge_maximum_element_size=1.8e-9,
+    edge_distance=50e-9,
+)
+waveguide.mesh.size_field(core_relaxation["kind"], **core_relaxation["params"])
 # Energy terms
 study.b_ext(0.0, 0.0, B_EXT_T)
 study.demag(realization="poisson_robin")

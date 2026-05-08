@@ -70,7 +70,7 @@ study.objects.mesh.defaults(
     per_element_quality=True,
 )
 free.mesh(
-    hmax=6e-9,
+    maximum_element_size=6e-9,
     order=1,
     algorithm_2d=1,
     algorithm_3d=1,

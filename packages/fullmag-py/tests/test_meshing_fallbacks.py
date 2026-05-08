@@ -355,8 +355,8 @@ class ResolutionPrecedenceTests(unittest.TestCase):
         )
         target = per_obj["left"]
         self.assertAlmostEqual(target["hmax"], 20e-9)
-        # interface_hmax is no longer auto-computed
-        self.assertIsNone(target["interface_hmax"])
+        # Explicit interface maximum element size is preserved.
+        self.assertAlmostEqual(target["interface_hmax"], 12e-9)
         # transition_distance = bulk_hmax * 3.0
         self.assertAlmostEqual(target["transition_distance"], 60e-9)
         self.assertEqual(target["source"], "local_override")

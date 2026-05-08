@@ -2547,6 +2547,15 @@ export interface components {
             mesh_pipeline_status?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
+            shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
+        };
+        MeshAirboxTargetResource: {
+            /** Format: double */
+            growth_rate?: number | null;
+            /** Format: double */
+            maximum_element_size?: number | null;
+            /** Format: double */
+            minimum_element_size?: number | null;
         };
         MeshBuildCommandRequest: {
             mesh_options?: Record<string, never> | null;
@@ -2590,6 +2599,11 @@ export interface components {
             /** @enum {string} */
             kind: "object_mesh";
             object_id: string;
+        };
+        MeshDomainRegionMarkerResource: {
+            geometry_name: string;
+            /** Format: int32 */
+            marker: number;
         };
         MeshInterfaceConfigReplaceRequest: {
             config?: Record<string, never> | null;
@@ -2673,6 +2687,16 @@ export interface components {
             revision: number;
             size_field?: Record<string, never> | null;
         };
+        MeshOperationStatusResource: {
+            actual_method?: string | null;
+            details?: Record<string, never> | null;
+            kind: string;
+            reason?: string | null;
+            requested: boolean;
+            requested_method?: string | null;
+            scope: string;
+            status: string;
+        };
         MeshPartResource: {
             /** Format: int32 */
             boundary_face_count: number;
@@ -2697,6 +2721,34 @@ export interface components {
             object_id?: string | null;
             role: string;
             surface_faces?: number[][];
+        };
+        MeshPerObjectTargetResource: {
+            /** Format: double */
+            corner_extent?: number | null;
+            /** Format: double */
+            corner_maximum_element_size?: number | null;
+            /** Format: double */
+            edge_maximum_element_size?: number | null;
+            /** Format: double */
+            edge_thickness?: number | null;
+            /** Format: double */
+            interface_maximum_element_size?: number | null;
+            /** Format: double */
+            interface_thickness?: number | null;
+            /** Format: int32 */
+            marker?: number | null;
+            /** Format: double */
+            maximum_element_size?: number | null;
+            source?: string;
+            /** Format: double */
+            transition_distance?: number | null;
+            /** Format: double */
+            transition_distance_effective?: number | null;
+            /** Format: double */
+            transition_distance_requested?: number | null;
+            /** Format: double */
+            transition_growth?: number | null;
+            transition_realization?: string | null;
         };
         MeshPeriodicPairResource: {
             destination_marker?: string | null;
@@ -2730,8 +2782,23 @@ export interface components {
             /** Format: int64 */
             revision: number;
         };
+        MeshRealizedSizeFieldResource: {
+            applied?: boolean | null;
+            /** Format: int64 */
+            gmsh_field_id?: number | null;
+            kind: string;
+            params?: Record<string, never> | null;
+            reason?: string | null;
+            source?: string | null;
+            status: string;
+        };
+        MeshRealizedSizeFieldsPayload: {
+            fields?: components["schemas"]["MeshRealizedSizeFieldResource"][];
+            reason?: string | null;
+            source?: string | null;
+        };
         MeshRealizedSizeFieldsResource: {
-            realized_size_fields?: Record<string, never> | null;
+            realized_size_fields: components["schemas"]["MeshRealizedSizeFieldsPayload"];
             /** Format: int64 */
             revision: number;
         };
@@ -2761,6 +2828,22 @@ export interface components {
             solver_mesh?: null | components["schemas"]["MeshSolverMeshResource"];
             /** @description Solver-domain universe mesh policy. This endpoint owns mesh semantics, not build diagnostics. */
             universe_config?: Record<string, never> | null;
+        };
+        MeshSharedDomainBuildReportResource: {
+            build_mode: string;
+            degraded?: boolean;
+            /** Format: double */
+            effective_airbox_maximum_element_size?: number | null;
+            effective_airbox_target?: null | components["schemas"]["MeshAirboxTargetResource"];
+            effective_per_object_targets?: {
+                [key: string]: components["schemas"]["MeshPerObjectTargetResource"];
+            };
+            fallbacks_triggered?: string[];
+            operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
+            region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
+            size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
+            thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
+            used_size_field_kinds?: string[];
         };
         MeshSharedDomainConfigReplaceRequest: {
             config: Record<string, never>;
@@ -2818,6 +2901,26 @@ export interface components {
             mesh_summary?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
+        };
+        MeshThinFilmDiagnosticResource: {
+            actual_method?: string | null;
+            /** Format: double */
+            aspect_ratio?: number | null;
+            /** Format: int32 */
+            estimated_layers_from_maximum_element_size?: number | null;
+            geometry_name: string;
+            is_thin_film?: boolean;
+            /** Format: double */
+            lateral_size?: number | null;
+            /** Format: double */
+            maximum_element_size_to_thickness_ratio?: number | null;
+            /** Format: int32 */
+            requested_layers?: number | null;
+            requested_method?: string | null;
+            scope?: string | null;
+            /** Format: double */
+            thickness?: number | null;
+            warnings?: string[];
         };
         MeshUniverseConfigReplaceRequest: {
             config: Record<string, never>;

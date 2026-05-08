@@ -2663,7 +2663,27 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
             "mesh_pipeline_status": { "phase": "remesh", "queued": true },
             "effective_airbox_target": { "hmax": "5e-9" },
             "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
-            "last_build_summary": { "elements": 42 },
+            "last_build_summary": {
+                "elements": 42,
+                "shared_domain_build_report": {
+                    "build_mode": "component_aware",
+                    "effective_per_object_targets": {
+                        "body": {
+                            "edge_hmax": 1.8e-9,
+                            "edge_thickness": 12e-9,
+                            "interface_thickness": 8e-9,
+                            "transition_realization": "surface_shell"
+                        }
+                    },
+                    "operation_statuses": [{
+                        "kind": "boundary_layers",
+                        "scope": "global",
+                        "requested": true,
+                        "status": "ignored",
+                        "reason": "explicit target selectors required"
+                    }]
+                }
+            },
             "last_build_error": "stale topology"
         }));
         snapshot.mesh_build_revision = 13;
@@ -2688,6 +2708,28 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_airbox_target"]["hmax"], "5e-9");
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
+    assert_eq!(
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
+            ["body"]["edge_hmax"],
+        1.8e-9
+    );
+    assert_eq!(
+        json["last_build_summary"]["shared_domain_build_report"]["operation_statuses"][0]["status"],
+        "ignored"
+    );
+    assert_eq!(
+        json["shared_domain_build_report"]["build_mode"],
+        "component_aware"
+    );
+    assert_eq!(
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_maximum_element_size"],
+        1.8e-9
+    );
+    assert_eq!(
+        json["shared_domain_build_report"]["operation_statuses"][0]["status"],
+        "ignored"
+    );
     assert_eq!(json["last_build_error"], "stale topology");
 }
 

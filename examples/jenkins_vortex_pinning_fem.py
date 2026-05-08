@@ -216,7 +216,7 @@ runtime_fem = RuntimeSelection(
 )
 
 disc_fem = DiscretizationHints(
-    fem=FEM(order=1, hmax=4e-9),    # ~4 nm max element size
+    fem=FEM(order=1, maximum_element_size=4e-9),    # ~4 nm max element size
 )
 
 # Alternative: FDM runtime (faster for time-domain STNO)
@@ -564,7 +564,7 @@ cofesib_relax_40nm = Problem(
         max_steps=100_000,
     ),
     discretization=DiscretizationHints(
-        fem=FEM(order=1, hmax=5e-9),  # slightly coarser for thicker disk
+        fem=FEM(order=1, maximum_element_size=5e-9),  # slightly coarser for thicker disk
     ),
     runtime=runtime_fem,
 )

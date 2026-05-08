@@ -116,8 +116,14 @@ def _realized_size_field_report(size_fields: list[dict[str, object]]) -> list[di
                 "id": f"sf{index}",
                 "kind": kind,
                 "target": str(target) if target is not None else None,
-                "status": "applied",
+                "status": str(field_desc.get("_gmsh_status", "requested")),
                 "source": str(params.get("Source", "scene_config")),
+                "reason": (
+                    str(field_desc.get("_gmsh_reason"))
+                    if field_desc.get("_gmsh_reason") is not None
+                    else None
+                ),
+                "gmsh_field_id": field_desc.get("_gmsh_field_id"),
                 "params": dict(params),
             }
         )
@@ -387,9 +393,9 @@ def _build_thin_film_diagnostics(
         if opts.through_thickness_elements is not None and opts.through_thickness_elements < 4:
             warnings.append("requested through-thickness layer count is below 4")
         if estimated_layers is not None and estimated_layers < 4:
-            warnings.append("estimated layers from hmax across thickness is below 4")
+            warnings.append("estimated layers from maximum element size across thickness is below 4")
         if hmax_ratio is not None and hmax_ratio > 0.5:
-            warnings.append("hmax is too large relative to thin-film thickness")
+            warnings.append("maximum element size is too large relative to thin-film thickness")
         if opts.smoothing_steps == 0:
             warnings.append("smoothing is disabled for a thin-film mesh")
         if sweepability.sweepable and actual_method == "free_tetrahedral":

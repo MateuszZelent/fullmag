@@ -512,6 +512,14 @@ def _curve_tags_for_geometry(
     if isinstance(explicit_curve_tags, list) and explicit_curve_tags:
         return [int(tag) for tag in explicit_curve_tags]
 
+    selector = params.get("Selector")
+    if isinstance(selector, dict):
+        mode = selector.get("mode")
+        if mode not in {None, "all_boundary_curves"}:
+            emit_progress(
+                f"Gmsh: warning - unsupported edge selector {mode!r}; using all boundary curves"
+            )
+
     surface_tags = _component_surface_tags_for_geometry(geometry_name, component_surface_tags)
     if not surface_tags:
         return []
@@ -701,6 +709,20 @@ def _configure_mesh_size_fields(
     }
 
     field_ids = []
+
+    def _mark_field(
+        config: dict[str, Any],
+        *,
+        status: str,
+        reason: str | None = None,
+        field_id: int | None = None,
+    ) -> None:
+        config["_gmsh_status"] = status
+        if reason is not None:
+            config["_gmsh_reason"] = reason
+        if field_id is not None:
+            config["_gmsh_field_id"] = int(field_id)
+
     for config in fields:
         validate_size_field_config(config)
         kind = config["kind"]
@@ -711,6 +733,7 @@ def _configure_mesh_size_fields(
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
                 emit_progress("Gmsh: warning - ComponentVolumeConstant is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
                 continue
             fid = _add_component_volume_constant_field(
                 gmsh,
@@ -722,11 +745,15 @@ def _configure_mesh_size_fields(
             )
             if fid is not None:
                 field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
             continue
         if kind == "ComponentRestrictedBox":
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
                 emit_progress("Gmsh: warning - ComponentRestrictedBox is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
                 continue
             fid = _add_component_restricted_box_field(
                 gmsh,
@@ -744,11 +771,15 @@ def _configure_mesh_size_fields(
             )
             if fid is not None:
                 field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component volumes")
             continue
         if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold", "TransitionShellThreshold"}:
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
                 emit_progress(f"Gmsh: warning - {kind} is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
                 continue
             fid = _add_component_surface_threshold_field(
                 gmsh,
@@ -763,11 +794,15 @@ def _configure_mesh_size_fields(
             )
             if fid is not None:
                 field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered component surfaces")
             continue
         if kind == "EdgeDistanceThreshold":
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
                 emit_progress("Gmsh: warning - EdgeDistanceThreshold is missing GeometryName; skipping")
+                _mark_field(config, status="ignored", reason="missing GeometryName")
                 continue
             fid = _add_edge_distance_threshold_field(
                 gmsh,
@@ -784,11 +819,15 @@ def _configure_mesh_size_fields(
             )
             if fid is not None:
                 field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="no recovered edge curves")
             continue
         if kind == "BoundsSurfaceThreshold":
             bounds_min = params.get("BoundsMin")
             bounds_max = params.get("BoundsMax")
             if not isinstance(bounds_min, list) or not isinstance(bounds_max, list):
+                _mark_field(config, status="ignored", reason="missing BoundsMin/BoundsMax")
                 continue
             fid = _add_bounds_surface_threshold_field(
                 gmsh,
@@ -804,6 +843,9 @@ def _configure_mesh_size_fields(
             )
             if fid is not None:
                 field_ids.append(fid)
+                _mark_field(config, status="applied", field_id=fid)
+            else:
+                _mark_field(config, status="ignored", reason="bounds matched no surfaces")
             continue
         fid = gmsh.model.mesh.field.add(kind)
         for key, value in params.items():
@@ -817,6 +859,7 @@ def _configure_mesh_size_fields(
                     value = value * hscale
                 gmsh.model.mesh.field.setNumber(fid, key, value)
         field_ids.append(fid)
+        _mark_field(config, status="applied", field_id=fid)
 
     if extra_field_ids:
         field_ids.extend(extra_field_ids)

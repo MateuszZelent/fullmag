@@ -75,6 +75,16 @@ export interface ThinFilmDiagnosticView {
   warnings: string[];
 }
 
+export interface RealizedSizeFieldView {
+  id: string;
+  kind: string;
+  status: string;
+  source: string | null;
+  reason: string | null;
+  gmshFieldId: number | null;
+  params: Record<string, unknown>;
+}
+
 interface ComputedTetraMetric {
   elementIndex: number;
   marker: number | null;
@@ -578,13 +588,42 @@ export function parseThinFilmDiagnostics(summary: Record<string, unknown> | null
       lateralSize: finiteNumber(record.lateral_size),
       aspectRatio: finiteNumber(record.aspect_ratio),
       requestedLayers: finiteNumber(record.requested_layers),
-      estimatedLayersFromHmax: finiteNumber(record.estimated_layers_from_hmax),
-      hmaxToThicknessRatio: finiteNumber(record.hmax_to_thickness_ratio),
+      estimatedLayersFromHmax: finiteNumber(
+        record.estimated_layers_from_maximum_element_size ?? record.estimated_layers_from_hmax,
+      ),
+      hmaxToThicknessRatio: finiteNumber(
+        record.maximum_element_size_to_thickness_ratio ?? record.hmax_to_thickness_ratio,
+      ),
       requestedMethod: stringOrNull(record.requested_method),
       actualMethod: stringOrNull(record.actual_method) ?? "free_tetrahedral",
       warnings: Array.isArray(record.warnings)
         ? record.warnings.filter((warning): warning is string => typeof warning === "string")
         : [],
+    }];
+  });
+}
+
+export function parseRealizedSizeFields(summary: Record<string, unknown> | null | undefined): RealizedSizeFieldView[] {
+  const raw = summary?.size_fields_realized;
+  const fields: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).fields)
+      ? ((raw as Record<string, unknown>).fields as unknown[])
+      : [];
+  return fields.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") return [];
+    const record = entry as Record<string, unknown>;
+    const kind = stringOrNull(record.kind);
+    if (!kind) return [];
+    const params = asRecord(record.params) ?? {};
+    return [{
+      id: `${kind}:${index}`,
+      kind,
+      status: stringOrNull(record.status) ?? (record.applied === true ? "applied" : "requested"),
+      source: stringOrNull(record.source),
+      reason: stringOrNull(record.reason),
+      gmshFieldId: finiteNumber(record.gmsh_field_id),
+      params,
     }];
   });
 }
@@ -848,6 +887,10 @@ export default function MeshStatisticsPanel() {
     () => parseThinFilmDiagnostics(meshWorkspace?.last_build_summary),
     [meshWorkspace?.last_build_summary],
   );
+  const realizedSizeFields = useMemo(
+    () => parseRealizedSizeFields(meshWorkspace?.last_build_summary),
+    [meshWorkspace?.last_build_summary],
+  );
   const statisticsGlobalQuality = reportHasExtractedQuality && meshStatisticsGlobal
     ? qualityFromStatisticsScope(meshStatisticsGlobal)
     : null;
@@ -909,7 +952,7 @@ export default function MeshStatisticsPanel() {
         category: "Objects",
         severity: "warn",
         message: warning,
-        recommendation: "Reduce object hmax or use a validation mesh profile for thin-film checks.",
+        recommendation: "Reduce object maximum element size or use a validation mesh profile for thin-film checks.",
       });
     }
     for (const status of operationStatuses) {
@@ -950,8 +993,8 @@ export default function MeshStatisticsPanel() {
           severity,
           message: `${row.label}: ${warning}`,
           recommendation: row.role === "air"
-            ? "Increase airbox hmin or reduce abrupt transition-field spread."
-            : "Inspect worst elements in this object and adjust local hmax/optimizer.",
+            ? "Increase airbox minimum element size or reduce abrupt transition-field spread."
+            : "Inspect worst elements in this object and adjust local maximum element size or optimizer.",
         });
       }
     }
@@ -1049,6 +1092,14 @@ export default function MeshStatisticsPanel() {
       warnings: row.warnings,
     })),
     worst_elements: worstElements,
+    size_fields_realized: realizedSizeFields.map((field) => ({
+      kind: field.kind,
+      status: field.status,
+      source: field.source,
+      reason: field.reason,
+      gmsh_field_id: field.gmshFieldId,
+      params: field.params,
+    })),
   };
   const handleExportStatistics = useCallback(() => {
     const blob = new Blob([`${JSON.stringify(exportPayload, null, 2)}\n`], {
@@ -1283,6 +1334,43 @@ export default function MeshStatisticsPanel() {
           </div>
         ) : (
           <EmptyStats message="No backend operation statuses are available yet. Rebuild the shared-domain mesh to capture actual methods and fallbacks." />
+        )}
+      </SidebarSection>
+
+      <SidebarSection title="Realized Size Fields" defaultOpen={realizedSizeFields.length > 0}>
+        {realizedSizeFields.length > 0 ? (
+          <div className="overflow-hidden rounded-lg border border-border/10 bg-card/40">
+            <div className="grid grid-cols-[1fr_0.55fr_0.7fr_0.75fr] gap-2 border-b border-border/10 bg-card/40 px-2.5 py-2 text-[0.58rem] font-bold uppercase tracking-wider text-muted-foreground">
+              <span>Field</span>
+              <span>Status</span>
+              <span>Gmsh id</span>
+              <span>Source</span>
+            </div>
+            {realizedSizeFields.map((field) => (
+              <div key={field.id} className="grid grid-cols-[1fr_0.55fr_0.7fr_0.75fr] gap-2 border-b border-border/10 px-2.5 py-2.5 last:border-b-0">
+                <div className="min-w-0">
+                  <div className="truncate text-[0.72rem] font-semibold text-foreground/90" title={field.kind}>
+                    {field.kind.replaceAll("_", " ")}
+                  </div>
+                  {field.reason ? (
+                    <div className="mt-0.5 text-[0.62rem] leading-relaxed text-muted-foreground">
+                      {field.reason}
+                    </div>
+                  ) : null}
+                  <div className="mt-1 truncate font-mono text-[0.56rem] text-muted-foreground" title={JSON.stringify(field.params)}>
+                    {JSON.stringify(field.params)}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end">
+                  <OperationStatusBadge status={field.status} />
+                </div>
+                <MetricCell value={field.gmshFieldId == null ? "-" : String(Math.round(field.gmshFieldId))} />
+                <MetricCell value={field.source ?? "-"} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyStats message="No realized size-field report is available. Rebuild the shared-domain mesh to capture requested, applied, and ignored local sizing fields." />
         )}
       </SidebarSection>
 

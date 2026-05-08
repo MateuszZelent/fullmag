@@ -13,7 +13,7 @@ hole = fm.Cylinder(radius=150e-9, height=10e-9, name="hole")
 body = fm.Difference(base=layer, tool=hole, name="py_layer_with_hole")
 
 # ── Generate FEM tetrahedral mesh via Gmsh ───────
-mesh = fm.generate_mesh(body, hmax=20e-9)
+mesh = fm.generate_mesh(body, maximum_element_size=20e-9)
 print(f"Mesh: {mesh.n_nodes} nodes, {mesh.n_elements} tetrahedra, {mesh.n_boundary_faces} boundary faces")
 
 # ── Create synthetic initial magnetization (uniform +x) ──

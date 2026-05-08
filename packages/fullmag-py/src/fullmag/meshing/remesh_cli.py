@@ -336,7 +336,7 @@ def main() -> None:
                 mesh_data, region_markers, shared_domain_report = (
                     realize_fem_domain_mesh_asset_from_components_with_report(
                     geometries,
-                    FEM(order=int(order), hmax=float(hmax)),
+                    FEM(order=int(order), maximum_element_size=float(hmax)),
                     study_universe=declared_universe,
                     mesh_workflow=mesh_workflow,
                     )

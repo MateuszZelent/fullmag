@@ -1148,7 +1148,9 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
 
     interface_hmax_value = _number_or_none(mesh_config.get("interface_hmax"))
     if interface_hmax_value is not None:
-        kwargs.append(f"interface_hmax={_py_number(interface_hmax_value)}")
+        kwargs.append(
+            f"interface_maximum_element_size={_py_number(interface_hmax_value)}"
+        )
 
     interface_thickness_value = _number_or_none(mesh_config.get("interface_thickness"))
     if interface_thickness_value is not None:
@@ -1164,7 +1166,7 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
 
     edge_hmax_value = _number_or_none(mesh_config.get("edge_hmax"))
     if edge_hmax_value is not None:
-        kwargs.append(f"edge_hmax={_py_number(edge_hmax_value)}")
+        kwargs.append(f"edge_maximum_element_size={_py_number(edge_hmax_value)}")
 
     edge_thickness_value = _number_or_none(mesh_config.get("edge_thickness"))
     if edge_thickness_value is not None:
@@ -1172,11 +1174,39 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
 
     corner_hmax_value = _number_or_none(mesh_config.get("corner_hmax"))
     if corner_hmax_value is not None:
-        kwargs.append(f"corner_hmax={_py_number(corner_hmax_value)}")
+        kwargs.append(f"corner_maximum_element_size={_py_number(corner_hmax_value)}")
 
     corner_extent_value = _number_or_none(mesh_config.get("corner_extent"))
     if corner_extent_value is not None:
         kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
+
+    boundary_layer_count_value = mesh_config.get("boundary_layer_count")
+    if isinstance(boundary_layer_count_value, (int, float)):
+        kwargs.append(f"boundary_layer_count={int(boundary_layer_count_value)}")
+
+    boundary_layer_thickness_value = _number_or_none(
+        mesh_config.get("boundary_layer_thickness")
+    )
+    if boundary_layer_thickness_value is not None:
+        kwargs.append(
+            f"boundary_layer_thickness={_py_number(boundary_layer_thickness_value)}"
+        )
+
+    boundary_layer_stretching_value = _number_or_none(
+        mesh_config.get("boundary_layer_stretching")
+    )
+    if boundary_layer_stretching_value is not None:
+        kwargs.append(
+            f"boundary_layer_stretching={_py_number(boundary_layer_stretching_value)}"
+        )
+
+    for key in (
+        "boundary_layer_target_surface_tags",
+        "boundary_layer_target_curve_tags",
+    ):
+        value = mesh_config.get(key)
+        if isinstance(value, list) and value:
+            kwargs.append(f"{key}={_py_literal([int(tag) for tag in value])}")
 
     if mesh_config.get("optimize") is not None:
         kwargs.append(f"optimize={_py_repr(str(mesh_config['optimize']))}")
@@ -1471,7 +1501,7 @@ def _render_mesh_workflow(
             lines.append(f"{_surface_call(surface, 'mesh')}({', '.join(kwargs)})")
         elif isinstance(fem, FEM):
             lines.append(
-                f"{_surface_call(surface, 'mesh')}(hmax={_py_number(fem.hmax)}, order={fem.order})"
+                f"{_surface_call(surface, 'mesh')}(maximum_element_size={_py_number(fem.hmax)}, order={fem.order})"
             )
 
         explicit_domain_mesh_call = _render_domain_mesh_call(surface, global_mesh, source_root=source_root)
@@ -2344,6 +2374,9 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(mesh_options.get("narrow_region_resolution"))
         ),
         "interface_hmax": _text_number(_number_or_none(mesh_options.get("interface_hmax"))),
+        "interface_maximum_element_size": _text_number(
+            _number_or_none(mesh_options.get("interface_hmax"))
+        ),
         "interface_thickness": _text_number(
             _number_or_none(mesh_options.get("interface_thickness"))
         ),
@@ -2354,9 +2387,32 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(mesh_options.get("transition_growth"))
         ),
         "edge_hmax": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
+        "edge_maximum_element_size": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
         "edge_thickness": _text_number(_number_or_none(mesh_options.get("edge_thickness"))),
         "corner_hmax": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
+        "corner_maximum_element_size": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
         "corner_extent": _text_number(_number_or_none(mesh_options.get("corner_extent"))),
+        "boundary_layer_count": (
+            int(mesh_options.get("boundary_layer_count"))
+            if isinstance(mesh_options.get("boundary_layer_count"), (int, float))
+            else None
+        ),
+        "boundary_layer_thickness": _text_number(
+            _number_or_none(mesh_options.get("boundary_layer_thickness"))
+        ),
+        "boundary_layer_stretching": _number_or_none(
+            mesh_options.get("boundary_layer_stretching")
+        ),
+        "boundary_layer_target_surface_tags": (
+            list(mesh_options.get("boundary_layer_target_surface_tags"))
+            if isinstance(mesh_options.get("boundary_layer_target_surface_tags"), list)
+            else []
+        ),
+        "boundary_layer_target_curve_tags": (
+            list(mesh_options.get("boundary_layer_target_curve_tags"))
+            if isinstance(mesh_options.get("boundary_layer_target_curve_tags"), list)
+            else []
+        ),
         "resolved_size_from_curvature": (
             int(mesh_options.get("resolved_size_from_curvature"))
             if isinstance(mesh_options.get("resolved_size_from_curvature"), (int, float))
@@ -2439,6 +2495,9 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
                 _number_or_none(mesh_entry.get("narrow_region_resolution"))
             ),
             "interface_hmax": _text_number(_number_or_none(mesh_entry.get("interface_hmax"))),
+            "interface_maximum_element_size": _text_number(
+                _number_or_none(mesh_entry.get("interface_hmax"))
+            ),
             "interface_thickness": _text_number(
                 _number_or_none(mesh_entry.get("interface_thickness"))
             ),
@@ -2447,9 +2506,32 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             ),
             "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
             "edge_hmax": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
+            "edge_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
             "edge_thickness": _text_number(_number_or_none(mesh_entry.get("edge_thickness"))),
             "corner_hmax": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
+            "corner_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
             "corner_extent": _text_number(_number_or_none(mesh_entry.get("corner_extent"))),
+            "boundary_layer_count": (
+                int(mesh_entry["boundary_layer_count"])
+                if isinstance(mesh_entry.get("boundary_layer_count"), (int, float))
+                else None
+            ),
+            "boundary_layer_thickness": _text_number(
+                _number_or_none(mesh_entry.get("boundary_layer_thickness"))
+            ),
+            "boundary_layer_stretching": _number_or_none(
+                mesh_entry.get("boundary_layer_stretching")
+            ),
+            "boundary_layer_target_surface_tags": (
+                list(mesh_entry.get("boundary_layer_target_surface_tags"))
+                if isinstance(mesh_entry.get("boundary_layer_target_surface_tags"), list)
+                else []
+            ),
+            "boundary_layer_target_curve_tags": (
+                list(mesh_entry.get("boundary_layer_target_curve_tags"))
+                if isinstance(mesh_entry.get("boundary_layer_target_curve_tags"), list)
+                else []
+            ),
             "resolved_size_from_curvature": (
                 int(mesh_entry["resolved_size_from_curvature"])
                 if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
@@ -2491,13 +2573,21 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "narrow_regions": None,
             "narrow_region_resolution": "",
             "interface_hmax": "",
+            "interface_maximum_element_size": "",
             "interface_thickness": "",
             "transition_distance": "",
             "transition_growth": None,
             "edge_hmax": "",
+            "edge_maximum_element_size": "",
             "edge_thickness": "",
             "corner_hmax": "",
+            "corner_maximum_element_size": "",
             "corner_extent": "",
+            "boundary_layer_count": None,
+            "boundary_layer_thickness": "",
+            "boundary_layer_stretching": None,
+            "boundary_layer_target_surface_tags": [],
+            "boundary_layer_target_curve_tags": [],
             "resolved_size_from_curvature": None,
             "resolved_narrow_regions": None,
             "resolved_growth_rate": "",

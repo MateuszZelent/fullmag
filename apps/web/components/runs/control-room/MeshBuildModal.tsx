@@ -298,15 +298,15 @@ export default function MeshBuildModal({
                       </span>
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-2 text-[0.72rem] text-slate-300/78">
-                      <span>Bulk hmax</span>
+                      <span>Bulk maximum element size</span>
                       <span className="text-right font-mono text-white">
                         {target.hmax != null ? fmtSI(target.hmax, "m") : "auto"}
                       </span>
-                      <span>Interface hmax</span>
+                      <span>Interface maximum element size</span>
                       <span className="text-right font-mono text-white">
                         {target.interface_hmax != null ? fmtSI(target.interface_hmax, "m") : "—"}
                       </span>
-                      <span>Edge hmax</span>
+                      <span>Edge maximum element size</span>
                       <span className="text-right font-mono text-white">
                         {target.edge_hmax != null ? fmtSI(target.edge_hmax, "m") : "—"}
                       </span>
@@ -314,7 +314,7 @@ export default function MeshBuildModal({
                       <span className="text-right font-mono text-white">
                         {target.edge_thickness != null ? fmtSI(target.edge_thickness, "m") : "—"}
                       </span>
-                      <span>Corner hmax</span>
+                      <span>Corner maximum element size</span>
                       <span className="text-right font-mono text-white">
                         {target.corner_hmax != null ? fmtSI(target.corner_hmax, "m") : "—"}
                       </span>
@@ -358,14 +358,14 @@ export default function MeshBuildModal({
               <div className="mt-2 grid gap-1.5 text-sm leading-relaxed text-slate-300/80">
                 <div>
                   {meshSummary
-                    ? `${meshSummary.mesh_name} · ${meshSummary.source_kind} · hmax ${fmtSI(meshSummary.hmax, "m")}`
+                    ? `${meshSummary.mesh_name} · ${meshSummary.source_kind} · maximum element size ${fmtSI(meshSummary.hmax, "m")}`
                     : "Mesh summary will appear here as soon as the first build finishes."}
                 </div>
                 {summaryBuildMode ? (
                   <div>Build mode: <span className="font-mono text-white">{summaryBuildMode}</span></div>
                 ) : null}
                 {effectiveAirboxTarget?.hmax != null ? (
-                  <div>Airbox hmax: <span className="font-mono text-white">{fmtSI(effectiveAirboxTarget.hmax, "m")}</span></div>
+                  <div>Airbox maximum element size: <span className="font-mono text-white">{fmtSI(effectiveAirboxTarget.hmax, "m")}</span></div>
                 ) : null}
                 {summaryFieldKinds.length > 0 ? (
                   <div>Size fields: <span className="font-mono text-white">{summaryFieldKinds.join(", ")}</span></div>

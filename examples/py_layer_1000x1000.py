@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     # ── Demonstrate mesh generation + STL export ─────
     body = problem.magnets[0].geometry
-    mesh = fm.generate_mesh(body, hmax=20e-9)
+    mesh = fm.generate_mesh(body, maximum_element_size=20e-9)
     print(f"Mesh: {mesh.n_nodes} nodes, {mesh.n_elements} tetrahedra")
     mesh.save("py_layer_with_hole.mesh.json")
     fm.export_stl(body, "py_layer_with_hole.stl")

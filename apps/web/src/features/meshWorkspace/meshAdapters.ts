@@ -65,7 +65,7 @@ function adaptUniverse(config: MeshConfigRecord | null | undefined): UniverseMes
     size: normalizeVec3(raw.size),
     center: normalizeVec3(raw.center),
     padding: normalizeVec3(raw.padding),
-    airbox_hmax: numericOrNull(raw.airbox_hmax),
+    airbox_hmax: numericOrNull(raw.maximum_element_size ?? raw.airbox_hmax),
     raw: config,
   };
 }
@@ -76,8 +76,8 @@ function adaptObjectConfig(entry: MeshObjectConfigEntry): ObjectMeshConfigView {
     object_id: entry.object_id,
     object_name: entry.object_name,
     mode: raw && typeof raw.mode === "string" ? raw.mode : null,
-    hmax: raw ? numericOrNull(raw.hmax) : null,
-    hmin: raw ? numericOrNull(raw.hmin) : null,
+    hmax: raw ? numericOrNull(raw.maximum_element_size ?? raw.hmax) : null,
+    hmin: raw ? numericOrNull(raw.minimum_element_size ?? raw.hmin) : null,
     raw: entry.config ?? null,
   };
 }

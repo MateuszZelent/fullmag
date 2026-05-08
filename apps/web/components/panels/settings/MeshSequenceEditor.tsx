@@ -5,7 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
 import SelectField from "../../ui/SelectField";
-import type { ScriptBuilderMeshOperationEntry } from "../../../lib/session/types";
+import type { MeshCapabilitiesState, ScriptBuilderMeshOperationEntry } from "../../../lib/session/types";
 
 /* ── types ── */
 
@@ -46,6 +46,7 @@ function defaultParamsFor(kind: string): Record<string, unknown> {
 export interface MeshSequenceEditorProps {
   operations: ScriptBuilderMeshOperationEntry[];
   onChange: (ops: ScriptBuilderMeshOperationEntry[]) => void;
+  capabilities?: MeshCapabilitiesState | null;
   disabled?: boolean;
 }
 
@@ -54,8 +55,22 @@ export interface MeshSequenceEditorProps {
 export default function MeshSequenceEditor({
   operations,
   onChange,
+  capabilities = null,
   disabled = false,
 }: MeshSequenceEditorProps) {
+  function operationEnabled(kind: string): boolean {
+    if (kind === "free_tetrahedral") return true;
+    if (kind === "size_field") return capabilities?.supports_size_field_remesh !== false;
+    if (kind === "swept") return true;
+    if (kind === "boundary_layers") {
+      return capabilities?.supports_boundary_layers === true
+        && capabilities.boundary_layer_status !== "explicit_target_selectors_required";
+    }
+    if (kind === "adapt") return capabilities?.supports_adaptive_remesh === true;
+    if (kind === "refine") return false;
+    return false;
+  }
+
   function addOperation() {
     onChange([
       ...operations,
@@ -100,7 +115,11 @@ export default function MeshSequenceEditor({
                   label=""
                   value={op.kind}
                   onchange={(val) => updateKind(i, val)}
-                  options={OPERATION_KINDS.map((k) => ({ label: k.label, value: k.value }))}
+                  options={OPERATION_KINDS.map((k) => ({
+                    label: operationEnabled(k.value) ? k.label : `${k.label} (disabled)`,
+                    value: k.value,
+                    disabled: !operationEnabled(k.value),
+                  }))}
                   disabled={disabled}
                 />
               </div>

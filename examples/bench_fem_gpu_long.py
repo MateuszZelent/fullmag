@@ -76,7 +76,7 @@ def build(mesh_path: Path, dt: float, steps: int) -> fm.Problem:
             outputs=[fm.SaveScalar("E_total", every=dt * steps)],
         ),
         discretization=fm.DiscretizationHints(
-            fem=fm.FEM(order=1, hmax=3e-9, mesh=str(mesh_path)),
+            fem=fm.FEM(order=1, maximum_element_size=3e-9, mesh=str(mesh_path)),
         ),
     )
 

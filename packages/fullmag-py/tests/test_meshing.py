@@ -691,7 +691,7 @@ class MeshScaffoldTests(unittest.TestCase):
         realized_fields = payload["size_fields_realized"]  # type: ignore[index]
         self.assertEqual(realized_fields[0]["id"], "sf1")
         self.assertEqual(realized_fields[0]["kind"], "Box")
-        self.assertEqual(realized_fields[0]["status"], "applied")
+        self.assertEqual(realized_fields[0]["status"], "requested")
         self.assertEqual(realized_fields[0]["source"], "scene_config")
 
         diagnostics = payload["thin_film_diagnostics"]  # type: ignore[index]
@@ -700,7 +700,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(diagnostic["geometry_name"], "free_layer")
         self.assertTrue(diagnostic["is_thin_film"])
         self.assertEqual(diagnostic["requested_layers"], 3)
-        self.assertEqual(diagnostic["estimated_layers_from_hmax"], 1)
+        self.assertEqual(diagnostic["estimated_layers_from_maximum_element_size"], 1)
         self.assertEqual(diagnostic["actual_method"], "free_tetrahedral")
         warning_text = "\n".join(diagnostic["warnings"])
         self.assertIn("below 4", warning_text)
@@ -1340,25 +1340,22 @@ class MeshScaffoldTests(unittest.TestCase):
             },
         )()
 
+        size_field_config = {
+            "kind": "EdgeDistanceThreshold",
+            "params": {
+                "GeometryName": "free_layer",
+                "SizeMin": 0.8e-9,
+                "SizeMax": 3.0e-9,
+                "DistMin": 0.0,
+                "DistMax": 5.0e-9,
+                "Sampling": 40,
+            },
+        }
         _apply_mesh_options(
             fake_gmsh,
             hmax=5e-9,
             order=1,
-            opts=MeshOptions(
-                size_fields=[
-                    {
-                        "kind": "EdgeDistanceThreshold",
-                        "params": {
-                            "GeometryName": "free_layer",
-                            "SizeMin": 0.8e-9,
-                            "SizeMax": 3.0e-9,
-                            "DistMin": 0.0,
-                            "DistMax": 5.0e-9,
-                            "Sampling": 40,
-                        },
-                    }
-                ],
-            ),
+            opts=MeshOptions(size_fields=[size_field_config]),
             component_surface_tags={"free_layer": [7]},
             component_volume_tags={"free_layer": [3]},
         )
@@ -1378,6 +1375,8 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(len(restrict_ids), 1)
         self.assertEqual(fake_field_api.numbers[(restrict_ids[0], "VolumesList")], [3.0])
         self.assertIsNotNone(fake_field_api.background)
+        self.assertEqual(size_field_config["_gmsh_status"], "applied")
+        self.assertEqual(size_field_config["_gmsh_field_id"], restrict_ids[0])
 
     def test_curvature_refinement_is_finer_than_far_field_airbox(self) -> None:
         try:
@@ -2259,8 +2258,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, _path: Path) -> None:
-                return None
+            def export(self, path: Path) -> None:
+                path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_trimesh = type(
             "FakeTrimesh",
@@ -2281,7 +2280,7 @@ class MeshScaffoldTests(unittest.TestCase):
             "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
             return_value=_FakeSurface(),
         ), patch(
-            "fullmag.meshing.asset_pipeline.generate_mesh_from_file",
+            "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
             return_value=shared_domain_mesh,
         ), patch(
             "fullmag.meshing.asset_pipeline._contains_points_in_geometry",
@@ -2347,8 +2346,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, _path: Path) -> None:
-                return None
+            def export(self, path: Path) -> None:
+                path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_result = SharedDomainMeshResult(
             mesh=shared_domain_mesh,
@@ -2434,8 +2433,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def copy(self) -> "_FakeSurface":
                 return self
 
-            def export(self, _path: Path) -> None:
-                return None
+            def export(self, path: Path) -> None:
+                path.write_text("solid fake\nendsolid fake\n", encoding="utf-8")
 
         fake_trimesh = type(
             "FakeTrimesh",
@@ -2569,7 +2568,7 @@ class MeshScaffoldTests(unittest.TestCase):
             "fullmag.meshing.asset_pipeline._geometry_to_trimesh",
             return_value=_FakeSurface(),
         ), patch(
-            "fullmag.meshing.asset_pipeline.generate_mesh_from_file",
+            "fullmag.meshing.gmsh_bridge.generate_mesh_from_file",
             return_value=shared_domain_mesh,
         ):
             realize_fem_domain_mesh_asset(
@@ -2800,8 +2799,8 @@ class FieldStackAcceptanceTests(unittest.TestCase):
                         {
                             "kind": "ObjectCoreRelaxation",
                             "params": {
-                                "core_hmax": 5e-9,
-                                "surface_hmax": 1e-9,
+                                "core_maximum_element_size": 5e-9,
+                                "surface_maximum_element_size": 1e-9,
                                 "surface_distance": 6e-9,
                             },
                         }
@@ -2821,6 +2820,38 @@ class FieldStackAcceptanceTests(unittest.TestCase):
             ["ComponentVolumeConstant", "SurfaceDistanceThreshold", "EdgeDistanceThreshold"],
         )
         self.assertEqual(core_fields[0]["params"]["GeometryName"], "left")
+        self.assertEqual(core_fields[1]["params"]["Sampling"], 20)
+        self.assertEqual(core_fields[2]["params"]["Sampling"], 40)
+
+    def test_mesh_control_wrappers_validate_and_emit_size_fields(self) -> None:
+        field = fm.mesh.object_core_relaxation(
+            "arch_waveguide",
+            maximum_element_size=6e-9,
+            surface_maximum_element_size=3e-9,
+            surface_distance=8e-9,
+            edge_maximum_element_size=1.8e-9,
+            edge_distance=12e-9,
+            sampling_surface=12,
+            sampling_edge=24,
+        )
+
+        self.assertEqual(field["kind"], "ObjectCoreRelaxation")
+        self.assertEqual(field["params"]["GeometryName"], "arch_waveguide")
+        self.assertAlmostEqual(field["params"]["edge_maximum_element_size"], 1.8e-9)
+        self.assertEqual(field["params"]["sampling_surface"], 12)
+        self.assertEqual(field["params"]["sampling_edge"], 24)
+        with self.assertRaisesRegex(
+            ValueError,
+            "edge_maximum_element_size must be <= surface_maximum_element_size",
+        ):
+            fm.mesh.object_core_relaxation(
+                "arch_waveguide",
+                maximum_element_size=6e-9,
+                surface_maximum_element_size=3e-9,
+                surface_distance=8e-9,
+                edge_maximum_element_size=4e-9,
+                edge_distance=12e-9,
+            )
 
     def test_perimeter_refinement_fields_build_component_scoped_sub_boxes(self) -> None:
         left = fm.Box(10.0, 4.0, 1.0, name="left")
@@ -2849,36 +2880,73 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertAlmostEqual(fields[4]["params"]["XMax"], -4.25)
         self.assertAlmostEqual(fields[4]["params"]["YMax"], -1.25)
 
-    def test_perimeter_refinement_rejects_interface_shell_conflict(self) -> None:
+    def test_perimeter_refinement_allows_interface_shell_coexistence(self) -> None:
         left = fm.Box(10.0, 4.0, 1.0, name="left")
-        with self.assertRaisesRegex(ValueError, "cannot be combined with interface_hmax"):
-            _build_perimeter_refinement_fields(
-                [left],
-                default_hmax=20e-9,
-                override_by_name={
-                    "left": {
-                        "edge_hmax": "5e-9",
-                        "edge_thickness": "1.0",
-                        "interface_hmax": "3e-9",
-                    },
+        fields = _build_field_stack(
+            [left],
+            default_hmax=20e-9,
+            per_geometry=[
+                {
+                    "geometry": "left",
+                    "bulk_hmax": "10e-9",
+                    "interface_hmax": "3e-9",
+                    "interface_thickness": "8e-9",
+                    "edge_hmax": "5e-9",
+                    "edge_thickness": "1.0",
                 },
-                component_aware=True,
-            )
+            ],
+            component_aware=True,
+        )
+        kinds = [field["kind"] for field in fields]
+        self.assertIn("InterfaceShellThreshold", kinds)
+        self.assertIn("ComponentRestrictedBox", kinds)
 
-    def test_perimeter_refinement_rejects_non_box_geometry(self) -> None:
+    def test_perimeter_refinement_uses_edge_threshold_for_non_box_geometry(self) -> None:
         left = fm.Cylinder(2.0, 1.0, name="left")
-        with self.assertRaisesRegex(ValueError, "supported only for Box geometries"):
-            _build_perimeter_refinement_fields(
-                [left],
-                default_hmax=20e-9,
-                override_by_name={
-                    "left": {
-                        "edge_hmax": "5e-9",
-                        "edge_thickness": "1.0",
-                    },
+        fields = _build_perimeter_refinement_fields(
+            [left],
+            default_hmax=20e-9,
+            override_by_name={
+                "left": {
+                    "edge_hmax": "5e-9",
+                    "edge_thickness": "1.0",
                 },
-                component_aware=True,
-            )
+            },
+            component_aware=True,
+        )
+        self.assertEqual(len(fields), 1)
+        self.assertEqual(fields[0]["kind"], "EdgeDistanceThreshold")
+        self.assertEqual(fields[0]["params"]["Selector"], {"mode": "all_boundary_curves"})
+        self.assertAlmostEqual(fields[0]["params"]["SizeMin"], 5e-9)
+
+    def test_mesh_options_from_runtime_metadata_parses_boundary_layer_targets(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        options = _mesh_options_from_runtime_metadata(
+            {
+                "per_geometry": [
+                    {
+                        "geometry": "left",
+                        "boundary_layer_count": 3,
+                        "boundary_layer_thickness": "1e-9",
+                        "boundary_layer_stretching": 1.25,
+                        "boundary_layer_target_surface_tags": [11, 12],
+                        "boundary_layer_target_curve_tags": [21],
+                    }
+                ]
+            },
+            geometries=[left],
+            default_hmax=20e-9,
+            component_aware=True,
+        )
+        self.assertEqual(options.boundary_layer_count, 3)
+        self.assertAlmostEqual(options.boundary_layer_thickness, 1e-9)
+        self.assertAlmostEqual(options.boundary_layer_stretching, 1.25)
+        self.assertEqual(options.boundary_layer_target_surface_tags, [11, 12])
+        self.assertEqual(options.boundary_layer_target_curve_tags, [21])
+
+    def test_public_boundary_layers_helper_requires_explicit_targets(self) -> None:
+        with self.assertRaisesRegex(ValueError, "target_surface_tags or target_curve_tags"):
+            fm.mesh.boundary_layers(count=3, first_layer_thickness=1e-9)
 
     def test_field_stack_combines_all_layers(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")

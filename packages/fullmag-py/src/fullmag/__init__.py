@@ -153,7 +153,7 @@ from .world import (
     cell,
     pbc,
     object_mesh_defaults,
-    mesh,
+    mesh as _legacy_mesh,
     hmax,
     fem_order,
     interactive,
@@ -189,10 +189,23 @@ from .world import (
     my,
     mz,
 )
+from . import meshing as _mesh_controls
+
+
+class _MeshNamespace:
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        return _legacy_mesh(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(_mesh_controls, name)
+
+
+mesh = _MeshNamespace()
 
 __all__ = [
     # Class-based API
     "BackendTarget",
+    "mesh",
     "AdaptiveTimestep",
     "AntennaFieldSource",
     "ArchWaveguide",

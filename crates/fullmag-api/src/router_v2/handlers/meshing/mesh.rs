@@ -19,12 +19,14 @@ use crate::schemas::mesh::{
     MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
     MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
     MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicPairResource,
-    MeshPeriodicPairsResource, MeshQualityGatesResource, MeshRealizedSizeFieldsResource,
-    MeshRegionResource, MeshSemanticsResource, MeshSharedDomainConfigReplaceRequest,
-    MeshSharedDomainConfigResource, MeshSharedDomainManifestResource,
-    MeshSharedDomainQualityResource, MeshSharedDomainReportResource, MeshSolverMeshResource,
-    MeshSummaryResource, MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource,
-    MeshUniverseQualityResource, MeshUniverseReportResource,
+    MeshPeriodicPairsResource, MeshQualityGatesResource, MeshRealizedSizeFieldResource,
+    MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource, MeshRegionResource,
+    MeshSemanticsResource, MeshSharedDomainBuildReportResource,
+    MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
+    MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
+    MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
+    MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource, MeshUniverseQualityResource,
+    MeshUniverseReportResource,
 };
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
@@ -191,6 +193,7 @@ pub async fn get_mesh_active_build(
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
         last_build_summary: mesh_workspace.get("last_build_summary").cloned(),
+        shared_domain_build_report: typed_shared_domain_build_report(mesh_workspace),
         last_build_error: mesh_workspace
             .get("last_build_error")
             .and_then(Value::as_str)
@@ -201,6 +204,20 @@ pub async fn get_mesh_active_build(
         snapshot.mesh_build_revision
     ));
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}
+
+fn typed_shared_domain_build_report(
+    mesh_workspace: &Value,
+) -> Option<MeshSharedDomainBuildReportResource> {
+    first_workspace_value(
+        mesh_workspace,
+        &[
+            &["shared_domain_build_report"],
+            &["last_build_summary", "shared_domain_build_report"],
+            &["shared_domain_report", "shared_domain_build_report"],
+        ],
+    )
+    .and_then(|value| serde_json::from_value(value).ok())
 }
 
 #[utoipa::path(
@@ -503,27 +520,118 @@ pub async fn get_mesh_realized_size_fields(
 ) -> Result<Json<MeshRealizedSizeFieldsResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let realized_size_fields = normalize_realized_size_fields_payload(first_workspace_value(
+        mesh_workspace,
+        &[
+            &["size_fields_realized"],
+            &["realized_size_fields"],
+            &["last_build_summary", "size_fields_realized"],
+            &["last_build_summary", "realized_size_fields"],
+            &["shared_domain_report", "size_fields_realized"],
+            &["shared_domain_report", "realized_size_fields"],
+        ],
+    ));
     Ok(Json(MeshRealizedSizeFieldsResource {
         revision: snapshot.mesh_revision,
-        realized_size_fields: first_workspace_value(
-            mesh_workspace,
-            &[
-                &["size_fields_realized"],
-                &["realized_size_fields"],
-                &["last_build_summary", "size_fields_realized"],
-                &["last_build_summary", "realized_size_fields"],
-                &["shared_domain_report", "size_fields_realized"],
-                &["shared_domain_report", "realized_size_fields"],
-            ],
-        )
-        .or_else(|| {
-            Some(json!({
-                "source": "unavailable",
-                "fields": [],
-                "reason": "size_fields_realized is missing from the current mesh workspace/build report"
-            }))
-        }),
+        realized_size_fields,
     }))
+}
+
+fn normalize_realized_size_fields_payload(raw: Option<Value>) -> MeshRealizedSizeFieldsPayload {
+    let Some(value) = raw else {
+        return MeshRealizedSizeFieldsPayload {
+            source: Some("unavailable".to_string()),
+            reason: Some(
+                "size_fields_realized is missing from the current mesh workspace/build report"
+                    .to_string(),
+            ),
+            fields: Vec::new(),
+        };
+    };
+
+    match value {
+        Value::Array(fields) => MeshRealizedSizeFieldsPayload {
+            source: None,
+            reason: None,
+            fields: fields
+                .into_iter()
+                .filter_map(realized_size_field_from_value)
+                .collect(),
+        },
+        Value::Object(mut object) => {
+            let fields_value = object.remove("fields");
+            let fields = match fields_value {
+                Some(Value::Array(fields)) => fields
+                    .into_iter()
+                    .filter_map(realized_size_field_from_value)
+                    .collect(),
+                Some(field) => realized_size_field_from_value(field).into_iter().collect(),
+                None => realized_size_field_from_value(Value::Object(object.clone()))
+                    .into_iter()
+                    .collect(),
+            };
+            MeshRealizedSizeFieldsPayload {
+                source: object
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                reason: object
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                fields,
+            }
+        }
+        _ => MeshRealizedSizeFieldsPayload {
+            source: Some("unavailable".to_string()),
+            reason: Some("size_fields_realized has an unsupported payload shape".to_string()),
+            fields: Vec::new(),
+        },
+    }
+}
+
+fn realized_size_field_from_value(value: Value) -> Option<MeshRealizedSizeFieldResource> {
+    let Value::Object(mut object) = value else {
+        return None;
+    };
+    let kind = object
+        .remove("kind")
+        .and_then(string_from_value)
+        .filter(|value| !value.trim().is_empty())?;
+    let applied = object.get("applied").and_then(Value::as_bool);
+    let status = object
+        .remove("status")
+        .and_then(string_from_value)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if applied == Some(true) {
+                "applied".to_string()
+            } else {
+                "requested".to_string()
+            }
+        });
+    let source = object.remove("source").and_then(string_from_value);
+    let reason = object.remove("reason").and_then(string_from_value);
+    let gmsh_field_id = object
+        .remove("gmsh_field_id")
+        .and_then(|value| value.as_i64());
+    let params = object.remove("params");
+    Some(MeshRealizedSizeFieldResource {
+        kind,
+        status,
+        source,
+        reason,
+        gmsh_field_id,
+        applied,
+        params,
+    })
+}
+
+fn string_from_value(value: Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value),
+        _ => None,
+    }
 }
 
 #[utoipa::path(
