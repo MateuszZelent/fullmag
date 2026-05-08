@@ -176,6 +176,8 @@ import { ControlRoomConnectingState } from "./ControlRoomConnectingState";
 import {
   fieldFrameIdentity,
   isQuantitySelectable,
+  resolveViewModeSyncFromWorkspaceTabChange,
+  workspaceTabViewSyncKey,
   vectorHead,
 } from "./controlRoomContextHelpers";
 import {
@@ -493,30 +495,39 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     () => workspaceTabs.find((tab) => tab.id === activeWorkspaceTabId) ?? null,
     [activeWorkspaceTabId, workspaceTabs],
   );
+  const workspaceTabViewSyncKeyRef = useRef<string | null>(null);
+  const pendingInternalWorkspaceTabViewSyncKeyRef = useRef<string | null>(null);
+  const markInternalWorkspaceViewSync = useCallback(
+    (tabId: string, payloadViewMode: "3D" | "2D" | "Analyze") => {
+      pendingInternalWorkspaceTabViewSyncKeyRef.current = workspaceTabViewSyncKey({
+        activeTabId: tabId,
+        payloadViewMode,
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (!activeWorkspaceTab) return;
-    const payloadMode = activeWorkspaceTab.payload?.viewMode;
-    const inferredMode: ViewportMode | null =
-      payloadMode === "3D" || payloadMode === "2D" || payloadMode === "Mesh" || payloadMode === "Analyze"
-        ? payloadMode === "Mesh"
-          ? "3D"
-          : payloadMode
-        : activeWorkspaceTab.id === "core:3d"
-          ? "3D"
-          : activeWorkspaceTab.id === "core:2d"
-            ? "2D"
-            : activeWorkspaceTab.id === "core:mesh"
-              ? "3D"
-              : activeWorkspaceTab.id === "core:analyze"
-                ? "Analyze"
-                : null;
-    if (!inferredMode || inferredMode === viewMode) return;
-    if (inferredMode === "2D") {
-      setComponent((prev) => (prev === "magnitude" ? "x" : prev));
+    if (!activeWorkspaceTab) {
+      workspaceTabViewSyncKeyRef.current = null;
+      pendingInternalWorkspaceTabViewSyncKeyRef.current = null;
+      return;
     }
-    setViewMode(inferredMode);
-  }, [activeWorkspaceTab, viewMode]);
+    const { nextMode, nextSyncKey, consumedInternalSyncKey } =
+      resolveViewModeSyncFromWorkspaceTabChange({
+        previousSyncKey: workspaceTabViewSyncKeyRef.current,
+        pendingInternalSyncKey: pendingInternalWorkspaceTabViewSyncKeyRef.current,
+        activeTabId: activeWorkspaceTab.id,
+        payloadViewMode: activeWorkspaceTab.payload?.viewMode ?? null,
+        currentViewMode: viewMode,
+      });
+    if (consumedInternalSyncKey) {
+      pendingInternalWorkspaceTabViewSyncKeyRef.current = null;
+    }
+    workspaceTabViewSyncKeyRef.current = nextSyncKey;
+    if (!nextMode) return;
+    setViewMode(nextMode);
+  }, [activeWorkspaceTab, setViewMode, viewMode]);
 
   /* ── Derived runtime state ── */
   const session = runtimeSession;
@@ -1283,6 +1294,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     meshOptions,
     setMeshOptions,
     meshHmax,
+    meshCapabilities: meshWorkspace?.mesh_capabilities ?? null,
     session,
     localBuilderDraft,
     localBuilderSignature,
@@ -1368,6 +1380,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     optimisticDisplaySelection,
     displaySelection,
     cachedFieldQuantities,
+    markInternalWorkspaceViewSync,
     setViewMode,
     setFemDockTab,
     setComponent,
@@ -1854,10 +1867,6 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     connection !== "connecting" &&
     (session != null || remoteSceneDocument != null || error != null);
 
-  if (!controlRoomReady) {
-    return <ControlRoomConnectingState />;
-  }
-
   return (
     <ControlRoomContextProviders
       transportValue={transportValue}
@@ -1865,7 +1874,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
       commandValue={commandValue}
       modelValue={modelValue}
     >
-      {children}
+      <div className="relative h-full w-full">
+        {children}
+        {!controlRoomReady ? (
+          <div className="absolute inset-0 z-50">
+            <ControlRoomConnectingState />
+          </div>
+        ) : null}
+      </div>
     </ControlRoomContextProviders>
   );
 }

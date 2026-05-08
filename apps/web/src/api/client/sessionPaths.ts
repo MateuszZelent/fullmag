@@ -60,6 +60,7 @@ export const sessionApiPaths = {
     fields: openApiV2Path("/v2/sessions/current/data/fields"),
     domainMeta: openApiV2Path("/v2/sessions/current/data/domain/meta"),
     domainTopology: openApiV2Path("/v2/sessions/current/data/domain/topology"),
+    domainSliceMeshOverlay: openApiV2Path("/v2/sessions/current/data/domain/slice/mesh-overlay"),
     fieldMeta: (quantityId: string) =>
       openApiV2Path("/v2/sessions/current/data/fields/{quantity_id}/meta").replace("{quantity_id}", encodeURIComponent(quantityId)),
     fieldVector: (quantityId: string) =>

@@ -13,10 +13,11 @@ use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
     FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
     SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
-    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
-    VectorStyleVisualizationState, VisualizationDiagnostics, VisualizationLayerPatch,
-    VisualizationLayerState, VisualizationScopeKind, VisualizationStatePatch,
-    VisualizationStateResource,
+    TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
+    TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
+    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationDiagnostics,
+    VisualizationLayerPatch, VisualizationLayerState, VisualizationScopeKind,
+    VisualizationStatePatch, VisualizationStateResource,
 };
 use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
@@ -107,6 +108,7 @@ pub async fn replace_visualization_state(
         presentation.visualization_sampling = Some(replacement.sampling);
         presentation.visualization_fem = Some(replacement.fem);
         presentation.visualization_slice = Some(replacement.slice);
+        presentation.visualization_trim = Some(replacement.trim.clone());
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
         presentation.visualization_overrides = Some(replacement.overrides);
@@ -469,6 +471,132 @@ fn default_clip_visualization() -> ClipVisualizationState {
     }
 }
 
+fn default_trim_axis_visualization() -> TrimAxisVisualizationState {
+    TrimAxisVisualizationState {
+        enabled: false,
+        min_percent: 0.0,
+        max_percent: 100.0,
+    }
+}
+
+fn default_trim_visualization() -> TrimVisualizationState {
+    TrimVisualizationState {
+        enabled: false,
+        axes: TrimAxisVisualizationAxes {
+            x: default_trim_axis_visualization(),
+            y: default_trim_axis_visualization(),
+            z: default_trim_axis_visualization(),
+        },
+    }
+}
+
+fn clamp_trim_percent(value: f64) -> f64 {
+    value.clamp(0.0, 100.0)
+}
+
+fn normalize_trim_axis(axis: &mut TrimAxisVisualizationState) {
+    axis.min_percent = clamp_trim_percent(axis.min_percent);
+    axis.max_percent = clamp_trim_percent(axis.max_percent);
+    if axis.max_percent - axis.min_percent < 1.0 {
+        let center = ((axis.min_percent + axis.max_percent) * 0.5).clamp(0.5, 99.5);
+        axis.min_percent = (center - 0.5).max(0.0);
+        axis.max_percent = (center + 0.5).min(100.0);
+    }
+}
+
+fn apply_trim_axis_patch(
+    axis: &mut TrimAxisVisualizationState,
+    patch: &TrimAxisVisualizationPatch,
+) {
+    if let Some(enabled) = patch.enabled {
+        axis.enabled = enabled;
+    }
+    if let Some(min_percent) = patch.min_percent {
+        axis.min_percent = min_percent;
+    }
+    if let Some(max_percent) = patch.max_percent {
+        axis.max_percent = max_percent;
+    }
+    normalize_trim_axis(axis);
+}
+
+fn apply_trim_axes_patch(
+    axes: &mut TrimAxisVisualizationAxes,
+    patch: &TrimAxisVisualizationAxesPatch,
+) {
+    if let Some(x) = &patch.x {
+        apply_trim_axis_patch(&mut axes.x, x);
+    }
+    if let Some(y) = &patch.y {
+        apply_trim_axis_patch(&mut axes.y, y);
+    }
+    if let Some(z) = &patch.z {
+        apply_trim_axis_patch(&mut axes.z, z);
+    }
+}
+
+fn first_enabled_trim_axis(
+    trim: &TrimVisualizationState,
+) -> Option<(ClipAxis, &TrimAxisVisualizationState)> {
+    if trim.axes.x.enabled {
+        return Some((ClipAxis::X, &trim.axes.x));
+    }
+    if trim.axes.y.enabled {
+        return Some((ClipAxis::Y, &trim.axes.y));
+    }
+    if trim.axes.z.enabled {
+        return Some((ClipAxis::Z, &trim.axes.z));
+    }
+    None
+}
+
+fn compatibility_clip_from_trim(trim: &TrimVisualizationState) -> ClipVisualizationState {
+    if !trim.enabled {
+        return default_clip_visualization();
+    }
+    let Some((axis, state)) = first_enabled_trim_axis(trim) else {
+        return default_clip_visualization();
+    };
+    let use_min_plane = state.min_percent > 0.0;
+    ClipVisualizationState {
+        enabled: true,
+        axis,
+        position_percent: if use_min_plane {
+            state.min_percent
+        } else {
+            state.max_percent
+        },
+        flipped: use_min_plane,
+    }
+}
+
+fn apply_compatibility_clip_to_trim(
+    trim: &mut TrimVisualizationState,
+    clip: &ClipVisualizationState,
+) {
+    trim.enabled = clip.enabled;
+    trim.axes.x.enabled = false;
+    trim.axes.y.enabled = false;
+    trim.axes.z.enabled = false;
+    if !clip.enabled {
+        return;
+    }
+    let target = match clip.axis {
+        ClipAxis::X => &mut trim.axes.x,
+        ClipAxis::Y => &mut trim.axes.y,
+        ClipAxis::Z => &mut trim.axes.z,
+    };
+    target.enabled = true;
+    if clip.flipped {
+        target.min_percent = clip.position_percent;
+        target.max_percent = 100.0;
+    } else {
+        target.min_percent = 0.0;
+        target.max_percent = clip.position_percent;
+    }
+    normalize_trim_axis(target);
+}
+
 fn default_vector_style_visualization() -> VectorStyleVisualizationState {
     VectorStyleVisualizationState {
         color_mode: VectorColorMode::Orientation,
@@ -692,11 +820,31 @@ fn apply_visualization_presentation_patch(
         }
         presentation.visualization_slice = Some(slice);
     }
-    if let Some(clip_patch) = &update.clip {
-        let mut clip = presentation
-            .visualization_clip
+    if let Some(trim_patch) = &update.trim {
+        let mut trim = presentation
+            .visualization_trim
             .take()
-            .unwrap_or_else(default_clip_visualization);
+            .unwrap_or_else(default_trim_visualization);
+        if let Some(enabled) = trim_patch.enabled {
+            trim.enabled = enabled;
+        }
+        if let Some(axes_patch) = &trim_patch.axes {
+            apply_trim_axes_patch(&mut trim.axes, axes_patch);
+        }
+        let clip = compatibility_clip_from_trim(&trim);
+        presentation.visualization_trim = Some(trim);
+        presentation.visualization_clip = Some(clip);
+    }
+    if let Some(clip_patch) = &update.clip {
+        let trim_updated_directly = update.trim.is_some();
+        let mut clip = presentation.visualization_clip.take().unwrap_or_else(|| {
+            compatibility_clip_from_trim(
+                &presentation
+                    .visualization_trim
+                    .clone()
+                    .unwrap_or_else(default_trim_visualization),
+            )
+        });
         if let Some(enabled) = clip_patch.enabled {
             clip.enabled = enabled;
         }
@@ -708,6 +856,14 @@ fn apply_visualization_presentation_patch(
         }
         if let Some(flipped) = clip_patch.flipped {
             clip.flipped = flipped;
+        }
+        if !trim_updated_directly {
+            let mut trim = presentation
+                .visualization_trim
+                .take()
+                .unwrap_or_else(default_trim_visualization);
+            apply_compatibility_clip_to_trim(&mut trim, &clip);
+            presentation.visualization_trim = Some(trim);
         }
         presentation.visualization_clip = Some(clip);
     }
@@ -925,10 +1081,14 @@ pub(crate) fn build_visualization_state_response(
         .visualization_slice
         .clone()
         .unwrap_or_else(|| default_slice_visualization(selection, presentation, &layers));
+    let trim = presentation
+        .visualization_trim
+        .clone()
+        .unwrap_or_else(default_trim_visualization);
     let clip = presentation
         .visualization_clip
         .clone()
-        .unwrap_or_else(default_clip_visualization);
+        .unwrap_or_else(|| compatibility_clip_from_trim(&trim));
     let vector_style = presentation
         .visualization_vector_style
         .clone()
@@ -940,7 +1100,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 2,
+        schema_version: 3,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -958,6 +1118,7 @@ pub(crate) fn build_visualization_state_response(
         },
         fem,
         slice,
+        trim,
         clip,
         vector_style,
         overrides,

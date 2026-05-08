@@ -53,6 +53,21 @@ export interface AirboxRenderPassState {
   opacityPercent: number;
 }
 
+export interface UnifiedTrimAxisState {
+  enabled: boolean;
+  minPercent: number;
+  maxPercent: number;
+}
+
+export interface UnifiedTrimState {
+  enabled: boolean;
+  axes: {
+    x: UnifiedTrimAxisState;
+    y: UnifiedTrimAxisState;
+    z: UnifiedTrimAxisState;
+  };
+}
+
 export interface UnifiedRenderState {
   // Common
   selectedLayer: number;
@@ -66,6 +81,7 @@ export interface UnifiedRenderState {
   // Capability-gated (FEM-specific become optional)
   meshRenderMode?: "solid" | "solid+wireframe" | "wireframe" | "mesh" | "points";
   meshOpacity?: number;
+  trim?: UnifiedTrimState;
   clipEnabled?: boolean;
   clipAxis?: "x" | "y" | "z";
   clipPosition?: number;

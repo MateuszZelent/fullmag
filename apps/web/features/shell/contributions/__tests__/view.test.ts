@@ -26,6 +26,7 @@ const slice2DToolbar: Slice2DToolbarState = {
   showAirboxVectors: false,
   showQuantity: true,
   showVectors: true,
+  vectorDensity: 4,
   renderMode: "heatmap",
   projectionReduction: "mean_occupied",
   projectionIncludeAirAsZero: false,
@@ -180,14 +181,6 @@ describe("View ribbon contribution", () => {
     )[1];
 
     expect(sliceGroup.id).toBe("view-slice-2d");
-    expect(sliceGroup.actions.every((action) => !action.disabled)).toBe(true);
-
-    const axis = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:axis");
-    const mode = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:mode");
-    const component = findNode(
-      sliceGroup.actions.find((action) => action.id === "view-slice-quantity")?.menu ?? [],
-      "slice:quantity:component",
-    );
     expect(sliceGroup.actions.map((action) => action.id)).toEqual([
       "view-slice-quantity",
       "view-slice-vectors",
@@ -195,24 +188,135 @@ describe("View ribbon contribution", () => {
       "view-slice-layers",
       "view-slice-plane",
     ]);
+    expect(sliceGroup.actions.find((action) => action.id === "view-slice-quantity")?.disabled).toBe(
+      false,
+    );
+    expect(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.disabled).toBe(
+      false,
+    );
+    expect(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.disabled).toBe(
+      false,
+    );
+    expect(sliceGroup.actions.find((action) => action.id === "view-slice-vectors")?.disabled).toBe(
+      true,
+    );
+    expect(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.disabled).toBe(
+      true,
+    );
 
+    const axis = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:axis");
+    const mode = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-plane")?.menu ?? [], "slice:plane:mode");
+    const component = findNode(
+      sliceGroup.actions.find((action) => action.id === "view-slice-quantity")?.menu ?? [],
+      "slice:quantity:component",
+    );
     const render = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [], "slice:layers:render-mode");
     const airbox = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [], "slice:airbox:visible");
     const airboxRender = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-airbox")?.menu ?? [], "slice:airbox:render-mode");
     const vectors = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-vectors")?.menu ?? [], "slice:vectors:visible");
+    const primitives = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [], "slice:mesh:primitives");
+    const mesh = findNode(sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [], "slice:mesh:wireframe");
 
     expect(axis).toMatchObject({ type: "radio-group", value: "y" });
     expect(mode).toMatchObject({ type: "radio-group", value: "slab" });
     expect(component).toMatchObject({ type: "radio-group", value: "magnitude" });
     expect(render).toMatchObject({ type: "radio-group", value: "heatmap" });
-    expect(airbox).toMatchObject({ type: "checkbox", checked: true });
-    expect(airboxRender).toMatchObject({ type: "radio-group", value: "wireframe" });
-    expect(vectors).toMatchObject({ type: "checkbox", checked: true });
+    expect(airbox).toMatchObject({ type: "checkbox", checked: true, disabled: true });
+    expect(airboxRender).toMatchObject({ type: "radio-group", value: "wireframe", disabled: true });
+    expect(vectors).toMatchObject({ type: "checkbox", checked: true, disabled: true });
+    expect(primitives).toMatchObject({ type: "checkbox", checked: true, disabled: true });
+    expect(mesh).toMatchObject({ type: "checkbox", checked: true, disabled: true });
+    expect(mode?.type === "radio-group" ? mode.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "slab",
+          disabled: true,
+          disabledReason: "Slab mode is not implemented E2E yet",
+        }),
+      ]),
+    );
+    expect(render?.type === "radio-group" ? render.items : []).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "contour",
+          disabled: true,
+          disabledReason: "2D contour rendering is not implemented E2E yet",
+        }),
+        expect.objectContaining({
+          value: "heatmap+contour",
+          disabled: true,
+          disabledReason: "2D contour rendering is not implemented E2E yet",
+        }),
+        expect.objectContaining({
+          value: "vectors",
+          disabled: true,
+          disabledReason: "2D vectors currently support Single mode only",
+        }),
+        expect.objectContaining({
+          value: "mesh-overlay",
+          disabled: true,
+          disabledReason: "2D mesh overlay currently supports Single mode only",
+        }),
+      ]),
+    );
 
     axis?.onValueChange?.("x");
     component?.onValueChange?.("z");
     expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-axis", axis: "x" });
     expect(run).toHaveBeenCalledWith({ id: "viewport.set-slice-component", component: "z" });
+  });
+
+  it("enables exact 2D vector controls in single-slice mode with honest per-plane color gating", () => {
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        requestedPreviewEveryN: 11,
+        slice2DEnabled: true,
+        femArrowColorMode: "monochrome",
+        femArrowMonoColor: "#112233",
+        slice2DToolbar: { ...slice2DToolbar, axis: "z", mode: "single", showVectors: false, vectorDensity: 7 },
+      }),
+    )[1];
+    const action = sliceGroup.actions.find((entry) => entry.id === "view-slice-vectors");
+    const menu = action?.menu ?? [];
+    const vectorColors = findNode(menu, "slice:vectors:colors");
+    const monoColor = findNode(menu, "slice:vectors:mono-color");
+
+    expect(action).toMatchObject({ disabled: false });
+    expect(findNode(menu, "slice:vectors:visible")).toMatchObject({
+      type: "checkbox",
+      disabled: false,
+      checked: false,
+    });
+    expect(findNode(menu, "slice:vectors:density")).toMatchObject({
+      type: "slider",
+      disabled: false,
+      value: 7,
+    });
+    expect(vectorColors).toMatchObject({
+      type: "radio-group",
+      disabled: false,
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          value: "z",
+          disabled: true,
+          disabledReason: "Z component is unavailable for the XY slice plane",
+        }),
+        expect.objectContaining({
+          value: "x",
+          disabled: false,
+        }),
+        expect.objectContaining({
+          value: "y",
+          disabled: false,
+        }),
+      ]),
+    });
+    expect(monoColor).toMatchObject({
+      type: "color",
+      disabled: false,
+      value: "#112233",
+    });
   });
 
   it("lets all-layer projection sliders reach their configured maximum", () => {
@@ -243,6 +347,80 @@ describe("View ribbon contribution", () => {
       type: "slider",
       value: 100,
       max: 100,
+    });
+  });
+
+  it("enables exact FEM mesh overlay controls in 2D single-slice mode", () => {
+    const sliceGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        slice2DEnabled: true,
+        isFemBackend: true,
+        slice2DToolbar: { ...slice2DToolbar, mode: "single" },
+      }),
+    )[1];
+    const menu = sliceGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [];
+
+    expect(findNode(menu, "slice:mesh:wireframe")).toMatchObject({
+      type: "checkbox",
+      disabled: false,
+    });
+    expect(findNode(menu, "slice:layers:render-mode")).toMatchObject({
+      type: "radio-group",
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          value: "mesh-overlay",
+          disabled: false,
+        }),
+      ]),
+    });
+  });
+
+  it("keeps mesh overlay disabled outside exact FEM single-slice mode", () => {
+    const femProjectionGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        slice2DEnabled: true,
+        isFemBackend: true,
+        slice2DToolbar: { ...slice2DToolbar, mode: "all_layers" },
+      }),
+    )[1];
+    const fdmGroup = buildViewRibbonGroups(
+      baseContext({
+        viewMode: "2D",
+        slice2DEnabled: true,
+        isFemBackend: false,
+        slice2DToolbar: { ...slice2DToolbar, mode: "single" },
+      }),
+    )[1];
+    const femRenderMode = findNode(
+      femProjectionGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [],
+      "slice:layers:render-mode",
+    );
+    const fdmRenderMode = findNode(
+      fdmGroup.actions.find((action) => action.id === "view-slice-layers")?.menu ?? [],
+      "slice:layers:render-mode",
+    );
+
+    expect(femRenderMode).toMatchObject({
+      type: "radio-group",
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          value: "mesh-overlay",
+          disabled: true,
+          disabledReason: "2D mesh overlay currently supports Single mode only",
+        }),
+      ]),
+    });
+    expect(fdmRenderMode).toMatchObject({
+      type: "radio-group",
+      items: expect.arrayContaining([
+        expect.objectContaining({
+          value: "mesh-overlay",
+          disabled: true,
+          disabledReason: "2D mesh overlay requires FEM explicit topology",
+        }),
+      ]),
     });
   });
 

@@ -68,7 +68,7 @@ describe("resolveWorkspaceTabResourceDisposals", () => {
     ).toEqual([]);
   });
 
-  it("still disposes non-primary WebGL tabs when they are hidden", () => {
+  it("does not dispose the keep-alive core 2D viewport on tab-hide", () => {
     expect(
       resolveWorkspaceTabResourceDisposals(
         {
@@ -88,12 +88,7 @@ describe("resolveWorkspaceTabResourceDisposals", () => {
           activeTabId: "core:3d",
         },
       ),
-    ).toEqual([
-      {
-        ownerId: "workspace:study:core:2d",
-        reason: "tab-hide",
-      },
-    ]);
+    ).toEqual([]);
   });
 
   it("does not dispose a non-WebGL hidden-mounted tab on active tab switch", () => {
@@ -117,5 +112,45 @@ describe("resolveWorkspaceTabResourceDisposals", () => {
         },
       ),
     ).toEqual([]);
+  });
+
+  it("still disposes non-core WebGL tabs when they are hidden", () => {
+    expect(
+      resolveWorkspaceTabResourceDisposals(
+        {
+          stage,
+          tabs: [
+            makeTab({ id: "core:3d", kind: "viewport-3d" }),
+            makeTab({
+              id: "result:m",
+              key: "result:m",
+              kind: "result-quantity",
+              title: "M",
+              mountPolicy: "active-only",
+            }),
+          ],
+          activeTabId: "result:m",
+        },
+        {
+          stage,
+          tabs: [
+            makeTab({ id: "core:3d", kind: "viewport-3d" }),
+            makeTab({
+              id: "result:m",
+              key: "result:m",
+              kind: "result-quantity",
+              title: "M",
+              mountPolicy: "active-only",
+            }),
+          ],
+          activeTabId: "core:3d",
+        },
+      ),
+    ).toEqual([
+      {
+        ownerId: "workspace:study:result:m",
+        reason: "tab-hide",
+      },
+    ]);
   });
 });

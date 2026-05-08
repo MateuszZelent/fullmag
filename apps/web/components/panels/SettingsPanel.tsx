@@ -274,6 +274,7 @@ export default function SettingsPanel({ nodeId }: SettingsPanelProps) {
       disabled: meshGenerating || !(cmd.awaitingCommand || cmd.isWaitingForCompute),
       waitMode: cmd.isWaitingForCompute,
       focus: meshSettingsFocus,
+      capabilities: meshWorkspace?.mesh_capabilities ?? null,
     };
 
     return (

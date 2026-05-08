@@ -3,16 +3,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use serde::Deserialize;
 
 use crate::error::ApiError;
+use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
+use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::domain::*;
 use crate::types::AppState;
+
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct DomainSliceMeshOverlayQuery {
+    pub plane: SlicePlane,
+    pub cut_world: Option<f64>,
+    pub cut_norm: Option<f64>,
+}
 
 #[utoipa::path(
     get,
@@ -160,4 +171,105 @@ pub async fn get_domain_topology(
         }
         None => Ok(StatusCode::NO_CONTENT.into_response()),
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/domain/slice/mesh-overlay",
+    params(DomainSliceMeshOverlayQuery),
+    responses(
+        (status = 200, description = "Exact FEM 2D mesh overlay in slice coordinates", body = DomainSliceMeshOverlay),
+        (status = 304, description = "Mesh overlay not modified for the supplied ETag"),
+        (status = 204, description = "Not applicable (FDM)"),
+        (status = 404, description = "No active workspace"),
+        (status = 409, description = "FEM topology unavailable for slice overlay"),
+    ),
+    tag = "data"
+)]
+pub async fn get_domain_slice_mesh_overlay(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DomainSliceMeshOverlayQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    let resolved = resolve_slice_query(
+        &FieldSliceQuery {
+            plane: query.plane,
+            component: None,
+            cut_world: query.cut_world,
+            cut_norm: query.cut_norm,
+            x_size: None,
+            y_size: None,
+            max_points: None,
+            include_arrows: None,
+            arrow_every: None,
+            max_arrows: None,
+        },
+        1,
+    )?;
+    let overlay = collect_fem_slice_overlay(
+        FemSliceOverlayInput {
+            nodes: &mesh.nodes,
+            elements: &mesh.elements,
+            element_markers: &mesh.element_markers,
+        },
+        &resolved,
+    )?;
+    let domain_generation_id = mesh
+        .generation_id
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "domain-slice-mesh-overlay:{domain_generation_id}:{}:{}:{:.17e}:{:.17e}:v1",
+        snapshot.mesh_revision,
+        overlay.plane.as_str(),
+        overlay.cut_norm,
+        overlay.cut_world,
+    ));
+    let segment_count = overlay.segments.len();
+    let body = DomainSliceMeshOverlay {
+        schema: "fullmag.domain_2d.mesh_overlay.v1".to_string(),
+        plane: overlay.plane,
+        cut_kind: if query.cut_world.is_some() {
+            "world".to_string()
+        } else {
+            "normalized".to_string()
+        },
+        cut_world: overlay.cut_world,
+        cut_norm: overlay.cut_norm,
+        u_axis: overlay.u_axis.to_string(),
+        v_axis: overlay.v_axis.to_string(),
+        normal_axis: overlay.normal_axis.to_string(),
+        bounds: Bounds2 {
+            u_min: overlay.bounds.u_min,
+            u_max: overlay.bounds.u_max,
+            v_min: overlay.bounds.v_min,
+            v_max: overlay.bounds.v_max,
+        },
+        segments: overlay
+            .segments
+            .into_iter()
+            .map(|segment| DomainSliceMeshOverlaySegment {
+                a: segment.a,
+                b: segment.b,
+            })
+            .collect(),
+        truncated: false,
+        segment_count,
+        point_count: 0,
+        topology_revision: snapshot.mesh_revision,
+        domain_generation_id,
+        etag: etag.clone(),
+    };
+
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

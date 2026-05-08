@@ -189,3 +189,65 @@ describe("field slice request lifecycle", () => {
     expect(client.fields.getSliceArrowsResponse).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("inactive field-2d state", () => {
+  it("keeps the last good frame when the renderer temporarily loses request support", () => {
+    const previous = {
+      meta: META,
+      scalar: {
+        values: new Float64Array([1, 2, 3, 4]),
+        xPixels: 2,
+        yPixels: 2,
+        min: 1,
+        max: 4,
+        etag: "\"scalar\"",
+      },
+      arrows: null,
+    };
+
+    expect(
+      __fieldSliceDecodeInternals.resolveInactiveField2DState({
+        previous,
+        quantityId: "m",
+        fieldRevision: 11,
+        request: null,
+        unsupportedReason: "Slab mode is not implemented E2E yet",
+      }),
+    ).toMatchObject({
+      meta: META,
+      scalar: previous.scalar,
+      arrows: null,
+      stateKind: "unsupported",
+      unsupportedReason: "Slab mode is not implemented E2E yet",
+    });
+  });
+
+  it("clears stale data only when the quantity context really disappears", () => {
+    expect(
+      __fieldSliceDecodeInternals.resolveInactiveField2DState({
+        previous: {
+          meta: META,
+          scalar: {
+            values: new Float64Array([1, 2, 3, 4]),
+            xPixels: 2,
+            yPixels: 2,
+            min: 1,
+            max: 4,
+            etag: "\"scalar\"",
+          },
+          arrows: null,
+        },
+        quantityId: null,
+        fieldRevision: null,
+        request: null,
+        unsupportedReason: "ignored",
+      }),
+    ).toMatchObject({
+      meta: null,
+      scalar: null,
+      arrows: null,
+      stateKind: "empty",
+      unsupportedReason: null,
+    });
+  });
+});

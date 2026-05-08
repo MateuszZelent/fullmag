@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from fullmag.model.geometry import (
+    ArchWaveguide,
     Box,
     Cylinder,
     Difference,
@@ -210,6 +211,11 @@ def _geometry_to_trimesh(
     geometry: Geometry,
     trimesh: Any,
     cylinder_sections: int = 48,
+    *,
+    through_thickness_elements: int | None = None,
+    through_thickness_distribution: str | None = None,
+    through_thickness_element_ratio: float | None = None,
+    through_thickness_symmetric: bool = False,
 ) -> Any:
     """Convert a geometry primitive to a trimesh Trimesh object."""
     if isinstance(geometry, ImportedGeometry):
@@ -242,24 +248,279 @@ def _geometry_to_trimesh(
         mesh.vertices[:, 1] *= geometry.ry
         mesh.vertices[:, 2] *= geometry.height
         return mesh
+    if isinstance(geometry, ArchWaveguide):
+        return _arch_waveguide_to_trimesh(
+            geometry,
+            trimesh,
+            sections=cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
     if isinstance(geometry, Difference):
-        base = _geometry_to_trimesh(geometry.base, trimesh, cylinder_sections)
-        tool = _geometry_to_trimesh(geometry.tool, trimesh, cylinder_sections)
+        base = _geometry_to_trimesh(
+            geometry.base,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
+        tool = _geometry_to_trimesh(
+            geometry.tool,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
         return base.difference(tool)
     if isinstance(geometry, Union):
-        a = _geometry_to_trimesh(geometry.a, trimesh, cylinder_sections)
-        b = _geometry_to_trimesh(geometry.b, trimesh, cylinder_sections)
+        a = _geometry_to_trimesh(
+            geometry.a,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
+        b = _geometry_to_trimesh(
+            geometry.b,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
         return a.union(b)
     if isinstance(geometry, Intersection):
-        a = _geometry_to_trimesh(geometry.a, trimesh, cylinder_sections)
-        b = _geometry_to_trimesh(geometry.b, trimesh, cylinder_sections)
+        a = _geometry_to_trimesh(
+            geometry.a,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
+        b = _geometry_to_trimesh(
+            geometry.b,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
         return a.intersection(b)
     if isinstance(geometry, Translate):
-        mesh = _geometry_to_trimesh(geometry.geometry, trimesh, cylinder_sections)
+        mesh = _geometry_to_trimesh(
+            geometry.geometry,
+            trimesh,
+            cylinder_sections,
+            through_thickness_elements=through_thickness_elements,
+            through_thickness_distribution=through_thickness_distribution,
+            through_thickness_element_ratio=through_thickness_element_ratio,
+            through_thickness_symmetric=through_thickness_symmetric,
+        )
         mesh = mesh.copy()
         mesh.apply_translation(geometry.offset)
         return mesh
     raise TypeError(f"unsupported geometry for trimesh conversion: {type(geometry)!r}")
+
+
+def _arch_waveguide_to_trimesh(
+    geometry: ArchWaveguide,
+    trimesh: Any,
+    *,
+    sections: int,
+    through_thickness_elements: int | None = None,
+    through_thickness_distribution: str | None = None,
+    through_thickness_element_ratio: float | None = None,
+    through_thickness_symmetric: bool = False,
+) -> Any:
+    n_sections = max(3, int(sections))
+    n_layers = max(1, int(through_thickness_elements or 1))
+    scale = max(
+        geometry.length,
+        geometry.width,
+        geometry.height,
+        abs(geometry.arch_height),
+        abs(geometry.z0) + geometry.height,
+    )
+    length = geometry.length / scale
+    width = geometry.width / scale
+    height = geometry.height / scale
+    arch_height = geometry.arch_height / scale
+    z0 = geometry.z0 / scale
+    half_l = length * 0.5
+    half_w = width * 0.5
+    half_h = height * 0.5
+    layer_fractions = _through_thickness_layer_fractions(
+        n_layers,
+        distribution=through_thickness_distribution,
+        element_ratio=through_thickness_element_ratio,
+        symmetric=through_thickness_symmetric,
+    )
+
+    def vid(section_index: int, layer_index: int, side_index: int) -> int:
+        return section_index * (n_layers + 1) * 2 + layer_index * 2 + side_index
+
+    vertices: list[tuple[float, float, float]] = []
+    for index in range(n_sections):
+        t = index / (n_sections - 1)
+        x = -half_l + t * length
+        z_center = z0 + arch_height * np.sin(np.pi * t)
+        for fraction in layer_fractions:
+            z = z_center - half_h + height * fraction
+            vertices.append((x, -half_w, z))
+            vertices.append((x, half_w, z))
+
+    faces: list[tuple[int, int, int]] = []
+    for index in range(n_sections - 1):
+        a0 = vid(index, 0, 0)
+        a1 = vid(index, 0, 1)
+        b0 = vid(index + 1, 0, 0)
+        b1 = vid(index + 1, 0, 1)
+        faces.extend(
+            [
+                (a0, a1, b1),
+                (a0, b1, b0),
+            ]
+        )
+        for layer_index in range(n_layers):
+            a_low_y_plus = vid(index, layer_index, 1)
+            a_high_y_plus = vid(index, layer_index + 1, 1)
+            b_low_y_plus = vid(index + 1, layer_index, 1)
+            b_high_y_plus = vid(index + 1, layer_index + 1, 1)
+            faces.extend(
+                [
+                    (a_low_y_plus, a_high_y_plus, b_high_y_plus),
+                    (a_low_y_plus, b_high_y_plus, b_low_y_plus),
+                ]
+            )
+
+            a_low_y_minus = vid(index, layer_index, 0)
+            a_high_y_minus = vid(index, layer_index + 1, 0)
+            b_low_y_minus = vid(index + 1, layer_index, 0)
+            b_high_y_minus = vid(index + 1, layer_index + 1, 0)
+            faces.extend(
+                [
+                    (a_high_y_minus, a_low_y_minus, b_low_y_minus),
+                    (a_high_y_minus, b_low_y_minus, b_high_y_minus),
+                ]
+            )
+
+        top = n_layers
+        a_top_y_plus = vid(index, top, 1)
+        a_top_y_minus = vid(index, top, 0)
+        b_top_y_plus = vid(index + 1, top, 1)
+        b_top_y_minus = vid(index + 1, top, 0)
+        faces.extend(
+            [
+                (a_top_y_plus, a_top_y_minus, b_top_y_minus),
+                (a_top_y_plus, b_top_y_minus, b_top_y_plus),
+            ]
+        )
+
+    last_section = n_sections - 1
+    for layer_index in range(n_layers):
+        first_low_y_minus = vid(0, layer_index, 0)
+        first_low_y_plus = vid(0, layer_index, 1)
+        first_high_y_minus = vid(0, layer_index + 1, 0)
+        first_high_y_plus = vid(0, layer_index + 1, 1)
+        faces.extend(
+            [
+                (first_low_y_minus, first_high_y_plus, first_low_y_plus),
+                (first_low_y_minus, first_high_y_minus, first_high_y_plus),
+            ]
+        )
+
+        last_low_y_minus = vid(last_section, layer_index, 0)
+        last_low_y_plus = vid(last_section, layer_index, 1)
+        last_high_y_minus = vid(last_section, layer_index + 1, 0)
+        last_high_y_plus = vid(last_section, layer_index + 1, 1)
+        faces.extend(
+            [
+                (last_low_y_minus, last_low_y_plus, last_high_y_plus),
+                (last_low_y_minus, last_high_y_plus, last_high_y_minus),
+            ]
+        )
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=True,
+    )
+    mesh.vertices *= scale
+    return mesh
+
+
+def _through_thickness_layer_fractions(
+    n_layers: int,
+    *,
+    distribution: str | None,
+    element_ratio: float | None,
+    symmetric: bool,
+) -> list[float]:
+    if n_layers <= 1:
+        return [0.0, 1.0]
+    ratio = float(element_ratio) if element_ratio is not None else 1.0
+    if distribution not in {"linear", "exponential"} or ratio == 1.0:
+        heights = [1.0 / n_layers] * n_layers
+    elif symmetric:
+        half = n_layers // 2
+        middle = n_layers - 2 * half
+        half_heights = _through_thickness_layer_heights(
+            half,
+            distribution=distribution,
+            element_ratio=ratio,
+        )
+        heights = half_heights + ([1.0] if middle else []) + list(reversed(half_heights))
+        total = sum(heights)
+        heights = [height / total for height in heights]
+    else:
+        heights = _through_thickness_layer_heights(
+            n_layers,
+            distribution=distribution,
+            element_ratio=ratio,
+        )
+
+    fractions = [0.0]
+    acc = 0.0
+    for height in heights:
+        acc += height
+        fractions.append(acc)
+    fractions[-1] = 1.0
+    return fractions
+
+
+def _through_thickness_layer_heights(
+    n_layers: int,
+    *,
+    distribution: str,
+    element_ratio: float,
+) -> list[float]:
+    if n_layers <= 0:
+        return []
+    if n_layers == 1:
+        return [1.0]
+    if distribution == "linear":
+        raw = [
+            1.0 + (element_ratio - 1.0) * index / (n_layers - 1)
+            for index in range(n_layers)
+        ]
+    elif distribution == "exponential":
+        raw = [element_ratio**index for index in range(n_layers)]
+    else:
+        raw = [1.0] * n_layers
+    total = sum(raw)
+    return [value / total for value in raw]
 
 
 def _imported_geometry_to_trimesh(geometry: ImportedGeometry, trimesh: Any) -> Any:

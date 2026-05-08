@@ -271,15 +271,19 @@ export function ViewportTabContent({
         shouldUseSliceApi2D={bridge.shouldUseSliceApi2D}
         hasSliceScalar={bridge.hasSliceScalar}
         sliceLoading={bridge.slice2D.loading}
-        sliceErrorMessage={bridge.slice2D.error?.message ?? null}
+        sliceStateKind={bridge.slice2D.stateKind}
+        sliceErrorMessage={bridge.slice2D.error?.message ?? bridge.slice2D.unsupportedReason ?? null}
         sliceMeta={bridge.slice2D.meta}
         sliceArrows={bridge.slice2D.arrows}
+        runtimeResourceRevisions={bridge.runtimeResourceRevisions}
         grid={ctx.previewGrid}
         vectors={bridge.scaledVectors}
         sliceScalarValues={bridge.scaledSliceScalar}
         sliceScalarShape={bridge.sliceScalarShape}
         quantityLabel={bridge.resolvedSliceQuantityLabel}
         quantityId={bridge.sliceQuantityId}
+        quantityUnit={ctx.quantityDescriptor?.unit ?? null}
+        quantityComponentCount={ctx.quantityDescriptor?.n_comp ?? null}
         component={bridge.sliceComponent}
         plane={ctx.plane}
         sliceIndex={ctx.sliceIndex}
@@ -305,6 +309,8 @@ export function ViewportTabContent({
         antennaOverlays={ctx.antennaOverlays}
         selectedAntennaId={bridge.selectedAntennaName}
         showArrows={bridge.femShowArrowsForRender}
+        vectorColorMode={vectorViz.colorMode}
+        vectorMonoColor={vectorViz.monoColor}
         previewMaxPoints={ctx.requestedPreviewMaxPoints}
         onQuantityChange={ctx.requestDisplayQuantity}
         onComponentChange={bridge.handleFemSliceComponentChange}
@@ -375,6 +381,7 @@ export function ViewportTabContent({
                 : femAirboxPassesForViewport
             }
             opacity={bridge.femOpacityForRender}
+            trim={viz.meshTrim}
             clipEnabled={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                 ? false
@@ -507,6 +514,7 @@ export function ViewportTabContent({
                   : femAirboxPassesForViewport
               }
               opacity={bridge.femOpacityForRender}
+              trim={viz.meshTrim}
               clipEnabled={
                 FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                   ? false
@@ -640,6 +648,7 @@ export function ViewportTabContent({
                 : viz.meshRenderMode
             }
             opacity={1}
+            trim={viz.meshTrim}
             clipEnabled={
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.forceDisableClip
                 ? false
@@ -734,6 +743,7 @@ export function ViewportTabContent({
         quantityLabel={ctx.quantityDescriptor?.label ?? bridge.scaledSpatialPreview.quantity}
         quantityUnit={bridge.scaledSpatialPreview.unit}
         component={bridge.scaledSpatialPreview.component}
+        quantityComponentCount={bridge.scaledSpatialPreview.n_comp}
         min={bridge.scaledSpatialPreview.min}
         max={bridge.scaledSpatialPreview.max}
         axisExtent={

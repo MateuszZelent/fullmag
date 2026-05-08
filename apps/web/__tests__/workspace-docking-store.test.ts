@@ -156,11 +156,11 @@ describe("workspace docking store", () => {
     expect(Object.keys(getDefaultDockingLayoutByPreset())).toEqual(["build", "study"]);
   });
 
-  it("keeps core viewport tabs active-only", () => {
+  it("keeps core viewport tabs persistent", () => {
     const defaults = getDefaultWorkspaceTabsByStage();
     const studyTabs = defaults.study;
-    expect(studyTabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("active-only");
-    expect(studyTabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("active-only");
+    expect(studyTabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("hidden-mounted");
+    expect(studyTabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("hidden-mounted");
     expect(studyTabs.some((tab) => tab.id === "core:mesh")).toBe(false);
     expect(studyTabs.find((tab) => tab.id === "core:charts")?.mountPolicy).toBe("active-only");
   });
@@ -210,8 +210,8 @@ describe("workspace docking store", () => {
     const tabs = useWorkspaceStore.getState().workspaceTabsByStage.study;
     expect(tabs.find((tab) => tab.id === hiddenMountedId)?.mountPolicy).toBe("hidden-mounted");
     expect(tabs.find((tab) => tab.id === coldId)?.mountPolicy).toBe("active-only");
-    expect(tabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("active-only");
-    expect(tabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("active-only");
+    expect(tabs.find((tab) => tab.id === "core:3d")?.mountPolicy).toBe("hidden-mounted");
+    expect(tabs.find((tab) => tab.id === "core:2d")?.mountPolicy).toBe("hidden-mounted");
   });
 
   it("normalizes legacy WebGL warm lifecycle inputs to active-only", () => {

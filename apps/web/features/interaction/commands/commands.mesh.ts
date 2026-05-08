@@ -8,6 +8,17 @@
 import type { CommandDefinition } from "./commandRegistry";
 import { registerCommand } from "./commandRegistry";
 
+function dispatchShellCommand(commandId: string): void {
+  if (typeof window === "undefined") {
+    throw new Error(`mesh command '${commandId}' requires the browser shell`);
+  }
+  window.dispatchEvent(
+    new CustomEvent("fullmag:shell-command", {
+      detail: { commandId },
+    }),
+  );
+}
+
 // ── mesh.build.selected ───────────────────────────────────────
 
 const meshBuildSelected: CommandDefinition = {
@@ -22,8 +33,8 @@ const meshBuildSelected: CommandDefinition = {
     enabled: ctx.dirtyGraph.mesh.status !== "building",
     reason: ctx.dirtyGraph.mesh.status === "building" ? "Mesh build in progress" : undefined,
   }),
-  execute: async () => {
-    // Triggers mesh build for selected scope
+  execute: () => {
+    dispatchShellCommand("mesh.build-selected");
   },
 };
 
@@ -49,8 +60,8 @@ const meshBuildAll: CommandDefinition = {
           : undefined,
     badge: ctx.dirtyGraph.mesh.status === "stale" ? "STALE" : undefined,
   }),
-  execute: async () => {
-    // Triggers final shared domain mesh build
+  execute: () => {
+    dispatchShellCommand("mesh.build-all");
   },
 };
 
@@ -66,8 +77,8 @@ const meshShowStaleGhost: CommandDefinition = {
   getState: () => ({
     enabled: true,
   }),
-  execute: async () => {
-    // Toggles stale mesh ghost overlay
+  execute: () => {
+    dispatchShellCommand("mesh.show-stale-ghost.toggle");
   },
 };
 
@@ -95,8 +106,8 @@ const fieldRealizeInitialState: CommandDefinition = {
             : undefined,
     badge: ctx.dirtyGraph.initialState.status === "stale" ? "STALE" : undefined,
   }),
-  execute: async () => {
-    // Triggers initial state realization
+  execute: () => {
+    dispatchShellCommand("field.realizeInitialState");
   },
 };
 

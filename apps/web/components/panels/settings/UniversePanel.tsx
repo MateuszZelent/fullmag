@@ -556,6 +556,7 @@ export default function UniversePanel() {
                   disabled={ctx.meshGenerating}
                   nodeCount={meshSummary?.node_count ?? ctx.effectiveFemMesh?.nodes.length}
                   showAdaptiveSection={false}
+                  capabilities={ctx.meshWorkspace?.mesh_capabilities ?? null}
                 />
               </div>
             </div>

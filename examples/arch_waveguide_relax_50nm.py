@@ -40,14 +40,14 @@ study.interactive(True)
 study.wait_for_solve(True)
 study.universe(
     mode="auto",
-    size=(3.0e-6, 1.2e-6, 2.5e-7),
+    size=(4.0e-6, 2.2e-6, 5.5e-7),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    maximum_element_size=100e-9,
-    minimum_element_size=50e-9,
-    growth_rate=1.25,
+    maximum_element_size=200e-9,
+    minimum_element_size=20e-9,
+    maximum_element_growth_rate=2.5,
     grading="geometric",
 )
 
@@ -70,23 +70,25 @@ waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
 waveguide.m = fm.texture.uniform(0.0, 0.0, 1.0)
 waveguide.mesh(
-    maximum_element_size=50e-9,
-    minimum_element_size=25e-9,
+    maximum_element_size=6e-9,
+    minimum_element_size=1.8e-9,
+    transition_distance=80e-9,
+    mesh_strategy="swept_prism",
+    through_thickness_elements=1,
+    through_thickness_distribution="fixed",
+    sweep_face_meshing="triangular",
     order=1,
     algorithm_2d=6,
     algorithm_3d=1,
-    size_from_curvature=24,
-    smoothing_steps=5,
+    size_from_curvature=16,
+    smoothing_steps=8,
     optimize="Netgen",
-    optimize_iterations=5,
-    curvature_factor=0.6,
-    maximum_element_growth_rate=1.2,
-    narrow_regions=4,
+    optimize_iterations=8,
+    curvature_factor=0.35,
+    maximum_element_growth_rate=1.22,
+    narrow_regions=2,
     narrow_region_resolution=1.0,
-    interface_hmax=20e-9,
-    interface_thickness=6e-9,
-    transition_distance=60e-9,
-    transition_growth=1.25,
+    transition_growth=1.18,
     compute_quality=True,
     per_element_quality=True,
 )

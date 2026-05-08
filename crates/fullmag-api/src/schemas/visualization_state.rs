@@ -23,7 +23,9 @@ pub struct VisualizationStateResource {
     pub fem: FemVisualizationState,
     /// 2-D slice toolbar and overlay controls.
     pub slice: SliceVisualizationState,
-    /// Shared clip-plane controls for topology-aware viewports.
+    /// Canonical 3-D trim controls for topology-aware viewports.
+    pub trim: TrimVisualizationState,
+    /// Compatibility projection of the legacy single clip plane.
     pub clip: ClipVisualizationState,
     /// Vector glyph style independent from vector visibility and sampling.
     pub vector_style: VectorStyleVisualizationState,
@@ -103,6 +105,8 @@ pub struct VisualizationStatePatch {
     pub fem: Option<FemVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slice: Option<SliceVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trim: Option<TrimVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<ClipVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -427,6 +431,54 @@ pub enum SliceAirboxRenderMode {
     #[serde(rename = "surface+edges")]
     SurfaceEdges,
     Points,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct TrimVisualizationState {
+    pub enabled: bool,
+    pub axes: TrimAxisVisualizationAxes,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TrimVisualizationPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axes: Option<TrimAxisVisualizationAxesPatch>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct TrimAxisVisualizationAxes {
+    pub x: TrimAxisVisualizationState,
+    pub y: TrimAxisVisualizationState,
+    pub z: TrimAxisVisualizationState,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TrimAxisVisualizationAxesPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<TrimAxisVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<TrimAxisVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<TrimAxisVisualizationPatch>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct TrimAxisVisualizationState {
+    pub enabled: bool,
+    pub min_percent: f64,
+    pub max_percent: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TrimAxisVisualizationPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_percent: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

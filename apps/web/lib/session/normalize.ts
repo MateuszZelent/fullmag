@@ -980,6 +980,10 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
       interface_thickness: String(raw.mesh?.interface_thickness ?? ""),
       transition_distance: String(raw.mesh?.transition_distance ?? ""),
       transition_growth: String(raw.mesh?.transition_growth ?? ""),
+      edge_hmax: String(raw.mesh?.edge_hmax ?? ""),
+      edge_thickness: String(raw.mesh?.edge_thickness ?? ""),
+      corner_hmax: String(raw.mesh?.corner_hmax ?? ""),
+      corner_extent: String(raw.mesh?.corner_extent ?? ""),
       adaptive_enabled: Boolean(raw.mesh?.adaptive_enabled),
       adaptive_policy: String(raw.mesh?.adaptive_policy ?? "auto"),
       adaptive_indicator: String(raw.mesh?.adaptive_indicator ?? "geometric_only"),
@@ -1168,6 +1172,10 @@ function normalizeScriptBuilder(raw: any): ScriptBuilderState | null {
             interface_thickness: typeof geo.mesh.interface_thickness === "string" ? geo.mesh.interface_thickness : null,
             transition_distance: typeof geo.mesh.transition_distance === "string" ? geo.mesh.transition_distance : null,
             transition_growth: geo.mesh.transition_growth != null ? Number(geo.mesh.transition_growth) : null,
+            edge_hmax: typeof geo.mesh.edge_hmax === "string" ? geo.mesh.edge_hmax : null,
+            edge_thickness: typeof geo.mesh.edge_thickness === "string" ? geo.mesh.edge_thickness : null,
+            corner_hmax: typeof geo.mesh.corner_hmax === "string" ? geo.mesh.corner_hmax : null,
+            corner_extent: typeof geo.mesh.corner_extent === "string" ? geo.mesh.corner_extent : null,
             boundary_layer_count: geo.mesh.boundary_layer_count != null ? Number(geo.mesh.boundary_layer_count) : null,
             boundary_layer_thickness: typeof geo.mesh.boundary_layer_thickness === "string" ? geo.mesh.boundary_layer_thickness : null,
             boundary_layer_stretching: geo.mesh.boundary_layer_stretching != null ? Number(geo.mesh.boundary_layer_stretching) : null,
@@ -1915,6 +1923,13 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
             supports_adaptive_remesh: Boolean(raw.mesh_capabilities.supports_adaptive_remesh),
             supports_compare_snapshots: Boolean(raw.mesh_capabilities.supports_compare_snapshots),
             supports_size_field_remesh: Boolean(raw.mesh_capabilities.supports_size_field_remesh),
+            supports_selected_surface_size_fields: Boolean(raw.mesh_capabilities.supports_selected_surface_size_fields),
+            supports_boundary_layers: Boolean(raw.mesh_capabilities.supports_boundary_layers),
+            supports_mesh_convergence_workflow: Boolean(raw.mesh_capabilities.supports_mesh_convergence_workflow),
+            boundary_layer_status:
+              typeof raw.mesh_capabilities.boundary_layer_status === "string"
+                ? raw.mesh_capabilities.boundary_layer_status
+                : null,
             supports_mesh_error_preview: Boolean(raw.mesh_capabilities.supports_mesh_error_preview),
             supports_target_h_preview: Boolean(raw.mesh_capabilities.supports_target_h_preview),
           }
@@ -1991,6 +2006,14 @@ export function normalizeMeshWorkspace(raw: any): MeshWorkspaceState | null {
                     target.interface_hmax != null ? Number(target.interface_hmax) : null,
                   transition_distance:
                     target.transition_distance != null ? Number(target.transition_distance) : null,
+                  edge_hmax:
+                    target.edge_hmax != null ? Number(target.edge_hmax) : null,
+                  edge_thickness:
+                    target.edge_thickness != null ? Number(target.edge_thickness) : null,
+                  corner_hmax:
+                    target.corner_hmax != null ? Number(target.corner_hmax) : null,
+                  corner_extent:
+                    target.corner_extent != null ? Number(target.corner_extent) : null,
                   source:
                     typeof target.source === "string" ? target.source : null,
                 },

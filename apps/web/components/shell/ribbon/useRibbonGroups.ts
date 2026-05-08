@@ -110,6 +110,7 @@ function buildContext(
     selectedObjectTextureVisible: props.selectedObjectTextureVisible ?? null,
     selectedObjectOpacity: props.selectedObjectOpacity ?? null,
     selectedObjectRenderMode: props.selectedObjectRenderMode ?? null,
+    meshTrim: props.meshTrim ?? null,
     meshClipEnabled: vizStore.meshClipEnabled,
     meshClipAxis: vizStore.meshClipAxis,
     meshClipPos: vizStore.meshClipPos,

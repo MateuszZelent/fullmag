@@ -18,6 +18,7 @@ import { useBatchedInvalidate } from "./useBatchedInvalidate";
 import { useFemVertexColorResource } from "./useFemVertexColorResource";
 import { useFemGeometryMaterials } from "./useFemGeometryMaterials";
 import { useFemGeometryDisposalAudit } from "./useFemGeometryDisposalAudit";
+import type { UnifiedTrimState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 
 interface FemGeometryProps {
   meshData: FemMeshData;
@@ -36,6 +37,7 @@ interface FemGeometryProps {
   qualityPerFace?: number[] | null;
   sharedBaseVertexColors?: Float32Array | null;
   shrinkFactor?: number;
+  trim?: UnifiedTrimState | null;
   clipEnabled?: boolean;
   clipAxis?: "x" | "y" | "z";
   clipPos?: number;
@@ -115,6 +117,85 @@ export function resolveFemClipPlane({
   return new THREE.Plane(normal, planePosition);
 }
 
+function resolveFemTrimPlaneForBoundary(args: {
+  axis: "x" | "y" | "z";
+  boundary: "min" | "max";
+  percent: number;
+  size: THREE.Vector3;
+}): THREE.Plane | null {
+  const axisSize = args.axis === "y" ? args.size.y : args.axis === "z" ? args.size.z : args.size.x;
+  if (!Number.isFinite(axisSize) || axisSize <= 0) {
+    return null;
+  }
+  const resolvedPercent = Math.max(0, Math.min(100, args.percent));
+  const planePosition = ((resolvedPercent / 100) - 0.5) * axisSize;
+  if (args.boundary === "min") {
+    const normal =
+      args.axis === "y"
+        ? new THREE.Vector3(0, 1, 0)
+        : args.axis === "z"
+          ? new THREE.Vector3(0, 0, 1)
+          : new THREE.Vector3(1, 0, 0);
+    return new THREE.Plane(normal, -planePosition);
+  }
+  const normal =
+    args.axis === "y"
+      ? new THREE.Vector3(0, -1, 0)
+      : args.axis === "z"
+        ? new THREE.Vector3(0, 0, -1)
+        : new THREE.Vector3(-1, 0, 0);
+  return new THREE.Plane(normal, planePosition);
+}
+
+export function resolveFemTrimPlanes(args: {
+  trim?: UnifiedTrimState | null;
+  clipEnabled?: boolean;
+  clipAxis?: "x" | "y" | "z";
+  clipPos?: number;
+  size: THREE.Vector3;
+}): THREE.Plane[] | null {
+  if (args.trim?.enabled) {
+    const planes: THREE.Plane[] = [];
+    for (const axis of ["x", "y", "z"] as const) {
+      const axisTrim = args.trim.axes[axis];
+      if (!axisTrim.enabled) {
+        continue;
+      }
+      if (axisTrim.minPercent > 0) {
+        const plane = resolveFemTrimPlaneForBoundary({
+          axis,
+          boundary: "min",
+          percent: axisTrim.minPercent,
+          size: args.size,
+        });
+        if (plane) {
+          planes.push(plane);
+        }
+      }
+      if (axisTrim.maxPercent < 100) {
+        const plane = resolveFemTrimPlaneForBoundary({
+          axis,
+          boundary: "max",
+          percent: axisTrim.maxPercent,
+          size: args.size,
+        });
+        if (plane) {
+          planes.push(plane);
+        }
+      }
+    }
+    return planes.length > 0 ? planes : null;
+  }
+
+  const plane = resolveFemClipPlane({
+    enabled: args.clipEnabled,
+    axis: args.clipAxis,
+    clipPos: args.clipPos,
+    size: args.size,
+  });
+  return plane ? [plane] : null;
+}
+
 /* ── Helper: compute vertex colors from field data ─────────────────── */
 export const FemGeometry = memo(function FemGeometry({
   meshData,
@@ -133,6 +214,7 @@ export const FemGeometry = memo(function FemGeometry({
   qualityPerFace,
   sharedBaseVertexColors = null,
   shrinkFactor,
+  trim,
   clipEnabled,
   clipAxis,
   clipPos,
@@ -552,15 +634,17 @@ export const FemGeometry = memo(function FemGeometry({
     recordViewportLifecycleEventForLabel(viewportTelemetryLabel, "topology_rebuild");
   }, [geometry, viewportTelemetryLabel]);
 
-  const clippingPlanes = useMemo(() => {
-    const plane = resolveFemClipPlane({
-      enabled: clipEnabled,
-      axis: clipAxis,
-      clipPos,
-      size: geoSize,
-    });
-    return plane ? [plane] : null;
-  }, [clipAxis, clipEnabled, clipPos, geoSize.x, geoSize.y, geoSize.z]);
+  const clippingPlanes = useMemo(
+    () =>
+      resolveFemTrimPlanes({
+        trim,
+        clipEnabled,
+        clipAxis,
+        clipPos,
+        size: geoSize,
+      }),
+    [clipAxis, clipEnabled, clipPos, geoSize.x, geoSize.y, geoSize.z, trim],
+  );
 
   const geometryResourceNeeds = resolveFemGeometryResourceNeeds({
     renderMode,

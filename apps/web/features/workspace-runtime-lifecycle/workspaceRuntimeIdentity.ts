@@ -32,7 +32,7 @@ export function resolveWorkspaceRuntimeIdentity(
   const sourceHash = identityToken(input.sourceHash, "no-source-hash");
   const runId = identityToken(input.runId, "no-run");
   return {
-    documentIdentity: `${sessionId}:${scriptPath}:${sourceHash}`,
+    documentIdentity: `${scriptPath}:${sourceHash}`,
     runtimeIdentity: sessionId,
     runIdentity: `${sessionId}:${runId}`,
   };

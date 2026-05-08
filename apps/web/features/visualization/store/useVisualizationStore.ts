@@ -22,10 +22,14 @@ import { create } from "zustand";
 import type { SetStateAction } from "react";
 import type { RenderMode } from "@/components/preview/FemMeshView3D";
 import type {
+  ResolvedTrimState,
   ResolvedRenderPlan,
   ViewportVisualizationState,
 } from "@/components/runs/control-room/visualizationStateSync";
-import { projectResolvedRenderPlanToViewportState } from "@/components/runs/control-room/visualizationStateSync";
+import {
+  defaultResolvedTrimState,
+  projectResolvedRenderPlanToViewportState,
+} from "@/components/runs/control-room/visualizationStateSync";
 import type { ClipAxis } from "@/components/preview/fem/femMeshTypes";
 import type {
   FemViewportLayerState,
@@ -62,6 +66,7 @@ import {
 export interface ViewportVizCore {
   meshRenderMode: RenderMode;
   meshOpacity: number;
+  meshTrim: ResolvedTrimState;
   meshClipEnabled: boolean;
   meshClipAxis: ClipAxis;
   meshClipPos: number;
@@ -138,6 +143,7 @@ export interface VisualizationStoreState extends ViewportVizCore {
 export const DEFAULT_CORE: ViewportVizCore = {
   meshRenderMode: "surface",
   meshOpacity: 100,
+  meshTrim: defaultResolvedTrimState(),
   meshClipEnabled: false,
   meshClipAxis: "x",
   meshClipPos: 50,

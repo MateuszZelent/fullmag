@@ -4,6 +4,7 @@ import type { VisualizationStateResource } from "@/src/api/types";
 import { DEFAULT_FEM_VIEWPORT_LAYER_STATE } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import {
   airboxPassesFromVisualizationState,
+  defaultResolvedTrimState,
   femLayersFromVisualizationState,
   femVectorDomainFromVisualizationState,
   opacityUnitToPercent,
@@ -16,6 +17,7 @@ import {
   visualizationPatchForFemLayers,
   visualizationPatchForOpacity,
   visualizationPatchForRenderMode,
+  visualizationPatchForTrim,
   visualizationPatchForVectorStyle,
 } from "../visualizationStateSync";
 
@@ -24,7 +26,7 @@ function state(
 ): VisualizationStateResource {
   return {
     revision: 1,
-    schema_version: 2,
+    schema_version: 3,
     quantity: {
       active_quantity_id: "m",
       field_component: "magnitude",
@@ -89,6 +91,14 @@ function state(
       show_quantity: true,
       show_vectors: false,
       render_mode: "heatmap",
+    },
+    trim: {
+      enabled: false,
+      axes: {
+        x: { enabled: false, min_percent: 0, max_percent: 100 },
+        y: { enabled: false, min_percent: 0, max_percent: 100 },
+        z: { enabled: false, min_percent: 0, max_percent: 100 },
+      },
     },
     clip: {
       enabled: false,
@@ -351,6 +361,7 @@ describe("visualization state local sync", () => {
     const fallback = {
       meshRenderMode: "surface" as const,
       meshOpacity: 100,
+      meshTrim: defaultResolvedTrimState(),
       meshClipEnabled: false,
       meshClipAxis: "x" as const,
       meshClipPos: 50,
@@ -386,6 +397,14 @@ describe("visualization state local sync", () => {
           ...baseState.sampling,
           max_glyphs: 3456,
         },
+        trim: {
+          enabled: true,
+          axes: {
+            x: { enabled: true, min_percent: 10, max_percent: 80 },
+            y: { enabled: false, min_percent: 0, max_percent: 100 },
+            z: { enabled: true, min_percent: 0, max_percent: 55 },
+          },
+        },
         clip: {
           enabled: true,
           axis: "z",
@@ -407,6 +426,14 @@ describe("visualization state local sync", () => {
     expect(projectResolvedRenderPlanToViewportState(plan, fallback)).toMatchObject({
       meshRenderMode: "surface+edges",
       meshOpacity: 42,
+      meshTrim: {
+        enabled: true,
+        axes: {
+          x: { enabled: true, minPercent: 10, maxPercent: 80 },
+          y: { enabled: false, minPercent: 0, maxPercent: 100 },
+          z: { enabled: true, minPercent: 0, maxPercent: 55 },
+        },
+      },
       meshClipEnabled: true,
       meshClipAxis: "z",
       meshClipPos: 72,
@@ -429,6 +456,7 @@ describe("visualization state local sync", () => {
     const fallback = {
       meshRenderMode: "points" as const,
       meshOpacity: 12,
+      meshTrim: defaultResolvedTrimState(),
       meshClipEnabled: true,
       meshClipAxis: "y" as const,
       meshClipPos: 25,
@@ -489,6 +517,23 @@ describe("visualization state local sync", () => {
         axis: "z",
         position_percent: 37.5,
         flipped: true,
+      },
+    });
+    expect(visualizationPatchForTrim({
+      enabled: true,
+      axes: {
+        x: { enabled: true, minPercent: 15, maxPercent: 85 },
+      },
+    })).toEqual({
+      trim: {
+        enabled: true,
+        axes: {
+          x: {
+            enabled: true,
+            min_percent: 15,
+            max_percent: 85,
+          },
+        },
       },
     });
     expect(visualizationPatchForVectorStyle({

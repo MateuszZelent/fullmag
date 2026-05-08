@@ -72,6 +72,7 @@ export interface VisualizationStateResource extends DisplaySelection {
   fdm: FdmVisualizationState;
   fem: FemVisualizationState;
   slice: SliceVisualizationState;
+  trim: TrimVisualizationState;
   clip: ClipVisualizationState;
   vector_style: VectorStyleVisualizationState;
   overrides: VisualizationOverrideState[];
@@ -298,6 +299,40 @@ export interface SliceVisualizationPatch {
 }
 
 export type ClipAxis = "x" | "y" | "z";
+
+export interface TrimVisualizationState {
+  enabled: boolean;
+  axes: TrimAxisVisualizationAxes;
+}
+
+export interface TrimVisualizationPatch {
+  enabled?: boolean | null;
+  axes?: TrimAxisVisualizationAxesPatch | null;
+}
+
+export interface TrimAxisVisualizationAxes {
+  x: TrimAxisVisualizationState;
+  y: TrimAxisVisualizationState;
+  z: TrimAxisVisualizationState;
+}
+
+export interface TrimAxisVisualizationAxesPatch {
+  x?: TrimAxisVisualizationPatch | null;
+  y?: TrimAxisVisualizationPatch | null;
+  z?: TrimAxisVisualizationPatch | null;
+}
+
+export interface TrimAxisVisualizationState {
+  enabled: boolean;
+  min_percent: number;
+  max_percent: number;
+}
+
+export interface TrimAxisVisualizationPatch {
+  enabled?: boolean | null;
+  min_percent?: number | null;
+  max_percent?: number | null;
+}
 
 export interface ClipVisualizationState {
   enabled: boolean;
@@ -895,6 +930,43 @@ export interface StructuredGridDescriptor {
   spacing: [number, number, number];
 }
 
+export interface DomainSliceMeshOverlayQuery {
+  plane: SlicePlane;
+  cut_world?: number;
+  cut_norm?: number;
+}
+
+export interface MeshOverlay2DResponse {
+  schema: "fullmag.domain_2d.mesh_overlay.v1";
+  plane: SlicePlane;
+  cut_kind: "normalized" | "world";
+  cut_world: number;
+  cut_norm: number;
+  u_axis: "x" | "y" | "z";
+  v_axis: "x" | "y" | "z";
+  normal_axis: "x" | "y" | "z";
+  bounds: Bounds2;
+  segments: MeshOverlay2DSegment[];
+  truncated: boolean;
+  segment_count: number;
+  point_count: number;
+  topology_revision: number;
+  domain_generation_id: number;
+  etag: string;
+}
+
+export interface Bounds2 {
+  u_min: number;
+  u_max: number;
+  v_min: number;
+  v_max: number;
+}
+
+export interface MeshOverlay2DSegment {
+  a: [number, number];
+  b: [number, number];
+}
+
 // ── Fields ────────────────────────────────────────────────────────────
 
 export interface FieldCatalog {
@@ -972,6 +1044,7 @@ export interface VisualizationStatePatch extends DisplayPatchRequest {
   fdm?: FdmVisualizationPatch | null;
   fem?: FemVisualizationPatch | null;
   slice?: SliceVisualizationPatch | null;
+  trim?: TrimVisualizationPatch | null;
   clip?: ClipVisualizationPatch | null;
   vector_style?: VectorStyleVisualizationPatch | null;
 }

@@ -38,6 +38,7 @@ import type { TextureTransform3D } from "@/lib/textureTransform";
 import { useFemSceneGeometry } from "./fem/useFemSceneGeometry";
 import { resolveAirboxArrowSamplingMode } from "./fem/airboxVectorSampling";
 import { useFemFaceInteraction } from "./fem/useFemFaceInteraction";
+import type { UnifiedTrimState } from "@/features/viewport-unified/model/unifiedViewportTypes";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
@@ -117,6 +118,7 @@ interface Props {
   renderPasses?: MeshRenderPassState;
   airboxPasses?: AirboxRenderPassState;
   opacity?: number;
+  trim?: UnifiedTrimState | null;
   clipEnabled?: boolean;
   clipAxis?: ClipAxis;
   clipPos?: number;
@@ -221,6 +223,7 @@ function FemMeshView3DInner({
   renderPasses,
   airboxPasses,
   opacity: controlledOpacity,
+  trim: controlledTrim = null,
   clipEnabled: controlledClipEnabled,
   clipAxis: controlledClipAxis,
   clipPos: controlledClipPos,
@@ -1214,6 +1217,7 @@ function FemMeshView3DInner({
             magneticElementIndices={magneticElementIndices}
             qualityPerFace={qualityPerFace}
             shrinkFactor={shrinkFactor}
+            trim={controlledTrim}
             clipEnabled={clipEnabled}
             clipAxis={clipAxis}
             clipPos={clipPos}

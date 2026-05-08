@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,41 @@ from ._gmsh_types import (
     MeshOptions,
     resolve_mesh_size_controls,
 )
+
+@dataclass(frozen=True, slots=True)
+class BoundaryLayerResult:
+    field_id: int | None
+    status: str
+    reason: str | None = None
+
+
+FIELD_SCHEMAS: dict[str, set[str]] = {
+    "Box": {"VIn", "VOut", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
+    "ComponentVolumeConstant": {"GeometryName", "VIn"},
+    "ComponentRestrictedBox": {"GeometryName", "VIn", "XMin", "XMax", "YMin", "YMax", "ZMin", "ZMax"},
+    "SurfaceDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "InterfaceShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "TransitionShellThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "BoundsSurfaceThreshold": {"BoundsMin", "BoundsMax", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+    "EdgeDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
+}
+
+
+def validate_size_field_config(config: dict[str, Any]) -> None:
+    kind = config.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        raise ValueError("mesh size field must define a non-empty kind")
+    params = config.get("params", {})
+    if not isinstance(params, dict):
+        raise ValueError(f"mesh size field {kind} params must be an object")
+    required = FIELD_SCHEMAS.get(kind)
+    if not required:
+        return
+    missing = sorted(key for key in required if key not in params)
+    if missing:
+        raise ValueError(
+            f"mesh size field {kind} missing required params: {', '.join(missing)}"
+        )
 
 
 def resolve_effective_algorithm_3d(opts: MeshOptions) -> tuple[int, str | None]:
@@ -115,19 +151,25 @@ def _apply_mesh_options(
         and opts.boundary_layer_thickness > 0.0
     ):
         bl_stretching = opts.boundary_layer_stretching if opts.boundary_layer_stretching else 1.2
-        fid = _add_boundary_layer_field(
+        result = _add_boundary_layer_field(
             gmsh,
             count=opts.boundary_layer_count,
             thickness=opts.boundary_layer_thickness,
             stretching=bl_stretching,
+            target_surface_tags=opts.boundary_layer_target_surface_tags,
+            target_curve_tags=opts.boundary_layer_target_curve_tags,
             hscale=hscale,
         )
-        if fid is not None:
+        if result.field_id is not None and result.status == "degraded":
+            extra_field_ids.append(result.field_id)
+        if result.status in {"applied", "degraded"}:
             emit_progress(
                 f"Gmsh: boundary layers ({opts.boundary_layer_count} layers, "
                 f"thickness={opts.boundary_layer_thickness:.3e}, "
-                f"stretching={bl_stretching:.2f})"
+                f"stretching={bl_stretching:.2f}, status={result.status})"
             )
+        elif result.reason:
+            emit_progress(f"Gmsh: boundary layers ignored ({result.reason})")
 
     # When a background size field is active, disable competing Gmsh size
     # sources so the field is the authoritative sizing control.  Without these,
@@ -304,14 +346,18 @@ def _add_curvature_surface_field(
 
 def _add_boundary_layer_field(
     gmsh: Any,
+    *,
     count: int,
     thickness: float,
     stretching: float,
+    target_surface_tags: Sequence[int] | None = None,
+    target_curve_tags: Sequence[int] | None = None,
     hscale: float = 1.0,
-) -> int | None:
+) -> BoundaryLayerResult:
     """Add a Gmsh BoundaryLayer field for prismatic near-wall extrusion.
 
-    Uses all currently visible surfaces as the seeding boundary.
+    Uses explicit target surfaces/curves as the seeding boundary.  A missing
+    target selector is ignored instead of silently applying to the whole model.
 
     Args:
         gmsh: Active Gmsh Python module.
@@ -322,32 +368,43 @@ def _add_boundary_layer_field(
         hscale: Coordinate scale factor (1 for SI meshes; SCALE for µm meshes).
 
     Returns:
-        Gmsh field ID of the BoundaryLayer field, or ``None`` when no
-        surfaces are found.
+        Boundary-layer realization status and the created field ID, if any.
     """
     if count < 1 or thickness <= 0.0:
-        return None
+        return BoundaryLayerResult(
+            field_id=None,
+            status="ignored",
+            reason="boundary layer count and thickness must be positive",
+        )
 
-    surfaces = gmsh.model.getEntities(2)
-    if not surfaces:
-        return None
-    surf_tags = [int(t) for _, t in surfaces]
+    surf_tags = [int(tag) for tag in (target_surface_tags or [])]
+    curve_tags = [int(tag) for tag in (target_curve_tags or [])]
+    if not surf_tags and not curve_tags:
+        return BoundaryLayerResult(
+            field_id=None,
+            status="ignored",
+            reason="no explicit boundary-layer target surfaces or curves were provided",
+        )
 
     h_first = float(thickness) * hscale
     fid = gmsh.model.mesh.field.add("BoundaryLayer")
-    gmsh.model.mesh.field.setNumbers(fid, "SurfacesList", surf_tags)
+    if surf_tags:
+        gmsh.model.mesh.field.setNumbers(fid, "SurfacesList", surf_tags)
+    if curve_tags:
+        gmsh.model.mesh.field.setNumbers(fid, "CurvesList", curve_tags)
     gmsh.model.mesh.field.setNumber(fid, "hwall_n", h_first)
     gmsh.model.mesh.field.setNumber(fid, "hwall_t", h_first)
     gmsh.model.mesh.field.setNumber(fid, "ratio", float(stretching) if stretching > 0.0 else 1.2)
     gmsh.model.mesh.field.setNumber(fid, "nb_layers", int(count))
     try:
         gmsh.model.mesh.field.setAsBoundaryLayer(fid)
-    except Exception:
-        # Older Gmsh builds may not have setAsBoundaryLayer; fall back to
-        # injecting as a background field which still provides local refinement
-        # near walls even without true prismatic extrusion.
-        pass
-    return fid
+    except Exception as exc:
+        return BoundaryLayerResult(
+            field_id=fid,
+            status="degraded",
+            reason=f"setAsBoundaryLayer unavailable: {exc}",
+        )
+    return BoundaryLayerResult(field_id=fid, status="applied")
 
 
 def _match_surfaces_within_bounds(
@@ -445,6 +502,77 @@ def _add_component_surface_threshold_field(
     )
 
 
+def _curve_tags_for_geometry(
+    gmsh: Any,
+    geometry_name: str,
+    params: dict[str, Any],
+    component_surface_tags: dict[str, list[int]] | None,
+) -> list[int]:
+    explicit_curve_tags = params.get("CurveTags")
+    if isinstance(explicit_curve_tags, list) and explicit_curve_tags:
+        return [int(tag) for tag in explicit_curve_tags]
+
+    surface_tags = _component_surface_tags_for_geometry(geometry_name, component_surface_tags)
+    if not surface_tags:
+        return []
+    curve_tags: set[int] = set()
+    for surface_tag in surface_tags:
+        try:
+            boundary = gmsh.model.getBoundary([(2, int(surface_tag))], oriented=False)
+        except Exception:
+            continue
+        for dim, tag in boundary:
+            if int(dim) == 1:
+                curve_tags.add(abs(int(tag)))
+    return sorted(curve_tags)
+
+
+def _add_edge_distance_threshold_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    size_min: float,
+    size_max: float,
+    dist_min: float,
+    dist_max: float,
+    params: dict[str, Any],
+    component_volume_tags: dict[str, list[int]] | None,
+    component_surface_tags: dict[str, list[int]] | None,
+    sampling: int = 40,
+    hscale: float = 1.0,
+) -> int | None:
+    curve_tags = _curve_tags_for_geometry(
+        gmsh,
+        geometry_name,
+        params,
+        component_surface_tags,
+    )
+    if not curve_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered edge curves for '{geometry_name}', skipping edge distance field"
+        )
+        return None
+
+    f_dist = gmsh.model.mesh.field.add("Distance")
+    gmsh.model.mesh.field.setNumbers(f_dist, "CurvesList", curve_tags)
+    gmsh.model.mesh.field.setNumber(f_dist, "Sampling", int(max(2, sampling)))
+
+    f_thresh = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(f_thresh, "InField", f_dist)
+    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMin", float(size_min) * hscale)
+    gmsh.model.mesh.field.setNumber(f_thresh, "SizeMax", float(size_max) * hscale)
+    gmsh.model.mesh.field.setNumber(f_thresh, "DistMin", float(dist_min) * hscale)
+    gmsh.model.mesh.field.setNumber(f_thresh, "DistMax", float(dist_max) * hscale)
+
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if volume_tags:
+        restricted = gmsh.model.mesh.field.add("Restrict")
+        gmsh.model.mesh.field.setNumber(restricted, "InField", f_thresh)
+        gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+        return restricted
+    return f_thresh
+
+
 def _add_component_volume_constant_field(
     gmsh: Any,
     *,
@@ -466,6 +594,44 @@ def _add_component_volume_constant_field(
     gmsh.model.mesh.field.setNumber(field_id, "VIn", float(vin) * hscale)
     gmsh.model.mesh.field.setNumber(field_id, "VOut", float(vout) * hscale)
     return field_id
+
+
+def _add_component_restricted_box_field(
+    gmsh: Any,
+    *,
+    geometry_name: str,
+    vin: float,
+    vout: float,
+    xmin: float,
+    xmax: float,
+    ymin: float,
+    ymax: float,
+    zmin: float,
+    zmax: float,
+    component_volume_tags: dict[str, list[int]] | None,
+    hscale: float = 1.0,
+) -> int | None:
+    volume_tags = _component_volume_tags_for_geometry(geometry_name, component_volume_tags)
+    if not volume_tags:
+        emit_progress(
+            f"Gmsh: warning - no recovered component volumes for '{geometry_name}', skipping restricted sub-box refinement"
+        )
+        return None
+
+    field_id = gmsh.model.mesh.field.add("Box")
+    gmsh.model.mesh.field.setNumber(field_id, "VIn", float(vin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "VOut", float(vout) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "XMin", float(xmin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "XMax", float(xmax) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "YMin", float(ymin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "YMax", float(ymax) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "ZMin", float(zmin) * hscale)
+    gmsh.model.mesh.field.setNumber(field_id, "ZMax", float(zmax) * hscale)
+
+    restricted = gmsh.model.mesh.field.add("Restrict")
+    gmsh.model.mesh.field.setNumber(restricted, "InField", field_id)
+    gmsh.model.mesh.field.setNumbers(restricted, "VolumesList", volume_tags)
+    return restricted
 
 
 def _add_bounds_surface_threshold_field(
@@ -536,6 +702,7 @@ def _configure_mesh_size_fields(
 
     field_ids = []
     for config in fields:
+        validate_size_field_config(config)
         kind = config["kind"]
         params = config.get("params", {})
         if not isinstance(params, dict):
@@ -556,6 +723,28 @@ def _configure_mesh_size_fields(
             if fid is not None:
                 field_ids.append(fid)
             continue
+        if kind == "ComponentRestrictedBox":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - ComponentRestrictedBox is missing GeometryName; skipping")
+                continue
+            fid = _add_component_restricted_box_field(
+                gmsh,
+                geometry_name=geometry_name,
+                vin=float(params.get("VIn")),
+                vout=float(params.get("VOut", 1.0e22)),
+                xmin=float(params.get("XMin")),
+                xmax=float(params.get("XMax")),
+                ymin=float(params.get("YMin")),
+                ymax=float(params.get("YMax")),
+                zmin=float(params.get("ZMin")),
+                zmax=float(params.get("ZMax")),
+                component_volume_tags=component_volume_tags,
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+            continue
         if kind in {"SurfaceDistanceThreshold", "InterfaceShellThreshold", "TransitionShellThreshold"}:
             geometry_name = params.get("GeometryName")
             if not isinstance(geometry_name, str) or not geometry_name.strip():
@@ -570,6 +759,27 @@ def _configure_mesh_size_fields(
                 dist_max=float(params.get("DistMax", 0.0)),
                 component_surface_tags=component_surface_tags,
                 sampling=int(params.get("Sampling", 20)),
+                hscale=hscale,
+            )
+            if fid is not None:
+                field_ids.append(fid)
+            continue
+        if kind == "EdgeDistanceThreshold":
+            geometry_name = params.get("GeometryName")
+            if not isinstance(geometry_name, str) or not geometry_name.strip():
+                emit_progress("Gmsh: warning - EdgeDistanceThreshold is missing GeometryName; skipping")
+                continue
+            fid = _add_edge_distance_threshold_field(
+                gmsh,
+                geometry_name=geometry_name,
+                size_min=float(params.get("SizeMin")),
+                size_max=float(params.get("SizeMax")),
+                dist_min=float(params.get("DistMin", 0.0)),
+                dist_max=float(params.get("DistMax")),
+                params=params,
+                component_volume_tags=component_volume_tags,
+                component_surface_tags=component_surface_tags,
+                sampling=int(params.get("Sampling", 40)),
                 hscale=hscale,
             )
             if fid is not None:

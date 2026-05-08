@@ -35,7 +35,6 @@ import MeshSettingsPanel, {
   type MeshOptionsState,
   type SizeFieldSpec,
 } from "../MeshSettingsPanel";
-import MeshSequenceEditor from "./MeshSequenceEditor";
 import { useViewport, useCommand, useModel } from "../../runs/control-room/context-hooks";
 import { type ViewportMode } from "../../runs/control-room/shared";
 import { fmtExp, fmtSI } from "@/lib/format";
@@ -59,6 +58,7 @@ import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import MeshManifestSection from "./MeshManifestSection";
 import type {
+  ScriptBuilderMeshSizeFieldEntry,
   ScriptBuilderPerGeometryMeshEntry,
 } from "../../../lib/session/types";
 import { findSceneObjectByNodeId } from "./objectSelection";
@@ -102,6 +102,10 @@ function createInheritedMeshState(): ScriptBuilderPerGeometryMeshEntry {
     interface_thickness: null,
     transition_distance: null,
     transition_growth: null,
+    edge_hmax: null,
+    edge_thickness: null,
+    corner_hmax: null,
+    corner_extent: null,
     boundary_layer_count: null,
     boundary_layer_thickness: null,
     boundary_layer_stretching: null,
@@ -217,6 +221,22 @@ function mapObjectMeshToOptions(
       transitionGrowthText.trim().length > 0
         ? transitionGrowthText
         : effective.transitionGrowth,
+    edgeHMax:
+      safeMesh.edge_hmax?.trim().length
+        ? safeMesh.edge_hmax
+        : effective.edgeHMax,
+    edgeThickness:
+      safeMesh.edge_thickness?.trim().length
+        ? safeMesh.edge_thickness
+        : effective.edgeThickness,
+    cornerHMax:
+      safeMesh.corner_hmax?.trim().length
+        ? safeMesh.corner_hmax
+        : effective.cornerHMax,
+    cornerExtent:
+      safeMesh.corner_extent?.trim().length
+        ? safeMesh.corner_extent
+        : effective.cornerExtent,
     smoothingSteps: safeMesh.smoothing_steps ?? effective.smoothingSteps,
     optimize: safeMesh.optimize ?? effective.optimize,
     optimizeIters: safeMesh.optimize_iterations ?? effective.optimizeIters,
@@ -266,6 +286,14 @@ function buildCustomMeshState(
     Number(options.transitionGrowth) > 0
       ? Number(options.transitionGrowth)
       : null;
+  const hasPerimeterRefinement =
+    options.edgeHMax.trim().length > 0
+    || options.edgeThickness.trim().length > 0
+    || options.cornerHMax.trim().length > 0
+    || options.cornerExtent.trim().length > 0;
+  const hasInterfaceShell =
+    options.interfaceHMax.trim().length > 0
+    || options.interfaceThickness.trim().length > 0;
 
   return {
     mode: "custom",
@@ -297,12 +325,45 @@ function buildCustomMeshState(
     per_element_quality: options.perElementQuality,
     bulk_hmax: current?.bulk_hmax ?? null,
     bulk_hmin: current?.bulk_hmin ?? null,
-    interface_hmax: options.interfaceHMax.trim().length > 0 ? options.interfaceHMax : null,
+    interface_hmax:
+      hasPerimeterRefinement
+        ? null
+        : options.interfaceHMax.trim().length > 0
+          ? options.interfaceHMax
+          : null,
     interface_thickness:
-      options.interfaceThickness.trim().length > 0 ? options.interfaceThickness : null,
+      hasPerimeterRefinement
+        ? null
+        : options.interfaceThickness.trim().length > 0
+          ? options.interfaceThickness
+          : null,
     transition_distance:
       options.transitionDistance.trim().length > 0 ? options.transitionDistance : null,
     transition_growth: transitionGrowthParsed,
+    edge_hmax:
+      hasInterfaceShell
+        ? null
+        : options.edgeHMax.trim().length > 0
+          ? options.edgeHMax
+          : null,
+    edge_thickness:
+      hasInterfaceShell
+        ? null
+        : options.edgeThickness.trim().length > 0
+          ? options.edgeThickness
+          : null,
+    corner_hmax:
+      hasInterfaceShell
+        ? null
+        : options.cornerHMax.trim().length > 0
+          ? options.cornerHMax
+          : null,
+    corner_extent:
+      hasInterfaceShell
+        ? null
+        : options.cornerExtent.trim().length > 0
+          ? options.cornerExtent
+          : null,
     boundary_layer_count: extras.boundaryLayerCount ?? current?.boundary_layer_count ?? null,
     boundary_layer_thickness: extras.boundaryLayerThickness ?? current?.boundary_layer_thickness ?? null,
     boundary_layer_stretching: extras.boundaryLayerStretching ?? current?.boundary_layer_stretching ?? null,
@@ -319,6 +380,44 @@ function buildCustomMeshState(
     operations: current?.operations ?? [],
     build_requested: extras.buildRequested,
   };
+}
+
+function objectCoreRelaxationField(mesh: ScriptBuilderPerGeometryMeshEntry): ScriptBuilderMeshSizeFieldEntry | null {
+  return mesh.size_fields.find((field) => field.kind === "ObjectCoreRelaxation") ?? null;
+}
+
+function coreRelaxationParam(field: ScriptBuilderMeshSizeFieldEntry | null, key: string): string {
+  const value = field?.params?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+}
+
+function updateObjectCoreRelaxationField(
+  mesh: ScriptBuilderPerGeometryMeshEntry,
+  geometryName: string,
+  patch: Partial<{ core_hmax: string; surface_hmax: string; surface_distance: string }>,
+): ScriptBuilderPerGeometryMeshEntry {
+  const current = objectCoreRelaxationField(mesh);
+  const nextParams = {
+    core_hmax: coreRelaxationParam(current, "core_hmax"),
+    surface_hmax: coreRelaxationParam(current, "surface_hmax"),
+    surface_distance: coreRelaxationParam(current, "surface_distance"),
+    ...patch,
+  };
+  const nextFields = mesh.size_fields.filter((field) => field.kind !== "ObjectCoreRelaxation");
+  const hasCompleteValue = Object.values(nextParams).every((value) => Number(value) > 0);
+  if (!hasCompleteValue) {
+    return { ...mesh, size_fields: nextFields };
+  }
+  nextFields.push({
+    kind: "ObjectCoreRelaxation",
+    params: {
+      GeometryName: geometryName,
+      core_hmax: Number(nextParams.core_hmax) || 0,
+      surface_hmax: Number(nextParams.surface_hmax) || 0,
+      surface_distance: Number(nextParams.surface_distance) || 0,
+    },
+  });
+  return { ...mesh, mode: "custom", size_fields: nextFields };
 }
 
 function objectMeshTabFromNodeId(nodeId?: string): string {
@@ -392,6 +491,10 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
   );
 
   const mesh = useMemo(() => coerceObjectMeshState(geo?.mesh), [geo?.mesh]);
+  const coreRelaxationField = useMemo(() => objectCoreRelaxationField(mesh), [mesh]);
+  const coreRelaxationCoreHmax = coreRelaxationParam(coreRelaxationField, "core_hmax");
+  const coreRelaxationSurfaceHmax = coreRelaxationParam(coreRelaxationField, "surface_hmax");
+  const coreRelaxationSurfaceDistance = coreRelaxationParam(coreRelaxationField, "surface_distance");
   const effectiveOptions = useMemo(
     () => mapObjectMeshToOptions(mesh, model.meshOptions),
     [mesh, model.meshOptions],
@@ -465,6 +568,34 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
       bMax,
     };
   }, [geo?.bounds_min, geo?.bounds_max, meshBoundsMin, meshBoundsMax]);
+  const geometryKind = geo?.geometry_kind.trim().toLowerCase() ?? "";
+  const supportsPerimeterRefinement = geometryKind === "box" && sharedDomainMesh;
+  const perimeterRefinementActive =
+    effectiveOptions.edgeHMax.trim().length > 0
+    || effectiveOptions.edgeThickness.trim().length > 0
+    || effectiveOptions.cornerHMax.trim().length > 0
+    || effectiveOptions.cornerExtent.trim().length > 0;
+  const interfaceShellActive =
+    effectiveOptions.interfaceHMax.trim().length > 0
+    || effectiveOptions.interfaceThickness.trim().length > 0;
+  const meshCapabilities = meshWorkspace?.mesh_capabilities ?? null;
+  const boundaryLayerEditable =
+    mesh.mode === "custom"
+    && meshCapabilities?.supports_boundary_layers === true
+    && meshCapabilities.boundary_layer_status !== "explicit_target_selectors_required";
+
+  const applyObjectMeshOptions = useCallback(
+    (
+      nextOptions: MeshOptionsState,
+      currentMesh: ScriptBuilderPerGeometryMeshEntry | null | undefined,
+    ) =>
+      buildCustomMeshState(nextOptions, currentMesh, {
+        order: currentMesh?.order ?? model.meshFeOrder ?? null,
+        source: currentMesh?.source ?? model.meshSource ?? null,
+        buildRequested: currentMesh?.build_requested ?? false,
+      }),
+    [model.meshFeOrder, model.meshSource],
+  );
 
   const viewportModes: ViewportMode[] = ["Mesh", "3D", "2D"];
   const effectiveHmaxDisplay = formatMeshSetting(
@@ -608,7 +739,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                 <div className="grid grid-cols-2 gap-3">
                   <TextField
                     key={`${geo.name}-mesh-order-${effectiveOrder ?? ""}`}
-                    label="FEM Order"
+                    label="Solver FE Order"
                     defaultValue={effectiveOrder != null ? String(effectiveOrder) : ""}
                     onchange={(e) => {
                       const raw = e.target.value.trim();
@@ -627,7 +758,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     mono
                     disabled={mesh.mode !== "custom"}
                     placeholder="1"
-                    tooltip="Finite element polynomial order (P1 = linear, P2 = quadratic)."
+                    tooltip="Controls solver basis order. The exported mesh topology remains first-order P1."
                   />
                   <TextField
                     key={`${geo.name}-mesh-source-${effectiveSource ?? ""}`}
@@ -659,11 +790,21 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   onChange={(nextOptions) =>
                     updateGeo((currentMesh) =>
                         mesh.mode === "custom"
-                          ? buildCustomMeshState(nextOptions, currentMesh, {
-                              order: currentMesh?.order ?? model.meshFeOrder ?? null,
-                              source: currentMesh?.source ?? model.meshSource ?? null,
-                              buildRequested: currentMesh?.build_requested ?? false,
-                            })
+                          ? applyObjectMeshOptions(
+                              (
+                                nextOptions.interfaceHMax.trim().length > 0
+                                || nextOptions.interfaceThickness.trim().length > 0
+                              )
+                                ? {
+                                    ...nextOptions,
+                                    edgeHMax: "",
+                                    edgeThickness: "",
+                                    cornerHMax: "",
+                                    cornerExtent: "",
+                                  }
+                                : nextOptions,
+                              currentMesh,
+                            )
                           : currentMesh ?? createInheritedMeshState(),
                     )
                   }
@@ -673,7 +814,215 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   disabled={mesh.mode !== "custom" || ctx.meshGenerating}
                   waitMode={ctx.isWaitingForCompute}
                   showAdaptiveSection={false}
+                  capabilities={meshWorkspace?.mesh_capabilities ?? null}
                 />
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
+                      Edge / Corner Refinement
+                    </div>
+                    <HelpTip>
+                      Box-only in-plane refinement for rectangular waveguides. Edge bands and
+                      corner zones stay inside the ferromagnet; the object center remains
+                      controlled by the bulk maximum element size.
+                    </HelpTip>
+                  </div>
+                  {!supportsPerimeterRefinement ? (
+                    <div className="rounded-lg border border-border/10 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+                      Edge and corner refinement is currently available only for Box geometries in the shared-domain FEM mesh path.
+                    </div>
+                  ) : null}
+                  {interfaceShellActive ? (
+                    <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning/90">
+                      Interface shell refinement is active. Editing edge or corner refinement will replace the interface shell settings for this object.
+                    </div>
+                  ) : null}
+                  <div className="grid grid-cols-2 gap-3">
+                    <TextField
+                      key={`${geo.name}-edge-hmax-${effectiveOptions.edgeHMax}`}
+                      label="Edge hmax"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(effectiveOptions.edgeHMax)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          mesh.mode === "custom"
+                            ? applyObjectMeshOptions(
+                                {
+                                  ...effectiveOptions,
+                                  interfaceHMax: "",
+                                  interfaceThickness: "",
+                                  edgeHMax: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
+                                },
+                                currentMesh,
+                              )
+                            : currentMesh ?? createInheritedMeshState(),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      placeholder="5"
+                      tooltip="Target element size inside the four in-plane edge refinement bands."
+                    />
+                    <TextField
+                      key={`${geo.name}-edge-thickness-${effectiveOptions.edgeThickness}`}
+                      label="Edge thickness"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(effectiveOptions.edgeThickness)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          mesh.mode === "custom"
+                            ? applyObjectMeshOptions(
+                                {
+                                  ...effectiveOptions,
+                                  interfaceHMax: "",
+                                  interfaceThickness: "",
+                                  edgeThickness: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
+                                },
+                                currentMesh,
+                              )
+                            : currentMesh ?? createInheritedMeshState(),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      placeholder="20"
+                      tooltip="In-plane width of each edge refinement band, measured inward from the rectangle boundary."
+                    />
+                    <TextField
+                      key={`${geo.name}-corner-hmax-${effectiveOptions.cornerHMax}`}
+                      label="Corner hmax"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(effectiveOptions.cornerHMax)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          mesh.mode === "custom"
+                            ? applyObjectMeshOptions(
+                                {
+                                  ...effectiveOptions,
+                                  interfaceHMax: "",
+                                  interfaceThickness: "",
+                                  cornerHMax: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
+                                },
+                                currentMesh,
+                              )
+                            : currentMesh ?? createInheritedMeshState(),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      placeholder="3"
+                      tooltip="Target element size inside the four in-plane corner refinement zones."
+                    />
+                    <TextField
+                      key={`${geo.name}-corner-extent-${effectiveOptions.cornerExtent}`}
+                      label="Corner extent"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(effectiveOptions.cornerExtent)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          mesh.mode === "custom"
+                            ? applyObjectMeshOptions(
+                                {
+                                  ...effectiveOptions,
+                                  interfaceHMax: "",
+                                  interfaceThickness: "",
+                                  cornerExtent: raw.length > 0 ? nanometersInputToMetersText(raw) : "",
+                                },
+                                currentMesh,
+                              )
+                            : currentMesh ?? createInheritedMeshState(),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom" || !supportsPerimeterRefinement}
+                      placeholder="15"
+                      tooltip="In-plane extent of each corner refinement zone along both lateral axes."
+                    />
+                  </div>
+                  {perimeterRefinementActive ? (
+                    <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-xs text-info/90">
+                      Perimeter refinement is active. The final transition from edge/corner zones into the object center uses the standard maximum element growth rate.
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
+                      Core Relaxation
+                    </div>
+                    <HelpTip>
+                      Keeps the object core coarse while preserving finer shell and edge sizing through the realized ObjectCoreRelaxation size-field composition.
+                    </HelpTip>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <TextField
+                      key={`${geo.name}-core-relax-core-${coreRelaxationCoreHmax}`}
+                      label="Core hmax"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(coreRelaxationCoreHmax)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          updateObjectCoreRelaxationField(
+                            currentMesh ?? createInheritedMeshState(),
+                            geo.name,
+                            { core_hmax: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                          ),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="5"
+                      tooltip="Coarser target element size for the object interior."
+                    />
+                    <TextField
+                      key={`${geo.name}-core-relax-surface-${coreRelaxationSurfaceHmax}`}
+                      label="Surface hmax"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(coreRelaxationSurfaceHmax)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          updateObjectCoreRelaxationField(
+                            currentMesh ?? createInheritedMeshState(),
+                            geo.name,
+                            { surface_hmax: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                          ),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="1"
+                      tooltip="Finer target element size near the object surface."
+                    />
+                    <TextField
+                      key={`${geo.name}-core-relax-distance-${coreRelaxationSurfaceDistance}`}
+                      label="Shell distance"
+                      unit="nm"
+                      defaultValue={metersTextToNanometersInput(coreRelaxationSurfaceDistance)}
+                      onchange={(e) => {
+                        const raw = e.target.value.trim();
+                        updateGeo((currentMesh) =>
+                          updateObjectCoreRelaxationField(
+                            currentMesh ?? createInheritedMeshState(),
+                            geo.name,
+                            { surface_distance: raw.length > 0 ? nanometersInputToMetersText(raw) : "" },
+                          ),
+                        );
+                      }}
+                      mono
+                      disabled={mesh.mode !== "custom"}
+                      placeholder="6"
+                      tooltip="Distance over which the surface shell transitions into the relaxed core."
+                    />
+                  </div>
+                </div>
 
                 {/* ── Boundary Layers ── */}
                 <div className="flex flex-col gap-2">
@@ -681,8 +1030,9 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                     Boundary Layers
                   </div>
                   <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] text-muted-foreground">
-                    Prismatic near-wall extrusion (Gmsh BoundaryLayer field). Leave blank to
-                    disable.
+                    {meshCapabilities?.boundary_layer_status === "explicit_target_selectors_required"
+                      ? "Boundary layers require explicit backend surface or curve selectors. This UI does not yet provide those selectors, so object-level boundary-layer edits are disabled."
+                      : "Experimental boundary-layer intent. The backend build report is authoritative: it must say applied before this affects the solver mesh; degraded or ignored means the build fell back to ordinary size fields."}
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <TextField
@@ -700,7 +1050,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         );
                       }}
                       mono
-                      disabled={mesh.mode !== "custom"}
+                      disabled={!boundaryLayerEditable}
                       placeholder="0 = off"
                       tooltip="Number of prismatic boundary-layer element rows near this object's walls."
                     />
@@ -720,7 +1070,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         );
                       }}
                       mono
-                      disabled={mesh.mode !== "custom"}
+                      disabled={!boundaryLayerEditable}
                       placeholder="2"
                       tooltip="Target first-layer thickness in nanometres."
                     />
@@ -739,7 +1089,7 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                         );
                       }}
                       mono
-                      disabled={mesh.mode !== "custom"}
+                      disabled={!boundaryLayerEditable}
                       placeholder="1.2"
                       tooltip="Layer growth ratio between successive boundary layer rows (1.0–2.0)."
                     />
@@ -820,23 +1170,6 @@ export default function ObjectMeshPanel({ nodeId }: { nodeId?: string }) {
                   </div>
                 </div>
 
-                {/* ── Operation Sequence ── */}
-                <div className="flex flex-col gap-2">
-                  <div className="text-[0.6rem] font-bold uppercase tracking-widest text-muted-foreground">
-                    Mesh Operations
-                  </div>
-                  <MeshSequenceEditor
-                    operations={mesh.operations}
-                    onChange={(ops) =>
-                      updateGeo((cur) => ({
-                        ...(cur ?? createInheritedMeshState()),
-                        mode: "custom",
-                        operations: ops,
-                      }))
-                    }
-                    disabled={mesh.mode !== "custom" || ctx.meshGenerating}
-                  />
-                </div>
               </div>
             </TabsContent>
 

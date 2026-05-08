@@ -786,6 +786,15 @@ fn current_fem_mesh_workspace(
     let supports_target_h_preview = adaptive_runtime
         .and_then(|state| state.get("last_target_h_summary"))
         .is_some();
+    let mesh_time_seconds = mesh_history
+        .last()
+        .and_then(|entry| {
+            entry
+                .get("time_seconds")
+                .or_else(|| entry.get("wall_time_seconds"))
+                .or_else(|| entry.get("duration_seconds"))
+        })
+        .and_then(|value| value.as_f64());
 
     serde_json::json!({
         "mesh_summary": {
@@ -820,6 +829,15 @@ fn current_fem_mesh_workspace(
             "avg_quality": quality.avg_quality,
         })),
         "mesh_statistics": mesh_statistics.cloned(),
+        "mesh_cost_report": {
+            "node_count": mesh.nodes.len(),
+            "element_count": mesh.elements.len(),
+            "boundary_face_count": mesh.boundary_faces.len(),
+            "estimated_dense_ram_gb": ram_estimate_gb,
+            "available_ram_gb": available_ram_gb,
+            "time_seconds": mesh_time_seconds,
+            "status": status,
+        },
         "mesh_pipeline_status": [
             {"id": "import", "label": "Import", "status": "done", "detail": mesh_source.map(|source| source.to_string()).unwrap_or_else(|| "Inline/generated geometry".to_string())},
             {"id": "classify", "label": "Classify", "status": if source_kind == "stl_surface" { "done" } else { "idle" }, "detail": if source_kind == "stl_surface" { "Surface classification completed for STL import".to_string() } else { "No explicit surface classification stage".to_string() }},
@@ -832,9 +850,12 @@ fn current_fem_mesh_workspace(
         "mesh_capabilities": {
             "has_volume_mesh": true,
             "has_quality_arrays": quality_summary.is_some(),
-            "supports_adaptive_remesh": true,
+            "supports_adaptive_remesh": adaptive_enabled,
             "supports_compare_snapshots": true,
             "supports_size_field_remesh": true,
+            "supports_boundary_layers": true,
+            "boundary_layer_status": "explicit_target_selectors_required",
+            "supports_mesh_convergence_workflow": adaptive_enabled && adaptive_policy == "auto",
             "supports_mesh_error_preview": supports_mesh_error_preview,
             "supports_target_h_preview": supports_target_h_preview,
         },

@@ -34,6 +34,10 @@ const ENABLE_INFO_CONSOLE_TRACE =
   typeof process !== "undefined" &&
   process.env.NODE_ENV !== "production";
 
+interface MeshRefinementCapabilities {
+  supports_selected_surface_size_fields?: boolean;
+}
+
 export interface UseMeshCommandPipelineParams {
   liveApi: ControlRoomApi;
   meshPerGeometryPayload: Record<string, unknown>[];
@@ -42,6 +46,7 @@ export interface UseMeshCommandPipelineParams {
   meshOptions: MeshOptionsState;
   setMeshOptions: Dispatch<SetStateAction<MeshOptionsState>>;
   meshHmax: number | null;
+  meshCapabilities?: MeshRefinementCapabilities | null;
   session: { script_path?: string | null } | null;
   localBuilderDraft: SceneDocument | null;
   localBuilderSignature: string;
@@ -83,6 +88,52 @@ export interface UseMeshCommandPipelineReturn {
   handleLassoRefine: (faceIndices: number[], factor: number) => Promise<void>;
 }
 
+function buildSelectedSurfaceDistanceThresholdZone(args: {
+  faceIndices: number[];
+  sizeMin: number;
+  sizeMax: number;
+  distMax: number;
+}): SizeFieldSpec {
+  return {
+    kind: "SelectedSurfaceDistanceThreshold",
+    params: {
+      FaceIndices: args.faceIndices,
+      SizeMin: args.sizeMin,
+      SizeMax: args.sizeMax,
+      DistMin: 0,
+      DistMax: args.distMax,
+    },
+  };
+}
+
+function buildFallbackLassoBoxZone(args: {
+  sizeMin: number;
+  sizeMax: number;
+  xmin: number;
+  xmax: number;
+  ymin: number;
+  ymax: number;
+  zmin: number;
+  zmax: number;
+}): SizeFieldSpec {
+  return {
+    kind: "Box",
+    params: {
+      VIn: args.sizeMin,
+      VOut: args.sizeMax,
+      XMin: args.xmin,
+      XMax: args.xmax,
+      YMin: args.ymin,
+      YMax: args.ymax,
+      ZMin: args.zmin,
+      ZMax: args.zmax,
+      Source: "lasso_refine",
+      Degraded: 1,
+      DegradedReason: "selected surface size fields are not supported by backend capabilities",
+    },
+  };
+}
+
 export function useMeshCommandPipeline({
   liveApi,
   meshPerGeometryPayload,
@@ -91,6 +142,7 @@ export function useMeshCommandPipeline({
   meshOptions,
   setMeshOptions,
   meshHmax,
+  meshCapabilities,
   session,
   localBuilderDraft,
   localBuilderSignature,
@@ -595,15 +647,25 @@ export function useMeshCommandPipeline({
     const currentHmax = parseOptionalFiniteNumberText(meshOptions.hmax) ?? (meshHmax ?? 20e-9);
     const targetH = currentHmax * factor;
     const pad = currentHmax * 2;
-    const zone: SizeFieldSpec = {
-      kind: "Box",
-      params: {
-        VIn: targetH, VOut: currentHmax,
-        XMin: xmin - pad, XMax: xmax + pad,
-        YMin: ymin - pad, YMax: ymax + pad,
-        ZMin: zmin - pad, ZMax: zmax + pad,
-      },
-    };
+    const supportsSelectedSurfaceFields =
+      meshCapabilities?.supports_selected_surface_size_fields === true;
+    const zone: SizeFieldSpec = supportsSelectedSurfaceFields
+      ? buildSelectedSurfaceDistanceThresholdZone({
+          faceIndices,
+          sizeMin: targetH,
+          sizeMax: currentHmax,
+          distMax: pad,
+        })
+      : buildFallbackLassoBoxZone({
+          sizeMin: targetH,
+          sizeMax: currentHmax,
+          xmin: xmin - pad,
+          xmax: xmax + pad,
+          ymin: ymin - pad,
+          ymax: ymax + pad,
+          zmin: zmin - pad,
+          zmax: zmax + pad,
+        });
     const updatedZones = [...meshOptions.refinementZones, zone];
     setMeshOptions((prev) => ({ ...prev, refinementZones: updatedZones }));
 
@@ -623,7 +685,7 @@ export function useMeshCommandPipeline({
       meshGenGenerationRef.current = null;
       pendingMeshConfigSignatureRef.current = null;
     }
-  }, [buildMeshOptionsPayload, enqueueStudyDomainRemesh, meshHmax, meshOptions, setMeshOptions]);
+  }, [buildMeshOptionsPayload, enqueueStudyDomainRemesh, meshCapabilities, meshHmax, meshOptions, setMeshOptions]);
 
   return {
     appendFrontendTrace,

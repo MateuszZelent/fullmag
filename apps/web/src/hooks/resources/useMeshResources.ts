@@ -49,6 +49,7 @@ interface MeshHookOptions {
   enabled?: boolean;
   sessionKey?: string | null;
   revision?: number | null;
+  keepPreviousData?: boolean;
 }
 
 interface MeshResourceResult<T> {
@@ -76,6 +77,7 @@ function useMeshJsonResource<T>(
   responseFetcher?: (opts?: RequestOptions) => Promise<JsonResourceResponse<T>>,
 ): MeshResourceResult<T> {
   const enabled = options?.enabled ?? true;
+  const keepPreviousData = options?.keepPreviousData ?? false;
   const sessionKey = options?.sessionKey ?? null;
   const revision = options?.revision ?? null;
   const [data, setData] = useState<T | null>(null);
@@ -98,7 +100,9 @@ function useMeshJsonResource<T>(
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
       if (mountedRef.current) {
-        setData(null);
+        if (!keepPreviousData) {
+          setData(null);
+        }
         setError(null);
         setLoading(false);
       }
@@ -182,14 +186,16 @@ function useMeshJsonResource<T>(
         inFlightFetchKeyRef.current = null;
       }
     }
-  }, [cacheKey, cacheRevision, enabled, fetchKey, resourceName, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, keepPreviousData, resourceName, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
       inFlightFetchKeyRef.current = null;
-      setData((current) => (current === null ? current : null));
+      if (!keepPreviousData) {
+        setData((current) => (current === null ? current : null));
+      }
       setError((current) => (current === null ? current : null));
       setLoading((current) => (current ? false : current));
       return () => {
@@ -204,7 +210,7 @@ function useMeshJsonResource<T>(
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchKey, refresh, sessionKey]);
+  }, [enabled, fetchKey, keepPreviousData, refresh, sessionKey]);
 
   return { data, loading, error, refresh };
 }
@@ -215,6 +221,7 @@ function useMeshBinaryResource(
   options?: MeshHookOptions,
 ): MeshBinaryResourceResult {
   const enabled = options?.enabled ?? true;
+  const keepPreviousData = options?.keepPreviousData ?? false;
   const sessionKey = options?.sessionKey ?? null;
   const revision = options?.revision ?? null;
   const [data, setData] = useState<ArrayBuffer | null>(null);
@@ -235,7 +242,9 @@ function useMeshBinaryResource(
   const refresh = useCallback(async () => {
     if (!enabled || !sessionKey) {
       if (mountedRef.current) {
-        setData(null);
+        if (!keepPreviousData) {
+          setData(null);
+        }
         setError(null);
         setLoading(false);
       }
@@ -308,14 +317,16 @@ function useMeshBinaryResource(
         inFlightFetchKeyRef.current = null;
       }
     }
-  }, [cacheKey, cacheRevision, enabled, fetchKey, resourceName, sessionKey]);
+  }, [cacheKey, cacheRevision, enabled, fetchKey, keepPreviousData, resourceName, sessionKey]);
 
   useEffect(() => {
     mountedRef.current = true;
     if (!enabled || !sessionKey) {
       lastFetchKeyRef.current = null;
       inFlightFetchKeyRef.current = null;
-      setData((current) => (current === null ? current : null));
+      if (!keepPreviousData) {
+        setData((current) => (current === null ? current : null));
+      }
       setError((current) => (current === null ? current : null));
       setLoading((current) => (current ? false : current));
       return () => {
@@ -330,7 +341,7 @@ function useMeshBinaryResource(
     return () => {
       mountedRef.current = false;
     };
-  }, [enabled, fetchKey, refresh, sessionKey]);
+  }, [enabled, fetchKey, keepPreviousData, refresh, sessionKey]);
 
   return { data, loading, error, refresh };
 }
@@ -407,11 +418,7 @@ export function useMeshSemantics(options?: MeshHookOptions) {
   return { semantics: resource.data, ...resource };
 }
 
-export function useMeshBuilds(options?: {
-  enabled?: boolean;
-  sessionKey?: string | null;
-  revision?: number | null;
-}) {
+export function useMeshBuilds(options?: MeshHookOptions) {
   const active = useMeshJsonResource<MeshActiveBuildResource>(
     "mesh-builds-active",
     () => getLiveSessionClient().mesh.getActiveBuild(),
@@ -713,26 +720,31 @@ export function useMeshWorkspaceResourceState(options?: {
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
+    keepPreviousData: true,
   });
   const capabilities = useMeshCapabilities({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
+    keepPreviousData: true,
   });
   const manifest = useMeshSharedDomainManifest({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
+    keepPreviousData: true,
   });
   const sharedDomainReport = useMeshSharedDomainReport({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.meshRevision,
+    keepPreviousData: true,
   });
   const builds = useMeshBuilds({
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.meshBuildRevision,
+    keepPreviousData: true,
   });
 
   const rawMeshWorkspace = useMemo(() => {
@@ -862,11 +874,13 @@ export function useMeshWorkspaceModel(options?: {
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.resources?.mesh_revision ?? null,
+    keepPreviousData: true,
   };
   const buildOptions = {
     enabled: options?.enabled,
     sessionKey: options?.sessionKey,
     revision: options?.resources?.mesh_build_revision ?? null,
+    keepPreviousData: true,
   };
   const summary = useMeshSummary(resourceOptions);
   const capabilities = useMeshCapabilities(resourceOptions);

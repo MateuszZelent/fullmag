@@ -9,6 +9,7 @@ export function useViewportRenderState() {
   return useVisualizationStore(useShallow((s) => ({
     meshRenderMode: s.meshRenderMode,
     meshOpacity: s.meshOpacity,
+    meshTrim: s.meshTrim,
     meshClipEnabled: s.meshClipEnabled,
     meshClipAxis: s.meshClipAxis,
     meshClipPos: s.meshClipPos,

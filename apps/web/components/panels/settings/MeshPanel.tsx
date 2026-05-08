@@ -647,6 +647,8 @@ export default function MeshPanel() {
                 ["adaptive remesh", meshCapabilities.supports_adaptive_remesh],
                 ["compare", meshCapabilities.supports_compare_snapshots],
                 ["size field", meshCapabilities.supports_size_field_remesh],
+                ["boundary layers", meshCapabilities.supports_boundary_layers === true],
+                ["convergence", meshCapabilities.supports_mesh_convergence_workflow === true],
                 ["mesh error", meshCapabilities.supports_mesh_error_preview],
                 ["target_h", meshCapabilities.supports_target_h_preview],
               ].map(([label, enabled]) => (

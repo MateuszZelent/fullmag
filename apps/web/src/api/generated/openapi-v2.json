@@ -455,6 +455,33 @@
         ],
         "type": "object"
       },
+      "Bounds2": {
+        "properties": {
+          "u_max": {
+            "format": "double",
+            "type": "number"
+          },
+          "u_min": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_max": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_min": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "u_min",
+          "u_max",
+          "v_min",
+          "v_max"
+        ],
+        "type": "object"
+      },
       "Bounds3": {
         "properties": {
           "max": {
@@ -1447,6 +1474,111 @@
           "units",
           "bounds",
           "counts"
+        ],
+        "type": "object"
+      },
+      "DomainSliceMeshOverlay": {
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/Bounds2"
+          },
+          "cut_kind": {
+            "type": "string"
+          },
+          "cut_norm": {
+            "format": "double",
+            "type": "number"
+          },
+          "cut_world": {
+            "format": "double",
+            "type": "number"
+          },
+          "domain_generation_id": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "normal_axis": {
+            "type": "string"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/SlicePlane"
+          },
+          "point_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "segment_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/DomainSliceMeshOverlaySegment"
+            },
+            "type": "array"
+          },
+          "topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "u_axis": {
+            "type": "string"
+          },
+          "v_axis": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "plane",
+          "cut_kind",
+          "cut_world",
+          "cut_norm",
+          "u_axis",
+          "v_axis",
+          "normal_axis",
+          "bounds",
+          "segments",
+          "truncated",
+          "segment_count",
+          "point_count",
+          "topology_revision",
+          "domain_generation_id",
+          "etag"
+        ],
+        "type": "object"
+      },
+      "DomainSliceMeshOverlaySegment": {
+        "properties": {
+          "a": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "b": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "a",
+          "b"
         ],
         "type": "object"
       },
@@ -3723,6 +3855,44 @@
           "revision",
           "schema_version",
           "pairs"
+        ],
+        "type": "object"
+      },
+      "MeshQualityGatesResource": {
+        "properties": {
+          "gates": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MeshRealizedSizeFieldsResource": {
+        "properties": {
+          "realized_size_fields": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
         ],
         "type": "object"
       },
@@ -6447,6 +6617,142 @@
         ],
         "type": "object"
       },
+      "TrimAxisVisualizationAxes": {
+        "properties": {
+          "x": {
+            "$ref": "#/components/schemas/TrimAxisVisualizationState"
+          },
+          "y": {
+            "$ref": "#/components/schemas/TrimAxisVisualizationState"
+          },
+          "z": {
+            "$ref": "#/components/schemas/TrimAxisVisualizationState"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "type": "object"
+      },
+      "TrimAxisVisualizationAxesPatch": {
+        "properties": {
+          "x": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrimAxisVisualizationPatch"
+              }
+            ]
+          },
+          "y": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrimAxisVisualizationPatch"
+              }
+            ]
+          },
+          "z": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrimAxisVisualizationPatch"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TrimAxisVisualizationPatch": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "max_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TrimAxisVisualizationState": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_percent": {
+            "format": "double",
+            "type": "number"
+          },
+          "min_percent": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "min_percent",
+          "max_percent"
+        ],
+        "type": "object"
+      },
+      "TrimVisualizationPatch": {
+        "properties": {
+          "axes": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrimAxisVisualizationAxesPatch"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TrimVisualizationState": {
+        "properties": {
+          "axes": {
+            "$ref": "#/components/schemas/TrimAxisVisualizationAxes"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "axes"
+        ],
+        "type": "object"
+      },
       "UniverseFitRequest": {
         "properties": {
           "base_revision": {
@@ -7037,6 +7343,16 @@
               "null"
             ]
           },
+          "trim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TrimVisualizationPatch"
+              }
+            ]
+          },
           "vector_density": {
             "format": "int32",
             "minimum": 0,
@@ -7102,7 +7418,7 @@
           },
           "clip": {
             "$ref": "#/components/schemas/ClipVisualizationState",
-            "description": "Shared clip-plane controls for topology-aware viewports."
+            "description": "Compatibility projection of the legacy single clip plane."
           },
           "colormap": {
             "description": "Compatibility projection for current display clients. Prefer `quantity.colormap`.",
@@ -7192,6 +7508,10 @@
           "slice_mode": {
             "type": "string"
           },
+          "trim": {
+            "$ref": "#/components/schemas/TrimVisualizationState",
+            "description": "Canonical 3-D trim controls for topology-aware viewports."
+          },
           "vector_density": {
             "description": "Compatibility projection for current display clients. Prefer `layers.vectors.density`.",
             "format": "int32",
@@ -7233,6 +7553,7 @@
           "fdm",
           "fem",
           "slice",
+          "trim",
           "clip",
           "vector_style",
           "overrides",
@@ -7898,6 +8219,66 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/domain/slice/mesh-overlay": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_slice_mesh_overlay",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "plane",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SlicePlane"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_world",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cut_norm",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainSliceMeshOverlay"
+                }
+              }
+            },
+            "description": "Exact FEM 2D mesh overlay in slice coordinates"
+          },
+          "204": {
+            "description": "Not applicable (FDM)"
+          },
+          "304": {
+            "description": "Mesh overlay not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "FEM topology unavailable for slice overlay"
           }
         },
         "tags": [
@@ -10518,6 +10899,52 @@
               }
             },
             "description": "Shared-domain mesh quality"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshQualityGatesResource"
+                }
+              }
+            },
+            "description": "Shared-domain mesh quality gates"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeshRealizedSizeFieldsResource"
+                }
+              }
+            },
+            "description": "Shared-domain realized mesh size fields"
           },
           "404": {
             "description": "No active workspace"

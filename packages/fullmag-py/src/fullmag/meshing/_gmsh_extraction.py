@@ -13,26 +13,126 @@ from ._gmsh_types import MeshData, MeshOptions, MeshQualityReport
 from ._gmsh_infra import _import_meshio
 
 
-def _first_cell_block(mesh: Any, allowed: set[str], allow_empty: bool = False) -> NDArray[np.int32]:
-    for cell_block in mesh.cells:
-        if cell_block.type in allowed:
-            return np.asarray(cell_block.data, dtype=np.int32)
+def _cell_blocks(mesh: Any, allowed: set[str], allow_empty: bool = False) -> NDArray[np.int32]:
+    blocks = [
+        np.asarray(cell_block.data, dtype=np.int32)
+        for cell_block in mesh.cells
+        if cell_block.type in allowed
+    ]
+    if blocks:
+        return np.concatenate(blocks, axis=0)
     if allow_empty:
         width = 3 if "triangle" in allowed else 4
         return np.zeros((0, width), dtype=np.int32)
     raise ValueError(f"mesh does not contain required cell types: {sorted(allowed)}")
 
 
+def _first_cell_block(mesh: Any, allowed: set[str], allow_empty: bool = False) -> NDArray[np.int32]:
+    blocks = _cell_blocks(mesh, allowed, allow_empty=allow_empty)
+    if blocks.shape[0] == 0:
+        return blocks
+    for cell_block in mesh.cells:
+        if cell_block.type in allowed:
+            return np.asarray(cell_block.data, dtype=np.int32)
+    return blocks
+
+
+def _semantic_marker_from_name(name: str | None, marker: int) -> int:
+    normalized = (name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {"air", "airbox", "air_box", "__air__"}:
+        return 0
+    return int(marker)
+
+
+def _meshio_physical_name_map(mesh: Any, *, dim: int | None = None) -> dict[int, str]:
+    field_data = getattr(mesh, "field_data", {}) or {}
+    result: dict[int, str] = {}
+    for name, raw in field_data.items():
+        values = np.asarray(raw).reshape(-1)
+        if values.size == 0:
+            continue
+        marker = int(values[0])
+        field_dim = int(values[1]) if values.size > 1 else None
+        if dim is None or field_dim is None or field_dim == dim:
+            result[marker] = str(name)
+    return result
+
+
+def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDArray[np.int32]:
+    cell_blocks = list(getattr(mesh, "cells", []))
+    matching_indices = [
+        index for index, cell_block in enumerate(cell_blocks)
+        if getattr(cell_block, "type", None) == cell_type
+    ]
+    if not matching_indices:
+        width = 3 if cell_type == "triangle" else 4
+        return np.ones((0,), dtype=np.int32) if width else np.ones((0,), dtype=np.int32)
+
+    total = sum(int(np.asarray(cell_blocks[index].data).shape[0]) for index in matching_indices)
+    markers = np.full(total, int(fallback), dtype=np.int32)
+
+    def apply_block_values(values_by_block: list[Any], name_map: dict[int, str]) -> bool:
+        offset = 0
+        applied = False
+        for block_index in matching_indices:
+            count = int(np.asarray(cell_blocks[block_index].data).shape[0])
+            if block_index < len(values_by_block):
+                values = np.asarray(values_by_block[block_index], dtype=np.int32).reshape(-1)
+                if values.shape[0] == count:
+                    for local_index, marker in enumerate(values):
+                        markers[offset + local_index] = _semantic_marker_from_name(
+                            name_map.get(int(marker)),
+                            int(marker),
+                        )
+                    applied = True
+            offset += count
+        return applied
+
+    dim = 2 if cell_type == "triangle" else 3
+    name_map = _meshio_physical_name_map(mesh, dim=dim)
+    cell_data = getattr(mesh, "cell_data", {}) or {}
+    for key in ("gmsh:physical", "medit:ref"):
+        values_by_block = cell_data.get(key)
+        if values_by_block is not None and apply_block_values(list(values_by_block), name_map):
+            return markers
+
+    cell_sets = getattr(mesh, "cell_sets", {}) or {}
+    if cell_sets:
+        offset_by_block: dict[int, int] = {}
+        offset = 0
+        for block_index in matching_indices:
+            offset_by_block[block_index] = offset
+            offset += int(np.asarray(cell_blocks[block_index].data).shape[0])
+        next_marker = 1
+        applied = False
+        for set_name in sorted(cell_sets):
+            semantic_marker = _semantic_marker_from_name(str(set_name), next_marker)
+            if semantic_marker != 0:
+                next_marker += 1
+            for block_index, indices in enumerate(cell_sets[set_name]):
+                if block_index not in offset_by_block:
+                    continue
+                block_count = int(np.asarray(cell_blocks[block_index].data).shape[0])
+                for local_index in np.asarray(indices, dtype=np.int64).reshape(-1):
+                    if 0 <= int(local_index) < block_count:
+                        markers[offset_by_block[block_index] + int(local_index)] = semantic_marker
+                        applied = True
+        if applied:
+            return markers
+
+    return markers
+
+
 def _read_mesh_file(path: Path) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
-    tetra = _first_cell_block(mesh, {"tetra"})
-    triangles = _first_cell_block(mesh, {"triangle"}, allow_empty=True)
+    tetra = _cell_blocks(mesh, {"tetra"})
+    triangles = _cell_blocks(mesh, {"triangle"}, allow_empty=True)
     nodes = np.asarray(mesh.points[:, :3], dtype=np.float64)
     elements = np.asarray(tetra, dtype=np.int32)
     boundary_faces = np.asarray(triangles, dtype=np.int32)
-    element_markers = np.ones(elements.shape[0], dtype=np.int32)
-    boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+    element_markers = _meshio_cell_markers(mesh, cell_type="tetra")
+    boundary_markers = _meshio_cell_markers(mesh, cell_type="triangle")
     return MeshData(
         nodes=nodes,
         elements=elements,
@@ -60,9 +160,21 @@ def _extract_mesh_data(
 
     if has_physical_groups:
         # ── Region-aware extraction via physical groups ──
+        physical_names_3d = {
+            int(phys_tag): gmsh.model.getPhysicalName(3, int(phys_tag))
+            for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3)
+        }
+        physical_names_2d = {
+            int(phys_tag): gmsh.model.getPhysicalName(2, int(phys_tag))
+            for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2)
+        }
         elements_list: list[list[int]] = []
         markers_list: list[int] = []
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=3):
+            semantic_marker = _semantic_marker_from_name(
+                physical_names_3d.get(int(phys_tag)),
+                int(phys_tag),
+            )
             entities = gmsh.model.getEntitiesForPhysicalGroup(3, phys_tag)
             for entity in entities:
                 elem_types, elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
@@ -74,13 +186,17 @@ def _extract_mesh_data(
                     block_tags = [int(tag) for tag in tags]
                     for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
                         elements_list.append(flat[start : start + 4])
-                        markers_list.append(phys_tag)
+                        markers_list.append(semantic_marker)
                         if element_offset < len(block_tags):
                             extracted_element_tags.append(block_tags[element_offset])
 
         bfaces_list: list[list[int]] = []
         bmarkers_list: list[int] = []
         for _dim, phys_tag in gmsh.model.getPhysicalGroups(dim=2):
+            semantic_marker = _semantic_marker_from_name(
+                physical_names_2d.get(int(phys_tag)),
+                int(phys_tag),
+            )
             entities = gmsh.model.getEntitiesForPhysicalGroup(2, phys_tag)
             for entity in entities:
                 elem_types, _elem_tags, node_ids = gmsh.model.mesh.getElements(2, entity)
@@ -91,7 +207,7 @@ def _extract_mesh_data(
                     flat = [node_index[int(t)] for t in nids]
                     for start in range(0, len(flat), num_nodes):
                         bfaces_list.append(flat[start : start + 3])
-                        bmarkers_list.append(phys_tag)
+                        bmarkers_list.append(semantic_marker)
 
         elements = (
             np.asarray(elements_list, dtype=np.int32)
@@ -279,7 +395,7 @@ def _extract_quality_metrics(
     gmsh: Any,
     opts: MeshOptions,
     element_markers: NDArray[np.int32] | None = None,
-) -> MeshQualityReport:
+) -> tuple[MeshQualityReport, dict[int, MeshQualityReport] | None]:
     """Extract per-element quality metrics from the current Gmsh mesh."""
     emit_progress("Gmsh: extracting quality metrics")
 
@@ -298,7 +414,7 @@ def _extract_quality_metrics(
             gamma_histogram=[0] * 20,
             volume_min=0.0, volume_max=0.0, volume_mean=0.0, volume_std=0.0,
             avg_quality=0.0,
-        )
+        ), None
 
     sicn = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "minSICN"))
     gamma = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "gamma"))

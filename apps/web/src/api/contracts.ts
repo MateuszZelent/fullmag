@@ -17,6 +17,8 @@ export type {
   CurrentRunResource,
   DisplayPatchRequest,
   DisplaySelection,
+  DomainSliceMeshOverlayQuery,
+  MeshOverlay2DResponse,
   SliceVisualizationPatch,
   SliceVisualizationState,
   VisualizationStatePatch,

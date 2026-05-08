@@ -178,6 +178,121 @@ describe("ribbon viewport commands", () => {
     expect(onSetMeshShowArrows).not.toHaveBeenCalled();
   });
 
+  it("rejects unsupported 2D vector component coloring at the command layer", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetFemArrowStyle = vi.fn();
+    const ctx = context({
+      viewMode: "2D",
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "single",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: true,
+        vectorDensity: 4,
+        renderMode: "vectors",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onPatchVisualizationState,
+      onSetFemArrowStyle,
+    });
+
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "viewport.set-vector-style",
+        patch: { colorMode: "z" },
+      }),
+    ).toBe(false);
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "viewport.set-vector-style",
+        patch: { colorMode: "x" },
+      }),
+    ).toBe(true);
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-vector-style",
+      patch: { colorMode: "z" },
+    });
+
+    expect(onPatchVisualizationState).not.toHaveBeenCalled();
+    expect(onSetFemArrowStyle).not.toHaveBeenCalled();
+  });
+
+  it("keeps 2D vector density local to the slice toolbar instead of mutating global preview density", () => {
+    const onPatchVisualizationState = vi.fn();
+    const onSetPreviewEveryN = vi.fn();
+    const onSetSlice2DToolbar = vi.fn();
+    const ctx = context({
+      viewMode: "2D",
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "single",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: true,
+        vectorDensity: 4,
+        renderMode: "vectors",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onPatchVisualizationState,
+      onSetPreviewEveryN,
+      onSetSlice2DToolbar,
+    });
+
+    expect(
+      canExecuteRibbonCommand(ctx, {
+        id: "viewport.set-vector-density",
+        everyN: 9,
+      }),
+    ).toBe(true);
+
+    executeRibbonCommand(ctx, {
+      id: "viewport.set-vector-density",
+      everyN: 9,
+    });
+
+    expect(onSetSlice2DToolbar).toHaveBeenCalledWith({ vectorDensity: 9 });
+    expect(onPatchVisualizationState).not.toHaveBeenCalled();
+    expect(onSetPreviewEveryN).not.toHaveBeenCalled();
+  });
+
   it("maps 2D slice toolbar commands to canonical visualization slice patches", () => {
     expect(visualizationPatchFromRibbonCommand({
       id: "viewport.set-slice-axis",
@@ -209,7 +324,7 @@ describe("ribbon viewport commands", () => {
     })).toEqual({ slice: { projection_reduction: "rms" } });
   });
 
-  it("dispatches slice toolbar through visualization state when canonical patching is available", () => {
+  it("does not dispatch unsupported 2D airbox commands even when canonical patching is available", () => {
     const onPatchVisualizationState = vi.fn();
     const onSetSlice2DToolbar = vi.fn();
     const ctx = context({ onPatchVisualizationState, onSetSlice2DToolbar });
@@ -219,13 +334,11 @@ describe("ribbon viewport commands", () => {
       renderMode: "points",
     });
 
-    expect(onPatchVisualizationState).toHaveBeenCalledWith({
-      slice: { airbox_render_mode: "points" },
-    });
+    expect(onPatchVisualizationState).not.toHaveBeenCalled();
     expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
   });
 
-  it("keeps FEM clip axis synchronized with canonical slice axis patches", () => {
+  it("keeps FEM slice axis local to slice state", () => {
     const onPatchVisualizationState = vi.fn();
     const onSetSlice2DToolbar = vi.fn();
     const ctx = context({
@@ -241,7 +354,6 @@ describe("ribbon viewport commands", () => {
 
     expect(onPatchVisualizationState).toHaveBeenCalledWith({
       slice: { axis: "y" },
-      clip: { axis: "y" },
     });
     expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
   });
@@ -508,7 +620,38 @@ describe("ribbon viewport commands", () => {
 
   it("dispatches 2D slice toolbar commands through the slice callback", () => {
     const onSetSlice2DToolbar = vi.fn();
-    const ctx = context({ onSetSlice2DToolbar });
+    const ctx = context({
+      isFemBackend: true,
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "single",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: false,
+        vectorDensity: 4,
+        renderMode: "heatmap",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onSetSlice2DToolbar,
+    });
 
     executeRibbonCommand(ctx, { id: "viewport.set-slice-axis", axis: "x" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-component", component: "z" });
@@ -521,18 +664,103 @@ describe("ribbon viewport commands", () => {
 
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { axis: "x" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { component: "z" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { mode: "slab" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { positionPercent: 42 });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, { showAirbox: true });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, { airboxRenderMode: "points" });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(7, {
-      showAirboxVectors: true,
-    });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(8, {
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { positionPercent: 42 });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, {
       renderMode: "mesh-overlay",
       showMesh: true,
       showVectors: false,
     });
+    expect(onSetSlice2DToolbar).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects unsupported 2D slice commands instead of mutating impossible UI state", () => {
+    const onSetSlice2DToolbar = vi.fn();
+    const unsupportedCtx = context({
+      isFemBackend: false,
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "all_layers",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: false,
+        vectorDensity: 4,
+        renderMode: "heatmap",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onSetSlice2DToolbar,
+    });
+
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-mode", mode: "slab" })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "contour" })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "heatmap+contour" })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "vectors" })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-mesh", visible: true })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-primitives", visible: true })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-airbox", visible: true })).toBe(false);
+
+    executeRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "contour" });
+    executeRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-airbox", visible: true });
+
+    expect(onSetSlice2DToolbar).not.toHaveBeenCalled();
+  });
+
+  it("allows exact 2D vectors and mesh overlay only on supported single-slice paths", () => {
+    const onSetSlice2DToolbar = vi.fn();
+    const singleFemCtx = context({
+      isFemBackend: true,
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "single",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: false,
+        vectorDensity: 4,
+        renderMode: "heatmap",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onSetSlice2DToolbar,
+    });
+
+    expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-render-mode", renderMode: "vectors" })).toBe(true);
+    expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" })).toBe(true);
+    expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-mesh", visible: true })).toBe(true);
   });
 
   it("requires the 2D slice callback for slice commands", () => {
@@ -543,7 +771,38 @@ describe("ribbon viewport commands", () => {
       }),
     ).toBe(false);
     expect(
-      canExecuteRibbonCommand(context({ onSetSlice2DToolbar: vi.fn() }), {
+      canExecuteRibbonCommand(context({
+        isFemBackend: true,
+        slice2DToolbar: {
+          quantityId: "m",
+          component: "magnitude",
+          axis: "z",
+          mode: "single",
+          layerIndex: 0,
+          positionPercent: 50,
+          positionWorld: null,
+          normalAxisBounds: null,
+          magneticExtent: null,
+          thicknessPercent: null,
+          colormap: "viridis",
+          autoContrast: true,
+          showPrimitives: false,
+          showMesh: false,
+          showMagneticTexture: true,
+          showAirbox: false,
+          airboxRenderMode: "wireframe",
+          showAirboxVectors: false,
+          showQuantity: true,
+          showVectors: false,
+          vectorDensity: 4,
+          renderMode: "heatmap",
+          projectionReduction: "mean_occupied",
+          projectionIncludeAirAsZero: false,
+          projectionSamples: 20,
+          projectionResolution: 128,
+        },
+        onSetSlice2DToolbar: vi.fn(),
+      }), {
         id: "viewport.set-slice-mesh",
         visible: true,
       }),

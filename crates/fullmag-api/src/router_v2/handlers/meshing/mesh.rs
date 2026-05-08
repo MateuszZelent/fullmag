@@ -19,12 +19,12 @@ use crate::schemas::mesh::{
     MeshObjectConfigEntryResource, MeshObjectConfigReplaceRequest, MeshObjectConfigResource,
     MeshObjectQualityResource, MeshObjectReportResource, MeshObjectSegmentResource,
     MeshObjectSizeFieldResource, MeshPartResource, MeshPeriodicPairResource,
-    MeshPeriodicPairsResource, MeshRegionResource, MeshSemanticsResource,
-    MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
-    MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
-    MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
-    MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource, MeshUniverseQualityResource,
-    MeshUniverseReportResource,
+    MeshPeriodicPairsResource, MeshQualityGatesResource, MeshRealizedSizeFieldsResource,
+    MeshRegionResource, MeshSemanticsResource, MeshSharedDomainConfigReplaceRequest,
+    MeshSharedDomainConfigResource, MeshSharedDomainManifestResource,
+    MeshSharedDomainQualityResource, MeshSharedDomainReportResource, MeshSolverMeshResource,
+    MeshSummaryResource, MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource,
+    MeshUniverseQualityResource, MeshUniverseReportResource,
 };
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
@@ -459,6 +459,7 @@ pub async fn get_mesh_shared_domain_report(
     let report = Some(json!({
         "mesh_summary": mesh_workspace.get("mesh_summary").cloned().unwrap_or(Value::Null),
         "mesh_statistics": mesh_workspace.get("mesh_statistics").cloned().unwrap_or(Value::Null),
+        "mesh_cost_report": mesh_workspace.get("mesh_cost_report").cloned().unwrap_or(Value::Null),
         "mesh_pipeline_status": mesh_workspace.get("mesh_pipeline_status").cloned().unwrap_or(Value::Null),
         "last_build_summary": mesh_workspace.get("last_build_summary").cloned().unwrap_or(Value::Null),
     }));
@@ -485,6 +486,75 @@ pub async fn get_mesh_shared_domain_quality(
     Ok(Json(MeshSharedDomainQualityResource {
         revision: snapshot.mesh_revision,
         quality: mesh_workspace.get("mesh_quality_summary").cloned(),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+    responses(
+        (status = 200, description = "Shared-domain realized mesh size fields", body = MeshRealizedSizeFieldsResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_realized_size_fields(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MeshRealizedSizeFieldsResource>, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    Ok(Json(MeshRealizedSizeFieldsResource {
+        revision: snapshot.mesh_revision,
+        realized_size_fields: first_workspace_value(
+            mesh_workspace,
+            &[
+                &["size_fields_realized"],
+                &["realized_size_fields"],
+                &["last_build_summary", "size_fields_realized"],
+                &["last_build_summary", "realized_size_fields"],
+                &["shared_domain_report", "size_fields_realized"],
+                &["shared_domain_report", "realized_size_fields"],
+            ],
+        )
+        .or_else(|| {
+            Some(json!({
+                "source": "unavailable",
+                "fields": [],
+                "reason": "size_fields_realized is missing from the current mesh workspace/build report"
+            }))
+        }),
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+    responses(
+        (status = 200, description = "Shared-domain mesh quality gates", body = MeshQualityGatesResource),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "meshing"
+)]
+pub async fn get_mesh_quality_gates(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MeshQualityGatesResource>, ApiError> {
+    let snapshot = current_snapshot(&state).await?;
+    let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let gates = first_workspace_value(
+        mesh_workspace,
+        &[
+            &["mesh_quality_gates"],
+            &["quality_gates"],
+            &["last_build_summary", "mesh_quality_gates"],
+            &["last_build_summary", "quality_gates"],
+            &["shared_domain_report", "mesh_quality_gates"],
+            &["shared_domain_report", "quality_gates"],
+        ],
+    )
+    .or_else(|| Some(derive_mesh_quality_gates(&snapshot, mesh_workspace)));
+    Ok(Json(MeshQualityGatesResource {
+        revision: snapshot.mesh_revision,
+        gates,
     }))
 }
 
@@ -1101,10 +1171,14 @@ pub async fn get_mesh_interface_quality(
     Path(interface_id): Path<String>,
 ) -> Result<Json<MeshInterfaceQualityResource>, ApiError> {
     let snapshot = current_snapshot(&state).await?;
+    let quality = snapshot
+        .fem_mesh
+        .as_ref()
+        .and_then(|mesh| interface_quality(mesh, &interface_id));
     Ok(Json(MeshInterfaceQualityResource {
         revision: snapshot.mesh_revision,
         interface_id,
-        quality: None,
+        quality,
     }))
 }
 
@@ -1130,6 +1204,61 @@ fn current_mesh_workspace(snapshot: &SessionStateResponse) -> Result<&Value, Api
         .mesh_workspace
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no mesh workspace available for current workspace"))
+}
+
+fn workspace_value_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = root;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+fn first_workspace_value(root: &Value, paths: &[&[&str]]) -> Option<Value> {
+    paths
+        .iter()
+        .find_map(|path| workspace_value_at(root, path).cloned())
+}
+
+fn derive_mesh_quality_gates(snapshot: &SessionStateResponse, mesh_workspace: &Value) -> Value {
+    let mesh = snapshot.fem_mesh.as_ref();
+    let element_count = mesh.map(|mesh| mesh.elements.len()).unwrap_or_default();
+    let node_count = mesh.map(|mesh| mesh.nodes.len()).unwrap_or_default();
+    let marker_coverage = mesh
+        .map(|mesh| mesh.element_markers.len() == mesh.elements.len())
+        .unwrap_or(false);
+    let outer_boundary_present = mesh
+        .map(|mesh| mesh.boundary_markers.iter().any(|marker| *marker == 99))
+        .unwrap_or(false);
+    json!({
+        "source": "derived_from_current_fem_mesh",
+        "status": if element_count > 0 && marker_coverage { "pass" } else { "unknown" },
+        "reason": "mesh_quality_gates is missing from the current mesh workspace/build report",
+        "checks": [
+            {
+                "id": "non_empty_tetrahedra",
+                "status": if element_count > 0 { "pass" } else { "unknown" },
+                "value": element_count
+            },
+            {
+                "id": "non_empty_nodes",
+                "status": if node_count > 0 { "pass" } else { "unknown" },
+                "value": node_count
+            },
+            {
+                "id": "element_marker_coverage",
+                "status": if marker_coverage { "pass" } else { "unknown" },
+                "value": marker_coverage
+            },
+            {
+                "id": "outer_boundary_marker_present",
+                "status": if outer_boundary_present { "pass" } else { "unknown" },
+                "value": outer_boundary_present
+            }
+        ],
+        "mesh_quality_summary": mesh_workspace.get("mesh_quality_summary").cloned().unwrap_or(Value::Null),
+        "mesh_statistics": mesh_workspace.get("mesh_statistics").cloned().unwrap_or(Value::Null)
+    })
 }
 
 fn current_universe_mesh_config(scene: &SceneDocument) -> Option<&ScriptBuilderUniverseState> {
@@ -1472,6 +1601,14 @@ fn max_vec3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 }
 
 fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshPayload> {
+    if let Some(part) = mesh
+        .mesh_parts
+        .iter()
+        .find(|part| part.role == "magnetic_object" && part.object_id.as_deref() == Some(object_id))
+    {
+        return subset_part_mesh(mesh, &part.id);
+    }
+
     let segment = mesh
         .object_segments
         .iter()
@@ -1556,6 +1693,106 @@ fn subset_object_mesh(mesh: &FemMeshPayload, object_id: &str) -> Option<FemMeshP
         generation_id: mesh.generation_id.clone(),
         per_domain_quality,
     })
+}
+
+fn interface_quality(mesh: &FemMeshPayload, interface_id: &str) -> Option<Value> {
+    let owners = parse_interface_owners(interface_id);
+    let interface_part = mesh.mesh_parts.iter().find(|part| {
+        if part.role != "interface" {
+            return false;
+        }
+        if part.id == interface_id || part.label == interface_id {
+            return true;
+        }
+        let Some((left, right)) = owners.as_ref() else {
+            return false;
+        };
+        (part.id.contains(left) && part.id.contains(right))
+            || (part.label.contains(left) && part.label.contains(right))
+    })?;
+
+    let mut interface_faces = Vec::new();
+    if !interface_part.surface_faces.is_empty() {
+        interface_faces.extend(interface_part.surface_faces.iter().copied());
+    } else if !interface_part.boundary_face_indices.is_empty() {
+        for index in &interface_part.boundary_face_indices {
+            if let Some(face) = mesh.boundary_faces.get(*index as usize) {
+                interface_faces.push(*face);
+            }
+        }
+    } else {
+        let start = interface_part.boundary_face_start as usize;
+        let end = start.saturating_add(interface_part.boundary_face_count as usize);
+        interface_faces.extend(mesh.boundary_faces.get(start..end)?.iter().copied());
+    }
+
+    let mut adjacent_markers = BTreeSet::new();
+    for face in &interface_faces {
+        let face_nodes = [face[0], face[1], face[2]];
+        for (element_index, element) in mesh.elements.iter().enumerate() {
+            if face_nodes.iter().all(|node| element.contains(node)) {
+                if let Some(marker) = mesh.element_markers.get(element_index) {
+                    adjacent_markers.insert(*marker);
+                }
+            }
+        }
+    }
+
+    let per_domain_quality = adjacent_markers
+        .iter()
+        .filter_map(|marker| {
+            mesh.per_domain_quality
+                .get(marker)
+                .and_then(|quality| serde_json::to_value(quality).ok())
+                .map(|quality| (marker.to_string(), quality))
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    let bounds = bounds_for_node_indices(mesh, &interface_part.node_indices)
+        .or_else(|| bounds_for_surface_faces(mesh, &interface_faces));
+
+    Some(json!({
+        "part_id": interface_part.id,
+        "label": interface_part.label,
+        "face_count": interface_faces.len(),
+        "node_count": interface_part.node_count,
+        "adjacent_markers": adjacent_markers.into_iter().collect::<Vec<_>>(),
+        "per_domain_quality": Value::Object(per_domain_quality),
+        "bounds_min": bounds.map(|(min, _)| min).unwrap_or([0.0, 0.0, 0.0]),
+        "bounds_max": bounds.map(|(_, max)| max).unwrap_or([0.0, 0.0, 0.0]),
+    }))
+}
+
+fn bounds_for_node_indices(
+    mesh: &FemMeshPayload,
+    node_indices: &[u32],
+) -> Option<([f64; 3], [f64; 3])> {
+    let mut iter = node_indices
+        .iter()
+        .filter_map(|index| mesh.nodes.get(*index as usize).copied());
+    let first = iter.next()?;
+    let mut min = first;
+    let mut max = first;
+    for node in iter {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(node[axis]);
+            max[axis] = max[axis].max(node[axis]);
+        }
+    }
+    Some((min, max))
+}
+
+fn bounds_for_surface_faces(
+    mesh: &FemMeshPayload,
+    faces: &[[u32; 3]],
+) -> Option<([f64; 3], [f64; 3])> {
+    let node_indices = faces
+        .iter()
+        .flat_map(|face| face.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    bounds_for_node_indices(mesh, &node_indices)
 }
 
 fn subset_part_mesh(mesh: &FemMeshPayload, part_id: &str) -> Option<FemMeshPayload> {

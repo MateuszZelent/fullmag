@@ -11,8 +11,14 @@ export function isWebGLWorkspaceTabKind(kind: string): boolean {
   return WEBGL_WORKSPACE_TAB_KINDS.has(kind);
 }
 
-export function isCore3DWorkspaceTab(args: { id?: string | null; kind: string }): boolean {
-  return args.id === "core:3d" && args.kind === "viewport-3d";
+export function isPersistentViewportWorkspaceTab(args: {
+  id?: string | null;
+  kind: string;
+}): boolean {
+  return (
+    (args.id === "core:3d" && args.kind === "viewport-3d") ||
+    (args.id === "core:2d" && args.kind === "viewport-2d")
+  );
 }
 
 export function resolveWorkspaceTabMountPolicy(args: {
@@ -20,7 +26,7 @@ export function resolveWorkspaceTabMountPolicy(args: {
   kind: string;
   requestedMountPolicy: WorkspaceTabMountPolicyValue;
 }): WorkspaceTabMountPolicyValue {
-  if (isCore3DWorkspaceTab(args)) {
+  if (isPersistentViewportWorkspaceTab(args)) {
     return "hidden-mounted";
   }
   return isWebGLWorkspaceTabKind(args.kind) ? "active-only" : args.requestedMountPolicy;

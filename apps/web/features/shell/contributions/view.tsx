@@ -51,6 +51,28 @@ const VECTOR_COLOR_ITEMS = [
   { value: "monochrome", label: "Monochrome" },
 ];
 
+function slicePlaneFromAxis(axis: "x" | "y" | "z"): "xy" | "xz" | "yz" {
+  if (axis === "z") return "xy";
+  if (axis === "y") return "xz";
+  return "yz";
+}
+
+function is2DVectorColorItemSupported(
+  plane: "xy" | "xz" | "yz",
+  value: string,
+): boolean {
+  if (value === "orientation" || value === "magnitude" || value === "monochrome") {
+    return true;
+  }
+  if (plane === "xy") {
+    return value === "x" || value === "y";
+  }
+  if (plane === "xz") {
+    return value === "x" || value === "z";
+  }
+  return value === "y" || value === "z";
+}
+
 const VECTOR_COMPONENT_ITEMS = [
   { value: "3D", label: "3D vectors" },
   { value: "magnitude", label: "Magnitude |v|" },
@@ -707,6 +729,14 @@ function buildAirboxMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
 
 function buildRenderLayersMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
   const global = canUse3Dor2D(ctx);
+  const trim = ctx.meshTrim ?? {
+    enabled: false,
+    axes: {
+      x: { enabled: false, minPercent: 0, maxPercent: 100 },
+      y: { enabled: false, minPercent: 0, maxPercent: 100 },
+      z: { enabled: false, minPercent: 0, maxPercent: 100 },
+    },
+  };
   return [
     {
       type: "radio-group",
@@ -737,45 +767,123 @@ function buildRenderLayersMenu(ctx: RibbonBuildContext): RibbonMenuNode[] {
     },
     {
       type: "submenu",
-      id: "layers:clip",
-      label: "Global clip",
+      id: "layers:trim",
+      label: "3D trim",
       nodes: [
         {
           type: "checkbox",
-          id: "clip:enabled",
-          label: "Clip enabled",
-          checked: Boolean(ctx.meshClipEnabled),
-          onCheckedChange: (enabled) => ctx.run({ id: "viewport.set-global-clip", patch: { enabled } }),
+          id: "trim:enabled",
+          label: "TRIM enabled",
+          checked: Boolean(trim.enabled),
+          onCheckedChange: (enabled) =>
+            ctx.run({ id: "viewport.set-global-trim", patch: { enabled } }),
         },
+        { type: "separator", id: "trim:s0" },
+        ...(["x", "y", "z"] as const).flatMap((axis) => {
+          const axisTrim = trim.axes[axis];
+          const axisLabel = axis.toUpperCase();
+          return [
+            {
+              type: "label",
+              id: `trim:${axis}:label`,
+              label: `${axisLabel} axis`,
+              badge: axisTrim.enabled ? "active" : "off",
+            } as RibbonMenuNode,
+            {
+              type: "checkbox",
+              id: `trim:${axis}:enabled`,
+              label: `${axisLabel} trim`,
+              checked: Boolean(axisTrim.enabled),
+              disabled: global.disabled,
+              disabledReason: global.reason,
+              onCheckedChange: (enabled) =>
+                ctx.run({
+                  id: "viewport.set-global-trim",
+                  patch: {
+                    axes: {
+                      [axis]: { enabled },
+                    },
+                  },
+                }),
+            } as RibbonMenuNode,
+            {
+              type: "slider",
+              id: `trim:${axis}:min`,
+              label: `${axisLabel} min`,
+              value: axisTrim.minPercent,
+              min: 0,
+              max: 100,
+              step: 1,
+              unit: "%",
+              disabled: global.disabled || !trim.enabled || !axisTrim.enabled,
+              disabledReason: global.reason ?? (!trim.enabled ? "Enable TRIM first" : !axisTrim.enabled ? `Enable ${axisLabel} trim first` : null),
+              onValueChange: (minPercent) =>
+                ctx.run({
+                  id: "viewport.set-global-trim",
+                  patch: {
+                    axes: {
+                      [axis]: { minPercent },
+                    },
+                  },
+                }),
+            } as RibbonMenuNode,
+            {
+              type: "slider",
+              id: `trim:${axis}:max`,
+              label: `${axisLabel} max`,
+              value: axisTrim.maxPercent,
+              min: 0,
+              max: 100,
+              step: 1,
+              unit: "%",
+              disabled: global.disabled || !trim.enabled || !axisTrim.enabled,
+              disabledReason: global.reason ?? (!trim.enabled ? "Enable TRIM first" : !axisTrim.enabled ? `Enable ${axisLabel} trim first` : null),
+              onValueChange: (maxPercent) =>
+                ctx.run({
+                  id: "viewport.set-global-trim",
+                  patch: {
+                    axes: {
+                      [axis]: { maxPercent },
+                    },
+                  },
+                }),
+            } as RibbonMenuNode,
+            {
+              type: "item",
+              id: `trim:${axis}:reset`,
+              label: `Reset ${axisLabel}`,
+              action: () =>
+                ctx.run({
+                  id: "viewport.set-global-trim",
+                  patch: {
+                    axes: {
+                      [axis]: { enabled: false, minPercent: 0, maxPercent: 100 },
+                    },
+                  },
+                }),
+            } as RibbonMenuNode,
+            {
+              type: "separator",
+              id: `trim:${axis}:separator`,
+            } as RibbonMenuNode,
+          ];
+        }),
         {
-          type: "radio-group",
-          id: "clip:axis",
-          label: "Axis",
-          value: ctx.meshClipAxis ?? "z",
-          onValueChange: (axis) => ctx.run({ id: "viewport.set-global-clip", patch: { axis: axis as "x" | "y" | "z" } }),
-          items: [
-            { value: "x", label: "X" },
-            { value: "y", label: "Y" },
-            { value: "z", label: "Z" },
-          ],
-        },
-        {
-          type: "slider",
-          id: "clip:position",
-          label: "Position",
-          value: ctx.meshClipPos ?? 50,
-          min: 0,
-          max: 100,
-          step: 1,
-          unit: "%",
-          onValueChange: (position) => ctx.run({ id: "viewport.set-global-clip", patch: { position } }),
-        },
-        {
-          type: "checkbox",
-          id: "clip:flip",
-          label: "Flip side",
-          checked: Boolean(ctx.meshClipFlip),
-          onCheckedChange: (flipped) => ctx.run({ id: "viewport.set-global-clip", patch: { flipped } }),
+          type: "item",
+          id: "trim:reset-all",
+          label: "Reset all",
+          action: () =>
+            ctx.run({
+              id: "viewport.set-global-trim",
+              patch: {
+                enabled: false,
+                axes: {
+                  x: { enabled: false, minPercent: 0, maxPercent: 100 },
+                  y: { enabled: false, minPercent: 0, maxPercent: 100 },
+                  z: { enabled: false, minPercent: 0, maxPercent: 100 },
+                },
+              },
+            }),
         },
       ],
     },
@@ -929,9 +1037,25 @@ function queueSlicePositionCommand(
 function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const slice = canUse2D(ctx);
   const toolbar = ctx.slice2DToolbar;
+  const unsupportedAirboxReason = "2D airbox overlay is not implemented E2E yet";
+  const unsupportedContourReason = "2D contour rendering is not implemented E2E yet";
+  const unsupportedSlabReason = "Slab mode is not implemented E2E yet";
+  const unsupportedPrimitiveReason = "2D primitive overlays are not implemented E2E yet";
   const component = toolbar?.component ?? "magnitude";
   const axis = toolbar?.axis ?? "z";
   const mode = toolbar?.mode ?? "single";
+  const unsupportedVectorReason =
+    mode !== "single"
+      ? "2D vectors currently support Single mode only"
+      : null;
+  const unsupportedMeshOverlayReason =
+    !ctx.isFemBackend
+      ? "2D mesh overlay requires FEM explicit topology"
+      : mode !== "single"
+        ? "2D mesh overlay currently supports Single mode only"
+        : null;
+  const unsupported2DMeshRenderModeReason =
+    "2D uses slice overlay modes; 3D mesh render mode does not apply here";
   const renderMode = toolbar?.renderMode ?? "heatmap";
   const showQuantity = toolbar?.showQuantity ?? true;
   const showPrimitives = toolbar?.showPrimitives ?? true;
@@ -973,6 +1097,16 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const projectionResolution = toolbar?.projectionResolution ?? 128;
   const projectionDisabled = slice.disabled || mode !== "all_layers";
   const projectionDisabledReason = slice.reason ?? (mode !== "all_layers" ? "Select All layers mode first" : null);
+  const vectorColorsPlane = slicePlaneFromAxis(axis);
+  const vectorColorsDisabled = Boolean(slice.reason ?? unsupportedVectorReason);
+  const vectorColorsDisabledReason = slice.reason ?? unsupportedVectorReason;
+  const vectorColorItems = VECTOR_COLOR_ITEMS.map((item) => ({
+    ...item,
+    disabled: !is2DVectorColorItemSupported(vectorColorsPlane, item.value),
+    disabledReason: is2DVectorColorItemSupported(vectorColorsPlane, item.value)
+      ? null
+      : `${item.label} is unavailable for the ${vectorColorsPlane.toUpperCase()} slice plane`,
+  }));
   return {
     id: "view-slice-2d",
     title: "2D Slice 2",
@@ -1041,9 +1175,9 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
         id: "view-slice-vectors",
         icon: <Zap size={20} />,
         label: "Vectors",
-        tooltip: slice.reason ?? "Control 2D vector overlay",
+        tooltip: slice.reason ?? unsupportedVectorReason ?? undefined,
         active: showVectors,
-        disabled: slice.disabled,
+        disabled: Boolean(slice.reason ?? unsupportedVectorReason),
         iconColor: "text-cyan-300",
         menu: [
           {
@@ -1051,8 +1185,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:vectors:visible",
             label: "Show vectors",
             checked: showVectors,
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: Boolean(slice.reason ?? unsupportedVectorReason),
+            disabledReason: slice.reason ?? unsupportedVectorReason,
             onCheckedChange: (visible) =>
               ctx.run({
                 id: "viewport.set-slice-render-mode",
@@ -1063,12 +1197,12 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             type: "slider",
             id: "slice:vectors:density",
             label: "Every N",
-            value: ctx.requestedPreviewEveryN ?? 4,
+            value: toolbar?.vectorDensity ?? ctx.requestedPreviewEveryN ?? 4,
             min: 1,
             max: 64,
             step: 1,
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: Boolean(slice.reason ?? unsupportedVectorReason),
+            disabledReason: slice.reason ?? unsupportedVectorReason,
             onValueChange: (everyN) => ctx.run({ id: "viewport.set-vector-density", everyN }),
           },
           {
@@ -1076,14 +1210,31 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:vectors:colors",
             label: "Vector colors",
             value: ctx.femArrowColorMode ?? "orientation",
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: vectorColorsDisabled,
+            disabledReason: vectorColorsDisabledReason,
             onValueChange: (colorMode) =>
               ctx.run({
                 id: "viewport.set-vector-style",
                 patch: { colorMode: colorMode as "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome" },
               }),
-            items: VECTOR_COLOR_ITEMS,
+            items: vectorColorItems,
+          },
+          {
+            type: "color",
+            id: "slice:vectors:mono-color",
+            label: "Monochrome vector color",
+            value: ctx.femArrowMonoColor ?? "#38d9ff",
+            disabled: vectorColorsDisabled || ctx.femArrowColorMode !== "monochrome",
+            disabledReason: vectorColorsDisabled
+              ? vectorColorsDisabledReason
+              : ctx.femArrowColorMode === "monochrome"
+                ? null
+                : "Use Monochrome vector coloring first",
+            onValueChange: (monoColor) =>
+              ctx.run({
+                id: "viewport.set-vector-style",
+                patch: { monoColor },
+              }),
           },
         ],
       },
@@ -1091,9 +1242,9 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
         id: "view-slice-airbox",
         icon: <Box size={20} />,
         label: "Airbox",
-        tooltip: slice.reason ?? "Control 2D airbox visibility and rendering",
+        tooltip: slice.reason ?? unsupportedAirboxReason,
         active: showAirbox,
-        disabled: slice.disabled,
+        disabled: true,
         iconColor: "text-fuchsia-300",
         menu: [
           { type: "label", id: "slice:airbox:header", label: "2D airbox", badge: showAirbox ? "visible" : "hidden" },
@@ -1102,8 +1253,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:airbox:visible",
             label: "Airbox on/off",
             checked: showAirbox,
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: true,
+            disabledReason: slice.reason ?? unsupportedAirboxReason,
             onCheckedChange: (visible) =>
               ctx.dispatchVisualization
                 ? ctx.dispatchVisualization({ type: "airbox.setVisible2D", visible })
@@ -1114,8 +1265,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:airbox:render-mode",
             label: "Airbox render",
             value: airboxRenderMode,
-            disabled: slice.disabled || !showAirbox,
-            disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
+            disabled: true,
+            disabledReason: slice.reason ?? unsupportedAirboxReason,
             onValueChange: (renderMode) =>
               ctx.run({
                 id: "viewport.set-slice-airbox-render-mode",
@@ -1133,8 +1284,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:airbox:vectors",
             label: "Vectors",
             checked: showAirboxVectors,
-            disabled: slice.disabled || !showAirbox,
-            disabledReason: slice.reason ?? (!showAirbox ? "Enable airbox first" : undefined),
+            disabled: true,
+            disabledReason: slice.reason ?? unsupportedAirboxReason,
             onCheckedChange: (visible) =>
               ctx.run({ id: "viewport.set-slice-airbox-vectors", visible }),
           },
@@ -1153,8 +1304,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:mesh:primitives",
             label: "Primitives",
             checked: showPrimitives,
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: true,
+            disabledReason: slice.reason ?? unsupportedPrimitiveReason,
             onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-primitives", visible }),
           },
           {
@@ -1162,8 +1313,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:mesh:wireframe",
             label: "Mesh wireframe",
             checked: showMesh,
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: Boolean(slice.reason ?? unsupportedMeshOverlayReason),
+            disabledReason: slice.reason ?? unsupportedMeshOverlayReason,
             onCheckedChange: (visible) => ctx.run({ id: "viewport.set-slice-mesh", visible }),
           },
           {
@@ -1190,10 +1341,30 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
               }),
             items: [
               { value: "heatmap", label: "Heatmap" },
-              { value: "contour", label: "Contour" },
-              { value: "heatmap+contour", label: "Heatmap + contour" },
-              { value: "vectors", label: "Vectors" },
-              { value: "mesh-overlay", label: "Mesh overlay" },
+              {
+                value: "contour",
+                label: "Contour",
+                disabled: true,
+                disabledReason: unsupportedContourReason,
+              },
+              {
+                value: "heatmap+contour",
+                label: "Heatmap + contour",
+                disabled: true,
+                disabledReason: unsupportedContourReason,
+              },
+              {
+                value: "vectors",
+                label: "Vectors",
+                disabled: Boolean(unsupportedVectorReason),
+                disabledReason: unsupportedVectorReason,
+              },
+              {
+                value: "mesh-overlay",
+                label: "Mesh overlay",
+                disabled: Boolean(unsupportedMeshOverlayReason),
+                disabledReason: unsupportedMeshOverlayReason,
+              },
             ],
           },
           {
@@ -1201,8 +1372,8 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:mesh:render-mode",
             label: "Mesh render mode",
             value: ctx.meshRenderMode ?? "surface",
-            disabled: slice.disabled,
-            disabledReason: slice.reason,
+            disabled: true,
+            disabledReason: slice.reason ?? unsupported2DMeshRenderModeReason,
             onValueChange: (meshRenderMode) =>
               ctx.run({
                 id: "viewport.set-global-render-mode",
@@ -1253,7 +1424,12 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
               }),
             items: [
               { value: "single", label: "Single" },
-              { value: "slab", label: "Slab" },
+              {
+                value: "slab",
+                label: "Slab",
+                disabled: true,
+                disabledReason: unsupportedSlabReason,
+              },
               { value: "all_layers", label: "All layers" },
             ],
           },

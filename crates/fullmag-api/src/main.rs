@@ -33,6 +33,7 @@ mod assets;
 mod error;
 mod feature_flags;
 mod fem_slice;
+mod fem_slice_overlay;
 mod fem_spatial_index;
 mod field_projection;
 mod field_render_png;

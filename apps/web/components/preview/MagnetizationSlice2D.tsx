@@ -2,11 +2,17 @@
 
 import { useEffect, useRef, useMemo } from "react";
 import * as echarts from "echarts";
+import type {
+  FieldProjectionMeta,
+  FieldSliceMeta,
+} from "@/src/api/types";
+import type { SliceArrowData } from "@/src/hooks/resources/useFieldSlice2D";
+import type { SliceMeshOverlay2D } from "./fem/sliceMeshOverlay2D";
 import { DIVERGING_PALETTE, SEQUENTIAL_BLUE_PALETTE, POSITIVE_PALETTE } from "../../lib/colorPalettes";
-import { ECHARTS_THEME } from "../../lib/echartsTheme";
 
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
+type FemArrowColorMode = "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
 
 interface Props {
   grid: [number, number, number];
@@ -18,9 +24,19 @@ interface Props {
   scalarValues?: Float64Array | null;
   /** `[xPixels, yPixels]` for `scalarValues`. */
   scalarShape?: [number, number] | null;
+  meta?: FieldSliceMeta | FieldProjectionMeta | null;
+  meshOverlay?: SliceMeshOverlay2D | null;
+  arrows?: SliceArrowData | null;
   quantityLabel: string;
   /** e.g. "m", "H_ex", "H_demag", "H_ext", "H_eff" */
   quantityId?: string;
+  quantityUnit?: string | null;
+  quantityComponentCount?: number | null;
+  showQuantity?: boolean;
+  showVectors?: boolean;
+  arrowEvery?: number | null;
+  vectorColorMode?: FemArrowColorMode;
+  vectorMonoColor?: string;
   component: VectorComponent;
   plane: SlicePlane;
   sliceIndex: number;
@@ -28,7 +44,6 @@ interface Props {
 
 // Alias for local use
 const NEGATIVE_PALETTE = SEQUENTIAL_BLUE_PALETTE;
-const THEME = ECHARTS_THEME;
 
 function getColorScale(min: number, max: number) {
   if (min < 0 && max > 0) {
@@ -73,23 +88,17 @@ function getSmartColorScale(
   return getColorScale(dMin, dMax);
 }
 
-function formatMagnitude(value: number): string {
-  if (!Number.isFinite(value)) return "NaN";
-  if (value === 0) return "0";
-  const abs = Math.abs(value);
-  if (abs >= 1000 || abs < 1e-2) return value.toExponential(2);
-  if (abs >= 10) return value.toFixed(1);
-  if (abs >= 1) return value.toFixed(2);
-  return value.toPrecision(2);
-}
-
 function clamp(v: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, v));
 }
 
 import {
+  buildSlice2DChartOption,
   buildSlice2DChartTopologyKey,
+  reconstructSliceArrowGlyphs,
+  rasterToHeatmapPoints,
   resolveHeatmapTooltipValue,
+  styleSliceVectorGlyphs,
 } from "./magnetizationSliceUtils";
 export { buildSlice2DChartTopologyKey, resolveHeatmapTooltipValue };
 
@@ -119,8 +128,18 @@ export default function MagnetizationSlice2D({
   vectors,
   scalarValues = null,
   scalarShape = null,
+  meta = null,
+  meshOverlay = null,
+  arrows = null,
   quantityLabel,
   quantityId,
+  quantityUnit = null,
+  quantityComponentCount = null,
+  showQuantity = true,
+  showVectors = false,
+  arrowEvery = null,
+  vectorColorMode = "orientation",
+  vectorMonoColor = "#38d9ff",
   component,
   plane,
   sliceIndex,
@@ -140,19 +159,18 @@ export default function MagnetizationSlice2D({
     ) {
       const xLen = scalarShape[0];
       const yLen = scalarShape[1];
-      const expectedCount = xLen * yLen;
-      const count = Math.min(expectedCount, scalarValues.length);
-      const points: [number, number, number][] = [];
+      const points = rasterToHeatmapPoints({
+        values: scalarValues,
+        xLen,
+        yLen,
+        bounds: meta?.bounds ?? null,
+      });
       let dMin = Number.POSITIVE_INFINITY;
       let dMax = Number.NEGATIVE_INFINITY;
 
-      for (let idx = 0; idx < count; idx++) {
-        const x = idx % xLen;
-        const y = Math.floor(idx / xLen);
-        const v = scalarValues[idx];
+      for (const [, , v] of points) {
         if (v < dMin) dMin = v;
         if (v > dMax) dMax = v;
-        points.push([x, y, v]);
       }
 
       if (!Number.isFinite(dMin)) dMin = 0;
@@ -215,7 +233,7 @@ export default function MagnetizationSlice2D({
     if (!Number.isFinite(dMax)) dMax = 0;
 
     return { data: points, xLen, yLen, dMin, dMax };
-  }, [component, grid, plane, scalarShape, scalarValues, sliceIndex, vectors]);
+  }, [component, grid, meta?.bounds, plane, scalarShape, scalarValues, sliceIndex, vectors]);
 
   // ─── Init / update chart ──────────────────────────────────────────
   useEffect(() => {
@@ -233,169 +251,75 @@ export default function MagnetizationSlice2D({
 
     const chart = chartRef.current;
     const scale = getSmartColorScale(dMin, dMax, quantityId, component);
-    const xCategories = Array.from({ length: xLen }, (_, i) => i);
-    const yCategories = Array.from({ length: yLen }, (_, i) => i);
+    const vectorGlyphs = showVectors
+      ? reconstructSliceArrowGlyphs({
+        arrows,
+        scalarValues,
+        xLen,
+        yLen,
+        bounds: meta?.bounds ?? null,
+        arrowEvery,
+      })
+      : [];
+    const styledVectorGlyphs = styleSliceVectorGlyphs({
+      glyphs: vectorGlyphs,
+      plane,
+      colorMode: vectorColorMode,
+      monoColor: vectorMonoColor,
+    });
 
-    const axisLabel = plane === "xy" ? "x" : plane === "xz" ? "x" : "y";
-    const yAxisLabel = plane === "xy" ? "y" : "z";
-
-    const topologyKey = buildSlice2DChartTopologyKey(plane, xLen, yLen);
+    const topologyKey = buildSlice2DChartTopologyKey(
+      plane,
+      xLen,
+      yLen,
+      meshOverlay?.segments.length ?? 0,
+      styledVectorGlyphs.length,
+    );
     const topologyChanged = chartTopologyKeyRef.current !== topologyKey;
     chartTopologyKeyRef.current = topologyKey;
-
-    chart.setOption(
-      {
-        animation: true,
-        animationDurationUpdate: 140,
-        animationEasingUpdate: "cubicOut",
-        tooltip: {
-          position: "top",
-          confine: true,
-          formatter: (params: unknown) => {
-            const v = resolveHeatmapTooltipValue(params);
-            if (!v) {
-              return `<strong>${quantityLabel}.${component}</strong><br/>No sample`;
-            }
-            return [
-              `<strong>${quantityLabel}.${component}</strong>`,
-              `${axisLabel}: ${v[0]}`,
-              `${yAxisLabel}: ${v[1]}`,
-              `value: ${formatMagnitude(v[2])}`,
-            ].join("<br/>");
-          },
-          backgroundColor: THEME.tooltipBg,
-          borderColor: THEME.tooltipBorder,
-          borderWidth: 1,
-          padding: [10, 12],
-          textStyle: { color: THEME.tooltipText, fontSize: 12 },
-        },
-        xAxis: {
-          type: "category",
-          data: xCategories,
-          name: `${axisLabel} (cell)`,
-          nameLocation: "middle",
-          nameGap: 30,
-          nameTextStyle: { color: THEME.text2, fontWeight: 600 },
-          axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisPointer: {
-            show: true,
-            label: {
-              show: true,
-              backgroundColor: THEME.tooltipBg,
-              color: THEME.tooltipText,
-              padding: [6, 8],
-              borderColor: THEME.accent,
-              borderWidth: 1,
-            },
-            lineStyle: { color: THEME.accent, width: 1.5, type: "dashed" },
-          },
-          axisTick: { length: 6, lineStyle: { type: "solid", color: THEME.border } },
-          axisLabel: { show: false },
-          splitLine: { show: false },
-        },
-        yAxis: {
-          type: "category",
-          data: yCategories,
-          name: `${yAxisLabel} (cell)`,
-          nameLocation: "middle",
-          nameGap: 44,
-          nameTextStyle: { color: THEME.text2, fontWeight: 600 },
-          axisLine: { show: true, lineStyle: { color: THEME.border } },
-          axisPointer: {
-            show: true,
-            label: {
-              show: true,
-              backgroundColor: THEME.tooltipBg,
-              color: THEME.tooltipText,
-              padding: [6, 8],
-              borderColor: THEME.accent,
-              borderWidth: 1,
-            },
-            lineStyle: { color: THEME.accent, width: 1.5, type: "dashed" },
-          },
-          axisTick: { length: 6, lineStyle: { type: "solid", color: THEME.border } },
-          axisLabel: { show: false },
-          splitLine: { show: false },
-        },
-        visualMap: [
-          {
-            type: "continuous",
-            min: scale.min,
-            max: scale.max,
-            calculable: false,
-            realtime: false,
-            precision: 3,
-            orient: "vertical",
-            right: 8,
-            top: "middle",
-            itemWidth: 12,
-            itemHeight: 188,
-            align: "right",
-            padding: [12, 10, 12, 10],
-            backgroundColor: "rgba(15, 23, 42, 0.76)",
-            borderColor: THEME.border,
-            borderWidth: 1,
-            text: [formatMagnitude(scale.max), formatMagnitude(scale.min)],
-            textStyle: { color: THEME.text2, fontSize: 11, fontWeight: 600 },
-            formatter: (value: number) => formatMagnitude(value),
-            inRange: { color: scale.palette },
-            outOfRange: { color: ["rgba(107, 122, 154, 0.18)"] },
-            seriesIndex: 0,
-            showLabel: true,
-          },
-        ],
-        series: [
-          {
-            name: quantityLabel,
-            type: "heatmap",
-            selectedMode: false,
-            emphasis: { disabled: true },
-            progressive: 0,
-            progressiveThreshold: Number.MAX_SAFE_INTEGER,
-            animation: true,
-            data,
-          },
-        ],
-        grid: {
-          containLabel: true,
-          left: 58,
-          right: 92,
-          top: 42,
-          bottom: 52,
-        },
-        toolbox: {
-          show: true,
-          top: 10,
-          right: 10,
-          itemSize: 20,
-          itemGap: 12,
-          iconStyle: { borderColor: THEME.toolboxIcon, borderWidth: 1.15 },
-          emphasis: { iconStyle: { borderColor: THEME.text1 } },
-          feature: {
-            dataZoom: {
-              xAxisIndex: 0,
-              yAxisIndex: 0,
-              brushStyle: {
-                color: THEME.brushBg,
-                borderColor: THEME.brushBorder,
-                borderWidth: 2,
-              },
-            },
-            dataView: { show: false },
-            restore: { show: true },
-            saveAsImage: { type: "png", name: "preview" },
-          },
-        },
-      },
-      { notMerge: topologyChanged },
-    );
+    chart.setOption(buildSlice2DChartOption({
+      data,
+      xLen,
+      yLen,
+      scale,
+      quantityLabel,
+      quantityUnit,
+      quantityComponentCount,
+      component,
+      plane,
+      bounds: meta?.bounds ?? null,
+      showQuantity,
+      meshOverlay,
+      vectorGlyphs: styledVectorGlyphs,
+    }), { notMerge: topologyChanged });
 
     return () => {
       if (chart && !chart.isDisposed()) {
         chart.dispatchAction({ type: "hideTip" });
       }
     };
-  }, [data, xLen, yLen, dMin, dMax, quantityId, quantityLabel, component, plane]);
+  }, [
+    data,
+    xLen,
+    yLen,
+    dMin,
+    dMax,
+    meta?.bounds,
+    meshOverlay,
+    arrows,
+    scalarValues,
+    arrowEvery,
+    vectorColorMode,
+    vectorMonoColor,
+    quantityId,
+    quantityLabel,
+    quantityUnit,
+    quantityComponentCount,
+    showQuantity,
+    showVectors,
+    component,
+    plane,
+  ]);
 
   // ─── Resize observer ──────────────────────────────────────────────
   useEffect(() => {

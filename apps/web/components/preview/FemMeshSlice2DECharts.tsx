@@ -50,6 +50,7 @@ interface Props {
   quantityLabel: string;
   quantityId?: string;
   quantityUnit?: string;
+  quantityComponentCount?: number | null;
   quantityOptions?: Array<{
     id: string;
     shortLabel: string;
@@ -121,6 +122,7 @@ export default function FemMeshSlice2DECharts({
   quantityLabel,
   quantityId,
   quantityUnit,
+  quantityComponentCount = null,
   component,
   plane,
   meshParts = [],
@@ -477,11 +479,21 @@ export default function FemMeshSlice2DECharts({
   const palette = useMemo(() => paletteForMode(colorScale.mode), [colorScale.mode]);
 
   const quantityTitle = useMemo(() => {
+    const unit = quantityUnit ? ` [${quantityUnit}]` : "";
+    if (quantityComponentCount === 1) {
+      return `${quantityLabel}${unit}`;
+    }
     const base = isMagnetizationQuantity ? "m" : (quantityId ?? "v");
     const comp = effectiveComponent === "magnitude" ? `|${base}|` : `${base}_${effectiveComponent}`;
-    const unit = quantityUnit ? ` [${quantityUnit}]` : "";
     return `${quantityLabel} · ${comp}${unit}`;
-  }, [effectiveComponent, isMagnetizationQuantity, quantityId, quantityLabel, quantityUnit]);
+  }, [
+    effectiveComponent,
+    isMagnetizationQuantity,
+    quantityComponentCount,
+    quantityId,
+    quantityLabel,
+    quantityUnit,
+  ]);
 
   // ── Render chart ───────────────────────────────────────────────
   useEffect(() => {

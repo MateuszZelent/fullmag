@@ -162,6 +162,22 @@ pub struct MeshSharedDomainQualityResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshRealizedSizeFieldsResource {
+    pub revision: u64,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realized_size_fields: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshQualityGatesResource {
+    pub revision: u64,
+    #[schema(value_type = Object, nullable)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gates: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshPeriodicPairsResource {
     pub revision: u64,
     pub schema_version: String,

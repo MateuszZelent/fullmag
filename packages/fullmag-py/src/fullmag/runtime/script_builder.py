@@ -1162,6 +1162,22 @@ def _render_mesh_kwargs(mesh_config: dict[str, object], *, source_root: Path) ->
     if transition_growth_value is not None:
         kwargs.append(f"transition_growth={_py_number(transition_growth_value)}")
 
+    edge_hmax_value = _number_or_none(mesh_config.get("edge_hmax"))
+    if edge_hmax_value is not None:
+        kwargs.append(f"edge_hmax={_py_number(edge_hmax_value)}")
+
+    edge_thickness_value = _number_or_none(mesh_config.get("edge_thickness"))
+    if edge_thickness_value is not None:
+        kwargs.append(f"edge_thickness={_py_number(edge_thickness_value)}")
+
+    corner_hmax_value = _number_or_none(mesh_config.get("corner_hmax"))
+    if corner_hmax_value is not None:
+        kwargs.append(f"corner_hmax={_py_number(corner_hmax_value)}")
+
+    corner_extent_value = _number_or_none(mesh_config.get("corner_extent"))
+    if corner_extent_value is not None:
+        kwargs.append(f"corner_extent={_py_number(corner_extent_value)}")
+
     if mesh_config.get("optimize") is not None:
         kwargs.append(f"optimize={_py_repr(str(mesh_config['optimize']))}")
     if mesh_config.get("compute_quality") is not None:
@@ -2337,6 +2353,10 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "transition_growth": _text_number(
             _number_or_none(mesh_options.get("transition_growth"))
         ),
+        "edge_hmax": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
+        "edge_thickness": _text_number(_number_or_none(mesh_options.get("edge_thickness"))),
+        "corner_hmax": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
+        "corner_extent": _text_number(_number_or_none(mesh_options.get("corner_extent"))),
         "resolved_size_from_curvature": (
             int(mesh_options.get("resolved_size_from_curvature"))
             if isinstance(mesh_options.get("resolved_size_from_curvature"), (int, float))
@@ -2426,6 +2446,10 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
                 _number_or_none(mesh_entry.get("transition_distance"))
             ),
             "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
+            "edge_hmax": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
+            "edge_thickness": _text_number(_number_or_none(mesh_entry.get("edge_thickness"))),
+            "corner_hmax": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
+            "corner_extent": _text_number(_number_or_none(mesh_entry.get("corner_extent"))),
             "resolved_size_from_curvature": (
                 int(mesh_entry["resolved_size_from_curvature"])
                 if isinstance(mesh_entry.get("resolved_size_from_curvature"), (int, float))
@@ -2470,6 +2494,10 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "interface_thickness": "",
             "transition_distance": "",
             "transition_growth": None,
+            "edge_hmax": "",
+            "edge_thickness": "",
+            "corner_hmax": "",
+            "corner_extent": "",
             "resolved_size_from_curvature": None,
             "resolved_narrow_regions": None,
             "resolved_growth_rate": "",

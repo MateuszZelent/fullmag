@@ -308,6 +308,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/slice/mesh-overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_slice_mesh_overlay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/topology": {
         parameters: {
             query?: never;
@@ -844,6 +860,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_quality"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1775,6 +1823,16 @@ export interface components {
             opacity: number;
             visible: boolean;
         };
+        Bounds2: {
+            /** Format: double */
+            u_max: number;
+            /** Format: double */
+            u_min: number;
+            /** Format: double */
+            v_max: number;
+            /** Format: double */
+            v_min: number;
+        };
         Bounds3: {
             max: number[];
             min: number[];
@@ -2017,6 +2075,32 @@ export interface components {
             units: {
                 [key: string]: string;
             };
+        };
+        DomainSliceMeshOverlay: {
+            bounds: components["schemas"]["Bounds2"];
+            cut_kind: string;
+            /** Format: double */
+            cut_norm: number;
+            /** Format: double */
+            cut_world: number;
+            /** Format: int64 */
+            domain_generation_id: number;
+            etag: string;
+            normal_axis: string;
+            plane: components["schemas"]["SlicePlane"];
+            point_count: number;
+            schema: string;
+            segment_count: number;
+            segments: components["schemas"]["DomainSliceMeshOverlaySegment"][];
+            /** Format: int64 */
+            topology_revision: number;
+            truncated: boolean;
+            u_axis: string;
+            v_axis: string;
+        };
+        DomainSliceMeshOverlaySegment: {
+            a: number[];
+            b: number[];
         };
         DomainSummary: {
             /** Format: int64 */
@@ -2640,6 +2724,16 @@ export interface components {
             /** Format: int64 */
             revision: number;
             schema_version: string;
+        };
+        MeshQualityGatesResource: {
+            gates?: Record<string, never> | null;
+            /** Format: int64 */
+            revision: number;
+        };
+        MeshRealizedSizeFieldsResource: {
+            realized_size_fields?: Record<string, never> | null;
+            /** Format: int64 */
+            revision: number;
         };
         MeshRegionResource: {
             bounds_max?: number[] | null;
@@ -3310,6 +3404,38 @@ export interface components {
             requested_mode: string;
             requested_precision: string;
         };
+        TrimAxisVisualizationAxes: {
+            x: components["schemas"]["TrimAxisVisualizationState"];
+            y: components["schemas"]["TrimAxisVisualizationState"];
+            z: components["schemas"]["TrimAxisVisualizationState"];
+        };
+        TrimAxisVisualizationAxesPatch: {
+            x?: null | components["schemas"]["TrimAxisVisualizationPatch"];
+            y?: null | components["schemas"]["TrimAxisVisualizationPatch"];
+            z?: null | components["schemas"]["TrimAxisVisualizationPatch"];
+        };
+        TrimAxisVisualizationPatch: {
+            enabled?: boolean | null;
+            /** Format: double */
+            max_percent?: number | null;
+            /** Format: double */
+            min_percent?: number | null;
+        };
+        TrimAxisVisualizationState: {
+            enabled: boolean;
+            /** Format: double */
+            max_percent: number;
+            /** Format: double */
+            min_percent: number;
+        };
+        TrimVisualizationPatch: {
+            axes?: null | components["schemas"]["TrimAxisVisualizationAxesPatch"];
+            enabled?: boolean | null;
+        };
+        TrimVisualizationState: {
+            axes: components["schemas"]["TrimAxisVisualizationAxes"];
+            enabled: boolean;
+        };
         UniverseFitRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -3423,6 +3549,7 @@ export interface components {
             /** Format: int32 */
             slice_layer?: number | null;
             slice_mode?: string | null;
+            trim?: null | components["schemas"]["TrimVisualizationPatch"];
             /** Format: int32 */
             vector_density?: number | null;
             vector_glyphs?: boolean | null;
@@ -3438,7 +3565,7 @@ export interface components {
             active_quantity_id: string;
             /** @description Compatibility projection for current display clients. Prefer `quantity.auto_contrast`. */
             auto_contrast: boolean;
-            /** @description Shared clip-plane controls for topology-aware viewports. */
+            /** @description Compatibility projection of the legacy single clip plane. */
             clip: components["schemas"]["ClipVisualizationState"];
             /** @description Compatibility projection for current display clients. Prefer `quantity.colormap`. */
             colormap: string;
@@ -3490,6 +3617,8 @@ export interface components {
             /** Format: int32 */
             slice_layer: number;
             slice_mode: string;
+            /** @description Canonical 3-D trim controls for topology-aware viewports. */
+            trim: components["schemas"]["TrimVisualizationState"];
             /**
              * Format: int32
              * @description Compatibility projection for current display clients. Prefer `layers.vectors.density`.
@@ -4071,6 +4200,58 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_domain_slice_mesh_overlay: {
+        parameters: {
+            query: {
+                plane: components["schemas"]["SlicePlane"];
+                cut_world?: number;
+                cut_norm?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact FEM 2D mesh overlay in slice coordinates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainSliceMeshOverlay"];
+                };
+            };
+            /** @description Not applicable (FDM) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Mesh overlay not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology unavailable for slice overlay */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5609,6 +5790,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeshSharedDomainQualityResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_quality_gates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shared-domain mesh quality gates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshQualityGatesResource"];
+                };
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shared-domain realized mesh size fields */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeshRealizedSizeFieldsResource"];
                 };
             };
             /** @description No active workspace */

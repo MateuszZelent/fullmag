@@ -4,6 +4,7 @@ import {
   resolveComputeFieldsQuantity,
   resolveQuantitySwitchCacheState,
   shouldPatchDisplayForQuantitySwitch,
+  visualizationPatchForViewModeChange,
 } from "../hooks/useWorkspaceActions";
 
 describe("workspace quantity switch helpers", () => {
@@ -76,5 +77,20 @@ describe("workspace compute fields quantity guard", () => {
         selectedQuantity: "H_ant",
       }),
     ).toBe("H_ant");
+  });
+});
+
+describe("workspace view-mode transition patches", () => {
+  it("preserves the current 2D component when switching into 2D mode", () => {
+    expect(visualizationPatchForViewModeChange("2D")).toEqual({
+      view_mode: "2d",
+    });
+  });
+
+  it("keeps the legacy 3D patch semantics for full-vector mode", () => {
+    expect(visualizationPatchForViewModeChange("3D")).toEqual({
+      view_mode: "3d",
+      field_component: "magnitude",
+    });
   });
 });

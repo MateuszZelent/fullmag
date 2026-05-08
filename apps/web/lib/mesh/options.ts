@@ -47,6 +47,10 @@ export interface MeshOptionsState {
   interfaceThickness: string;   // SI metres — shell thickness for interface refinement
   transitionDistance: string;    // SI metres — distance over which sizing grades to airbox
   transitionGrowth: string;     // growth rate within transition zone ("" = default 1.5)
+  edgeHMax: string;             // SI metres — element size in edge refinement bands
+  edgeThickness: string;        // SI metres — in-plane width of edge refinement bands
+  cornerHMax: string;           // SI metres — element size in corner refinement zones
+  cornerExtent: string;         // SI metres — in-plane extent of corner refinement zones
 
   // Adaptive Mesh (AFEM)
   adaptiveEnabled: boolean;
@@ -112,6 +116,10 @@ export const DEFAULT_MESH_OPTIONS: MeshOptionsState = {
   interfaceThickness: "",
   transitionDistance: "",
   transitionGrowth: "",
+  edgeHMax: "",
+  edgeThickness: "",
+  cornerHMax: "",
+  cornerExtent: "",
   adaptiveEnabled: false,
   adaptivePolicy: "auto",
   adaptiveIndicator: "geometric_only",

@@ -15,9 +15,49 @@ declare global {
 }
 
 const MAX_SAMPLES = 400;
+const MAX_META_KEYS = 24;
+const MAX_TEXT_LENGTH = 160;
 const EMPTY_FRONTEND_PERF_SAMPLES: PerfSample[] = [];
 
 let frontendPerfSamples: PerfSample[] = [];
+
+function sanitizeText(value: string): string {
+  return value.length > MAX_TEXT_LENGTH ? `${value.slice(0, MAX_TEXT_LENGTH - 1)}...` : value;
+}
+
+function sanitizeNumber(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
+function sanitizeMeta(
+  meta: Record<string, number | string | boolean | null> | undefined,
+): Record<string, number | string | boolean | null> | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  const next: Record<string, number | string | boolean | null> = {};
+  for (const [key, value] of Object.entries(meta).slice(0, MAX_META_KEYS)) {
+    const safeKey = sanitizeText(key);
+    if (typeof value === "number") {
+      next[safeKey] = sanitizeNumber(value);
+    } else if (typeof value === "string") {
+      next[safeKey] = sanitizeText(value);
+    } else if (typeof value === "boolean" || value === null) {
+      next[safeKey] = value;
+    }
+  }
+  return next;
+}
+
+function sanitizePerfSample(sample: PerfSample): PerfSample {
+  return {
+    scope: sanitizeText(sample.scope),
+    phase: sanitizeText(sample.phase),
+    durationMs: sanitizeNumber(sample.durationMs),
+    timestampMs: sanitizeNumber(sample.timestampMs),
+    meta: sanitizeMeta(sample.meta),
+  };
+}
 
 function getCanonicalPerfSamples(): PerfSample[] {
   if (typeof window === "undefined") {
@@ -39,8 +79,9 @@ export function recordFrontendPerfSample(sample: PerfSample): void {
     return;
   }
 
+  const safeSample = sanitizePerfSample(sample);
   const next = [...getCanonicalPerfSamples()];
-  next.push(sample);
+  next.push(safeSample);
   if (next.length > MAX_SAMPLES) {
     next.splice(0, next.length - MAX_SAMPLES);
   }

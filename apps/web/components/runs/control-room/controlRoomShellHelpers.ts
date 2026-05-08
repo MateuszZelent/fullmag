@@ -15,6 +15,21 @@ type WorkspaceLaunchIntent = {
   resumeProjectId?: string | null;
 } | null | undefined;
 
+export type ControlRoomStartupState = "ready" | "initializing" | "no-active-workspace";
+
+export function resolveControlRoomStartupState(opts: {
+  hasSession: boolean;
+  error: string | null;
+}): ControlRoomStartupState {
+  if (opts.hasSession) {
+    return "ready";
+  }
+  if (opts.error?.includes("no active local live workspace")) {
+    return "no-active-workspace";
+  }
+  return "initializing";
+}
+
 export function surfaceColorFieldFromRibbonComponent(
   component: RibbonPreviewComponent,
 ): "orientation" | "x" | "y" | "z" | "magnitude" {

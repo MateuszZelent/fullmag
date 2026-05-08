@@ -52,6 +52,7 @@ export interface ResolvedRenderPlan {
     profile: VisualizationStateResource["sampling"]["profile"];
     progressive: boolean;
   };
+  trim: ResolvedTrimState;
   clip: {
     enabled: boolean;
     axis: ClipAxis;
@@ -73,6 +74,7 @@ export interface ResolvedRenderPlan {
 export interface ViewportVisualizationState {
   meshRenderMode: RenderMode;
   meshOpacity: number;
+  meshTrim: ResolvedTrimState;
   meshClipEnabled: boolean;
   meshClipAxis: ClipAxis;
   meshClipPos: number;
@@ -89,6 +91,55 @@ export interface ViewportVisualizationState {
   femViewportLayers: FemViewportLayerState;
   airMeshVisible: boolean;
   airMeshOpacity: number;
+}
+
+export interface ResolvedTrimAxisState {
+  enabled: boolean;
+  minPercent: number;
+  maxPercent: number;
+}
+
+export interface ResolvedTrimState {
+  enabled: boolean;
+  axes: {
+    x: ResolvedTrimAxisState;
+    y: ResolvedTrimAxisState;
+    z: ResolvedTrimAxisState;
+  };
+}
+
+function normalizeTrimAxisState(axis: VisualizationStateResource["trim"]["axes"]["x"]): ResolvedTrimAxisState {
+  const minPercent = Math.max(0, Math.min(100, axis.min_percent));
+  const maxPercent = Math.max(0, Math.min(100, axis.max_percent));
+  return {
+    enabled: axis.enabled,
+    minPercent: Math.min(minPercent, maxPercent),
+    maxPercent: Math.max(minPercent, maxPercent),
+  };
+}
+
+export function defaultResolvedTrimState(): ResolvedTrimState {
+  return {
+    enabled: false,
+    axes: {
+      x: { enabled: false, minPercent: 0, maxPercent: 100 },
+      y: { enabled: false, minPercent: 0, maxPercent: 100 },
+      z: { enabled: false, minPercent: 0, maxPercent: 100 },
+    },
+  };
+}
+
+export function trimFromVisualizationState(
+  state: VisualizationStateResource,
+): ResolvedTrimState {
+  return {
+    enabled: state.trim.enabled,
+    axes: {
+      x: normalizeTrimAxisState(state.trim.axes.x),
+      y: normalizeTrimAxisState(state.trim.axes.y),
+      z: normalizeTrimAxisState(state.trim.axes.z),
+    },
+  };
 }
 
 export function clipAxisFromVisualizationState(axis: "x" | "y" | "z"): ClipAxis {
@@ -250,6 +301,7 @@ export function resolveRenderPlanFromVisualizationState(
       profile: state.sampling.profile,
       progressive: state.sampling.progressive,
     },
+    trim: trimFromVisualizationState(state),
     clip: {
       enabled: state.clip.enabled,
       axis: clipAxisFromVisualizationState(state.clip.axis),
@@ -281,6 +333,7 @@ export function projectResolvedRenderPlanToViewportState(
   return {
     meshRenderMode: plan.layers.renderMode,
     meshOpacity: plan.layers.meshOpacityPercent,
+    meshTrim: plan.trim,
     meshClipEnabled: plan.clip.enabled,
     meshClipAxis: plan.clip.axis,
     meshClipPos: plan.clip.positionPercent,
@@ -373,6 +426,48 @@ export function visualizationPatchForClip(
       axis: patch.axis,
       position_percent: patch.positionPercent,
       flipped: patch.flipped,
+    },
+  };
+}
+
+export function visualizationPatchForTrim(
+  patch: Partial<{
+    enabled: boolean;
+    axes: Partial<{
+      x: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+      y: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+      z: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+    }>;
+  }>,
+): VisualizationStatePatch {
+  return {
+    trim: {
+      enabled: patch.enabled,
+      axes: patch.axes
+        ? {
+            x: patch.axes.x
+              ? {
+                  enabled: patch.axes.x.enabled,
+                  min_percent: patch.axes.x.minPercent,
+                  max_percent: patch.axes.x.maxPercent,
+                }
+              : undefined,
+            y: patch.axes.y
+              ? {
+                  enabled: patch.axes.y.enabled,
+                  min_percent: patch.axes.y.minPercent,
+                  max_percent: patch.axes.y.maxPercent,
+                }
+              : undefined,
+            z: patch.axes.z
+              ? {
+                  enabled: patch.axes.z.enabled,
+                  min_percent: patch.axes.z.minPercent,
+                  max_percent: patch.axes.z.maxPercent,
+                }
+              : undefined,
+          }
+        : undefined,
     },
   };
 }

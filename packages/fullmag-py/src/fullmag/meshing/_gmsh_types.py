@@ -182,6 +182,8 @@ class MeshOptions:
     boundary_layer_count: int | None = None
     boundary_layer_thickness: float | None = None   # target first-layer thickness (SI)
     boundary_layer_stretching: float | None = None  # layer growth ratio (e.g. 1.2–1.5)
+    boundary_layer_target_surface_tags: list[int] | None = None
+    boundary_layer_target_curve_tags: list[int] | None = None
 
     # ── Swept mesh / through-thickness control ──
     mesh_strategy: str | None = None  # "auto" | "free_tetrahedral" | "swept_prism" | "swept_hex"
@@ -496,6 +498,70 @@ class MeshData:
             if node_a == node_b:
                 raise ValueError(f"periodic_node_pairs[{index}] must connect distinct nodes")
 
+    def validate_strict(
+        self,
+        *,
+        require_positive_orientation: bool = True,
+        eps_volume: float | None = None,
+    ) -> None:
+        self.validate()
+        if not np.all(np.isfinite(self.nodes)):
+            raise ValueError("mesh nodes must be finite")
+        if self.elements.size == 0:
+            raise ValueError("mesh must contain at least one tetrahedral element")
+        if self.element_markers.shape != (self.n_elements,):
+            raise ValueError("element_markers must cover every tetrahedral element")
+
+        for index, element in enumerate(self.elements):
+            if len({int(node) for node in element}) != 4:
+                raise ValueError(f"mesh element {index} contains duplicate node indices")
+
+        volumes = _tetra_signed_volumes(self)
+        bbox = np.ptp(self.nodes, axis=0) if self.nodes.size else np.zeros(3, dtype=np.float64)
+        scale = float(np.max(bbox))
+        resolved_eps = (
+            float(eps_volume)
+            if eps_volume is not None
+            else max(np.finfo(np.float64).tiny, (scale if scale > 0.0 else 1.0) ** 3 * 1e-18)
+        )
+        bad_volume = np.flatnonzero(np.abs(volumes) <= resolved_eps)
+        if bad_volume.size:
+            first = int(bad_volume[0])
+            raise ValueError(
+                f"mesh element {first} has degenerate tetra volume "
+                f"{volumes[first]:.6e} <= eps {resolved_eps:.6e}"
+            )
+        if require_positive_orientation:
+            inverted = np.flatnonzero(volumes < 0.0)
+            if inverted.size:
+                first = int(inverted[0])
+                raise ValueError(
+                    f"mesh element {first} has negative tetra orientation "
+                    f"{volumes[first]:.6e}"
+                )
+
+    def oriented_copy(self) -> "MeshData":
+        volumes = _tetra_signed_volumes(self)
+        if volumes.size == 0 or not np.any(volumes < 0.0):
+            return self
+        elements = np.array(self.elements, copy=True)
+        inverted = volumes < 0.0
+        elements[inverted, 2], elements[inverted, 3] = (
+            elements[inverted, 3].copy(),
+            elements[inverted, 2].copy(),
+        )
+        return MeshData(
+            nodes=np.array(self.nodes, copy=True),
+            elements=elements,
+            element_markers=np.array(self.element_markers, copy=True),
+            boundary_faces=np.array(self.boundary_faces, copy=True),
+            boundary_markers=np.array(self.boundary_markers, copy=True),
+            periodic_boundary_pairs=[dict(pair) for pair in self.periodic_boundary_pairs],
+            periodic_node_pairs=[dict(pair) for pair in self.periodic_node_pairs],
+            quality=self.quality,
+            per_domain_quality=self.per_domain_quality,
+        )
+
     def save(self, path: str | Path) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -628,26 +694,23 @@ class MeshData:
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
+        mesh = self.oriented_copy()
+        mesh.validate_strict(require_positive_orientation=True)
         ir: dict[str, object] = {
             "mesh_name": mesh_name,
-            "nodes": self.nodes.tolist(),
-            "elements": self.elements.tolist(),
-            "element_markers": self.element_markers.tolist(),
-            "boundary_faces": self.boundary_faces.tolist(),
-            "boundary_markers": self.boundary_markers.tolist(),
+            "nodes": mesh.nodes.tolist(),
+            "elements": mesh.elements.tolist(),
+            "element_markers": mesh.element_markers.tolist(),
+            "boundary_faces": mesh.boundary_faces.tolist(),
+            "boundary_markers": mesh.boundary_markers.tolist(),
         }
-        periodic_boundary_pairs = self.periodic_boundary_pairs
-        periodic_node_pairs = self.periodic_node_pairs
-        # FIXME: Disabled automatic PBC inference - it incorrectly detects periodic pairs
-        # for non-periodic geometries like cylinders. Re-enable only when user explicitly
-        # requests PBC via a flag/parameter (e.g., universe.periodic or mesh.periodic).
-        # if not periodic_boundary_pairs and not periodic_node_pairs:
-        #     periodic_boundary_pairs, periodic_node_pairs = _infer_axis_aligned_periodic_pairs(self)
+        periodic_boundary_pairs = mesh.periodic_boundary_pairs
+        periodic_node_pairs = mesh.periodic_node_pairs
         if periodic_boundary_pairs:
             ir["periodic_boundary_pairs"] = periodic_boundary_pairs
         if periodic_node_pairs:
             ir["periodic_node_pairs"] = periodic_node_pairs
-        if self.per_domain_quality is not None:
+        if mesh.per_domain_quality is not None:
             ir["per_domain_quality"] = {
                 str(marker): {
                     "n_elements": q.n_elements,
@@ -665,10 +728,10 @@ class MeshData:
                         "volume_std": q.volume_std,
                         "avg_quality": q.avg_quality,
                     }
-                    for marker, q in self.per_domain_quality.items()
+                    for marker, q in mesh.per_domain_quality.items()
             }
         ir["mesh_statistics"] = _mesh_statistics_report_to_ir(
-            _build_mesh_statistics_report(self, mesh_name)
+            _build_mesh_statistics_report(mesh, mesh_name)
         )
         return ir
 

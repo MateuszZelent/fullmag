@@ -158,6 +158,27 @@ pub struct MeshIR {
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct MeshValidationPolicy {
+    #[serde(default = "default_require_positive_orientation")]
+    pub require_positive_orientation: bool,
+    #[serde(default)]
+    pub eps_volume: Option<f64>,
+}
+
+fn default_require_positive_orientation() -> bool {
+    true
+}
+
+impl Default for MeshValidationPolicy {
+    fn default() -> Self {
+        Self {
+            require_positive_orientation: true,
+            eps_volume: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshPeriodicBoundaryPairIR {
     pub pair_id: String,
@@ -321,5 +342,164 @@ impl MeshIR {
         } else {
             Err(errors)
         }
+    }
+
+    pub fn validate_strict(&self, policy: &MeshValidationPolicy) -> Result<(), Vec<String>> {
+        let mut errors = self.validate().err().unwrap_or_default();
+
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.iter().any(|value| !value.is_finite()) {
+                errors.push(format!("mesh node {index} contains non-finite coordinates"));
+            }
+        }
+
+        if self.element_markers.len() != self.elements.len() {
+            errors.push("mesh.element_markers must cover every tetrahedral element".to_string());
+        }
+
+        let bbox_scale = self
+            .nodes
+            .iter()
+            .fold(None::<([f64; 3], [f64; 3])>, |acc, node| match acc {
+                Some((mut min, mut max)) => {
+                    for axis in 0..3 {
+                        min[axis] = min[axis].min(node[axis]);
+                        max[axis] = max[axis].max(node[axis]);
+                    }
+                    Some((min, max))
+                }
+                None => Some((*node, *node)),
+            })
+            .map(|(min, max)| {
+                (max[0] - min[0])
+                    .abs()
+                    .max((max[1] - min[1]).abs())
+                    .max((max[2] - min[2]).abs())
+            })
+            .unwrap_or(1.0);
+        let eps = policy
+            .eps_volume
+            .unwrap_or_else(|| {
+                let scale = if bbox_scale > 0.0 { bbox_scale } else { 1.0 };
+                scale.powi(3) * 1e-18
+            })
+            .max(f64::MIN_POSITIVE);
+
+        for (index, element) in self.elements.iter().enumerate() {
+            let mut unique = BTreeSet::new();
+            for node in element {
+                unique.insert(*node);
+            }
+            if unique.len() != 4 {
+                errors.push(format!(
+                    "mesh element {index} contains duplicate node indices"
+                ));
+                continue;
+            }
+            let Some(a) = self.nodes.get(element[0] as usize) else {
+                continue;
+            };
+            let Some(b) = self.nodes.get(element[1] as usize) else {
+                continue;
+            };
+            let Some(c) = self.nodes.get(element[2] as usize) else {
+                continue;
+            };
+            let Some(d) = self.nodes.get(element[3] as usize) else {
+                continue;
+            };
+            let volume = tet_signed_volume(*a, *b, *c, *d);
+            if volume.abs() <= eps {
+                errors.push(format!(
+                    "mesh element {index} has degenerate tetra volume {volume:.6e} <= eps {eps:.6e}"
+                ));
+            } else if policy.require_positive_orientation && volume < 0.0 {
+                errors.push(format!(
+                    "mesh element {index} has negative tetra orientation {volume:.6e}"
+                ));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn tet_signed_volume(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let cross = [
+        ac[1] * ad[2] - ac[2] * ad[1],
+        ac[2] * ad[0] - ac[0] * ad[2],
+        ac[0] * ad[1] - ac[1] * ad[0],
+    ];
+    (ab[0] * cross[0] + ab[1] * cross[1] + ab[2] * cross[2]) / 6.0
+}
+
+#[cfg(test)]
+mod mesh_validation_tests {
+    use super::*;
+
+    fn base_mesh(elements: Vec<[u32; 4]>) -> MeshIR {
+        MeshIR {
+            mesh_name: "unit".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            element_markers: vec![1; elements.len()],
+            elements,
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn validate_strict_rejects_duplicate_nodes() {
+        let mesh = base_mesh(vec![[0, 1, 1, 3]]);
+
+        let errors = mesh
+            .validate_strict(&MeshValidationPolicy::default())
+            .expect_err("duplicate nodes must fail strict validation");
+
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("duplicate node indices")));
+    }
+
+    #[test]
+    fn validate_strict_rejects_zero_volume_tetra() {
+        let mut mesh = base_mesh(vec![[0, 1, 2, 3]]);
+        mesh.nodes[3] = [2.0, 2.0, 0.0];
+
+        let errors = mesh
+            .validate_strict(&MeshValidationPolicy::default())
+            .expect_err("zero-volume tetra must fail strict validation");
+
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("degenerate tetra volume")));
+    }
+
+    #[test]
+    fn validate_strict_rejects_inverted_tetra() {
+        let mesh = base_mesh(vec![[0, 1, 3, 2]]);
+
+        let errors = mesh
+            .validate_strict(&MeshValidationPolicy::default())
+            .expect_err("inverted tetra must fail strict validation");
+
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("negative tetra orientation")));
     }
 }

@@ -21,6 +21,7 @@ export function useViewport3DUpdateClassification(args: Parameters<typeof buildV
       args.effectiveViewMode,
       args.femFerromagnetVisibilityMode,
       args.femVectorDomainFilter,
+      args.meshTrimKey,
       args.meshClipAxis,
       args.meshClipEnabled,
       args.meshClipPos,

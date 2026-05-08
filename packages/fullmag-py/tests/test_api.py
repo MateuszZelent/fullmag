@@ -3443,6 +3443,75 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("body.mesh.smooth(iterations=2)", rewritten)
         self.assertIn("body.mesh.build()", rewritten)
 
+    def test_study_mesh_builder_exports_box_perimeter_refinement(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("object_mesh_perimeter_refinement")
+        study.engine("fem")
+        study.objects.mesh.defaults(maximum_element_size=25e-9)
+
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(
+            maximum_element_size=20e-9,
+            edge_hmax=5e-9,
+            edge_thickness=9e-9,
+            corner_hmax=3e-9,
+            corner_extent=8e-9,
+        )
+
+        study.run(1e-12)
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_object_mesh_perimeter_refinement.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                loaded = fm.load_problem_from_script(path)
+
+        mesh_entry = export_builder_draft(loaded)["geometries"][0]["mesh"]
+        self.assertEqual(mesh_entry["edge_hmax"], "5e-09")
+        self.assertEqual(mesh_entry["edge_thickness"], "9e-09")
+        self.assertEqual(mesh_entry["corner_hmax"], "3e-09")
+        self.assertEqual(mesh_entry["corner_extent"], "8e-09")
+
+        rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        self.assertIn("edge_hmax=5e-09", rewritten)
+        self.assertIn("edge_thickness=9e-09", rewritten)
+        self.assertIn("corner_hmax=3e-09", rewritten)
+        self.assertIn("corner_extent=8e-09", rewritten)
+
+    def test_box_perimeter_refinement_rejects_interface_shell_conflict(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("object_mesh_perimeter_refinement_conflict")
+        study.engine("fem")
+
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        body.mesh(
+            maximum_element_size=20e-9,
+            edge_hmax=5e-9,
+            edge_thickness=9e-9,
+            interface_hmax=3e-9,
+        )
+        """
+
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "script_study_object_mesh_perimeter_refinement_conflict.py"
+            path.write_text(textwrap.dedent(script), encoding="utf-8")
+            with patch("fullmag.world.build_geometry_assets_for_request", return_value=None):
+                with self.assertRaisesRegex(ValueError, "cannot be combined with interface_hmax"):
+                    fm.load_problem_from_script(path)
+
     def test_study_mesh_builder_exports_comsol_like_size_semantics(self) -> None:
         script = """
         import fullmag as fm

@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
-import { resolveFemClipPlane } from "../FemGeometry";
+import { resolveFemClipPlane, resolveFemTrimPlanes } from "../FemGeometry";
 import { resolveFemGeometryResourceNeeds } from "../femGeometryResources";
 import { resolveFemGeometryRenderPasses } from "../femGeometryRenderPasses";
 
@@ -55,6 +55,46 @@ describe("resolveFemClipPlane", () => {
     expect(yPlane?.constant).toBe(-2);
     expect(zPlane?.normal.toArray()).toEqual([0, 0, -1]);
     expect(zPlane?.constant).toBe(1);
+  });
+});
+
+describe("resolveFemTrimPlanes", () => {
+  it("builds up to six clipping planes from canonical trim bounds", () => {
+    const planes = resolveFemTrimPlanes({
+      trim: {
+        enabled: true,
+        axes: {
+          x: { enabled: true, minPercent: 25, maxPercent: 75 },
+          y: { enabled: false, minPercent: 0, maxPercent: 100 },
+          z: { enabled: true, minPercent: 10, maxPercent: 90 },
+        },
+      },
+      size: new THREE.Vector3(8, 4, 2),
+    });
+
+    expect(planes).toHaveLength(4);
+    expect(planes?.[0]?.normal.toArray()).toEqual([1, 0, 0]);
+    expect(planes?.[0]?.constant).toBe(2);
+    expect(planes?.[1]?.normal.toArray()).toEqual([-1, 0, 0]);
+    expect(planes?.[1]?.constant).toBe(2);
+    expect(planes?.[2]?.normal.toArray()).toEqual([0, 0, 1]);
+    expect(planes?.[2]?.constant).toBe(0.8);
+    expect(planes?.[3]?.normal.toArray()).toEqual([0, 0, -1]);
+    expect(planes?.[3]?.constant).toBe(0.8);
+  });
+
+  it("falls back to legacy single-plane clipping when trim is not active", () => {
+    const planes = resolveFemTrimPlanes({
+      trim: null,
+      clipEnabled: true,
+      clipAxis: "y",
+      clipPos: 0,
+      size: new THREE.Vector3(8, 4, 2),
+    });
+
+    expect(planes).toHaveLength(1);
+    expect(planes?.[0]?.normal.toArray()).toEqual([0, -1, 0]);
+    expect(planes?.[0]?.constant).toBe(-2);
   });
 });
 

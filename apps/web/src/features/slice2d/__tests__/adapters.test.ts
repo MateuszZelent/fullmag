@@ -54,6 +54,7 @@ describe("slice2d adapters", () => {
       mode: "all_layers",
       layerIndex: 2,
       showVectors: true,
+      vectorDensity: 4,
       renderMode: "vectors",
     });
   });
@@ -165,6 +166,104 @@ describe("slice2d adapters", () => {
       x_size: 256,
       y_size: 256,
     });
+  });
+
+  it("maps vector density into arrow_every for plane slices", () => {
+    const frame = createFemSlice2DAdapter({
+      preview_2d: true,
+      structured_grid: false,
+      explicit_topology: true,
+      authoring_primitives: true,
+      slice_probe: true,
+      slice_measure: true,
+      slice_profile: true,
+      slice_vectors: true,
+      slice_all_layers: true,
+    }).buildSlice({
+      quantity: {
+        activeQuantityId: "m",
+        component: "magnitude",
+        colormap: "viridis",
+        autoContrast: true,
+        contrastMin: null,
+        contrastMax: null,
+      },
+      plane: {
+        axis: "z",
+        mode: "single",
+        positionPercent: 50,
+        layerIndex: 0,
+        thicknessPercent: null,
+        syncWith3DClip: false,
+      },
+      toolbar: {
+        ...slice2DToolbarFromDisplay(display()),
+        showVectors: true,
+        vectorDensity: 7.6,
+      },
+      revisions: {
+        domainGenerationId: 1,
+        topologyRevision: null,
+        fieldsRevision: 2,
+        scalarsRevision: null,
+        displayRevision: null,
+        meshRevision: null,
+        meshBuildRevision: null,
+        sceneRevision: null,
+      },
+    });
+    expect(frame.query).toMatchObject({
+      include_arrows: true,
+      arrow_every: 8,
+    });
+  });
+
+  it("marks slab mode unavailable instead of fabricating a request", () => {
+    const frame = createFemSlice2DAdapter({
+      preview_2d: true,
+      structured_grid: false,
+      explicit_topology: true,
+      authoring_primitives: true,
+      slice_probe: true,
+      slice_measure: true,
+      slice_profile: true,
+      slice_vectors: true,
+      slice_all_layers: true,
+    }).buildSlice({
+      quantity: {
+        activeQuantityId: "m",
+        component: "magnitude",
+        colormap: "viridis",
+        autoContrast: true,
+        contrastMin: null,
+        contrastMax: null,
+      },
+      plane: {
+        axis: "z",
+        mode: "slab",
+        positionPercent: 50,
+        layerIndex: 0,
+        thicknessPercent: 10,
+        syncWith3DClip: false,
+      },
+      toolbar: {
+        ...slice2DToolbarFromDisplay(display({ slice_mode: "slab" })),
+        mode: "slab",
+      },
+      revisions: {
+        domainGenerationId: 1,
+        topologyRevision: null,
+        fieldsRevision: 2,
+        scalarsRevision: null,
+        displayRevision: null,
+        meshRevision: null,
+        meshBuildRevision: null,
+        sceneRevision: null,
+      },
+    });
+    expect(frame.sampling).toBe("unavailable");
+    expect(frame.query).toBeNull();
+    expect(frame.diagnostics[0]).toBe("Slab mode is not implemented by the 2D API/renderer yet");
   });
 
   it("keeps unsupported controls visible through disabled capability gates", () => {

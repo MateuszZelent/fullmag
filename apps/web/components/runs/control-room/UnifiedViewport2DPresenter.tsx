@@ -11,14 +11,18 @@ import type { Slice2DModel } from "@/src/features/slice2d";
 import type { CrossSurfaceSelectionState } from "@/src/features/workspaceSync";
 import { sessionApiPaths } from "@/src/api/client/sessionPaths";
 import type {
+  DomainSliceMeshOverlayQuery,
   FieldProjectionMeta,
   FieldProjectionQuery,
+  ResourceRevisionMap,
   FieldSliceMeta,
   FieldSliceQuery,
 } from "@/src/api/types";
 import type { SliceArrowData } from "@/src/hooks/resources/useFieldSlice2D";
+import { useSliceMeshOverlay2D } from "@/src/hooks/resources/useSliceMeshOverlay2D";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
+import { buildExactSliceMeshOverlay2D } from "@/components/preview/fem/sliceMeshOverlay2D";
 import EmptyState from "../../ui/EmptyState";
 import {
   type MeshEntityViewStateMap,
@@ -29,6 +33,7 @@ import { resolveSlice2DAirboxViewState } from "./slice2DAirboxViewState";
 
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
+type FemArrowColorMode = "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
 
 interface QuantityOption {
   id: string;
@@ -56,15 +61,19 @@ export interface UnifiedViewport2DPresenterProps {
   shouldUseSliceApi2D: boolean;
   hasSliceScalar: boolean;
   sliceLoading: boolean;
+  sliceStateKind?: "empty" | "loading" | "ready" | "unsupported" | "error";
   sliceErrorMessage: string | null;
   sliceMeta: FieldSliceMeta | FieldProjectionMeta | null;
   sliceArrows: SliceArrowData | null;
+  runtimeResourceRevisions?: Partial<ResourceRevisionMap> | null;
   grid: [number, number, number];
   vectors: Float64Array | null;
   sliceScalarValues: Float64Array | null;
   sliceScalarShape: [number, number] | null;
   quantityLabel: string;
   quantityId?: string;
+  quantityUnit?: string | null;
+  quantityComponentCount?: number | null;
   component: VectorComponent;
   plane: SlicePlane;
   sliceIndex: number;
@@ -90,6 +99,8 @@ export interface UnifiedViewport2DPresenterProps {
   antennaOverlays: AntennaOverlay[];
   selectedAntennaId: string | null;
   showArrows: boolean;
+  vectorColorMode?: FemArrowColorMode;
+  vectorMonoColor?: string;
   previewMaxPoints: number;
   onQuantityChange: (quantityId: string) => void;
   onComponentChange: (component: VectorComponent) => void;
@@ -106,15 +117,19 @@ export default function UnifiedViewport2DPresenter({
   shouldUseSliceApi2D,
   hasSliceScalar,
   sliceLoading,
+  sliceStateKind,
   sliceErrorMessage,
   sliceMeta,
   sliceArrows,
+  runtimeResourceRevisions = null,
   grid,
   vectors,
   sliceScalarValues,
   sliceScalarShape,
   quantityLabel,
   quantityId,
+  quantityUnit,
+  quantityComponentCount = null,
   component,
   plane,
   sliceIndex,
@@ -140,6 +155,8 @@ export default function UnifiedViewport2DPresenter({
   antennaOverlays,
   selectedAntennaId,
   showArrows,
+  vectorColorMode = "orientation",
+  vectorMonoColor = "#38d9ff",
   previewMaxPoints,
   onQuantityChange,
   onComponentChange,
@@ -186,6 +203,78 @@ export default function UnifiedViewport2DPresenter({
       renderMode: toolbar.airboxRenderMode,
     });
   }, [effectiveAirboxVisible, meshEntityViewState, meshParts, toolbar]);
+  const backendSliceMeshOverlayRequest = useMemo(() => {
+    if (
+      !shouldUseSliceApi2D ||
+      !effectiveShowMesh ||
+      !isSliceMeta(sliceMeta) ||
+      !canUseBackendSliceMeshOverlay({
+        meshParts,
+        meshEntityViewState: effectiveMeshEntityViewState,
+        airSegmentVisible: effectiveAirboxVisible,
+        objectViewMode,
+        visibleObjectIds,
+      })
+    ) {
+      return null;
+    }
+    const query = resolveBackendSliceMeshOverlayQuery(sliceMeta);
+    if (!query) {
+      return null;
+    }
+    return {
+      domainGenerationId: sliceMeta.domain_generation_id,
+      topologyRevision:
+        runtimeResourceRevisions?.mesh_revision ?? sliceMeta.domain_generation_id,
+      query,
+    };
+  }, [
+    effectiveAirboxVisible,
+    effectiveMeshEntityViewState,
+    effectiveShowMesh,
+    meshParts,
+    objectViewMode,
+    runtimeResourceRevisions?.mesh_revision,
+    shouldUseSliceApi2D,
+    sliceMeta,
+    visibleObjectIds,
+  ]);
+  const { overlay: backendSliceMeshOverlay } = useSliceMeshOverlay2D(
+    backendSliceMeshOverlayRequest,
+  );
+  const apiSliceMeshOverlay = useMemo(() => {
+    if (
+      !shouldUseSliceApi2D ||
+      !femMeshData ||
+      !effectiveShowMesh ||
+      !toolbar ||
+      toolbar.mode !== "single" ||
+      !isSliceMeta(sliceMeta)
+    ) {
+      return null;
+    }
+    return buildExactSliceMeshOverlay2D({
+      meshData: femMeshData,
+      meta: sliceMeta,
+      toolbar,
+      meshParts,
+      meshEntityViewState: effectiveMeshEntityViewState,
+      airSegmentVisible: effectiveAirboxVisible,
+      objectViewMode,
+      visibleObjectIds,
+    });
+  }, [
+    effectiveAirboxVisible,
+    effectiveMeshEntityViewState,
+    effectiveShowMesh,
+    femMeshData,
+    meshParts,
+    objectViewMode,
+    shouldUseSliceApi2D,
+    sliceMeta,
+    toolbar,
+    visibleObjectIds,
+  ]);
 
   const sliceDebugPanel = useMemo(() => {
     if (!slice2DModel) {
@@ -232,7 +321,14 @@ export default function UnifiedViewport2DPresenter({
         selection={workspaceSelection}
         debugPanel={sliceDebugPanel}
       >
-        {content}
+        <div className="relative h-full w-full">
+          {content}
+          {sliceStateKind === "unsupported" && sliceErrorMessage ? (
+            <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 shadow-sm backdrop-blur-sm">
+              {sliceErrorMessage}
+            </div>
+          ) : null}
+        </div>
       </Slice2DShell>
     ) : content;
 
@@ -265,8 +361,18 @@ export default function UnifiedViewport2DPresenter({
         vectors={null}
         scalarValues={sliceScalarValues}
         scalarShape={sliceScalarShape}
+        meta={sliceMeta}
+        arrows={sliceArrows}
+        meshOverlay={backendSliceMeshOverlay ?? apiSliceMeshOverlay}
         quantityLabel={quantityLabel}
         quantityId={quantityId}
+        quantityUnit={quantityUnit}
+        quantityComponentCount={quantityComponentCount}
+        showQuantity={effectiveShowQuantity}
+        showVectors={effectiveShowArrows}
+        arrowEvery={toolbar?.vectorDensity ?? null}
+        vectorColorMode={vectorColorMode}
+        vectorMonoColor={vectorMonoColor}
         component={component}
         plane={plane}
         sliceIndex={sliceIndex}
@@ -281,6 +387,7 @@ export default function UnifiedViewport2DPresenter({
         quantityLabel={femQuantityLabel}
         quantityId={femQuantityId}
         quantityUnit={femQuantityUnit}
+        quantityComponentCount={quantityComponentCount}
         quantityOptions={femQuantityOptions}
         component={femComponent}
         plane={plane}
@@ -322,13 +429,75 @@ export default function UnifiedViewport2DPresenter({
       vectors={vectors}
       scalarValues={sliceScalarValues}
       scalarShape={sliceScalarShape}
+      meta={sliceMeta}
+      arrows={null}
       quantityLabel={quantityLabel}
       quantityId={quantityId}
+      quantityUnit={quantityUnit}
+      quantityComponentCount={quantityComponentCount}
+      showQuantity={effectiveShowQuantity}
+      showVectors={false}
+      arrowEvery={null}
+      vectorColorMode={vectorColorMode}
+      vectorMonoColor={vectorMonoColor}
       component={component}
       plane={plane}
       sliceIndex={sliceIndex}
     />,
   );
+}
+
+function resolveBackendSliceMeshOverlayQuery(
+  meta: FieldSliceMeta,
+): DomainSliceMeshOverlayQuery | null {
+  if (Number.isFinite(meta.cut_world)) {
+    return {
+      plane: meta.plane,
+      cut_world: meta.cut_world ?? undefined,
+    };
+  }
+  if (Number.isFinite(meta.cut_norm)) {
+    return {
+      plane: meta.plane,
+      cut_norm: meta.cut_norm,
+    };
+  }
+  return null;
+}
+
+function canUseBackendSliceMeshOverlay({
+  meshParts,
+  meshEntityViewState,
+  airSegmentVisible,
+  objectViewMode,
+  visibleObjectIds,
+}: {
+  meshParts: readonly FemMeshPart[];
+  meshEntityViewState: MeshEntityViewStateMap;
+  airSegmentVisible: boolean;
+  objectViewMode: ObjectViewMode;
+  visibleObjectIds: readonly string[];
+}): boolean {
+  if (objectViewMode !== "context" || !airSegmentVisible) {
+    return false;
+  }
+
+  const expectedVisibleObjectIds = meshParts
+    .filter((part) => part.role === "magnetic_object" && typeof part.object_id === "string")
+    .map((part) => part.object_id as string);
+  if (
+    expectedVisibleObjectIds.length > 0 &&
+    expectedVisibleObjectIds.some((objectId) => !visibleObjectIds.includes(objectId))
+  ) {
+    return false;
+  }
+
+  return meshParts.every((part) => {
+    if (part.role === "outer_boundary") {
+      return true;
+    }
+    return meshEntityViewState[part.id]?.visible !== false;
+  });
 }
 
 function Slice2DDebugPanel({

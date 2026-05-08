@@ -21,13 +21,15 @@ References:
 from __future__ import annotations
 
 import math
+import tempfile
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress
-from fullmag.model.geometry import Box, Cylinder, Geometry
+from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Geometry
 
 from ._gmsh_types import (
     AirboxOptions,
@@ -134,6 +136,26 @@ def classify_sweepability(geometry: Geometry) -> SweepabilityResult:
             thickness=min_dim,
             aspect_ratio=ar,
             reason=f"Box aspect ratio {ar:.1f} < 2.0; roughly cubic",
+        )
+
+    if isinstance(geometry, ArchWaveguide):
+        thickness = geometry.height
+        lateral_size = max(geometry.length, geometry.width, abs(geometry.arch_height) + thickness)
+        ar = lateral_size / thickness if thickness > 0 else float("inf")
+        if ar >= 2.0:
+            return SweepabilityResult(
+                sweepable=True,
+                thin_axis=2,
+                thickness=thickness,
+                aspect_ratio=ar,
+                reason=f"Thin arch waveguide: lateral/thickness={ar:.1f}",
+            )
+        return SweepabilityResult(
+            sweepable=False,
+            thin_axis=None,
+            thickness=thickness,
+            aspect_ratio=ar,
+            reason=f"ArchWaveguide aspect ratio {ar:.1f} < 2.0; not a thin ribbon",
         )
 
     return SweepabilityResult(
@@ -748,6 +770,33 @@ def generate_swept_mesh(
             symmetric=symmetric, recombine=recombine,
             airbox=airbox, options=options,
         )
+    if isinstance(geometry, ArchWaveguide):
+        from ._gmsh_generators import generate_mesh_from_file
+        from .surface_assets import _geometry_to_trimesh, _import_trimesh
+
+        emit_progress(
+            "Gmsh swept: ArchWaveguide uses layered surface-constrained "
+            "tetrahedral meshing"
+        )
+        with tempfile.TemporaryDirectory(prefix="fullmag-arch-waveguide-layered-") as tmp_dir:
+            surface_path = Path(tmp_dir) / "arch_waveguide_layered.stl"
+            trimesh = _import_trimesh()
+            surface = _geometry_to_trimesh(
+                geometry,
+                trimesh,
+                through_thickness_elements=n_layers,
+                through_thickness_distribution=distribution,
+                through_thickness_element_ratio=element_ratio,
+                through_thickness_symmetric=symmetric,
+            )
+            surface.export(surface_path)
+            return generate_mesh_from_file(
+                surface_path,
+                hmax=hmax,
+                order=order,
+                airbox=airbox,
+                options=options,
+            )
     raise TypeError(
         f"Swept meshing not supported for geometry type {type(geometry).__name__}. "
         "Use mesh_strategy='free_tetrahedral' instead."

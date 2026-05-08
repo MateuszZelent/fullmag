@@ -15,6 +15,11 @@ export type { SizeFieldSpec, MeshOptionsState, MeshQualityData } from "@/lib/mes
 export { DEFAULT_MESH_OPTIONS } from "@/lib/mesh/options";
 import type { MeshOptionsState, MeshQualityData } from "@/lib/mesh/options";
 
+interface MeshPanelCapabilities {
+  supports_adaptive_remesh?: boolean;
+  supports_size_field_remesh?: boolean;
+}
+
 interface MeshSettingsPanelProps {
   options: MeshOptionsState;
   onChange: (next: MeshOptionsState) => void;
@@ -29,6 +34,7 @@ interface MeshSettingsPanelProps {
   nodeCount?: number;
   waitMode?: boolean;
   showAdaptiveSection?: boolean;
+  capabilities?: MeshPanelCapabilities | null;
   focus?: "all" | "size" | "transition" | "method" | "optimization";
 }
 
@@ -234,6 +240,7 @@ export default function MeshSettingsPanel({
   generatingLabel = "Building Mesh...",
   nodeCount,
   showAdaptiveSection = true,
+  capabilities,
   focus = "all",
 }: MeshSettingsPanelProps) {
   const sicnCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -248,6 +255,8 @@ export default function MeshSettingsPanel({
   const isCustomSizeMode = sizeControlMode === "custom";
   const showAllSections = focus === "all";
   const showMethodSection = focus === "all" || focus === "method";
+  const supportsAdaptiveRemesh = capabilities?.supports_adaptive_remesh !== false;
+  const supportsSizeFieldRemesh = capabilities?.supports_size_field_remesh !== false;
   const showSizeSection = focus === "all" || focus === "size";
   const showTransitionSection = focus === "all" || focus === "transition";
   const showOptimizationSection = focus === "all" || focus === "optimization";
@@ -788,12 +797,17 @@ export default function MeshSettingsPanel({
         meta={(
           <Switch
             className="data-[state=checked]:bg-primary data-[state=unchecked]:bg-muted/80 h-[18px] w-8"
-            checked={options.adaptiveEnabled}
-            onCheckedChange={(checked) => set({ adaptiveEnabled: checked })}
-            disabled={disabled}
+            checked={supportsAdaptiveRemesh && options.adaptiveEnabled}
+            onCheckedChange={(checked) => set({ adaptiveEnabled: checked && supportsAdaptiveRemesh })}
+            disabled={disabled || !supportsAdaptiveRemesh}
           />
         )}
       >
+        {!supportsAdaptiveRemesh ? (
+          <div className="rounded-xl border border-border/15 bg-card/40 px-3 py-2 text-[0.68rem] leading-5 text-muted-foreground">
+            Adaptive remesh is disabled by backend capabilities for this session.
+          </div>
+        ) : null}
         {options.adaptiveEnabled && (
           <div className="flex flex-col gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
             <InspectorField
@@ -939,7 +953,7 @@ export default function MeshSettingsPanel({
       )}
 
       {/* ── Refinement Zones (lasso) ── */}
-      {showAdvanced && options.refinementZones.length > 0 && (
+      {showAdvanced && options.refinementZones.length > 0 && supportsSizeFieldRemesh && (
         <InspectorSection
           title="Refinement zones"
           eyebrow="Advanced"
@@ -974,6 +988,13 @@ export default function MeshSettingsPanel({
                 </button>
               </div>
             ))}
+          </div>
+        </InspectorSection>
+      )}
+      {showAdvanced && options.refinementZones.length > 0 && !supportsSizeFieldRemesh && (
+        <InspectorSection title="Refinement zones" eyebrow="Advanced">
+          <div className="rounded-xl border border-border/15 bg-card/40 px-3 py-2 text-[0.68rem] leading-5 text-muted-foreground">
+            Manual refinement zones are hidden because backend capabilities do not expose size-field remesh for this session.
           </div>
         </InspectorSection>
       )}

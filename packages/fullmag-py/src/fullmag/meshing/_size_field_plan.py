@@ -13,6 +13,7 @@ Component-aware path (when Gmsh has volume-tag identity):
   - ``ComponentVolumeConstant`` — set size inside a named component volume
   - ``InterfaceShellThreshold`` — refine near component surface (shell)
   - ``TransitionShellThreshold`` — smooth transition from shell to airbox
+  - ``ComponentRestrictedBox`` — refine inside a named component sub-box
 
 Bounds-based fallback (concatenated-STL or unknown topology):
   - ``Box`` — set size inside an axis-aligned bounding box
@@ -25,7 +26,7 @@ from typing import Mapping
 from fullmag._progress import emit_progress
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.model.domain_frame import geometry_bounds
-from fullmag.model.geometry import Geometry
+from fullmag.model.geometry import Box, Geometry, Translate
 
 from .gmsh_bridge import MeshOptions
 
@@ -36,6 +37,229 @@ from ._mesh_targets import (
 )
 
 _NO_OP_FIELD_SIZE = 1.0e22
+
+
+def _unwrap_translated_box_geometry(geometry: Geometry) -> Box | None:
+    current: Geometry | object = geometry
+    while isinstance(current, Translate):
+        current = current.geometry
+    return current if isinstance(current, Box) else None
+
+
+def _perimeter_refinement_config(
+    geometry: Geometry,
+    *,
+    entry: Mapping[str, object] | None,
+    component_aware: bool,
+) -> dict[str, float] | None:
+    if entry is None:
+        return None
+
+    edge_hmax = _coerce_positive_float(entry.get("edge_hmax"))
+    edge_thickness = _coerce_positive_float(entry.get("edge_thickness"))
+    corner_hmax = _coerce_positive_float(entry.get("corner_hmax"))
+    corner_extent = _coerce_positive_float(entry.get("corner_extent"))
+
+    if all(value is None for value in (edge_hmax, edge_thickness, corner_hmax, corner_extent)):
+        return None
+
+    if not component_aware:
+        raise ValueError(
+            f"{geometry.geometry_name}: edge/corner refinement currently requires component-aware shared-domain meshing"
+        )
+
+    if (edge_hmax is None) != (edge_thickness is None):
+        raise ValueError(
+            f"{geometry.geometry_name}: edge_hmax and edge_thickness must be set together"
+        )
+    if (corner_hmax is None) != (corner_extent is None):
+        raise ValueError(
+            f"{geometry.geometry_name}: corner_hmax and corner_extent must be set together"
+        )
+    if (
+        _coerce_positive_float(entry.get("interface_hmax")) is not None
+        or _coerce_positive_float(entry.get("interface_thickness")) is not None
+    ):
+        raise ValueError(
+            f"{geometry.geometry_name}: edge/corner refinement cannot be combined with interface_hmax or interface_thickness"
+        )
+
+    box = _unwrap_translated_box_geometry(geometry)
+    if box is None:
+        raise ValueError(
+            f"{geometry.geometry_name}: edge/corner refinement is currently supported only for Box geometries"
+        )
+
+    sx, sy, sz = (float(component) for component in box.size)
+    in_plane_dims = sorted((sx, sy, sz), reverse=True)[:2]
+    min_in_plane_dim = min(in_plane_dims)
+    half_min_in_plane_dim = 0.5 * min_in_plane_dim
+
+    if edge_thickness is not None and edge_thickness >= half_min_in_plane_dim:
+        raise ValueError(
+            f"{geometry.geometry_name}: edge_thickness must be smaller than half of the smaller in-plane dimension"
+        )
+    if corner_extent is not None and corner_extent >= half_min_in_plane_dim:
+        raise ValueError(
+            f"{geometry.geometry_name}: corner_extent must be smaller than half of the smaller in-plane dimension"
+        )
+    if (
+        edge_hmax is not None
+        and corner_hmax is not None
+        and corner_hmax > edge_hmax
+    ):
+        raise ValueError(
+            f"{geometry.geometry_name}: corner_hmax must be less than or equal to edge_hmax"
+        )
+
+    return {
+        key: value
+        for key, value in {
+            "edge_hmax": edge_hmax,
+            "edge_thickness": edge_thickness,
+            "corner_hmax": corner_hmax,
+            "corner_extent": corner_extent,
+        }.items()
+        if value is not None
+    }
+
+
+def _build_perimeter_refinement_fields(
+    geometries: list[Geometry],
+    *,
+    default_hmax: float,
+    override_by_name: dict[str, Mapping[str, object]],
+    bounds_by_name: dict[str, tuple] | None = None,
+    component_aware: bool = False,
+) -> list[dict[str, object]]:
+    """Build box-local edge and corner refinement fields for rectangular boxes."""
+    fields: list[dict[str, object]] = []
+    for geometry in geometries:
+        entry = _lookup_geometry_name_alias(override_by_name, geometry.geometry_name)
+        if entry is None:
+            continue
+
+        refinement = _perimeter_refinement_config(
+            geometry,
+            entry=entry,
+            component_aware=component_aware,
+        )
+        if refinement is None:
+            continue
+
+        if bounds_by_name is not None:
+            bounds_pair = bounds_by_name.get(geometry.geometry_name)
+            if bounds_pair is None:
+                continue
+            bounds_min, bounds_max = bounds_pair
+        else:
+            bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+        if bounds_min is None or bounds_max is None:
+            continue
+
+        box = _unwrap_translated_box_geometry(geometry)
+        if box is None:
+            continue
+        size_by_axis = [float(component) for component in box.size]
+        in_plane_axes = sorted(range(3), key=lambda axis: size_by_axis[axis], reverse=True)[:2]
+        axis_a, axis_b = in_plane_axes
+
+        def add_component_sub_box(
+            size_value: float | None,
+            min_a: float,
+            max_a: float,
+            min_b: float,
+            max_b: float,
+        ) -> None:
+            if size_value is None or size_value >= default_hmax:
+                return
+            local_min = [float(value) for value in bounds_min]
+            local_max = [float(value) for value in bounds_max]
+            local_min[axis_a] = min_a
+            local_max[axis_a] = max_a
+            local_min[axis_b] = min_b
+            local_max[axis_b] = max_b
+            fields.append(
+                {
+                    "kind": "ComponentRestrictedBox",
+                    "params": {
+                        "GeometryName": geometry.geometry_name,
+                        "VIn": float(size_value),
+                        "VOut": float(_NO_OP_FIELD_SIZE),
+                        "XMin": float(local_min[0]),
+                        "XMax": float(local_max[0]),
+                        "YMin": float(local_min[1]),
+                        "YMax": float(local_max[1]),
+                        "ZMin": float(local_min[2]),
+                        "ZMax": float(local_max[2]),
+                    },
+                }
+            )
+
+        if "edge_hmax" in refinement and "edge_thickness" in refinement:
+            edge_hmax = float(refinement["edge_hmax"])
+            edge_thickness = float(refinement["edge_thickness"])
+            add_component_sub_box(
+                edge_hmax,
+                float(bounds_min[axis_a]),
+                float(bounds_min[axis_a]) + edge_thickness,
+                float(bounds_min[axis_b]),
+                float(bounds_max[axis_b]),
+            )
+            add_component_sub_box(
+                edge_hmax,
+                float(bounds_max[axis_a]) - edge_thickness,
+                float(bounds_max[axis_a]),
+                float(bounds_min[axis_b]),
+                float(bounds_max[axis_b]),
+            )
+            add_component_sub_box(
+                edge_hmax,
+                float(bounds_min[axis_a]),
+                float(bounds_max[axis_a]),
+                float(bounds_min[axis_b]),
+                float(bounds_min[axis_b]) + edge_thickness,
+            )
+            add_component_sub_box(
+                edge_hmax,
+                float(bounds_min[axis_a]),
+                float(bounds_max[axis_a]),
+                float(bounds_max[axis_b]) - edge_thickness,
+                float(bounds_max[axis_b]),
+            )
+
+        if "corner_hmax" in refinement and "corner_extent" in refinement:
+            corner_hmax = float(refinement["corner_hmax"])
+            corner_extent = float(refinement["corner_extent"])
+            add_component_sub_box(
+                corner_hmax,
+                float(bounds_min[axis_a]),
+                float(bounds_min[axis_a]) + corner_extent,
+                float(bounds_min[axis_b]),
+                float(bounds_min[axis_b]) + corner_extent,
+            )
+            add_component_sub_box(
+                corner_hmax,
+                float(bounds_min[axis_a]),
+                float(bounds_min[axis_a]) + corner_extent,
+                float(bounds_max[axis_b]) - corner_extent,
+                float(bounds_max[axis_b]),
+            )
+            add_component_sub_box(
+                corner_hmax,
+                float(bounds_max[axis_a]) - corner_extent,
+                float(bounds_max[axis_a]),
+                float(bounds_min[axis_b]),
+                float(bounds_min[axis_b]) + corner_extent,
+            )
+            add_component_sub_box(
+                corner_hmax,
+                float(bounds_max[axis_a]) - corner_extent,
+                float(bounds_max[axis_a]),
+                float(bounds_max[axis_b]) - corner_extent,
+                float(bounds_max[axis_b]),
+            )
+    return fields
 
 
 # ===================================================================
@@ -263,17 +487,16 @@ def _build_transition_fields(
         bulk_hmax = _coerce_positive_float(
             entry.get("bulk_hmax") or entry.get("hmax") if entry else None  # type: ignore[union-attr]
         ) or default_hmax
-        transition_distance = _coerce_positive_float(
+        transition_distance_requested = _coerce_positive_float(
             entry.get("transition_distance") if entry else None  # type: ignore[union-attr]
         )
+        transition_distance = transition_distance_requested
 
         if transition_distance is None:
-            # Keep plain per-object hmax local to the object.  Automatically
-            # injecting a shell transition leaks fine object targets into the
-            # surrounding airbox and makes the shared-domain mesh look nearly
-            # uniform.  Users can still request a graded air/body shell
-            # explicitly with transition_distance.
-            continue
+            if bulk_hmax < default_hmax:
+                transition_distance = bulk_hmax * 3.0
+            else:
+                continue
 
         if bulk_hmax >= default_hmax:
             continue
@@ -296,6 +519,7 @@ def _build_transition_fields(
                         "DistMin": 0.0,
                         "DistMax": float(transition_distance),
                         "Sampling": 20,
+                        "Source": "explicit" if transition_distance_requested is not None else "auto",
                     },
                 }
             )
@@ -323,6 +547,7 @@ def _build_transition_fields(
                     "DistMax": float(transition_distance),
                     "Sampling": 20,
                     "MatchPadding": float(bulk_hmax),
+                    "Source": "explicit" if transition_distance_requested is not None else "auto",
                 },
             }
         )
@@ -348,8 +573,74 @@ def _build_manual_hotspot_fields(
             continue
         for sf in extra:
             if isinstance(sf, dict) and "kind" in sf:
-                fields.append(sf)
+                if sf.get("kind") == "ObjectCoreRelaxation":
+                    fields.extend(_expand_object_core_relaxation(entry, sf))
+                else:
+                    fields.append(sf)
     return fields
+
+
+def _expand_object_core_relaxation(
+    entry: Mapping[str, object],
+    field: Mapping[str, object],
+) -> list[dict[str, object]]:
+    params = field.get("params")
+    if not isinstance(params, Mapping):
+        params = field
+    geometry_name = (
+        params.get("GeometryName")
+        or params.get("object_id")
+        or params.get("target")
+        or entry.get("geometry")
+        or entry.get("geometry_name")
+        or entry.get("object_id")
+    )
+    if not isinstance(geometry_name, str) or not geometry_name.strip():
+        return []
+    core_hmax = _coerce_positive_float(params.get("core_hmax") or params.get("CoreHmax"))
+    surface_hmax = _coerce_positive_float(params.get("surface_hmax") or params.get("SurfaceHmax"))
+    surface_distance = _coerce_positive_float(
+        params.get("surface_distance") or params.get("SurfaceDistance")
+    )
+    if core_hmax is None or surface_hmax is None or surface_distance is None:
+        return []
+    edge_hmax = _coerce_positive_float(params.get("edge_hmax") or params.get("EdgeHmax")) or surface_hmax
+    edge_distance = _coerce_positive_float(params.get("edge_distance") or params.get("edge_thickness")) or surface_distance
+    return [
+        {
+            "kind": "ComponentVolumeConstant",
+            "params": {
+                "GeometryName": geometry_name,
+                "VIn": float(core_hmax),
+                "VOut": float(_NO_OP_FIELD_SIZE),
+                "Source": "ObjectCoreRelaxation",
+            },
+        },
+        {
+            "kind": "SurfaceDistanceThreshold",
+            "params": {
+                "GeometryName": geometry_name,
+                "SizeMin": float(surface_hmax),
+                "SizeMax": float(core_hmax),
+                "DistMin": 0.0,
+                "DistMax": float(surface_distance),
+                "Sampling": 20,
+                "Source": "ObjectCoreRelaxation",
+            },
+        },
+        {
+            "kind": "EdgeDistanceThreshold",
+            "params": {
+                "GeometryName": geometry_name,
+                "SizeMin": float(edge_hmax),
+                "SizeMax": float(core_hmax),
+                "DistMin": 0.0,
+                "DistMax": float(edge_distance),
+                "Sampling": 40,
+                "Source": "ObjectCoreRelaxation",
+            },
+        },
+    ]
 
 
 # ===================================================================
@@ -403,6 +694,16 @@ def _build_field_stack(
     if transition_fields:
         fields.extend(transition_fields)
 
+    perimeter_fields = _build_perimeter_refinement_fields(
+        geometries,
+        default_hmax=default_hmax,
+        override_by_name=override_by_name,
+        bounds_by_name=bounds_by_name,
+        component_aware=component_aware,
+    )
+    if perimeter_fields:
+        fields.extend(perimeter_fields)
+
     # Layer 4: Manual hotspot fields
     hotspot_fields = _build_manual_hotspot_fields(per_geometry)
     if hotspot_fields:
@@ -411,9 +712,10 @@ def _build_field_stack(
     if fields:
         emit_progress(
             f"Field stack: {len(fields)} fields "
-            f"(bulk={len(fields) - len(interface_fields) - len(transition_fields) - len(hotspot_fields)}, "
+            f"(bulk={len(fields) - len(interface_fields) - len(transition_fields) - len(perimeter_fields) - len(hotspot_fields)}, "
             f"interface={len(interface_fields)}, "
             f"transition={len(transition_fields)}, "
+            f"perimeter={len(perimeter_fields)}, "
             f"hotspots={len(hotspot_fields)})"
         )
 
@@ -509,6 +811,20 @@ def _mesh_options_from_runtime_metadata(
         else {}
     )
     assert isinstance(raw_mesh_options, Mapping)
+    raw_per_geometry = (
+        mesh_workflow.get("per_geometry")
+        if isinstance(mesh_workflow, Mapping)
+        and isinstance(mesh_workflow.get("per_geometry"), list)
+        else []
+    )
+    assert isinstance(raw_per_geometry, list)
+
+    def _single_geometry_value(key: str) -> object | None:
+        entries = [entry for entry in raw_per_geometry if isinstance(entry, Mapping)]
+        if len(entries) != 1:
+            return None
+        return entries[0].get(key)
+
     size_fields = (
         [field for field in raw_mesh_options.get("size_fields", []) if isinstance(field, Mapping)]
         if isinstance(raw_mesh_options.get("size_fields"), list)
@@ -524,6 +840,29 @@ def _mesh_options_from_runtime_metadata(
         )
     )
     optimize = raw_mesh_options.get("optimize")
+    raw_mesh_strategy = raw_mesh_options.get("mesh_strategy") or _single_geometry_value("mesh_strategy")
+    raw_through_thickness_elements = (
+        raw_mesh_options.get("through_thickness_elements")
+        if raw_mesh_options.get("through_thickness_elements") is not None
+        else _single_geometry_value("through_thickness_elements")
+    )
+    raw_through_thickness_distribution = (
+        raw_mesh_options.get("through_thickness_distribution")
+        or _single_geometry_value("through_thickness_distribution")
+    )
+    raw_through_thickness_element_ratio = (
+        raw_mesh_options.get("through_thickness_element_ratio")
+        if raw_mesh_options.get("through_thickness_element_ratio") is not None
+        else _single_geometry_value("through_thickness_element_ratio")
+    )
+    raw_through_thickness_symmetric = (
+        raw_mesh_options.get("through_thickness_symmetric")
+        if raw_mesh_options.get("through_thickness_symmetric") is not None
+        else _single_geometry_value("through_thickness_symmetric")
+    )
+    raw_sweep_face_meshing = raw_mesh_options.get("sweep_face_meshing") or _single_geometry_value(
+        "sweep_face_meshing"
+    )
     return MeshOptions(
         algorithm_2d=int(raw_mesh_options.get("algorithm_2d", 6)),
         algorithm_3d=int(raw_mesh_options.get("algorithm_3d", 1)),
@@ -552,4 +891,29 @@ def _mesh_options_from_runtime_metadata(
         size_fields=size_fields,
         compute_quality=bool(raw_mesh_options.get("compute_quality", True)),
         per_element_quality=bool(raw_mesh_options.get("per_element_quality", True)),
+        mesh_strategy=(
+            str(raw_mesh_strategy)
+            if isinstance(raw_mesh_strategy, str) and raw_mesh_strategy.strip()
+            else None
+        ),
+        through_thickness_elements=(
+            int(raw_through_thickness_elements)
+            if raw_through_thickness_elements is not None
+            else None
+        ),
+        through_thickness_distribution=(
+            str(raw_through_thickness_distribution)
+            if isinstance(raw_through_thickness_distribution, str)
+            and raw_through_thickness_distribution.strip()
+            else None
+        ),
+        through_thickness_element_ratio=_coerce_positive_float(
+            raw_through_thickness_element_ratio
+        ),
+        through_thickness_symmetric=bool(raw_through_thickness_symmetric or False),
+        sweep_face_meshing=(
+            str(raw_sweep_face_meshing)
+            if isinstance(raw_sweep_face_meshing, str) and raw_sweep_face_meshing.strip()
+            else None
+        ),
     )

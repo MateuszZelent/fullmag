@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Literal, Mapping
 
 from fullmag.model.discretization import FEM, PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
@@ -47,7 +47,14 @@ class ResolvedSharedObjectTarget:
     interface_hmax: float | None = None
     interface_thickness: float | None = None
     transition_distance: float | None = None
+    transition_distance_requested: float | None = None
+    transition_distance_effective: float | None = None
+    transition_realization: Literal["none", "auto", "explicit", "degraded"] = "none"
     transition_growth: float | None = None
+    edge_hmax: float | None = None
+    edge_thickness: float | None = None
+    corner_hmax: float | None = None
+    corner_extent: float | None = None
     source: str = "study_default"
     marker: int | None = None
 
@@ -318,18 +325,43 @@ def resolve_shared_domain_targets(
             else None
         )
 
-        transition_distance = (
+        transition_distance_requested = (
             _coerce_positive_float(workflow_entry.get("transition_distance"))
             if isinstance(workflow_entry, Mapping)
             else None
+        )
+        transition_distance = transition_distance_requested
+        transition_realization: Literal["none", "auto", "explicit", "degraded"] = (
+            "explicit" if transition_distance_requested is not None else "none"
         )
         transition_growth = (
             _coerce_positive_float(workflow_entry.get("transition_growth"))
             if isinstance(workflow_entry, Mapping)
             else None
         )
+        edge_hmax = (
+            _coerce_positive_float(workflow_entry.get("edge_hmax"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        edge_thickness = (
+            _coerce_positive_float(workflow_entry.get("edge_thickness"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        corner_hmax = (
+            _coerce_positive_float(workflow_entry.get("corner_hmax"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
+        corner_extent = (
+            _coerce_positive_float(workflow_entry.get("corner_extent"))
+            if isinstance(workflow_entry, Mapping)
+            else None
+        )
         if transition_distance is None and bulk_hmax is not None and default_hmax is not None and bulk_hmax < default_hmax:
             transition_distance = bulk_hmax * 3.0
+            transition_realization = "auto"
 
         source = "study_default"
         if isinstance(recipe, PerObjectMeshRecipe):
@@ -344,7 +376,14 @@ def resolve_shared_domain_targets(
             interface_hmax=interface_hmax,
             interface_thickness=interface_thickness,
             transition_distance=transition_distance,
+            transition_distance_requested=transition_distance_requested,
+            transition_distance_effective=transition_distance,
+            transition_realization=transition_realization,
             transition_growth=transition_growth,
+            edge_hmax=edge_hmax,
+            edge_thickness=edge_thickness,
+            corner_hmax=corner_hmax,
+            corner_extent=corner_extent,
             source=source,
         )
 
@@ -381,6 +420,8 @@ class SharedDomainBuildReport:
     effective_airbox_target: ResolvedAirboxTarget
     effective_per_object_targets: dict[str, ResolvedSharedObjectTarget]
     used_size_field_kinds: list[str]
+    region_markers: list[dict[str, object]] = field(default_factory=list)
+    size_fields_realized: list[dict[str, object]] = field(default_factory=list)
     operation_statuses: list["MeshOperationStatus"] = field(default_factory=list)
     thin_film_diagnostics: list["ThinFilmDiagnostic"] = field(default_factory=list)
     degraded: bool = False
@@ -402,12 +443,21 @@ class SharedDomainBuildReport:
                     "interface_hmax": target.interface_hmax,
                     "interface_thickness": target.interface_thickness,
                     "transition_distance": target.transition_distance,
+                    "transition_distance_requested": target.transition_distance_requested,
+                    "transition_distance_effective": target.transition_distance_effective,
+                    "transition_realization": target.transition_realization,
                     "transition_growth": target.transition_growth,
+                    "edge_hmax": target.edge_hmax,
+                    "edge_thickness": target.edge_thickness,
+                    "corner_hmax": target.corner_hmax,
+                    "corner_extent": target.corner_extent,
                     "source": target.source,
                 }
                 for name, target in self.effective_per_object_targets.items()
             },
+            "region_markers": [dict(marker) for marker in self.region_markers],
             "used_size_field_kinds": list(self.used_size_field_kinds),
+            "size_fields_realized": [dict(field) for field in self.size_fields_realized],
             "operation_statuses": [status.to_dict() for status in self.operation_statuses],
             "thin_film_diagnostics": [
                 diagnostic.to_dict() for diagnostic in self.thin_film_diagnostics

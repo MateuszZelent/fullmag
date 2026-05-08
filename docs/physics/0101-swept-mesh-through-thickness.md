@@ -1,7 +1,7 @@
 # Swept mesh (through-thickness structured layers)
 
-- Status: draft
-- Last updated: 2026-04-15
+- Status: implemented for Box, Cylinder, and ArchWaveguide thin-film surface layering
+- Last updated: 2026-05-08
 - Related specs: `docs/physics/0100-mesh-and-region-discretization.md`
 
 ## 1. Problem statement
@@ -49,13 +49,18 @@ Not applicable. FDM already uses a regular Cartesian grid with explicit cell siz
 The swept mesh strategy applies to FEM geometries where one direction (typically z for thin films)
 has significantly fewer characteristic lengths than the in-plane directions.
 
+For `ArchWaveguide`, the supported production path is layered surface-constrained tetrahedral
+meshing: the arch surface is generated with explicit through-thickness layer boundaries, then the
+shared-domain tetrahedral mesh conforms to those layer boundaries. This gives deterministic control
+over "one element through a 2 nm thickness" while preserving the airbox/shared-domain mesh contract.
+
 **Distribution types:**
 
 | Distribution  | Layer heights                                      |
 |---------------|---------------------------------------------------|
-| `uniform`     | All layers equal: $h_i = t / N_z$                 |
-| `arithmetic`  | Linear growth: $h_i = h_0 + i \cdot d$            |
-| `geometric`   | Exponential growth: $h_i = h_0 \cdot r^i$         |
+| `fixed`       | All layers equal: $h_i = t / N_z$                 |
+| `linear`      | Linear growth: $h_i = h_0 + i \cdot d$            |
+| `exponential` | Geometric growth: $h_i = h_0 \cdot r^i$           |
 
 Non-uniform distributions concentrate elements near surfaces (interfaces, free boundaries) where
 exchange and stray-field gradients are strongest.
@@ -74,24 +79,29 @@ cell boundaries.
 
 ### 4.1 Python API surface
 
-New dataclasses in `fullmag.model.discretization`:
+Current Python object mesh API:
 
 ```python
-@dataclass
-class SweepDistribution:
-    kind: Literal["uniform", "arithmetic", "geometric"] = "uniform"
-    num_layers: int = 1
-    growth_rate: float = 1.0
-
-@dataclass
-class SweptMeshControls:
-    distribution: SweepDistribution
-    sweep_direction: Literal["auto", "x", "y", "z"] = "auto"
+waveguide.mesh(
+    maximum_element_size=50e-9,
+    minimum_element_size=2e-9,
+    mesh_strategy="swept_prism",
+    through_thickness_elements=1,
+    through_thickness_distribution="fixed",
+    sweep_face_meshing="triangular",
+)
 ```
 
-`SweptMeshControls` attaches to a per-object mesh recipe (future `PerObjectMeshRecipe.swept`),
-not to the global `FEM` hints, because different objects in a multilayer may need different sweep
-parameters.
+The convenience form is:
+
+```python
+waveguide.mesh.swept(elements=1, distribution="fixed", face_meshing="triangular")
+```
+
+Swept/layered controls are per-object mesh semantics. A single object may request one through-
+thickness layer when the physical model intentionally assumes no through-thickness variation.
+Fullmag still reports a thin-film diagnostic warning below four layers because that is often too
+coarse for exchange-gradient accuracy.
 
 ### 4.2 ProblemIR representation
 
@@ -133,19 +143,20 @@ Attached to `FemPerObjectTargetIR` as an optional `swept` field.
 
 ## 6. Completeness checklist
 
-- [ ] Python API — `SweepDistribution`, `SweptMeshControls` dataclasses
-- [ ] ProblemIR — `SweptMeshHintsIR`
-- [ ] Planner — swept mesh eligibility check
+- [x] Python API — `mesh_strategy`, `through_thickness_*`, and `mesh.swept(...)`
+- [x] ProblemIR/session metadata — mesh workflow preserves swept controls for single-object and mesh-options paths
+- [x] Planner — swept mesh eligibility check for Box, Cylinder, and ArchWaveguide
 - [ ] Capability matrix — no restrictions (Gmsh-only)
 - [ ] FDM backend — N/A
-- [ ] FEM backend — Gmsh swept mesh generation
+- [x] FEM backend — Gmsh swept mesh generation for Box/Cylinder; layered ArchWaveguide surface-constrained tetrahedral path
 - [ ] UI — swept mesh controls panel
 - [ ] Round-trip — Python ↔ UI export preservation
-- [ ] Validation — element count and quality checks
+- [x] Validation — ArchWaveguide layered surface topology and runtime metadata regression tests
 
 ## 7. Known limits and deferred work
 
 - Only single-axis sweeps are supported initially (no multi-step COMSOL-style sweeps).
-- Curved sweep paths are deferred.
+- Full curved-volume prism/hexahedral sweeping for `ArchWaveguide` is deferred; current support is
+  layered surface-constrained tetrahedral meshing in the shared-domain pipeline.
 - Auto-detection of sweep eligibility relies on bounding-box heuristics; complex non-prismatic
   geometries may need explicit user hints.

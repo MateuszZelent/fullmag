@@ -17,9 +17,68 @@ declare global {
   }
 }
 
+const MAX_DETAIL_KEYS = 32;
+const MAX_DETAIL_TEXT_LENGTH = 240;
+
 function trimEvents(events: FrontendDebugEvent[]): FrontendDebugEvent[] {
   const MAX_EVENTS = 400;
   return events.length > MAX_EVENTS ? events.slice(events.length - MAX_EVENTS) : events;
+}
+
+function summarizeDebugValue(value: unknown): unknown {
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.length > MAX_DETAIL_TEXT_LENGTH
+      ? `${value.slice(0, MAX_DETAIL_TEXT_LENGTH - 1)}...`
+      : value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return {
+      type: value.constructor.name,
+      length: value.length,
+      byteLength: value.byteLength,
+    };
+  }
+  if (value instanceof ArrayBuffer) {
+    return {
+      type: "ArrayBuffer",
+      byteLength: value.byteLength,
+    };
+  }
+  if (Array.isArray(value)) {
+    return {
+      type: "Array",
+      length: value.length,
+    };
+  }
+  if (typeof value === "object") {
+    return {
+      type: value.constructor?.name ?? "Object",
+    };
+  }
+  return String(value);
+}
+
+function sanitizeDebugDetail(detail: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!detail) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(detail)
+      .slice(0, MAX_DETAIL_KEYS)
+      .map(([key, value]) => [
+        key.length > MAX_DETAIL_TEXT_LENGTH
+          ? `${key.slice(0, MAX_DETAIL_TEXT_LENGTH - 1)}...`
+          : key,
+        summarizeDebugValue(value),
+      ]),
+  );
 }
 
 export function recordFrontendDebugEvent(
@@ -36,13 +95,15 @@ export function recordFrontendDebugEvent(
     scope,
     event,
     href: window.location.href,
-    detail,
+    detail: sanitizeDebugDetail(detail),
     stack: options?.includeStack ? new Error().stack ?? null : null,
   };
   const nextEvents = trimEvents([...(window.__FULLMAG_DEBUG_EVENTS__ ?? []), entry]);
   window.__FULLMAG_DEBUG_EVENTS__ = nextEvents;
+  const markName = `fullmag:${scope}:${event}:${entry.ts}`;
   try {
-    performance.mark(`fullmag:${scope}:${event}:${entry.ts}`);
+    performance.mark(markName);
+    performance.clearMarks(markName);
   } catch {
     // Ignore performance API failures.
   }
@@ -51,7 +112,7 @@ export function recordFrontendDebugEvent(
     process.env.NODE_ENV !== "production" &&
     FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging
   ) {
-    console.info(`[fullmag-debug][${scope}] ${event}`, detail ?? {});
+    console.info(`[fullmag-debug][${scope}] ${event}`, entry.detail ?? {});
     if (entry.stack) {
       console.info(entry.stack);
     }

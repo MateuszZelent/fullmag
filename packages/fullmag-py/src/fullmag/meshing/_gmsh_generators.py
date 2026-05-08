@@ -307,7 +307,7 @@ def generate_box_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
-            airbox_maximum_element_size=resolved_scaled.maximum_element_size * SCALE if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
+            airbox_maximum_element_size=resolved_scaled.maximum_element_size if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -372,7 +372,7 @@ def generate_cylinder_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
-            airbox_maximum_element_size=resolved_scaled.maximum_element_size * SCALE if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
+            airbox_maximum_element_size=resolved_scaled.maximum_element_size if resolved_scaled is not None and resolved_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)
@@ -489,7 +489,7 @@ def _generate_csg_mesh(
             opts,
             hscale=SCALE,
             preexisting_field_ids=airbox_field_ids,
-            airbox_maximum_element_size=airbox_scaled.maximum_element_size * SCALE if airbox_scaled is not None and airbox_scaled.maximum_element_size is not None else None,
+            airbox_maximum_element_size=airbox_scaled.maximum_element_size if airbox_scaled is not None and airbox_scaled.maximum_element_size is not None else None,
         )
         with _GmshProgressLogger(gmsh):
             gmsh.model.mesh.generate(3)

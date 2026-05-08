@@ -23,6 +23,7 @@ import type { FemMeshPart, MeshEntityViewState } from "../../../lib/session/type
 import type {
   AirboxRenderPassState,
   MeshRenderPassState,
+  UnifiedTrimState,
 } from "@/features/viewport-unified/model/unifiedViewportTypes";
 
 export interface FemViewportRenderLayer {
@@ -284,6 +285,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   magneticElementIndices,
   qualityPerFace,
   shrinkFactor,
+  trim,
   clipEnabled,
   clipAxis,
   clipPos,
@@ -360,6 +362,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   magneticElementIndices: number[] | null;
   qualityPerFace?: number[] | null;
   shrinkFactor: number;
+  trim?: UnifiedTrimState | null;
   clipEnabled: boolean;
   clipAxis: ClipAxis;
   clipPos: number;
@@ -603,6 +606,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
                   displayElementIndices={layer.elementIndices}
                   qualityPerFace={qualityPerFace}
                   shrinkFactor={shrinkFactor}
+                  trim={trim}
                   clipEnabled={clipEnabled}
                   clipAxis={clipAxis}
                   clipPos={clipPos}
@@ -643,6 +647,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
           displayElementIndices={airElementIndices}
           qualityPerFace={qualityPerFace}
           shrinkFactor={shrinkFactor}
+          trim={trim}
           clipEnabled={clipEnabled}
           clipAxis={clipAxis}
           clipPos={clipPos}
@@ -684,6 +689,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
           displayElementIndices={magneticElementIndices}
           qualityPerFace={qualityPerFace}
           shrinkFactor={shrinkFactor}
+          trim={trim}
           clipEnabled={clipEnabled}
           clipAxis={clipAxis}
           clipPos={clipPos}

@@ -19,6 +19,7 @@ export function buildViewport3DUpdateSignature(args: {
   selectedQuantity: string | null | undefined;
   effectiveVectorComponent: string | null | undefined;
   meshRenderMode: string | null | undefined;
+  meshTrimKey?: string | null | undefined;
   meshClipEnabled: boolean;
   meshClipAxis: string | null | undefined;
   meshClipPos: string | number | null | undefined;
@@ -38,6 +39,7 @@ export function buildViewport3DUpdateSignature(args: {
       args.selectedQuantity,
       args.effectiveVectorComponent,
       args.meshRenderMode,
+      args.meshTrimKey ?? "trim-off",
       args.meshClipEnabled ? args.meshClipAxis : "clip-off",
       args.meshClipEnabled ? args.meshClipPos : "clip-off",
       args.femVectorDomainFilter,

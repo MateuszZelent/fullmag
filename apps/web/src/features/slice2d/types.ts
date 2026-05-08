@@ -63,6 +63,7 @@ export interface Slice2DToolbarState {
   showAirboxVectors: boolean;
   showQuantity: boolean;
   showVectors: boolean;
+  vectorDensity?: number;
   renderMode: SliceRenderMode;
   projectionReduction: SliceProjectionReduction;
   projectionIncludeAirAsZero: boolean;

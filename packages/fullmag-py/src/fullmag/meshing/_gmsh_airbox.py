@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -420,6 +421,12 @@ def add_air_box(
     Returns:
         MeshData with both magnetic (marker=1) and air (marker=0) elements.
     """
+    warnings.warn(
+        "add_air_box() is deprecated; use FEM shared-domain meshing with "
+        "AirboxOptions/universe mesh configuration instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if factor < 1.5:
         raise ValueError(f"air_box factor must be >= 1.5, got {factor}")
     if not 0.0 <= grading <= 1.0:

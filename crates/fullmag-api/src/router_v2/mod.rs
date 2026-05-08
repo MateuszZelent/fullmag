@@ -205,6 +205,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::meshing::get_mesh_shared_domain_quality),
         )
         .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+            get(handlers::meshing::get_mesh_realized_size_fields),
+        )
+        .route(
+            "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+            get(handlers::meshing::get_mesh_quality_gates),
+        )
+        .route(
             "/v2/sessions/current/meshing/meshes/shared-domain/report",
             get(handlers::meshing::get_mesh_shared_domain_report),
         )
@@ -288,6 +296,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/data/domain/topology",
             get(handlers::data::get_domain_topology),
+        )
+        .route(
+            "/v2/sessions/current/data/domain/slice/mesh-overlay",
+            get(handlers::data::get_domain_slice_mesh_overlay),
         )
         .route(
             "/v2/sessions/current/data/fields/:quantity_id/meta",

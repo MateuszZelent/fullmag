@@ -696,6 +696,10 @@ fn imported_geometry_with_grid_asset_plans_successfully() {
 fn fem_backend_with_mesh_asset_plans_successfully() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.air_box_policy = Some(fullmag_ir::AirBoxPolicyIR {
+        boundary_marker: Some(99),
+        ..Default::default()
+    });
     ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
         fdm: Some(fullmag_ir::FdmHintsIR {
             cell: [2e-9, 2e-9, 5e-9],
@@ -814,11 +818,12 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     [1.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 1.0],
                 ],
-                elements: vec![[0, 1, 2, 3]],
-                element_markers: vec![1],
-                boundary_faces: vec![[0, 1, 2], [0, 1, 3]],
-                boundary_markers: vec![10, 11],
+                elements: vec![[0, 1, 2, 3], [1, 2, 3, 4]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [0, 1, 3], [1, 2, 4]],
+                boundary_markers: vec![10, 11, 99],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_periodic".to_string(),
                     source_marker: None,
@@ -865,15 +870,16 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
             realization: fullmag_ir::RequestedFemDemagIR::default(),
         },
     ];
-    let err = plan(&demag_ir).expect_err("periodic FEM static demag must stay rejected");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("periodic_node_pairs")
-                && reason.contains("supports periodic constraints only for exchange")
-        }),
-        "unexpected error: {:?}",
-        err.reasons
-    );
+    let demag_planned =
+        plan(&demag_ir).expect("periodic FEM static demag with open airbox should plan");
+    match demag_planned.backend_plan {
+        BackendPlanIR::Fem(fem) => {
+            assert!(fem.enable_demag);
+            assert_eq!(fem.mesh.periodic_node_pairs.len(), 1);
+            assert!(fem.air_box_config.is_some());
+        }
+        other => panic!("expected FEM plan, got {:?}", other),
+    }
 }
 
 #[test]

@@ -82,7 +82,6 @@ export default function VortexOrbitPlot({ samples }: VortexOrbitPlotProps) {
           data: t.map((ti, i) => [ti, radius[i]]),
           lineStyle: { color: "#8ec5ff", width: 1, opacity: 0.6 },
           symbol: "none",
-          large: true,
           sampling: "lttb",
         },
         {
@@ -91,7 +90,6 @@ export default function VortexOrbitPlot({ samples }: VortexOrbitPlotProps) {
           data: t.map((ti, i) => [ti, envelope[i]]),
           lineStyle: { color: "#ffb86c", width: 1.8 },
           symbol: "none",
-          large: true,
           sampling: "lttb",
         },
       ],

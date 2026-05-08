@@ -54,6 +54,7 @@ export function slice2DToolbarFromDisplay(
     showAirboxVectors: false,
     showQuantity: true,
     showVectors: display.vector_glyphs,
+    vectorDensity: display.vector_density,
     renderMode: display.vector_glyphs ? "vectors" : DEFAULT_RENDER_MODE,
     projectionReduction: "mean_occupied",
     projectionIncludeAirAsZero: false,
@@ -168,6 +169,9 @@ export function createFdmSlice2DAdapter(
       if (!capabilities.structured_grid) {
         return unavailableFrame("Requires structured_grid capability");
       }
+      if (request.plane.mode === "slab") {
+        return unavailableFrame("Slab mode is not implemented by the 2D API/renderer yet");
+      }
       return {
         query: field2DQueryFromRequest(request),
         resourceKind: request.plane.mode === "all_layers" ? "projection" : "slice",
@@ -193,6 +197,9 @@ export function createFemSlice2DAdapter(
       if (!capabilities.explicit_topology) {
         return unavailableFrame("Requires explicit_topology capability");
       }
+      if (request.plane.mode === "slab") {
+        return unavailableFrame("Slab mode is not implemented by the 2D API/renderer yet");
+      }
       const query = fieldSliceQueryFromRequest(request);
       const allLayers = request.plane.mode === "all_layers";
       return {
@@ -204,10 +211,7 @@ export function createFemSlice2DAdapter(
           },
         resourceKind: allLayers ? "projection" : "slice",
         sampling: allLayers ? "fem-projection" : "fem-plane",
-        diagnostics:
-          request.plane.mode === "slab"
-            ? ["Slab mode samples a band around the FEM cut plane"]
-            : [],
+        diagnostics: [],
       };
     },
   };
@@ -227,7 +231,9 @@ export function fieldSliceQueryFromRequest(request: SliceBuildRequest): FieldSli
     y_size: resolution,
     max_points: request.toolbar.mode === "all_layers" ? undefined : 100_000,
     include_arrows: request.toolbar.showVectors,
-    arrow_every: request.toolbar.showVectors ? 4 : undefined,
+    arrow_every: request.toolbar.showVectors
+      ? Math.max(1, Math.round(request.toolbar.vectorDensity ?? 4))
+      : undefined,
     max_arrows: request.toolbar.showVectors ? 10_000 : undefined,
   };
 }

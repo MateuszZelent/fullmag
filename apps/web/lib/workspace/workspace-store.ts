@@ -100,7 +100,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "2D Slice 3",
       closable: false,
       pinned: true,
-      mountPolicy: "active-only",
+      mountPolicy: "hidden-mounted",
       payload: { viewMode: "2D" },
     },
     {

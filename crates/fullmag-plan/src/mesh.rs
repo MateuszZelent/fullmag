@@ -11,6 +11,9 @@ use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUniverseMetadata};
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
+pub(crate) const AIR_REGION_MARKER: u32 = 0;
+pub(crate) const OUTER_BOUNDARY_MARKER: u32 = 99;
+pub(crate) const MAG_AIR_INTERFACE_MARKER: u32 = 10;
 
 // FEM-014 fix: centralised air-box heuristic defaults.
 // All magic numbers for the air-box are gathered in one place so they can be
@@ -18,7 +21,7 @@ pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
 /// Default mesh grading factor for air-box elements.
 const AIRBOX_DEFAULT_GRADING: f64 = 1.4;
 /// Preferred boundary marker value for the air-box outer surface.
-const AIRBOX_DEFAULT_BOUNDARY_MARKER: u32 = 99;
+const AIRBOX_DEFAULT_BOUNDARY_MARKER: u32 = OUTER_BOUNDARY_MARKER;
 /// Default air-box shape.
 const AIRBOX_DEFAULT_SHAPE: &str = "bbox";
 /// Default Robin beta mode (dipole approximation).
@@ -27,7 +30,9 @@ const AIRBOX_DEFAULT_ROBIN_BETA_MODE: &str = "dipole";
 const AIRBOX_DEFAULT_ROBIN_BETA_FACTOR: f64 = 2.0;
 
 pub(crate) fn mesh_has_air_elements(mesh: &MeshIR) -> bool {
-    mesh.element_markers.iter().any(|&marker| marker == 0)
+    mesh.element_markers
+        .iter()
+        .any(|&marker| marker == AIR_REGION_MARKER)
 }
 
 pub(crate) fn resolved_domain_mesh_mode(mesh: &MeshIR) -> FemDomainMeshModeIR {
@@ -209,7 +214,13 @@ pub(crate) fn initial_vectors_for_magnet(
                     active: true,
                 })
                 .collect::<Vec<_>>();
-            sample_preset_texture(preset_kind, &preset_params, mapping, texture_transform, &points)?
+            sample_preset_texture(
+                preset_kind,
+                &preset_params,
+                mapping,
+                texture_transform,
+                &points,
+            )?
         }
         None => vec![[1.0, 0.0, 0.0]; n_nodes],
     })
@@ -276,7 +287,7 @@ pub(crate) fn analyze_shared_domain_mesh(
         .collect::<BTreeMap<_, _>>();
 
     for &marker in &mesh.element_markers {
-        if marker != 0 && !marker_to_object.contains_key(&marker) {
+        if marker != AIR_REGION_MARKER && !marker_to_object.contains_key(&marker) {
             return Err(format!(
                 "shared-domain FEM mesh '{}' uses magnetic element marker {} without a region_markers entry",
                 mesh.mesh_name, marker
@@ -287,7 +298,7 @@ pub(crate) fn analyze_shared_domain_mesh(
     let mut node_marker_sets = vec![BTreeSet::<u32>::new(); mesh.nodes.len()];
     for (element_index, element) in mesh.elements.iter().enumerate() {
         let marker = mesh.element_markers[element_index];
-        if marker == 0 {
+        if marker == AIR_REGION_MARKER {
             continue;
         }
         for &node in element {
@@ -318,7 +329,7 @@ pub(crate) fn analyze_shared_domain_mesh(
             let key = sorted_face_key(face);
             all_face_markers.entry(key).or_default().insert(marker);
             representative_faces.entry(key).or_insert(face);
-            if marker == 0 {
+            if marker == AIR_REGION_MARKER {
                 continue;
             }
             face_markers.entry(key).or_default().insert(marker);
@@ -437,7 +448,7 @@ pub(crate) fn pack_mesh_by_analysis(
     }
     let mut air_node_map = BTreeMap::<usize, u32>::new();
     for (node_index, owner) in analysis.node_owner.iter().enumerate() {
-        if *owner == 0 {
+        if *owner == AIR_REGION_MARKER {
             air_node_map.insert(node_index, reordered_nodes.len() as u32);
             reordered_nodes.push(mesh.nodes[node_index]);
         }
@@ -445,7 +456,7 @@ pub(crate) fn pack_mesh_by_analysis(
 
     let remap_node = |old_index: u32, owner_marker: u32| -> Result<u32, String> {
         let old_index = old_index as usize;
-        if owner_marker == 0 {
+        if owner_marker == AIR_REGION_MARKER {
             if let Some(new_index) = air_node_map.get(&old_index) {
                 return Ok(*new_index);
             }
@@ -547,7 +558,7 @@ pub(crate) fn pack_mesh_by_analysis(
             .get(&sorted_face_key(*face))
             .copied()
             .unwrap_or(0);
-        if owner != 0 {
+        if owner != AIR_REGION_MARKER {
             continue;
         }
         reordered_boundary_faces.push([
@@ -686,7 +697,7 @@ pub(crate) fn pack_mesh_by_analysis(
         let preferred_marker = pair
             .iter()
             .copied()
-            .find(|marker| *marker != 0)
+            .find(|marker| *marker != AIR_REGION_MARKER)
             .unwrap_or(pair[0]);
         let remapped_face = [
             remap_node(interface_face.face[0], preferred_marker)?,
@@ -707,7 +718,7 @@ pub(crate) fn pack_mesh_by_analysis(
         if surface_faces.is_empty() {
             continue;
         }
-        let left_label = if left_marker == 0 {
+        let left_label = if left_marker == AIR_REGION_MARKER {
             "Air".to_string()
         } else {
             marker_to_label
@@ -715,7 +726,7 @@ pub(crate) fn pack_mesh_by_analysis(
                 .cloned()
                 .unwrap_or_else(|| format!("marker_{left_marker}"))
         };
-        let right_label = if right_marker == 0 {
+        let right_label = if right_marker == AIR_REGION_MARKER {
             "Air".to_string()
         } else {
             marker_to_label
@@ -866,7 +877,7 @@ fn select_airbox_boundary_marker(mesh: &MeshIR) -> (u32, &'static str) {
             .boundary_markers
             .iter()
             .copied()
-            .filter(|&marker| marker > 0)
+            .filter(|&marker| marker > 0 && marker != MAG_AIR_INTERFACE_MARKER)
             .max();
         match max {
             Some(m) => (m, "mesh_max_marker"),
@@ -1199,7 +1210,7 @@ pub(crate) fn merge_fem_meshes(
     for (_object_id, mesh) in meshes {
         for (marker, quality) in &mesh.per_domain_quality {
             // After merge, all non-zero markers are normalised to 1.
-            let target_key = if *marker == 0 { 0 } else { 1 };
+            let target_key = if *marker == AIR_REGION_MARKER { 0 } else { 1 };
             merged_quality
                 .entry(target_key)
                 .or_insert_with(|| quality.clone());

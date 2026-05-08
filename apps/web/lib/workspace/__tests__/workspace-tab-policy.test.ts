@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isPersistentViewportWorkspaceTab,
   isWebGLWorkspaceTabKind,
   resolveWorkspaceTabMountPolicy,
 } from "../workspace-tab-policy";
@@ -14,7 +15,12 @@ describe("workspace tab mount policy", () => {
     expect(isWebGLWorkspaceTabKind("analyze")).toBe(false);
   });
 
-  it("keeps only the primary 3D viewport warm", () => {
+  it("marks the core 3D and 2D viewports as persistent", () => {
+    expect(isPersistentViewportWorkspaceTab({ id: "core:3d", kind: "viewport-3d" })).toBe(true);
+    expect(isPersistentViewportWorkspaceTab({ id: "core:2d", kind: "viewport-2d" })).toBe(true);
+    expect(
+      isPersistentViewportWorkspaceTab({ id: "result:quantity", kind: "result-quantity" }),
+    ).toBe(false);
     expect(
       resolveWorkspaceTabMountPolicy({
         id: "core:3d",
@@ -22,16 +28,16 @@ describe("workspace tab mount policy", () => {
         requestedMountPolicy: "active-only",
       }),
     ).toBe("hidden-mounted");
-  });
-
-  it("forces non-primary WebGL tabs to active-only even when warm mounting is requested", () => {
     expect(
       resolveWorkspaceTabMountPolicy({
         id: "core:2d",
         kind: "viewport-2d",
-        requestedMountPolicy: "hidden-mounted",
+        requestedMountPolicy: "active-only",
       }),
-    ).toBe("active-only");
+    ).toBe("hidden-mounted");
+  });
+
+  it("forces non-primary WebGL tabs to active-only even when warm mounting is requested", () => {
     expect(
       resolveWorkspaceTabMountPolicy({
         id: "result:quantity",

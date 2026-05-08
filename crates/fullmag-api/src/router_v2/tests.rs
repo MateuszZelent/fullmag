@@ -1270,6 +1270,115 @@ async fn domain_topology_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn domain_slice_mesh_overlay_returns_204_for_fdm() {
+    let app = test_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/slice/mesh-overlay?plane=xy&cut_norm=0.5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn domain_slice_mesh_overlay_returns_json_for_fem() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 31;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/slice/mesh-overlay?plane=xy&cut_norm=0.25")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+    let json = body_json(response).await;
+    assert_eq!(json["schema"], "fullmag.domain_2d.mesh_overlay.v1");
+    assert_eq!(json["plane"], "xy");
+    assert_eq!(json["u_axis"], "x");
+    assert_eq!(json["v_axis"], "y");
+    assert_eq!(json["normal_axis"], "z");
+    assert_eq!(json["domain_generation_id"], 42);
+    assert_eq!(json["topology_revision"], 31);
+    assert_eq!(json["etag"], etag);
+    assert_eq!(json["truncated"], false);
+    assert_eq!(
+        json["segment_count"].as_u64().unwrap_or(0),
+        json["segments"]
+            .as_array()
+            .map(|value| value.len())
+            .unwrap_or(0) as u64
+    );
+    assert!(
+        json["segment_count"].as_u64().unwrap_or(0) > 0,
+        "exact FEM slice overlay should expose line segments"
+    );
+}
+
+#[tokio::test]
+async fn domain_slice_mesh_overlay_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.mesh_revision = 9;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/slice/mesh-overlay?plane=xz&cut_world=0.25")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/slice/mesh-overlay?plane=xz&cut_world=0.25")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn field_vector_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -1566,7 +1675,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["schema_version"], 3);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -1582,6 +1691,9 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["slice"]["airbox_render_mode"], "wireframe");
     assert_eq!(json["slice"]["show_vectors"], false);
     assert_eq!(json["slice"]["render_mode"], "heatmap");
+    assert_eq!(json["trim"]["enabled"], false);
+    assert_eq!(json["trim"]["axes"]["x"]["min_percent"], 0.0);
+    assert_eq!(json["trim"]["axes"]["x"]["max_percent"], 100.0);
     assert!(json["overrides"].as_array().is_some());
     assert!(json["diagnostics"]["warnings"].as_array().is_some());
 }
@@ -1637,7 +1749,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 2);
+    assert_eq!(json["schema_version"], 3);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -2014,6 +2126,14 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                             "topology_mode": "volume",
                             "volume_edges_budget": 2048
                         },
+                        "trim": {
+                            "enabled": true,
+                            "axes": {
+                                "x": { "enabled": true, "min_percent": 10.0, "max_percent": 85.0 },
+                                "y": { "enabled": false, "min_percent": 0.0, "max_percent": 100.0 },
+                                "z": { "enabled": true, "min_percent": 0.0, "max_percent": 37.5 }
+                            }
+                        },
                         "clip": {
                             "enabled": true,
                             "axis": "z",
@@ -2045,6 +2165,9 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert_eq!(patched_json["sampling"]["max_points"], 4096);
     assert_eq!(patched_json["sampling"]["max_glyphs"], 512);
     assert_eq!(patched_json["fem"]["topology_mode"], "volume");
+    assert_eq!(patched_json["trim"]["enabled"], true);
+    assert_eq!(patched_json["trim"]["axes"]["x"]["min_percent"], 10.0);
+    assert_eq!(patched_json["trim"]["axes"]["z"]["max_percent"], 37.5);
     assert_eq!(patched_json["clip"]["enabled"], true);
     assert_eq!(patched_json["clip"]["axis"], "z");
     assert_eq!(patched_json["vector_style"]["color_mode"], "magnitude");
@@ -2071,6 +2194,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert_eq!(fetched_json["sampling"]["max_bytes"], 262144);
     assert_eq!(fetched_json["sampling"]["progressive"], false);
     assert_eq!(fetched_json["fem"]["volume_edges_budget"], 2048);
+    assert_eq!(fetched_json["trim"]["axes"]["x"]["max_percent"], 85.0);
     assert_eq!(fetched_json["clip"]["position_percent"], 37.5);
     assert_eq!(fetched_json["clip"]["flipped"], true);
     assert_eq!(fetched_json["vector_style"]["mono_color"], "#ff3366");
@@ -2083,6 +2207,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert!(presentation.visualization_layers.is_some());
     assert!(presentation.visualization_sampling.is_some());
     assert!(presentation.visualization_fem.is_some());
+    assert!(presentation.visualization_trim.is_some());
     assert!(presentation.visualization_clip.is_some());
     assert!(presentation.visualization_vector_style.is_some());
 }
@@ -2581,6 +2706,11 @@ async fn mesh_shared_domain_report_preserves_backend_truth_payloads() {
                 }
             },
             "mesh_pipeline_status": [{ "id": "generate", "status": "done" }],
+            "mesh_cost_report": {
+                "node_count": 12,
+                "element_count": 24,
+                "estimated_dense_ram_gb": 0.1
+            },
             "last_build_summary": {
                 "operation_statuses": [{
                     "kind": "swept_prism",
@@ -2619,6 +2749,7 @@ async fn mesh_shared_domain_report_preserves_backend_truth_payloads() {
         json["report"]["mesh_statistics"]["global"]["element_count"],
         24
     );
+    assert_eq!(json["report"]["mesh_cost_report"]["element_count"], 24);
     assert_eq!(
         json["report"]["last_build_summary"]["operation_statuses"][0]["status"],
         "fallback"
@@ -2626,6 +2757,111 @@ async fn mesh_shared_domain_report_preserves_backend_truth_payloads() {
     assert_eq!(
         json["report"]["last_build_summary"]["thin_film_diagnostics"][0]["actual_method"],
         "free_tetrahedral"
+    );
+}
+
+#[tokio::test]
+async fn mesh_realized_size_fields_returns_backend_truth_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {
+                "size_fields_realized": {
+                    "fields": [{
+                        "kind": "EdgeDistanceThreshold",
+                        "source": "object-edge-sizing",
+                        "applied": true
+                    }]
+                }
+            }
+        }));
+        snapshot.mesh_revision = 18;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 18);
+    assert_eq!(
+        json["realized_size_fields"]["fields"][0]["kind"],
+        "EdgeDistanceThreshold"
+    );
+    assert_eq!(json["realized_size_fields"]["fields"][0]["applied"], true);
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_prefers_backend_truth_payload() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_quality_gates": {
+                "source": "backend",
+                "checks": [{
+                    "id": "positive_orientation",
+                    "status": "pass"
+                }]
+            }
+        }));
+        snapshot.mesh_revision = 19;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 19);
+    assert_eq!(json["gates"]["source"], "backend");
+    assert_eq!(json["gates"]["checks"][0]["id"], "positive_orientation");
+}
+
+#[tokio::test]
+async fn mesh_quality_gates_returns_marked_projection_when_backend_payload_is_missing() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "mesh_quality_summary": { "sicn": { "p05": 0.34 } },
+            "mesh_statistics": { "global": { "element_count": 0 } }
+        }));
+        snapshot.mesh_revision = 20;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality-gates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 20);
+    assert_eq!(json["gates"]["source"], "derived_from_current_fem_mesh");
+    assert_eq!(
+        json["gates"]["reason"],
+        "mesh_quality_gates is missing from the current mesh workspace/build report"
     );
 }
 
@@ -7284,6 +7520,10 @@ fn openapi_contains_field_slice_paths() {
         paths.contains_key("/v2/sessions/current/data/fields/{quantity_id}/projection/empty-mask"),
         "OpenAPI missing /projection/empty-mask path"
     );
+    assert!(
+        paths.contains_key("/v2/sessions/current/data/domain/slice/mesh-overlay"),
+        "OpenAPI missing /data/domain/slice/mesh-overlay path"
+    );
 }
 
 #[test]
@@ -7365,6 +7605,51 @@ fn openapi_contains_field_slice_contract() {
     assert!(
         components.contains_key("FieldSliceBinaryDescriptor"),
         "OpenAPI missing FieldSliceBinaryDescriptor schema"
+    );
+}
+
+#[test]
+fn openapi_contains_domain_slice_mesh_overlay_contract() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let value = openapi;
+    let paths = value
+        .get("paths")
+        .and_then(|p| p.as_object())
+        .expect("OpenAPI paths must be an object");
+    let components = value
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    let overlay_get = paths
+        .get("/v2/sessions/current/data/domain/slice/mesh-overlay")
+        .and_then(|p| p.get("get"))
+        .expect("domain slice mesh overlay GET path missing");
+    let overlay_params = overlay_get
+        .get("parameters")
+        .and_then(|p| p.as_array())
+        .expect("domain slice mesh overlay parameters missing");
+    assert!(
+        overlay_params
+            .iter()
+            .any(|p| p.get("name").and_then(|n| n.as_str()) == Some("plane")),
+        "domain slice mesh overlay should expose query param `plane`"
+    );
+    assert!(
+        overlay_get
+            .get("responses")
+            .and_then(|r| r.get("409"))
+            .is_some(),
+        "domain slice mesh overlay should document 409 response"
+    );
+    assert!(
+        components.contains_key("DomainSliceMeshOverlay"),
+        "OpenAPI missing DomainSliceMeshOverlay schema"
+    );
+    assert!(
+        components.contains_key("DomainSliceMeshOverlaySegment"),
+        "OpenAPI missing DomainSliceMeshOverlaySegment schema"
     );
 }
 
@@ -7548,6 +7833,10 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
 #[test]
 fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
     let value = crate::openapi_v2::openapi_json();
+    let paths = value
+        .get("paths")
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI paths must be present");
     let schemas = value
         .get("components")
         .and_then(|value| value.get("schemas"))
@@ -7606,6 +7895,21 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
     assert!(
         semantics.contains("mesh_build_diagnostics"),
         "MeshSemanticsResource keeps diagnostics only as a named transitional projection"
+    );
+
+    for path in [
+        "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+        "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+    ] {
+        assert!(paths.contains_key(path), "OpenAPI missing `{path}`");
+    }
+    assert!(
+        schemas.contains_key("MeshRealizedSizeFieldsResource"),
+        "OpenAPI missing MeshRealizedSizeFieldsResource schema"
+    );
+    assert!(
+        schemas.contains_key("MeshQualityGatesResource"),
+        "OpenAPI missing MeshQualityGatesResource schema"
     );
 }
 

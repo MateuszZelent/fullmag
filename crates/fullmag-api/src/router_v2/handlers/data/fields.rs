@@ -10,6 +10,10 @@ use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
+use crate::fem_slice_overlay::{
+    collect_fem_slice_overlay, cut_norm_from_world, fem_normal_bounds_from_nodes,
+    overlay_segments_to_pixel_lines, FemSliceOverlayInput, SliceOverlayBounds,
+};
 use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::{
     component_etag_token, parse_component, project_values, ComponentSelection,
@@ -1112,24 +1116,6 @@ fn slice_normal_axis(plane: SlicePlane) -> usize {
     }
 }
 
-fn fem_normal_bounds(field: &FemField, plane: SlicePlane) -> Option<(f64, f64)> {
-    let axis = slice_normal_axis(plane);
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    for node in &field.nodes {
-        let value = node[axis];
-        if value.is_finite() {
-            min = min.min(value);
-            max = max.max(value);
-        }
-    }
-    if min.is_finite() && max.is_finite() && (max - min).abs() > f64::EPSILON {
-        Some((min, max))
-    } else {
-        None
-    }
-}
-
 fn fdm_normal_bounds(field: &FdmField, plane: SlicePlane) -> Option<(f64, f64)> {
     let axis = slice_normal_axis(plane);
     let origin = field.origin?;
@@ -1140,118 +1126,6 @@ fn fdm_normal_bounds(field: &FdmField, plane: SlicePlane) -> Option<(f64, f64)> 
     }
     let end = origin[axis] + extent;
     Some((origin[axis].min(end), origin[axis].max(end)))
-}
-
-fn cut_norm_from_world(cut_world: Option<f64>, bounds: Option<(f64, f64)>, fallback: f64) -> f64 {
-    let Some(cut_world) = cut_world else {
-        return fallback;
-    };
-    let Some((min, max)) = bounds else {
-        return fallback;
-    };
-    ((cut_world - min) / (max - min)).clamp(0.0, 1.0)
-}
-
-fn fem_slice_mesh_lines(
-    field: &FemField,
-    plane: SlicePlane,
-    cut_world: Option<f64>,
-    bounds: &FieldSliceBounds,
-    x_size: u32,
-    y_size: u32,
-) -> Vec<[f64; 4]> {
-    let Some(cut_world) = cut_world else {
-        return Vec::new();
-    };
-    let (u_axis, v_axis, normal_axis) = match plane {
-        SlicePlane::Xy => (0, 1, 2),
-        SlicePlane::Xz => (0, 2, 1),
-        SlicePlane::Yz => (1, 2, 0),
-    };
-    let u_span = (bounds.u_max - bounds.u_min).abs().max(f64::EPSILON);
-    let v_span = (bounds.v_max - bounds.v_min).abs().max(f64::EPSILON);
-    let epsilon = fem_normal_bounds(field, plane)
-        .map(|(min, max)| (max - min).abs().max(1.0) * 1.0e-12)
-        .unwrap_or(1.0e-12);
-    let mut lines = Vec::new();
-    let edges = [(0usize, 1usize), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
-    for (element_index, element) in field.elements.iter().enumerate() {
-        if field
-            .element_markers
-            .get(element_index)
-            .copied()
-            .unwrap_or(1)
-            == 0
-        {
-            continue;
-        }
-        let mut points: Vec<[f64; 2]> = Vec::new();
-        for (a, b) in edges {
-            let Some(pa) = field.nodes.get(element[a] as usize).copied() else {
-                continue;
-            };
-            let Some(pb) = field.nodes.get(element[b] as usize).copied() else {
-                continue;
-            };
-            let da = pa[normal_axis] - cut_world;
-            let db = pb[normal_axis] - cut_world;
-            if da.abs() <= epsilon && db.abs() <= epsilon {
-                push_unique_uv(&mut points, [pa[u_axis], pa[v_axis]], epsilon);
-                push_unique_uv(&mut points, [pb[u_axis], pb[v_axis]], epsilon);
-                continue;
-            }
-            if da.abs() <= epsilon {
-                push_unique_uv(&mut points, [pa[u_axis], pa[v_axis]], epsilon);
-                continue;
-            }
-            if db.abs() <= epsilon {
-                push_unique_uv(&mut points, [pb[u_axis], pb[v_axis]], epsilon);
-                continue;
-            }
-            if da.signum() == db.signum() {
-                continue;
-            }
-            let t = da / (da - db);
-            let u = pa[u_axis] + (pb[u_axis] - pa[u_axis]) * t;
-            let v = pa[v_axis] + (pb[v_axis] - pa[v_axis]) * t;
-            push_unique_uv(&mut points, [u, v], epsilon);
-        }
-        if points.len() < 2 {
-            continue;
-        }
-        let center = points.iter().fold([0.0, 0.0], |acc, point| {
-            [acc[0] + point[0], acc[1] + point[1]]
-        });
-        let center = [
-            center[0] / points.len() as f64,
-            center[1] / points.len() as f64,
-        ];
-        points.sort_by(|a, b| {
-            let aa = (a[1] - center[1]).atan2(a[0] - center[0]);
-            let bb = (b[1] - center[1]).atan2(b[0] - center[0]);
-            aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for i in 0..points.len() {
-            let a = points[i];
-            let b = points[(i + 1) % points.len()];
-            lines.push([
-                (a[0] - bounds.u_min) / u_span * (x_size.saturating_sub(1)) as f64,
-                (1.0 - (a[1] - bounds.v_min) / v_span) * (y_size.saturating_sub(1)) as f64,
-                (b[0] - bounds.u_min) / u_span * (x_size.saturating_sub(1)) as f64,
-                (1.0 - (b[1] - bounds.v_min) / v_span) * (y_size.saturating_sub(1)) as f64,
-            ]);
-        }
-    }
-    lines
-}
-
-fn push_unique_uv(points: &mut Vec<[f64; 2]>, point: [f64; 2], epsilon: f64) {
-    if points.iter().any(|existing| {
-        (existing[0] - point[0]).abs() <= epsilon && (existing[1] - point[1]).abs() <= epsilon
-    }) {
-        return;
-    }
-    points.push(point);
 }
 
 fn matrix_hash(raw: &str) -> String {
@@ -1750,14 +1624,26 @@ async fn build_slice_matrix(
         hash.clone(),
     )?;
     if let Some(fem_field) = fem_field.as_ref() {
-        matrix.mesh_lines = fem_slice_mesh_lines(
-            fem_field,
-            query.plane,
-            matrix.response.cut_world,
-            &matrix.response.bounds,
-            matrix.response.x_size,
-            matrix.response.y_size,
-        );
+        if let Ok(overlay) = collect_fem_slice_overlay(
+            FemSliceOverlayInput {
+                nodes: &fem_field.nodes,
+                elements: &fem_field.elements,
+                element_markers: &fem_field.element_markers,
+            },
+            &resolved,
+        ) {
+            matrix.mesh_lines = overlay_segments_to_pixel_lines(
+                &overlay.segments,
+                SliceOverlayBounds {
+                    u_min: matrix.response.bounds.u_min,
+                    u_max: matrix.response.bounds.u_max,
+                    v_min: matrix.response.bounds.v_min,
+                    v_max: matrix.response.bounds.v_max,
+                },
+                matrix.response.x_size,
+                matrix.response.y_size,
+            );
+        }
     }
     Ok((hash, matrix))
 }
@@ -2628,7 +2514,7 @@ pub async fn get_field_slice_meta(
         slice_result.cut_world,
         fem_field
             .as_ref()
-            .and_then(|field| fem_normal_bounds(field, resolved.plane))
+            .and_then(|field| fem_normal_bounds_from_nodes(&field.nodes, resolved.plane))
             .or_else(|| fdm_normal_bounds(&fdm_field, resolved.plane)),
         resolved.cut_norm,
     );

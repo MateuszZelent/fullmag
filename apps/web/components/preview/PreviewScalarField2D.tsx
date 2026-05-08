@@ -5,6 +5,7 @@ import * as echarts from "echarts";
 import { DIVERGING_PALETTE, SEQUENTIAL_BLUE_PALETTE, POSITIVE_PALETTE } from "../../lib/colorPalettes";
 import { ECHARTS_THEME } from "../../lib/echartsTheme";
 import { fmtSI } from "../../lib/format";
+import { buildColorbarLabel } from "./magnetizationSliceUtils";
 
 interface Props {
   data: [number, number, number][];
@@ -12,6 +13,7 @@ interface Props {
   quantityLabel: string;
   quantityUnit?: string;
   component: string;
+  quantityComponentCount?: number | null;
   min: number;
   max: number;
   axisExtent?: {
@@ -49,6 +51,7 @@ export default function PreviewScalarField2D({
   quantityLabel,
   quantityUnit,
   component,
+  quantityComponentCount = null,
   min,
   max,
   axisExtent = null,
@@ -80,6 +83,15 @@ export default function PreviewScalarField2D({
     const yCategories = Array.from({ length: yLen }, (_, i) => i);
     const xAxisName = axisExtent ? `x (${axisExtent.unit})` : "x (preview index)";
     const yAxisName = axisExtent ? `y (${axisExtent.unit})` : "y (preview index)";
+    const quantityDisplayLabel = buildColorbarLabel({
+      quantityLabel,
+      component:
+        component === "x" || component === "y" || component === "z" || component === "magnitude"
+          ? component
+          : "magnitude",
+      quantityUnit,
+      quantityComponentCount,
+    });
 
     chart.setOption(
       {
@@ -91,7 +103,7 @@ export default function PreviewScalarField2D({
           formatter: (params: Record<string, unknown>) => {
             const value = params.value as number[];
             return [
-              `<strong>${quantityLabel}.${component}</strong>`,
+              `<strong>${quantityDisplayLabel}</strong>`,
               `x: ${formatAxisCoordinate(value[0], xLen, axisExtent?.x ?? null, axisExtent?.unit ?? "m")}`,
               `y: ${formatAxisCoordinate(value[1], yLen, axisExtent?.y ?? null, axisExtent?.unit ?? "m")}`,
               `value: ${formatMagnitude(value[2])}${quantityUnit ? ` ${quantityUnit}` : ""}`,
@@ -167,7 +179,7 @@ export default function PreviewScalarField2D({
     return () => {
       window.removeEventListener("resize", resize);
     };
-  }, [axisExtent, component, data, quantityLabel, quantityUnit, scale.max, scale.min, scale.palette, xLen, yLen]);
+  }, [axisExtent, component, data, quantityComponentCount, quantityLabel, quantityUnit, scale.max, scale.min, scale.palette, xLen, yLen]);
 
   useEffect(() => {
     return () => {

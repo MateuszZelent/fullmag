@@ -71,6 +71,7 @@ from fullmag.model.problem import (
     RuntimeSelection,
 )
 from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
+from fullmag.model.geometry import Box, Translate
 
 _MESH_SIZE_CALIBRATIONS = (
     "general_physics",
@@ -385,6 +386,10 @@ class _MeshSpecState:
     interface_thickness: float | None = None
     transition_distance: float | None = None
     transition_growth: float | None = None
+    edge_hmax: float | None = None
+    edge_thickness: float | None = None
+    corner_hmax: float | None = None
+    corner_extent: float | None = None
     size_fields: list[dict[str, object]] = field(default_factory=list)
     # Quality
     compute_quality: bool = False
@@ -420,10 +425,76 @@ class _MeshSpecState:
             or self.interface_thickness is not None
             or self.transition_distance is not None
             or self.transition_growth is not None
+            or self.edge_hmax is not None
+            or self.edge_thickness is not None
+            or self.corner_hmax is not None
+            or self.corner_extent is not None
             or self.compute_quality
             or self.per_element_quality
             or bool(self.size_fields)
             or bool(self.operations)
+        )
+
+
+def _unwrap_translated_box(geometry: object) -> Box | None:
+    current = geometry
+    while isinstance(current, Translate):
+        current = current.geometry
+    return current if isinstance(current, Box) else None
+
+
+def _validate_perimeter_refinement_spec(
+    geometry: object,
+    spec: _MeshSpecState,
+    *,
+    context: str,
+) -> None:
+    edge_pair_active = spec.edge_hmax is not None or spec.edge_thickness is not None
+    corner_pair_active = spec.corner_hmax is not None or spec.corner_extent is not None
+
+    if edge_pair_active and (spec.edge_hmax is None or spec.edge_thickness is None):
+        raise ValueError(
+            f"{context}: edge_hmax and edge_thickness must be set together"
+        )
+    if corner_pair_active and (spec.corner_hmax is None or spec.corner_extent is None):
+        raise ValueError(
+            f"{context}: corner_hmax and corner_extent must be set together"
+        )
+
+    if not edge_pair_active and not corner_pair_active:
+        return
+
+    if spec.interface_hmax is not None or spec.interface_thickness is not None:
+        raise ValueError(
+            f"{context}: edge/corner refinement cannot be combined with interface_hmax or interface_thickness"
+        )
+
+    box = _unwrap_translated_box(geometry)
+    if box is None:
+        raise ValueError(
+            f"{context}: edge/corner refinement is currently supported only for Box geometries"
+        )
+
+    sx, sy, sz = (float(value) for value in box.size)
+    in_plane_dims = sorted((sx, sy, sz), reverse=True)[:2]
+    min_in_plane_dim = min(in_plane_dims)
+    half_min_in_plane_dim = 0.5 * min_in_plane_dim
+
+    if spec.edge_thickness is not None and spec.edge_thickness >= half_min_in_plane_dim:
+        raise ValueError(
+            f"{context}: edge_thickness must be smaller than half of the smaller in-plane dimension"
+        )
+    if spec.corner_extent is not None and spec.corner_extent >= half_min_in_plane_dim:
+        raise ValueError(
+            f"{context}: corner_extent must be smaller than half of the smaller in-plane dimension"
+        )
+    if (
+        spec.corner_hmax is not None
+        and spec.edge_hmax is not None
+        and spec.corner_hmax > spec.edge_hmax
+    ):
+        raise ValueError(
+            f"{context}: corner_hmax must be less than or equal to edge_hmax"
         )
 
 
@@ -469,6 +540,10 @@ class GeometryMeshHandle:
         interface_thickness: float | None = None,
         transition_distance: float | None = None,
         transition_growth: float | None = None,
+        edge_hmax: float | None = None,
+        edge_thickness: float | None = None,
+        corner_hmax: float | None = None,
+        corner_extent: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -497,6 +572,10 @@ class GeometryMeshHandle:
             interface_thickness=interface_thickness,
             transition_distance=transition_distance,
             transition_growth=transition_growth,
+            edge_hmax=edge_hmax,
+            edge_thickness=edge_thickness,
+            corner_hmax=corner_hmax,
+            corner_extent=corner_extent,
             compute_quality=compute_quality,
             per_element_quality=per_element_quality,
             mesh_strategy=mesh_strategy,
@@ -534,6 +613,10 @@ class GeometryMeshHandle:
         interface_thickness: float | None = None,
         transition_distance: float | None = None,
         transition_growth: float | None = None,
+        edge_hmax: float | None = None,
+        edge_thickness: float | None = None,
+        corner_hmax: float | None = None,
+        corner_extent: float | None = None,
         compute_quality: bool | None = None,
         per_element_quality: bool | None = None,
         mesh_strategy: str | None = None,
@@ -652,6 +735,18 @@ class GeometryMeshHandle:
         if transition_growth is not None:
             require_positive(float(transition_growth), f"{self._owner._name}.mesh.transition_growth")
             spec.transition_growth = float(transition_growth)
+        if edge_hmax is not None:
+            require_positive(float(edge_hmax), f"{self._owner._name}.mesh.edge_hmax")
+            spec.edge_hmax = float(edge_hmax)
+        if edge_thickness is not None:
+            require_positive(float(edge_thickness), f"{self._owner._name}.mesh.edge_thickness")
+            spec.edge_thickness = float(edge_thickness)
+        if corner_hmax is not None:
+            require_positive(float(corner_hmax), f"{self._owner._name}.mesh.corner_hmax")
+            spec.corner_hmax = float(corner_hmax)
+        if corner_extent is not None:
+            require_positive(float(corner_extent), f"{self._owner._name}.mesh.corner_extent")
+            spec.corner_extent = float(corner_extent)
         if compute_quality is not None:
             spec.compute_quality = compute_quality
         if per_element_quality is not None:
@@ -668,6 +763,11 @@ class GeometryMeshHandle:
             spec.through_thickness_symmetric = through_thickness_symmetric
         if sweep_face_meshing is not None:
             spec.sweep_face_meshing = sweep_face_meshing
+        _validate_perimeter_refinement_spec(
+            self._owner._shape,
+            spec,
+            context=f"{self._owner._name}.mesh",
+        )
         return self
 
     def algorithm(self, *, dim2: int | None = None, dim3: int | None = None) -> "GeometryMeshHandle":
@@ -3110,12 +3210,32 @@ def _mesh_spec_to_metadata(spec: _MeshSpecState) -> dict[str, object]:
         payload["transition_distance"] = spec.transition_distance
     if spec.transition_growth is not None:
         payload["transition_growth"] = spec.transition_growth
+    if spec.edge_hmax is not None:
+        payload["edge_hmax"] = spec.edge_hmax
+    if spec.edge_thickness is not None:
+        payload["edge_thickness"] = spec.edge_thickness
+    if spec.corner_hmax is not None:
+        payload["corner_hmax"] = spec.corner_hmax
+    if spec.corner_extent is not None:
+        payload["corner_extent"] = spec.corner_extent
     if spec.compute_quality:
         payload["compute_quality"] = True
     if spec.per_element_quality:
         payload["per_element_quality"] = True
     if spec.size_fields:
         payload["size_fields"] = list(spec.size_fields)
+    if spec.mesh_strategy is not None:
+        payload["mesh_strategy"] = spec.mesh_strategy
+    if spec.through_thickness_elements is not None:
+        payload["through_thickness_elements"] = spec.through_thickness_elements
+    if spec.through_thickness_distribution is not None:
+        payload["through_thickness_distribution"] = spec.through_thickness_distribution
+    if spec.through_thickness_element_ratio is not None:
+        payload["through_thickness_element_ratio"] = spec.through_thickness_element_ratio
+    if spec.through_thickness_symmetric:
+        payload["through_thickness_symmetric"] = True
+    if spec.sweep_face_meshing is not None:
+        payload["sweep_face_meshing"] = spec.sweep_face_meshing
     if spec.operations:
         payload["operations"] = [
             {"kind": operation.kind, "params": dict(operation.params)}

@@ -3,6 +3,7 @@ import type { StudyPrimitiveStageKind } from "@/lib/study-builder/types";
 import type { MagneticPresetKind } from "@/lib/magnetizationPresetCatalog";
 import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model/types";
 import type { CapabilityMap } from "@/src/api/types";
+import type { ResolvedTrimState } from "@/components/runs/control-room/visualizationStateSync";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { Slice2DToolbarState } from "@/src/features/slice2d";
 import type { VisualizationStatePatch } from "@/src/api/types";
@@ -65,6 +66,7 @@ export interface RibbonCommandContext {
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
+  slice2DToolbar?: Slice2DToolbarState | null;
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
   viewportLegendVisible?: boolean;
@@ -91,6 +93,7 @@ export interface RibbonCommandContext {
   onSetPreviewColormap?: (colormap: string) => void;
   onSetPreviewAutoScale?: (enabled: boolean) => void;
   onPatchVisualizationState?: (patch: VisualizationStatePatch) => void;
+  meshTrim?: ResolvedTrimState | null;
   onSetPrimitiveVisible?: (visible: boolean) => void;
   onSetMagneticTextureVisible?: (visible: boolean) => void;
   onSetMagneticTextureDensity?: (density: number) => void;
@@ -303,6 +306,37 @@ export function visualizationPatchFromRibbonCommand(
           ferromagnet_visibility: command.patch.ferromagnetVisibility,
         },
       };
+    case "viewport.set-global-trim":
+      return {
+        trim: {
+          enabled: command.patch.enabled,
+          axes: command.patch.axes
+            ? {
+                x: command.patch.axes.x
+                  ? {
+                      enabled: command.patch.axes.x.enabled,
+                      min_percent: command.patch.axes.x.minPercent,
+                      max_percent: command.patch.axes.x.maxPercent,
+                    }
+                  : undefined,
+                y: command.patch.axes.y
+                  ? {
+                      enabled: command.patch.axes.y.enabled,
+                      min_percent: command.patch.axes.y.minPercent,
+                      max_percent: command.patch.axes.y.maxPercent,
+                    }
+                  : undefined,
+                z: command.patch.axes.z
+                  ? {
+                      enabled: command.patch.axes.z.enabled,
+                      min_percent: command.patch.axes.z.minPercent,
+                      max_percent: command.patch.axes.z.maxPercent,
+                    }
+                  : undefined,
+              }
+            : undefined,
+        },
+      };
     case "viewport.set-global-clip":
       return {
         clip: {
@@ -489,6 +523,86 @@ function normalizeViewportMode(mode: string | undefined | null): CanonicalViewpo
   return null;
 }
 
+function currentSlice2DMode(ctx: RibbonCommandContext): Slice2DToolbarState["mode"] {
+  return ctx.slice2DToolbar?.mode ?? "single";
+}
+
+function currentSlice2DPlane(
+  ctx: RibbonCommandContext,
+): "xy" | "xz" | "yz" {
+  const axis = ctx.slice2DToolbar?.axis ?? "z";
+  if (axis === "x") {
+    return "yz";
+  }
+  if (axis === "y") {
+    return "xz";
+  }
+  return "xy";
+}
+
+function supportsSlice2DVectorColorMode(
+  plane: "xy" | "xz" | "yz",
+  colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome",
+): boolean {
+  if (
+    colorMode === "orientation" ||
+    colorMode === "magnitude" ||
+    colorMode === "monochrome"
+  ) {
+    return true;
+  }
+  if (plane === "xy") {
+    return colorMode === "x" || colorMode === "y";
+  }
+  if (plane === "xz") {
+    return colorMode === "x" || colorMode === "z";
+  }
+  return colorMode === "y" || colorMode === "z";
+}
+
+function supportsVectorStyleCommand(
+  ctx: RibbonCommandContext,
+  command: Extract<RibbonCommand, { id: "viewport.set-vector-style" }>,
+): boolean {
+  if (ctx.viewMode !== "2D" || !ctx.slice2DToolbar || !command.patch.colorMode) {
+    return true;
+  }
+  return supportsSlice2DVectorColorMode(
+    currentSlice2DPlane(ctx),
+    command.patch.colorMode,
+  );
+}
+
+function supportsSlice2DRenderMode(
+  ctx: RibbonCommandContext,
+  renderMode: Slice2DToolbarState["renderMode"],
+): boolean {
+  const mode = currentSlice2DMode(ctx);
+  switch (renderMode) {
+    case "heatmap":
+      return true;
+    case "contour":
+    case "heatmap+contour":
+      return false;
+    case "vectors":
+      return mode === "single";
+    case "mesh-overlay":
+      return mode === "single" && supportsFemMeshActions(ctx);
+    default:
+      return false;
+  }
+}
+
+function supportsSlice2DMeshOverlay(ctx: RibbonCommandContext): boolean {
+  return currentSlice2DMode(ctx) === "single" && supportsFemMeshActions(ctx);
+}
+
+function supportsSlice2DModeCommand(
+  mode: Slice2DToolbarState["mode"],
+): boolean {
+  return mode !== "slab";
+}
+
 export type RibbonCommand =
   | { id: "navigation.select-node"; nodeId: string }
   | { id: "viewport.set-mode"; mode: string }
@@ -531,6 +645,17 @@ export type RibbonCommand =
   | { id: "viewport.fit-all" }
   | { id: "viewport.set-global-render-mode"; renderMode: ViewportMeshRenderMode }
   | { id: "viewport.set-global-opacity"; opacity: number }
+  | {
+      id: "viewport.set-global-trim";
+      patch: Partial<{
+        enabled: boolean;
+        axes: Partial<{
+          x: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+          y: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+          z: Partial<{ enabled: boolean; minPercent: number; maxPercent: number }>;
+        }>;
+      }>;
+    }
   | { id: "viewport.set-global-clip"; patch: Partial<{ enabled: boolean; axis: "x" | "y" | "z"; position: number; flipped: boolean }> }
   | { id: "viewport.set-object-view"; mode: "context" | "isolate" }
   | { id: "viewport.set-slice-axis"; axis: Slice2DToolbarState["axis"] }
@@ -682,7 +807,11 @@ export function canExecuteRibbonCommand(
     case "viewport.toggle-quantity-shader":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetQuantityShaderVisible === "function";
     case "viewport.set-vector-density":
-      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewEveryN === "function";
+      return (
+        (ctx.viewMode === "2D" && typeof ctx.onSetSlice2DToolbar === "function")
+        || canPatchVisualizationCommand(ctx, command)
+        || typeof ctx.onSetPreviewEveryN === "function"
+      );
     case "viewport.set-vector-max-points":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetPreviewMaxPoints === "function";
     case "viewport.set-vector-glyph-budget":
@@ -692,13 +821,16 @@ export function canExecuteRibbonCommand(
     case "viewport.toggle-vectors":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshShowArrows === "function";
     case "viewport.set-vector-style":
-      return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetFemArrowStyle === "function";
+      return supportsVectorStyleCommand(ctx, command)
+        && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetFemArrowStyle === "function");
     case "viewport.set-airbox-display":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetAirboxDisplay === "function";
     case "viewport.set-global-render-mode":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshRenderMode === "function";
     case "viewport.set-global-opacity":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetMeshOpacity === "function";
+    case "viewport.set-global-trim":
+      return canPatchVisualizationCommand(ctx, command);
     case "viewport.set-global-clip":
       return canPatchVisualizationCommand(ctx, command) || (
         typeof ctx.onSetMeshClipEnabled === "function" ||
@@ -710,20 +842,27 @@ export function canExecuteRibbonCommand(
       return typeof ctx.onSetObjectViewMode === "function";
     case "viewport.set-slice-axis":
     case "viewport.set-slice-component":
-    case "viewport.set-slice-mode":
     case "viewport.set-slice-position":
-    case "viewport.set-slice-render-mode":
     case "viewport.set-slice-quantity-overlay":
-    case "viewport.set-slice-primitives":
-    case "viewport.set-slice-mesh":
-    case "viewport.set-slice-airbox":
-    case "viewport.set-slice-airbox-render-mode":
-    case "viewport.set-slice-airbox-vectors":
     case "viewport.set-slice-projection-reduction":
     case "viewport.set-slice-projection-air-zero":
     case "viewport.set-slice-projection-samples":
     case "viewport.set-slice-projection-resolution":
       return canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function";
+    case "viewport.set-slice-mode":
+      return supportsSlice2DModeCommand(command.mode)
+        && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function");
+    case "viewport.set-slice-render-mode":
+      return supportsSlice2DRenderMode(ctx, command.renderMode)
+        && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function");
+    case "viewport.set-slice-primitives":
+    case "viewport.set-slice-airbox":
+    case "viewport.set-slice-airbox-render-mode":
+    case "viewport.set-slice-airbox-vectors":
+      return false;
+    case "viewport.set-slice-mesh":
+      return supportsSlice2DMeshOverlay(ctx)
+        && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function");
     case "viewport.toggle-selected-texture":
       return Boolean(ctx.selectedObjectId)
         && typeof ctx.onSetSelectedObjectTextureVisible === "function";
@@ -845,6 +984,14 @@ export function executeRibbonCommand(
     return;
   }
   if (
+    command.id === "viewport.set-vector-density" &&
+    ctx.viewMode === "2D" &&
+    typeof ctx.onSetSlice2DToolbar === "function"
+  ) {
+    ctx.onSetSlice2DToolbar({ vectorDensity: command.everyN });
+    return;
+  }
+  if (
     command.id === "viewport.set-airbox-display" &&
     typeof ctx.onSetAirboxDisplay === "function"
   ) {
@@ -853,17 +1000,7 @@ export function executeRibbonCommand(
   }
   const visualizationPatch = visualizationPatchFromRibbonCommand(command);
   if (visualizationPatch && typeof ctx.onPatchVisualizationState === "function") {
-    if (ctx.isFemBackend && command.id === "viewport.set-slice-axis") {
-      ctx.onPatchVisualizationState({
-        ...visualizationPatch,
-        clip: {
-          ...(visualizationPatch.clip ?? {}),
-          axis: command.axis,
-        },
-      });
-    } else {
-      ctx.onPatchVisualizationState(visualizationPatch);
-    }
+    ctx.onPatchVisualizationState(visualizationPatch);
     return;
   }
   switch (command.id) {

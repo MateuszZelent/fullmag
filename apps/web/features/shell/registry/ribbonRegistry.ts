@@ -23,7 +23,11 @@ import type {
   RibbonCommand,
   ViewportMeshRenderMode,
 } from "@/components/shell/ribbon/command-registry";
-import type { CapabilityMap, GeometryCapabilitiesResource } from "@/src/api/types";
+import type {
+  CapabilityMap,
+  GeometryCapabilitiesResource,
+} from "@/src/api/types";
+import type { ResolvedTrimState } from "@/components/runs/control-room/visualizationStateSync";
 import type { Slice2DDiagnostics, Slice2DToolbarState } from "@/src/features/slice2d";
 import type { VisualizationAction } from "@/components/runs/control-room/visualizationReducer";
 import type { RibbonMenuNode, RibbonNodeState } from "./ribbonMenuTypes";
@@ -197,6 +201,7 @@ export interface RibbonBuildContext {
   selectedObjectTextureVisible?: boolean | null;
   selectedObjectOpacity?: number | null;
   selectedObjectRenderMode?: ViewportMeshRenderMode | "inherit" | null;
+  meshTrim?: ResolvedTrimState | null;
   meshClipEnabled?: boolean | null;
   meshClipAxis?: "x" | "y" | "z" | null;
   meshClipPos?: number | null;

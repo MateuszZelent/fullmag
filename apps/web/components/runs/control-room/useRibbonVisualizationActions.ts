@@ -153,6 +153,7 @@ export function useRibbonVisualizationActions({
       showAirboxVectors: false,
       showQuantity: viz.femViewportLayers.showQuantity,
       showVectors: Boolean(viz.meshShowArrows),
+      vectorDensity: viewport.requestedPreviewEveryN ?? 4,
       renderMode: viz.meshShowArrows ? "vectors" : "heatmap",
       projectionReduction: "mean_occupied",
       projectionIncludeAirAsZero: false,
@@ -172,6 +173,9 @@ export function useRibbonVisualizationActions({
     }
     if (typeof slice2DToolbarPatch.projectionResolution === "number") {
       localProjectionPatch.projectionResolution = slice2DToolbarPatch.projectionResolution;
+    }
+    if (typeof slice2DToolbarPatch.vectorDensity === "number") {
+      localProjectionPatch.vectorDensity = slice2DToolbarPatch.vectorDensity;
     }
     if (typeof slice2DToolbarPatch.positionPercent === "number") {
       localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
@@ -216,6 +220,7 @@ export function useRibbonVisualizationActions({
     viewport.requestedPreviewAllLayers,
     viewport.requestedPreviewAutoScale,
     viewport.requestedPreviewComponent,
+    viewport.requestedPreviewEveryN,
     viewport.requestedPreviewQuantity,
     viewport.selectedQuantity,
     viewport.sliceIndex,
@@ -291,17 +296,6 @@ export function useRibbonVisualizationActions({
     }
     if (nextPatch.axis) {
       viewport.setPlane(targetPlane);
-      if (axisSelection?.clipAxis) {
-        queueSliceDisplayPatch(
-          visualizationPatchForClip({
-            axis: axisSelection.clipAxis,
-            positionPercent:
-              typeof nextPatch.positionPercent === "number"
-                ? nextPatch.positionPercent
-                : undefined,
-          }),
-        );
-      }
       if (!femDiscretization) {
         const centeredPercent =
           typeof nextPatch.positionPercent === "number" ? nextPatch.positionPercent : 50;
@@ -323,17 +317,6 @@ export function useRibbonVisualizationActions({
     if (typeof nextPatch.layerIndex === "number") {
       viewport.setSliceIndex(nextPatch.layerIndex);
       queueSliceDisplayPatch({ slice_layer: nextPatch.layerIndex });
-      if (femDiscretization) {
-        queueSliceDisplayPatch(
-          visualizationPatchForClip({
-            positionPercent: positionPercentFromSliceIndex({
-              grid: viewport.previewGrid,
-              plane: targetPlane,
-              sliceIndex: nextPatch.layerIndex,
-            }),
-          }),
-        );
-      }
     }
     if (typeof nextPatch.positionPercent === "number") {
       const nextSliceIndex = sliceIndexFromPositionPercent({
@@ -341,9 +324,6 @@ export function useRibbonVisualizationActions({
         plane: targetPlane,
         positionPercent: nextPatch.positionPercent,
       });
-      if (!nextPatch.axis || !femDiscretization) {
-        queueSliceDisplayPatch(visualizationPatchForClip({ positionPercent: nextPatch.positionPercent }));
-      }
       viewport.setSliceIndex(nextSliceIndex);
       queueSliceDisplayPatch({ slice_layer: nextSliceIndex });
     }

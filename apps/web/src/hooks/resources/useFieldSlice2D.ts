@@ -51,6 +51,8 @@ export interface UseFieldSlice2DResult {
   arrows: SliceArrowData | null;
   loading: boolean;
   error: LiveApiError | null;
+  stateKind: "empty" | "loading" | "ready" | "unsupported" | "error";
+  unsupportedReason: string | null;
 }
 
 export type Field2DMeta = FieldSliceMeta | FieldProjectionMeta;
@@ -63,6 +65,16 @@ export interface LoadedFieldSlice2D {
   meta: Field2DMeta;
   scalar: SliceScalarData;
   arrows: SliceArrowData | null;
+}
+
+interface InactiveField2DState {
+  meta: Field2DMeta | null;
+  scalar: SliceScalarData | null;
+  arrows: SliceArrowData | null;
+  loading: false;
+  error: null;
+  stateKind: "empty" | "unsupported";
+  unsupportedReason: string | null;
 }
 
 export interface FieldSliceRequestParams {
@@ -341,9 +353,16 @@ export function useFieldSlice2D(
   fieldRevision: number | null,
   domainGenerationId: number,
   query: FieldSliceQuery | null,
+  unsupportedReason?: string | null,
 ): UseFieldSlice2DResult {
   const request = query ? { kind: "slice" as const, query } : null;
-  return useField2DResource(quantityId, fieldRevision, domainGenerationId, request);
+  return useField2DResource(
+    quantityId,
+    fieldRevision,
+    domainGenerationId,
+    request,
+    unsupportedReason,
+  );
 }
 
 export function useField2DResource(
@@ -351,15 +370,19 @@ export function useField2DResource(
   fieldRevision: number | null,
   domainGenerationId: number,
   request: Field2DResourceRequest | null,
+  unsupportedReason: string | null = null,
 ): UseFieldSlice2DResult {
   const [meta, setMeta] = useState<Field2DMeta | null>(null);
   const [scalar, setScalar] = useState<SliceScalarData | null>(null);
   const [arrows, setArrows] = useState<SliceArrowData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<LiveApiError | null>(null);
+  const [stateKind, setStateKind] = useState<UseFieldSlice2DResult["stateKind"]>("empty");
+  const [unsupportedStateReason, setUnsupportedStateReason] = useState<string | null>(null);
 
   const fetchedKeyRef = useRef<string | null>(null);
   const activeRequestRef = useRef<string | null>(null);
+  const lastGoodRef = useRef<LoadedFieldSlice2D | null>(null);
 
   const fetchSlice = useCallback(
     (
@@ -379,6 +402,8 @@ export function useField2DResource(
       activeRequestRef.current = queryKey;
       setLoading(true);
       setError(null);
+      setStateKind("loading");
+      setUnsupportedStateReason(null);
 
       const client = getLiveSessionClient();
       const request = loadFieldSliceRequest(client, params);
@@ -387,10 +412,13 @@ export function useField2DResource(
         .then((result) => {
           if (!active || activeRequestRef.current !== request.key) return;
           fetchedKeyRef.current = queryKey;
+          lastGoodRef.current = result;
           setMeta(result.meta);
           setScalar(result.scalar);
           setArrows(result.arrows);
           setLoading(false);
+          setStateKind("ready");
+          setUnsupportedStateReason(null);
         })
         .catch((err) => {
           if (!active || activeRequestRef.current !== request.key) return;
@@ -400,6 +428,8 @@ export function useField2DResource(
               : LiveApiError.networkError("field-slice-2d", err);
           setError(apiErr);
           setLoading(false);
+          setStateKind("error");
+          setUnsupportedStateReason(null);
         });
       return () => {
         active = false;
@@ -410,20 +440,56 @@ export function useField2DResource(
   );
 
   useEffect(() => {
-    if (!quantityId || fieldRevision == null || !request) {
+    if (!quantityId || fieldRevision == null) {
       activeRequestRef.current = null;
       fetchedKeyRef.current = null;
-      setMeta(null);
-      setScalar(null);
-      setArrows(null);
-      setLoading(false);
-      setError(null);
+      lastGoodRef.current = null;
+      const nextState = resolveInactiveField2DState({
+        previous: null,
+        quantityId,
+        fieldRevision,
+        unsupportedReason,
+        request,
+      });
+      setMeta(nextState.meta);
+      setScalar(nextState.scalar);
+      setArrows(nextState.arrows);
+      setLoading(nextState.loading);
+      setError(nextState.error);
+      setStateKind(nextState.stateKind);
+      setUnsupportedStateReason(nextState.unsupportedReason);
+      return undefined;
+    }
+    if (!request) {
+      activeRequestRef.current = null;
+      const nextState = resolveInactiveField2DState({
+        previous: lastGoodRef.current,
+        quantityId,
+        fieldRevision,
+        unsupportedReason,
+        request,
+      });
+      setMeta(nextState.meta);
+      setScalar(nextState.scalar);
+      setArrows(nextState.arrows);
+      setLoading(nextState.loading);
+      setError(nextState.error);
+      setStateKind(nextState.stateKind);
+      setUnsupportedStateReason(nextState.unsupportedReason);
       return undefined;
     }
     return fetchSlice(quantityId, fieldRevision, domainGenerationId, request);
-  }, [quantityId, fieldRevision, domainGenerationId, request, fetchSlice]);
+  }, [quantityId, fieldRevision, domainGenerationId, request, unsupportedReason, fetchSlice]);
 
-  return { meta, scalar, arrows, loading, error };
+  return {
+    meta,
+    scalar,
+    arrows,
+    loading,
+    error,
+    stateKind,
+    unsupportedReason: unsupportedStateReason,
+  };
 }
 
 // ── Binary decode helpers ────────────────────────────────────────────
@@ -495,7 +561,49 @@ function decodeSliceArrows(buffer: ArrayBuffer): SliceArrowData {
   return { values, arrowCount, etag: null };
 }
 
+function resolveInactiveField2DState(args: {
+  previous: LoadedFieldSlice2D | null;
+  quantityId: string | null;
+  fieldRevision: number | null;
+  request: Field2DResourceRequest | null;
+  unsupportedReason: string | null;
+}): InactiveField2DState {
+  if (!args.quantityId || args.fieldRevision == null) {
+    return {
+      meta: null,
+      scalar: null,
+      arrows: null,
+      loading: false,
+      error: null,
+      stateKind: "empty",
+      unsupportedReason: null,
+    };
+  }
+  if (!args.request) {
+    return {
+      meta: args.previous?.meta ?? null,
+      scalar: args.previous?.scalar ?? null,
+      arrows: args.previous?.arrows ?? null,
+      loading: false,
+      error: null,
+      stateKind: "unsupported",
+      unsupportedReason:
+        args.unsupportedReason ?? "2D mode is not implemented for the current renderer path",
+    };
+  }
+  return {
+    meta: args.previous?.meta ?? null,
+    scalar: args.previous?.scalar ?? null,
+    arrows: args.previous?.arrows ?? null,
+    loading: false,
+    error: null,
+    stateKind: "empty",
+    unsupportedReason: null,
+  };
+}
+
 export const __fieldSliceDecodeInternals = {
   decodeSliceScalar,
   decodeSliceArrows,
+  resolveInactiveField2DState,
 };

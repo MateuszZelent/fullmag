@@ -538,6 +538,10 @@ export interface ScriptBuilderMeshState {
   interface_thickness?: string;
   transition_distance?: string;
   transition_growth?: string;
+  edge_hmax?: string;
+  edge_thickness?: string;
+  corner_hmax?: string;
+  corner_extent?: string;
   adaptive_enabled: boolean;
   adaptive_policy: string;
   adaptive_indicator?: string;
@@ -740,6 +744,10 @@ export interface ScriptBuilderPerGeometryMeshEntry {
   interface_thickness: string | null;
   transition_distance: string | null;
   transition_growth: number | null;
+  edge_hmax: string | null;
+  edge_thickness: string | null;
+  corner_hmax: string | null;
+  corner_extent: string | null;
   // Boundary layer extrusion
   boundary_layer_count: number | null;
   boundary_layer_thickness: string | null;   // SI metres as string (matches hmax/hmin pattern)
@@ -1267,6 +1275,10 @@ export interface MeshCapabilitiesState {
   supports_adaptive_remesh: boolean;
   supports_compare_snapshots: boolean;
   supports_size_field_remesh: boolean;
+  supports_selected_surface_size_fields?: boolean;
+  supports_boundary_layers?: boolean;
+  supports_mesh_convergence_workflow?: boolean;
+  boundary_layer_status?: string | null;
   supports_mesh_error_preview: boolean;
   supports_target_h_preview: boolean;
 }
@@ -1303,6 +1315,10 @@ export interface MeshEffectiveObjectTargetState {
   hmax: number | null;
   interface_hmax: number | null;
   transition_distance: number | null;
+  edge_hmax: number | null;
+  edge_thickness: number | null;
+  corner_hmax: number | null;
+  corner_extent: number | null;
   source: string | null;
 }
 

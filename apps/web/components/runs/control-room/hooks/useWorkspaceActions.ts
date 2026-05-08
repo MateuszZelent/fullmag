@@ -88,6 +88,23 @@ function perfNow(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
+export function visualizationPatchForViewModeChange(
+  mode: ViewportMode,
+): VisualizationStatePatch | null {
+  if (mode === "3D") {
+    return {
+      view_mode: "3d",
+      field_component: "magnitude",
+    };
+  }
+  if (mode === "2D") {
+    return {
+      view_mode: "2d",
+    };
+  }
+  return null;
+}
+
 export function resolveQuantitySwitchCacheState(args: {
   cachedFieldQuantities: ReadonlySet<string>;
   nextQuantity: string;
@@ -198,6 +215,7 @@ export interface UseWorkspaceActionsParams {
   displaySelection: CurrentDisplaySelection | null;
   /** Quantity IDs that are already cached locally in fieldMap (data-plane). */
   cachedFieldQuantities: ReadonlySet<string>;
+  markInternalWorkspaceViewSync: (tabId: string, payloadViewMode: "3D" | "2D" | "Analyze") => void;
   // state setters
   setViewMode: Dispatch<SetStateAction<ViewportMode>>;
   setFemDockTab: Dispatch<SetStateAction<FemDockTab>>;
@@ -360,6 +378,7 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     optimisticDisplaySelection,
     displaySelection,
     cachedFieldQuantities,
+    markInternalWorkspaceViewSync,
     setViewMode,
     setFemDockTab,
     setComponent,
@@ -406,14 +425,26 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
         return;
       }
       if (nextMode === "3D" || nextMode === "2D" || nextMode === "Mesh" || nextMode === "Analyze") {
-        activateWorkspaceTab(currentStage, coreTabIdForViewMode(nextMode));
+        const nextTabId = coreTabIdForViewMode(nextMode);
+        markInternalWorkspaceViewSync(
+          nextTabId,
+          nextMode === "Mesh" ? "3D" : nextMode,
+        );
+        activateWorkspaceTab(currentStage, nextTabId);
       }
       setViewMode(nextMode);
       if (nextMode === "Mesh" && options?.femDockTab) {
         setFemDockTab(options.femDockTab);
       }
     });
-  }, [activateWorkspaceTab, currentStage, effectiveViewMode, setFemDockTab, setViewMode]);
+  }, [
+    activateWorkspaceTab,
+    currentStage,
+    effectiveViewMode,
+    markInternalWorkspaceViewSync,
+    setFemDockTab,
+    setViewMode,
+  ]);
 
   /* ── handleCompute ── */
   const handleCompute = useCallback(() => {
@@ -502,9 +533,6 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
       force: true,
       femDockTab: preset.dockTab,
       beforeTransition: () => {
-        if (preset.viewMode === "2D") {
-          setComponent((prev) => (prev === "magnitude" ? "x" : prev));
-        }
         setSelectedSidebarNodeId(
           preset.dockTab === "quality"
             ? "universe-mesh-quality"
@@ -559,17 +587,12 @@ export function useWorkspaceActions(params: UseWorkspaceActionsParams): UseWorks
     transitionToViewMode(normalizedMode, {
       force: normalizedMode !== effectiveViewMode,
       beforeTransition: () => {
-        if (normalizedMode === "2D") {
-          setComponent((prev) => (prev === "magnitude" ? "x" : prev));
-        }
         if (normalizedMode === "3D") {
           setComponent((prev) => (prev === "x" || prev === "y" || prev === "z" ? "magnitude" : prev));
         }
-        if (normalizedMode === "3D" || normalizedMode === "2D") {
-          void patchDisplay({
-            view_mode: normalizedMode === "3D" ? "3d" : "2d",
-            field_component: normalizedMode === "3D" ? "magnitude" : "x",
-          });
+        const viewModePatch = visualizationPatchForViewModeChange(normalizedMode);
+        if (viewModePatch) {
+          void patchDisplay(viewModePatch);
         }
       },
     });

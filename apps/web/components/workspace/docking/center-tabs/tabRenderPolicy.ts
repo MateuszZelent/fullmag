@@ -1,6 +1,6 @@
 import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
 import {
-  isCore3DWorkspaceTab,
+  isPersistentViewportWorkspaceTab,
   isWebGLWorkspaceTabKind,
 } from "@/lib/workspace/workspace-tab-policy";
 
@@ -24,7 +24,7 @@ export function isWebGLWorkspaceTab(tab: Pick<WorkspaceTab, "kind">): boolean {
 }
 
 export function isKeepAliveWorkspaceTab(tab: Pick<WorkspaceTab, "id" | "kind">): boolean {
-  return isCore3DWorkspaceTab(tab);
+  return isPersistentViewportWorkspaceTab(tab);
 }
 
 export function resolveWorkspaceTabRenderDecision(
@@ -61,9 +61,9 @@ export function resolveWorkspaceTabRenderDecision(
 
 /**
  * Center-tab panels can own WebGL canvases, Plotly charts, timers, observers,
- * and live subscriptions. Only the primary 3D viewport stays mounted while
- * hidden; it receives viewportVisible=false so its render loop pauses. Other
- * WebGL tabs remain active-only to avoid GPU memory growth.
+ * and live subscriptions. The core 3D and 2D viewports stay mounted while
+ * hidden so renderer state survives tab switches. Other WebGL tabs remain
+ * active-only to avoid GPU memory growth.
  */
 export function shouldRenderWorkspaceTabPanel(
   tab: RenderPolicyTab,

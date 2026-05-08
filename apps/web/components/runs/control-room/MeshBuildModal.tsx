@@ -306,6 +306,22 @@ export default function MeshBuildModal({
                       <span className="text-right font-mono text-white">
                         {target.interface_hmax != null ? fmtSI(target.interface_hmax, "m") : "—"}
                       </span>
+                      <span>Edge hmax</span>
+                      <span className="text-right font-mono text-white">
+                        {target.edge_hmax != null ? fmtSI(target.edge_hmax, "m") : "—"}
+                      </span>
+                      <span>Edge thickness</span>
+                      <span className="text-right font-mono text-white">
+                        {target.edge_thickness != null ? fmtSI(target.edge_thickness, "m") : "—"}
+                      </span>
+                      <span>Corner hmax</span>
+                      <span className="text-right font-mono text-white">
+                        {target.corner_hmax != null ? fmtSI(target.corner_hmax, "m") : "—"}
+                      </span>
+                      <span>Corner extent</span>
+                      <span className="text-right font-mono text-white">
+                        {target.corner_extent != null ? fmtSI(target.corner_extent, "m") : "—"}
+                      </span>
                     </div>
                   </div>
                 )) : effectiveTargets.length > 0 ? effectiveTargets.map((target) => (

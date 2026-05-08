@@ -44,6 +44,7 @@ import MeshBuildModal from "./control-room/MeshBuildModal";
 import { WorkspaceRightToolbox } from "../workspace/modes/WorkspaceModeInspectors";
 import { useAnalyzeStore } from "@/features/analyze";
 import {
+  useSelectionActions,
   useSelectedSidebarNodeId,
 } from "@/features/selection";
 import { useRenderMode } from "@/features/visualization/hooks/useVizSlice";
@@ -84,6 +85,7 @@ import {
 } from "./control-room/visualizationStateSync";
 import {
   launchDisplayName,
+  resolveControlRoomStartupState,
 } from "./control-room/controlRoomShellHelpers";
 import { useMeshBuildFlow } from "./control-room/useMeshBuildFlow";
 import type { DockLayoutModel } from "@/lib/workspace/dockLayoutContract";
@@ -257,7 +259,10 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   const { setSelectedObjectId } = useSelectionActions();
   const meshRenderMode = useRenderMode();
   const setMagneticTextureDensity = useVisualizationStore((s) => s.setFemTextureDownsampleCells);
-  const hasNoActiveWorkspace = _cmd.error?.includes("no active local live workspace") ?? false;
+  const startupState = resolveControlRoomStartupState({
+    hasSession: _cmd.session != null,
+    error: _cmd.error,
+  });
 
   const femDiscretization = resolveFemDiscretization(
     _cmd.domainCapabilities,
@@ -568,13 +573,9 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     handleSelectedObjectTextureVisible,
   } = useSelectedObjectRibbonDisplay(_model);
 
-  /* ── Loading state ── */
-  if (!_cmd.session) {
-    if (hasNoActiveWorkspace) {
-      return <NoActiveWorkspaceState onOpenLauncher={() => router.push("/")} />;
-    }
-
-    return <InitializingWorkspaceState error={_cmd.error} />;
+  /* ── Startup state ── */
+  if (startupState === "no-active-workspace") {
+    return <NoActiveWorkspaceState onOpenLauncher={() => router.push("/")} />;
   }
 
   if (!FRONTEND_DIAGNOSTIC_FLAGS.workspace.enableControlRoomShell) {
@@ -587,7 +588,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
   }
 
   return (
-    <div className="h-full flex flex-col bg-background font-sans text-foreground text-base overflow-hidden">
+    <div className="relative h-full flex flex-col overflow-hidden bg-background font-sans text-base text-foreground">
       <ControlRoomAppBar problemName={workspaceTitle} />
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showRibbonBar ? <ControlRoomRibbonBar
         viewport3DStatus={viewport3DStatus.status}
@@ -613,6 +614,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         selectedObjectTextureVisible={selectedObjectTextureVisible}
         selectedObjectOpacity={selectedObjectOpacity}
         selectedObjectRenderMode={selectedObjectRenderMode}
+        meshTrim={_model.resolvedRenderPlan?.trim ?? null}
         airMeshRenderMode={airMeshRenderMode}
         airMeshGeometryVisible={airboxDisplayState.geometryVisible}
         airMeshSurfaceVisible={airboxDisplayState.surface}
@@ -817,6 +819,12 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
       {/* ── Workspace overlays (settings, docs) ── */}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showWorkspaceOverlays ? <SettingsDialog /> : null}
       {FRONTEND_DIAGNOSTIC_FLAGS.shell.showWorkspaceOverlays ? <PhysicsDocsDrawer /> : null}
+
+      {startupState === "initializing" ? (
+        <div className="absolute inset-0 z-[180]">
+          <InitializingWorkspaceState error={_cmd.error} />
+        </div>
+      ) : null}
     </div>
   );
 }

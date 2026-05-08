@@ -266,7 +266,13 @@ pub(crate) fn plan_fdm(
                 -(grid_cells[2] as f64 * cell_size[2]) * 0.5,
             ];
             let points = grid_sample_points(grid_cells, cell_size, origin, active_mask.as_ref());
-            match sample_preset_texture(preset_kind, &preset_params, mapping, texture_transform, &points) {
+            match sample_preset_texture(
+                preset_kind,
+                &preset_params,
+                mapping,
+                texture_transform,
+                &points,
+            ) {
                 Ok(values) => values,
                 Err(message) => {
                     return Err(PlanError {

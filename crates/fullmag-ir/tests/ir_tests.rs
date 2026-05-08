@@ -948,9 +948,7 @@ fn preset_texture_accepts_preset_params_key() {
     let decoded: InitialMagnetizationIR =
         serde_json::from_str(json).expect("preset_params key should deserialize");
     match decoded {
-        InitialMagnetizationIR::PresetTexture {
-            preset_params, ..
-        } => {
+        InitialMagnetizationIR::PresetTexture { preset_params, .. } => {
             let dir = preset_params
                 .get("direction")
                 .expect("direction key must exist")
@@ -972,9 +970,7 @@ fn preset_texture_backward_compat_params_alias() {
     let decoded: InitialMagnetizationIR =
         serde_json::from_str(json).expect("params alias should deserialize");
     match decoded {
-        InitialMagnetizationIR::PresetTexture {
-            preset_params, ..
-        } => {
+        InitialMagnetizationIR::PresetTexture { preset_params, .. } => {
             let dir = preset_params
                 .get("direction")
                 .expect("direction key must exist")
