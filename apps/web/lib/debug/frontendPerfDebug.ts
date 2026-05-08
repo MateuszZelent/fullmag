@@ -22,7 +22,7 @@ const EMPTY_FRONTEND_PERF_SAMPLES: PerfSample[] = [];
 let frontendPerfSamples: PerfSample[] = [];
 
 function sanitizeText(value: string): string {
-  return value.length > MAX_TEXT_LENGTH ? `${value.slice(0, MAX_TEXT_LENGTH - 1)}...` : value;
+  return value.length > MAX_TEXT_LENGTH ? `${value.slice(0, MAX_TEXT_LENGTH - 3)}...` : value;
 }
 
 function sanitizeNumber(value: number): number {

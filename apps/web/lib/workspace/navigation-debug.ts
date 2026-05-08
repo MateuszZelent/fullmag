@@ -35,13 +35,13 @@ function summarizeDebugValue(value: unknown): unknown {
   }
   if (typeof value === "string") {
     return value.length > MAX_DETAIL_TEXT_LENGTH
-      ? `${value.slice(0, MAX_DETAIL_TEXT_LENGTH - 1)}...`
+      ? `${value.slice(0, MAX_DETAIL_TEXT_LENGTH - 3)}...`
       : value;
   }
   if (ArrayBuffer.isView(value)) {
     return {
       type: value.constructor.name,
-      length: value.length,
+      length: "length" in value && typeof value.length === "number" ? value.length : null,
       byteLength: value.byteLength,
     };
   }
@@ -74,7 +74,7 @@ function sanitizeDebugDetail(detail: Record<string, unknown> | null): Record<str
       .slice(0, MAX_DETAIL_KEYS)
       .map(([key, value]) => [
         key.length > MAX_DETAIL_TEXT_LENGTH
-          ? `${key.slice(0, MAX_DETAIL_TEXT_LENGTH - 1)}...`
+          ? `${key.slice(0, MAX_DETAIL_TEXT_LENGTH - 3)}...`
           : key,
         summarizeDebugValue(value),
       ]),

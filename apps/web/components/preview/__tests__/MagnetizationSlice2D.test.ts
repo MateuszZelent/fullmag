@@ -146,11 +146,38 @@ describe("slice plane metadata", () => {
     expect((option.yAxis as { min: number }).min).toBe(-20e-9);
     expect((option.yAxis as { max: number }).max).toBe(20e-9);
     expect((option.graphic as Array<{ style: { text: string } }>)[0]?.style.text).toBe("H_demag.z [A/m]");
-    expect((option.series as Array<{ id: string }>).map((series) => series.id)).toEqual([
+    const series = option.series as Array<{ id: string; type: string }>;
+    expect(series.map((entry) => entry.id)).toEqual([
       "slice-heatmap",
       "slice-mesh-overlay",
       "slice-vector-glyphs",
     ]);
+    expect(series[0]?.type).toBe("custom");
+  });
+
+  it("keeps category heatmap only for cell-index rasters without physical bounds", () => {
+    const option = buildSlice2DChartOption({
+      data: [[0, 0, 1]],
+      xLen: 2,
+      yLen: 2,
+      scale: {
+        min: 0,
+        max: 1,
+        palette: ["#000000", "#ffffff"],
+      },
+      quantityLabel: "m",
+      quantityComponentCount: 3,
+      component: "z",
+      plane: "xy",
+      showQuantity: true,
+    });
+
+    expect((option.xAxis as { type: string }).type).toBe("category");
+    expect((option.yAxis as { type: string }).type).toBe("category");
+    expect(((option.series as Array<{ id: string; type: string }>)[0])).toMatchObject({
+      id: "slice-heatmap",
+      type: "heatmap",
+    });
   });
 });
 

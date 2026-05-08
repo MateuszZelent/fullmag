@@ -13,6 +13,12 @@ import * as THREE from "three";
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
 type FemArrowColorMode = "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+type Slice2DRenderApi = {
+  value: (index: number) => unknown;
+  coord: (point: [number, number]) => [number, number];
+  style: (extra?: Record<string, unknown>) => Record<string, unknown>;
+};
+
 export interface VectorGlyph2D {
   origin: [number, number];
   delta: [number, number];
@@ -42,6 +48,57 @@ function formatMagnitude(value: number): string {
   if (abs >= 10) return value.toFixed(1);
   if (abs >= 1) return value.toFixed(2);
   return value.toPrecision(2);
+}
+
+function buildWorldRasterSeries(args: {
+  data: [number, number, number][];
+  bounds: FieldSliceBounds;
+  xLen: number;
+  yLen: number;
+  quantityLabel: string;
+  showQuantity: boolean;
+}): Record<string, unknown> {
+  const du = (args.bounds.u_max - args.bounds.u_min) / Math.max(1, args.xLen);
+  const dv = (args.bounds.v_max - args.bounds.v_min) / Math.max(1, args.yLen);
+
+  return {
+    id: "slice-heatmap",
+    name: args.quantityLabel,
+    type: "custom",
+    coordinateSystem: "cartesian2d",
+    selectedMode: false,
+    emphasis: { disabled: true },
+    progressive: 0,
+    progressiveThreshold: Number.MAX_SAFE_INTEGER,
+    animation: false,
+    dimensions: ["x", "y", "value"],
+    encode: { x: 0, y: 1, value: 2 },
+    data: args.showQuantity ? args.data : [],
+    renderItem: (_params: unknown, api: Slice2DRenderApi) => {
+      const u = Number(api.value(0));
+      const v = Number(api.value(1));
+      const value = Number(api.value(2));
+      if (!Number.isFinite(u) || !Number.isFinite(v) || !Number.isFinite(value)) {
+        return null;
+      }
+
+      const a = api.coord([u - du / 2, v - dv / 2]);
+      const b = api.coord([u + du / 2, v + dv / 2]);
+      const x = Math.min(a[0], b[0]);
+      const y = Math.min(a[1], b[1]);
+      const width = Math.abs(b[0] - a[0]) + 0.5;
+      const height = Math.abs(b[1] - a[1]) + 0.5;
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+
+      return {
+        type: "rect",
+        shape: { x, y, width, height },
+        style: api.style(),
+      };
+    },
+  };
 }
 
 function planeVectorToCartesian(
@@ -279,6 +336,7 @@ export function buildSlice2DChartOption(args: {
     : {
         type: "category" as const,
         data: xCategories,
+        boundaryGap: true,
         name: `${planeAxes.u} (cell)`,
         nameLocation: "middle" as const,
         nameGap: 30,
@@ -334,6 +392,7 @@ export function buildSlice2DChartOption(args: {
     : {
         type: "category" as const,
         data: yCategories,
+        boundaryGap: true,
         name: `${planeAxes.v} (cell)`,
         nameLocation: "middle" as const,
         nameGap: 44,
@@ -358,17 +417,26 @@ export function buildSlice2DChartOption(args: {
   const meshSegments = args.meshOverlay?.segments ?? [];
   const vectorGlyphs = args.vectorGlyphs ?? [];
   const series: Array<Record<string, unknown>> = [
-    {
-      id: "slice-heatmap",
-      name: args.quantityLabel,
-      type: "heatmap",
-      selectedMode: false,
-      emphasis: { disabled: true },
-      progressive: 0,
-      progressiveThreshold: Number.MAX_SAFE_INTEGER,
-      animation: false,
-      data: args.showQuantity ? args.data : [],
-    },
+    hasWorldBounds && args.bounds
+      ? buildWorldRasterSeries({
+        data: args.data,
+        bounds: args.bounds,
+        xLen: args.xLen,
+        yLen: args.yLen,
+        quantityLabel: args.quantityLabel,
+        showQuantity: args.showQuantity,
+      })
+      : {
+        id: "slice-heatmap",
+        name: args.quantityLabel,
+        type: "heatmap",
+        selectedMode: false,
+        emphasis: { disabled: true },
+        progressive: 0,
+        progressiveThreshold: Number.MAX_SAFE_INTEGER,
+        animation: false,
+        data: args.showQuantity ? args.data : [],
+      },
   ];
   if (meshSegments.length > 0) {
     series.push({
@@ -378,7 +446,7 @@ export function buildSlice2DChartOption(args: {
       silent: true,
       z: 20,
       data: meshSegments.map((_, index) => [index]),
-      renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (point: [number, number]) => [number, number] }) => {
+      renderItem: (_params: unknown, api: Slice2DRenderApi) => {
         const segmentIndex = api.value(0) as number;
         const segment = meshSegments[segmentIndex];
         if (!segment) {
@@ -411,7 +479,7 @@ export function buildSlice2DChartOption(args: {
       silent: true,
       z: 30,
       data: vectorGlyphs.map((_, index) => [index]),
-      renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (point: [number, number]) => [number, number] }) => {
+      renderItem: (_params: unknown, api: Slice2DRenderApi) => {
         const glyphIndex = api.value(0) as number;
         const glyph = vectorGlyphs[glyphIndex];
         if (!glyph) {
@@ -514,6 +582,7 @@ export function buildSlice2DChartOption(args: {
         inRange: { color: args.scale.palette },
         outOfRange: { color: ["rgba(107, 122, 154, 0.18)"] },
         seriesIndex: 0,
+        dimension: 2,
         showLabel: true,
       },
     ],
