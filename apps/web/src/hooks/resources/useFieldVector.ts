@@ -5,7 +5,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { incrementFrontendAuditCounter, setFrontendAuditCounter } from "@/lib/debug/frontendAudit";
+import {
+  incrementFrontendAuditCounter,
+  incrementFrontendAuditResourceFetch,
+  setFrontendAuditCounter,
+} from "@/lib/debug/frontendAudit";
 import type { DecodedFieldVector } from "../../api/codecs/types";
 import type {
   FieldBinaryResponse,
@@ -28,6 +32,7 @@ interface UseFieldVectorOptions {
   /** Optional server-side scope for sampled vector payloads. */
   scopeKind?: FieldSampleScopeKind;
   scopeId?: string | null;
+  auditResource?: string;
 }
 
 interface UseFieldVectorResult {
@@ -43,6 +48,7 @@ export interface FieldVectorRequestParams {
   domainGenerationId: number;
   scopeKind: FieldSampleScopeKind;
   scopeId: string | null;
+  auditResource?: string;
 }
 
 export interface FieldVectorRequestHandle {
@@ -74,7 +80,7 @@ export function buildFieldVectorScopeToken(
 export function buildFieldVectorResourceKey(params: FieldVectorRequestParams): string {
   return `${ResourceCache.fieldKey(
     params.quantityId,
-    params.revision,
+    0,
     params.domainGenerationId,
     params.component,
   )}:${buildFieldVectorScopeToken(params.scopeKind, params.scopeId)}`;
@@ -116,7 +122,7 @@ export function loadFieldVectorRequest(
 
   const controller = new AbortController();
   incrementFrontendAuditCounter("fieldVectorRequests", 1);
-  incrementFrontendAuditCounter("dataPlaneFetches", 1);
+  incrementFrontendAuditResourceFetch(params.auditResource ?? "field-vector", 1);
   const entry: InflightFieldVectorRequest = {
     consumers: 1,
     controller,
@@ -237,6 +243,7 @@ export function useFieldVector(
   const domainGenerationId = options?.domainGenerationId ?? 0;
   const scopeKind = options?.scopeKind ?? "full";
   const scopeId = options?.scopeId ?? null;
+  const auditResource = options?.auditResource;
 
   const [field, setField] = useState<DecodedFieldVector | null>(null);
   const [loading, setLoading] = useState(false);
@@ -252,6 +259,7 @@ export function useFieldVector(
       domainGenId: number,
       scopedKind: FieldSampleScopeKind,
       scopedId: string | null,
+      resourceLabel?: string,
     ) => {
       const params: FieldVectorRequestParams = {
         quantityId: qId,
@@ -260,6 +268,7 @@ export function useFieldVector(
         domainGenerationId: domainGenId,
         scopeKind: scopedKind,
         scopeId: scopedId,
+        auditResource: resourceLabel,
       };
       const cacheKey = buildFieldVectorRequestKey(params);
       if (fetchedRevRef.current === cacheKey) return;
@@ -304,6 +313,7 @@ export function useFieldVector(
         domainGenerationId,
         scopeKind,
         scopeId,
+        auditResource,
       );
     }
     fetchedRevRef.current = null;
@@ -318,6 +328,7 @@ export function useFieldVector(
     domainGenerationId,
     scopeKind,
     scopeId,
+    auditResource,
     fetchField,
   ]);
 

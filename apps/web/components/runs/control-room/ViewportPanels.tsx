@@ -4,15 +4,18 @@ import { memo, useEffect, useRef } from "react";
 
 import { useViewportDataBridge } from "@/features/viewport-unified/hooks/useViewportDataBridge";
 import { ViewportTabContent } from "@/features/viewport-unified/renderers/ViewportTabContent";
+import type { ViewportBridgeMode } from "@/features/viewport-unified/model/viewportBridgeActivity";
 import type { Viewport3DHealthReport } from "@/components/preview/FemMeshView3D";
 
 export { ViewportBar } from "./ViewportBar";
 
 export const ViewportCanvasArea = memo(function ViewportCanvasArea({
   viewportVisible = true,
+  viewportMode = "3D",
   onViewportHealthChange,
 }: {
   viewportVisible?: boolean;
+  viewportMode?: ViewportBridgeMode;
   onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
 }) {
   if (!viewportVisible) {
@@ -21,6 +24,7 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea({
   return (
     <ViewportCanvasAreaBridge
       viewportVisible={viewportVisible}
+      viewportMode={viewportMode}
       onViewportHealthChange={onViewportHealthChange}
     />
   );
@@ -28,12 +32,14 @@ export const ViewportCanvasArea = memo(function ViewportCanvasArea({
 
 const ViewportCanvasAreaBridge = memo(function ViewportCanvasAreaBridge({
   viewportVisible = true,
+  viewportMode = "3D",
   onViewportHealthChange,
 }: {
   viewportVisible?: boolean;
+  viewportMode?: ViewportBridgeMode;
   onViewportHealthChange?: (report: Viewport3DHealthReport) => void;
 }) {
-  const bridge = useViewportDataBridge();
+  const bridge = useViewportDataBridge({ active: viewportVisible, viewportMode });
   const visibleBridgeRef = useRef(bridge);
   useEffect(() => {
     if (viewportVisible) {

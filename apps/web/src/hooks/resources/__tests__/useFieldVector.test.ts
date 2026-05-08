@@ -89,7 +89,15 @@ describe("useFieldVector request helpers", () => {
     expect(buildFieldVectorRequestKey(params)).toBe(
       "field-vector:m:7:2:full:airbox:air",
     );
-    expect(buildFieldVectorResourceKey(params)).toBe("field:2:m:7:full:airbox:air");
+    expect(buildFieldVectorResourceKey(params)).toBe("field:2:m:0:full:airbox:air");
+  });
+
+  it("keeps the decoded resource cache key stable across field revisions", () => {
+    const first = baseParams();
+    const second = { ...first, revision: first.revision + 1 };
+
+    expect(buildFieldVectorRequestKey(first)).not.toBe(buildFieldVectorRequestKey(second));
+    expect(buildFieldVectorResourceKey(first)).toBe(buildFieldVectorResourceKey(second));
   });
 
   it("reuses cached decoded fields without fetching", async () => {
@@ -119,6 +127,24 @@ describe("useFieldVector request helpers", () => {
     await expect(second.promise).resolves.toEqual(decodedField);
     first.release();
     second.release();
+  });
+
+  it("records the configured audit resource label for uncached fetches", async () => {
+    vi.stubGlobal("window", {});
+    const getVectorResponse = vi.fn(async () => binaryResponse());
+    const client = createClient(getVectorResponse);
+
+    const request = loadFieldVectorRequest(client, {
+      ...baseParams(),
+      auditResource: "field-vector-shader",
+    });
+
+    expect((window as any).__FULLMAG_AUDIT__.resourceFetches).toMatchObject({
+      "field-vector-shader": 1,
+    });
+    await request.promise;
+    request.release();
+    vi.unstubAllGlobals();
   });
 
   it("aborts an inflight fetch when the last consumer releases it", () => {

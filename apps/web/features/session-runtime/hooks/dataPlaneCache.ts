@@ -3,6 +3,7 @@
 import type { LiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import type { RequestOptions } from "@/src/api/client/LiveSessionClient";
 import type { JsonResourceResponse } from "@/src/api/types";
+import { incrementFrontendAuditResourceFetch } from "@/lib/debug/frontendAudit";
 
 export async function getCachedJsonResource<T>({
   client,
@@ -12,6 +13,7 @@ export async function getCachedJsonResource<T>({
   responseFetcher,
   generationId = 0,
   requestOptions,
+  auditResource,
 }: {
   client: LiveSessionClient;
   cacheKey: string;
@@ -20,6 +22,7 @@ export async function getCachedJsonResource<T>({
   responseFetcher?: (opts?: RequestOptions) => Promise<JsonResourceResponse<T>>;
   generationId?: number;
   requestOptions?: RequestOptions;
+  auditResource?: string;
 }): Promise<T> {
   const cached = client.getCache().get<T>(cacheKey);
   if (cached && cached.revision === revision) {
@@ -27,6 +30,9 @@ export async function getCachedJsonResource<T>({
   }
 
   if (responseFetcher) {
+    if (auditResource) {
+      incrementFrontendAuditResourceFetch(auditResource, 1);
+    }
     const requestHeaders = requestOptions?.headers as Record<string, string> | undefined;
     const response = await responseFetcher({
       ...requestOptions,
@@ -57,6 +63,9 @@ export async function getCachedJsonResource<T>({
     return response.data;
   }
 
+  if (auditResource) {
+    incrementFrontendAuditResourceFetch(auditResource, 1);
+  }
   const next = await fetcher();
   client.getCache().set(cacheKey, next, revision, generationId);
   return next;

@@ -51,6 +51,10 @@ import {
   buildVectorLiveRenderDebugData,
 } from "@/features/viewport-unified/model/vectorLiveRenderDebugData";
 import {
+  resolveViewportBridgeActivity,
+  type ViewportBridgeMode,
+} from "@/features/viewport-unified/model/viewportBridgeActivity";
+import {
   buildViewportFitSeed,
   useViewportGraphCameraBridge,
 } from "@/features/viewport-unified/camera-lifecycle";
@@ -279,15 +283,12 @@ function summarizeTransform(transform: {
  * `ViewportCanvasArea`. Returns a `ViewportDataBridge` object that
  * `ViewportTabContent` consumes.
  */
-export function useViewportDataBridge() {
-  useEffect(() => {
-    incrementFrontendAuditCounter("viewportBridgeMounted", 1);
-    setFrontendAuditCounter("viewportBridgeActive", 1);
-    return () => {
-      setFrontendAuditCounter("viewportBridgeActive", 0);
-    };
-  }, []);
+export interface UseViewportDataBridgeOptions {
+  active?: boolean;
+  viewportMode?: ViewportBridgeMode;
+}
 
+export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}) {
   /* ── Context ── */
   const _transport = useTransport();
   const _viewport = useViewport();
@@ -297,6 +298,20 @@ export function useViewportDataBridge() {
     () => ({ ..._transport, ..._viewport, ..._cmd, ..._model }),
     [_transport, _viewport, _cmd, _model],
   );
+  const bridgeActive = options.active ?? true;
+  const bridgeViewportMode = options.viewportMode ?? ctx.effectiveViewMode;
+  useEffect(() => {
+    incrementFrontendAuditCounter("viewportBridgeMounted", 1);
+    return () => {
+      incrementFrontendAuditCounter("viewportBridgeMounted", -1);
+    };
+  }, []);
+  useEffect(() => {
+    setFrontendAuditCounter("viewportBridgeActive", bridgeActive ? 1 : 0);
+    return () => {
+      setFrontendAuditCounter("viewportBridgeActive", 0);
+    };
+  }, [bridgeActive]);
   const viz = useViewportRenderState();
   const vectorViz = useVectorState();
   const fdmVisualizationSettings = useFdmVisualizationSettings();
@@ -492,16 +507,22 @@ export function useViewportDataBridge() {
         ? ctx.domainCapabilities.explicit_topology && ctx.domainCapabilities.node_fields
         : ctx.domainCapabilities.structured_grid || ctx.domainCapabilities.explicit_topology),
   );
-  const vectorGlyphDataNeeded =
-    (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
-    vectorViz.showArrows;
-  const shaderFieldDataNeeded =
-    (ctx.effectiveViewMode === "3D" || ctx.effectiveViewMode === "Mesh") &&
-    (
-      vectorViz.showArrows ||
-      viz.femViewportLayers.showQuantity ||
-      (viz.femViewportLayers.showMagneticTexture && ctx.selectedQuantity === "m")
-    );
+  const sliceApiFeatureEnabled = ctx.isFemBackend
+    ? FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
+    : FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D;
+  const femSliceTopologyReady = !ctx.isFemBackend || Boolean(ctx.femMeshData);
+  const bridgeActivity = resolveViewportBridgeActivity({
+    active: bridgeActive,
+    viewportMode: bridgeViewportMode,
+    showArrows: vectorViz.showArrows,
+    showQuantity: viz.femViewportLayers.showQuantity,
+    showMagneticTexture: viz.femViewportLayers.showMagneticTexture,
+    selectedQuantity: ctx.selectedQuantity ?? null,
+    sliceApiFeatureEnabled,
+    sliceTopologyReady: femSliceTopologyReady,
+  });
+  const vectorGlyphDataNeeded = bridgeActivity.glyphVectorDataNeeded;
+  const shaderFieldDataNeeded = bridgeActivity.shaderFieldDataNeeded;
 
   /* ── 3D vector glyph model: arrows only, with glyph-density controls. ── */
   const viewport3DVectorField = useViewport3DVectorFieldModel({
@@ -518,6 +539,7 @@ export function useViewportDataBridge() {
     everyN: ctx.requestedPreviewEveryN,
     maxGlyphs: ctx.requestedPreviewMaxPoints,
     scope: vectorFetchScope,
+    auditRole: "glyph",
   });
   /* ── 3D shader field model: dense field data for mesh coloring/texture. ── */
   const viewport3DShaderField = useViewport3DVectorFieldModel({
@@ -534,6 +556,7 @@ export function useViewportDataBridge() {
     everyN: 1,
     maxGlyphs: null,
     scope: vectorFetchScope,
+    auditRole: "shader",
   });
   const hasVectorData = Boolean(
     (ctx.selectedVectors && ctx.selectedVectors.length > 0) ||
@@ -1146,6 +1169,7 @@ export function useViewportDataBridge() {
 
   const scaledFetched3DVectors = useMemo(() => {
     return measureFrontendAudit("scaledFetched3DVectors", () => {
+      if (!bridgeActivity.data3DActive) return null;
       if (viewport3DVectorField.status !== "ready") return null;
       const values = viewport3DVectorField.data?.values ?? null;
       if (!values) return null;
@@ -1155,15 +1179,15 @@ export function useViewportDataBridge() {
       for (let i = 0; i < arr.length; i++) arr[i] = values[i] * scaleFactor;
       return arr;
     });
-  }, [scaleFactor, viewport3DVectorField.data, viewport3DVectorField.status]);
+  }, [
+    bridgeActivity.data3DActive,
+    scaleFactor,
+    viewport3DVectorField.data,
+    viewport3DVectorField.status,
+  ]);
 
   /* ── Slice 2D params ── */
-  const sliceApiFeatureEnabled = ctx.isFemBackend
-    ? FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFemSlice2D
-    : FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableFdmSlice2D;
-  const femSliceTopologyReady = !ctx.isFemBackend || Boolean(ctx.femMeshData);
-  const shouldUseSliceApi2D =
-    ctx.effectiveViewMode === "2D" && sliceApiFeatureEnabled && femSliceTopologyReady;
+  const shouldUseSliceApi2D = bridgeActivity.slice2DActive;
   const sliceSampling = useMemo(
     () => deriveSliceSampling(ctx.previewGrid, effectiveSlicePlane, ctx.sliceIndex),
     [ctx.previewGrid, ctx.sliceIndex, effectiveSlicePlane],
@@ -1400,6 +1424,8 @@ export function useViewportDataBridge() {
   const scopedFetchedFemMeshData = useMemo(() => {
     return measureFrontendAudit("scopedFetchedFemMeshData", () => {
       if (
+        !bridgeActivity.data3DActive ||
+        !bridgeActivity.shaderFieldDataNeeded ||
         !scaledFemMeshData ||
         !femDiscretization ||
         vectorFetchScope.kind === "full" ||
@@ -1434,6 +1460,8 @@ export function useViewportDataBridge() {
       };
     });
   }, [
+    bridgeActivity.data3DActive,
+    bridgeActivity.shaderFieldDataNeeded,
     ctx.meshParts,
     femDiscretization,
     scaleFactor,
@@ -1446,6 +1474,9 @@ export function useViewportDataBridge() {
 
   const shaderDownsampledFemMeshData = useMemo(() => {
     return measureFrontendAudit("downsampleVectorFieldSpatialBins", () => {
+      if (!bridgeActivity.data3DActive || !bridgeActivity.shaderFieldDataNeeded) {
+        return scopedFetchedFemMeshData;
+      }
       if (!scopedFetchedFemMeshData?.fieldData) return scopedFetchedFemMeshData;
       return {
         ...scopedFetchedFemMeshData,
@@ -1457,7 +1488,12 @@ export function useViewportDataBridge() {
         }),
       };
     });
-  }, [viz.femTextureDownsampleCells, scopedFetchedFemMeshData]);
+  }, [
+    bridgeActivity.data3DActive,
+    bridgeActivity.shaderFieldDataNeeded,
+    viz.femTextureDownsampleCells,
+    scopedFetchedFemMeshData,
+  ]);
 
   const renderFemMeshData = shaderDownsampledFemMeshData ?? scopedFetchedFemMeshData;
 

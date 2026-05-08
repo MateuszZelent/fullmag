@@ -9,7 +9,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { incrementFrontendAuditCounter, setFrontendAuditCounter } from "@/lib/debug/frontendAudit";
+import {
+  incrementFrontendAuditCounter,
+  incrementFrontendAuditResourceFetch,
+  setFrontendAuditCounter,
+} from "@/lib/debug/frontendAudit";
 import type {
   FieldBinaryResponse,
   FieldProjectionMeta,
@@ -148,7 +152,7 @@ export function buildFieldSliceResourceKey(params: FieldSliceRequestParams): str
   const component = params.request.query.component ?? "full";
   return `${ResourceCache.fieldKey(
     params.quantityId,
-    params.fieldRevision,
+    0,
     params.domainGenerationId,
     component,
   )}:2d:${buildField2DRequestToken(params.request)}`;
@@ -201,6 +205,7 @@ export function loadFieldSliceRequest(
 
   const controller = new AbortController();
   incrementFrontendAuditCounter("field2DRequests", 1);
+  incrementFrontendAuditResourceFetch("field-slice-2d", 1);
   const entry: InflightFieldSliceRequest = {
     consumers: 1,
     controller,

@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 
+import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import { useFieldVector } from "@/src/hooks/resources/useFieldVector";
 import type { FieldComponent } from "@/src/api/types";
 import type { DecodedFieldVector } from "@/src/api/codecs/types";
@@ -29,6 +30,7 @@ export interface UseViewport3DVectorFieldModelInput {
   everyN: number;
   maxGlyphs?: number | null;
   scope?: Viewport3DVectorScope;
+  auditRole?: "glyph" | "shader";
 }
 
 export interface BuildViewport3DVectorFieldModelInput
@@ -52,6 +54,7 @@ export function useViewport3DVectorFieldModel({
   everyN,
   maxGlyphs = null,
   scope = FULL_VECTOR_SCOPE,
+  auditRole,
 }: UseViewport3DVectorFieldModelInput): Viewport3DVectorFieldModel {
   const directionComponent: FieldComponent = "full";
   const hasVectorQuantity = quantityComponentCount == null || quantityComponentCount >= 3;
@@ -62,6 +65,15 @@ export function useViewport3DVectorFieldModel({
     quantityId != null &&
     fieldRevision != null &&
     domainGenerationId != null;
+  useEffect(() => {
+    if (!shouldFetch || !auditRole) {
+      return;
+    }
+    incrementFrontendAuditCounter(
+      auditRole === "glyph" ? "fieldVectorGlyphRequests" : "fieldVectorShaderRequests",
+      1,
+    );
+  }, [auditRole, shouldFetch]);
 
   const { field, loading, error } = useFieldVector(
     shouldFetch ? quantityId : null,
@@ -71,6 +83,7 @@ export function useViewport3DVectorFieldModel({
       domainGenerationId: domainGenerationId ?? undefined,
       scopeKind: scope.kind,
       scopeId: scope.id ?? null,
+      auditResource: auditRole ? `field-vector-${auditRole}` : undefined,
     },
   );
 

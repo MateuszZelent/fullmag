@@ -150,7 +150,7 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(defaults.leakIsolation.enableFemMeshView3DAutoFitRecord).toBe(true);
     expect(defaults.leakIsolation.enableLegacyBinaryFemTopologyHydration).toBe(true);
     expect(defaults.leakIsolation.enableBinaryFieldHydration).toBe(true);
-    expect(defaults.leakIsolation.enableIdleLiveStatusPolling).toBe(true);
+    expect(defaults.leakIsolation.enableIdleLiveStatusPolling).toBe(false);
   });
 
   it("preserves persisted leak isolation kill switches", () => {

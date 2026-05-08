@@ -13,6 +13,8 @@ import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { scalarWindowToRows } from "@/src/api/client/modules/ScalarHistoryAdapter";
 import type { ScalarRow } from "@/lib/session/types";
 
+const MAX_SCALAR_HISTORY_ROWS = 10_000;
+
 const Plot2DWorkbench = dynamic(
   () => import("@/features/plots2d/components/Plot2DWorkbench"),
   {
@@ -43,7 +45,11 @@ function ConnectedPlot2DWorkbench() {
   );
 
   const fetchHistory = useCallback(async (): Promise<ScalarRow[]> => {
-    const window = await getLiveSessionClient().scalars.getWindow();
+    const window = await getLiveSessionClient().scalars.getWindow({
+      limit: MAX_SCALAR_HISTORY_ROWS,
+      maxPoints: MAX_SCALAR_HISTORY_ROWS,
+      decimate: "stride",
+    });
     return scalarWindowToRows(window) as unknown as ScalarRow[];
   }, []);
 
@@ -53,6 +59,7 @@ function ConnectedPlot2DWorkbench() {
     quantities: command.quantities,
     sessionId,
     fetchHistory,
+    maxHistoryRows: MAX_SCALAR_HISTORY_ROWS,
   });
 
   return <Plot2DWorkbench />;

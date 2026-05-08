@@ -2,7 +2,7 @@
 
 import type { WorkspaceTab } from "@/lib/workspace/workspace-store";
 import type { FrontendDiagnosticFlags } from "@/lib/debug/frontendDiagnosticFlags";
-import { isAnalyzeLikeTab } from "./tabSelection";
+import { isAnalyzeLikeTab, viewportModeForWorkspaceTab } from "./tabSelection";
 import { AnalyzeTabPanel } from "./panels/AnalyzeTabPanel";
 import { ChartsTabPanel } from "./panels/ChartsTabPanel";
 import { ViewportTabPanel } from "./panels/ViewportTabPanel";
@@ -58,5 +58,10 @@ export function DockCenterTabContent({
     return <DisabledPanel label="ViewportCanvasArea disabled by diagnostic flag" />;
   }
 
-  return <ViewportTabPanel viewportVisible={viewportVisible} />;
+  return (
+    <ViewportTabPanel
+      viewportVisible={viewportVisible}
+      viewportMode={viewportModeForWorkspaceTab(tab) ?? "3D"}
+    />
+  );
 }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { FemMeshData } from "../../fem/femMeshTypes";
-import { getSharedVertexColors, shouldUseVertexColorWorker } from "../femVertexColors";
+import {
+  FEM_VERTEX_COLOR_CACHE_MAX_ENTRIES,
+  getSharedVertexColorCacheStats,
+  getSharedVertexColors,
+  shouldUseVertexColorWorker,
+} from "../femVertexColors";
 
 function meshData(): FemMeshData {
   return {
@@ -50,6 +55,35 @@ describe("getSharedVertexColors", () => {
     });
 
     expect(second).not.toBe(first);
+  });
+
+  it("bounds field-revision cache entries for one topology", () => {
+    const topologyRef = {};
+    const mesh = {
+      ...meshData(),
+      topologyRef,
+    } as FemMeshData;
+
+    for (let revision = 1; revision <= FEM_VERTEX_COLOR_CACHE_MAX_ENTRIES + 4; revision += 1) {
+      getSharedVertexColors({
+        meshData: {
+          ...mesh,
+          topologyRef,
+          fieldRevision: revision,
+          fieldData: {
+            x: new Float64Array([revision, 0, 0]),
+            y: new Float64Array([0, revision, 0]),
+            z: new Float64Array([0, 0, revision]),
+          },
+          fieldNComp: 3,
+        } as FemMeshData,
+        field: "magnitude",
+      });
+    }
+
+    expect(getSharedVertexColorCacheStats(mesh).entries).toBeLessThanOrEqual(
+      FEM_VERTEX_COLOR_CACHE_MAX_ENTRIES,
+    );
   });
 });
 

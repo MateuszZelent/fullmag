@@ -15,6 +15,7 @@
     "typecheck": "npm run typegen && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "audit:idle-performance": "node scripts/audit-idle-performance.mjs",
     "test:viewport-memory-stress": "vitest run components/preview/r3f/__tests__/viewportMemoryStress.test.ts src/api/telemetry/__tests__/memorySmokeTransport.test.ts components/preview/shared/__tests__/ScientificViewportShell.test.ts",
     "test:quantity-api-gates": "vitest run src/api/client/modules/__tests__/FieldsModule.test.ts src/hooks/resources/__tests__/useFieldSlice2D.test.ts features/session-runtime/hooks/__tests__/useDataPlaneBridge.test.ts components/runs/control-room/__tests__/viewportLayers.test.ts components/runs/control-room/__tests__/viewportSelection.test.ts"
   },

@@ -19,6 +19,8 @@ import { scalarTableFromRows } from "../model/scalarTable";
 import { buildScalarSeriesMeta, buildSeriesMetaMap } from "../model/scalarSeriesMeta";
 import type { ScalarRow, QuantityDescriptor } from "@/lib/session/types";
 
+const MAX_SCALAR_HISTORY_ROWS = 10_000;
+
 interface UseScalarSeriesDataParams {
   /** Live scalar rows from transport (ControlRoomContext). */
   scalarRows: ScalarRow[];
@@ -30,6 +32,7 @@ interface UseScalarSeriesDataParams {
   sessionId: string | null;
   /** Fetch history function from the API layer. */
   fetchHistory?: () => Promise<ScalarRow[]>;
+  maxHistoryRows?: number;
 }
 
 /**
@@ -45,6 +48,7 @@ export function useScalarSeriesData({
   quantities,
   sessionId,
   fetchHistory,
+  maxHistoryRows = MAX_SCALAR_HISTORY_ROWS,
 }: UseScalarSeriesDataParams): void {
   const prevSessionRef = useRef<string | null>(null);
   const prevRowCountRef = useRef(0);
@@ -98,6 +102,11 @@ export function useScalarSeriesData({
     // Fetch history if we know there's more data than what the local store has.
     // This must also run from an empty store: on page load the transport may not
     // have live rows yet while the backend scalar-history endpoint already does.
+    const hasBoundedHistory = currentCount >= Math.min(scalarRowsTotal, maxHistoryRows);
+    if (scalarRowsTotal > maxHistoryRows && hasBoundedHistory) {
+      return;
+    }
+
     if (scalarRowsTotal > currentCount && scalarRowsTotal > 0) {
       fetchingRef.current = true;
       usePlot2DStore.getState().setScalarLoading(true);
@@ -122,5 +131,5 @@ export function useScalarSeriesData({
           fetchingRef.current = false;
         });
     }
-  }, [scalarRowsTotal, fetchHistory]);
+  }, [fetchHistory, maxHistoryRows, scalarRowsTotal]);
 }

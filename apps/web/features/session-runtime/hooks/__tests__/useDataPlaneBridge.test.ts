@@ -5,6 +5,7 @@ import {
   decideFieldVectorFetch,
   isNegativeDataPlaneResponse,
   mapResourceQuantities,
+  resolveDataPlaneCacheResetReason,
 } from "../useDataPlaneBridge";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 
@@ -172,6 +173,96 @@ describe("appendScalarRowsBounded", () => {
   it("reuses the existing array when no rows are appended", () => {
     const current = [{ step: 1 } as any];
     expect(appendScalarRowsBounded(current, [], 3)).toBe(current);
+  });
+
+  it("does not append duplicate rows when a scalar endpoint returns an overlapping window", () => {
+    const current = [
+      { step: 10 } as any,
+      { step: 11 } as any,
+    ];
+    const rows = appendScalarRowsBounded(
+      current,
+      [
+        { step: 10 } as any,
+        { step: 11 } as any,
+      ],
+      3,
+    );
+
+    expect(rows).toBe(current);
+  });
+
+  it("keeps only rows newer than the current scalar tip", () => {
+    const rows = appendScalarRowsBounded(
+      [
+        { step: 10 } as any,
+        { step: 11 } as any,
+      ],
+      [
+        { step: 10 } as any,
+        { step: 11 } as any,
+        { step: 12 } as any,
+      ],
+      3,
+    );
+
+    expect(rows.map((row) => row.step)).toEqual([10, 11, 12]);
+  });
+});
+
+describe("resolveDataPlaneCacheResetReason", () => {
+  it("resets cache for the first observed data-plane scope", () => {
+    expect(
+      resolveDataPlaneCacheResetReason(null, {
+        runtimeScopeKey: "session-1:run-1",
+        domainGenerationRevision: 1,
+      }),
+    ).toBe("scope-change");
+  });
+
+  it("resets cache when session or run scope changes", () => {
+    expect(
+      resolveDataPlaneCacheResetReason(
+        {
+          runtimeScopeKey: "session-1:run-1",
+          domainGenerationRevision: 1,
+        },
+        {
+          runtimeScopeKey: "session-1:run-2",
+          domainGenerationRevision: 1,
+        },
+      ),
+    ).toBe("scope-change");
+  });
+
+  it("resets cache when domain generation changes inside the same scope", () => {
+    expect(
+      resolveDataPlaneCacheResetReason(
+        {
+          runtimeScopeKey: "session-1:run-1",
+          domainGenerationRevision: 1,
+        },
+        {
+          runtimeScopeKey: "session-1:run-1",
+          domainGenerationRevision: 2,
+        },
+      ),
+    ).toBe("domain-change");
+  });
+
+  it("keeps cache when scope and domain generation are unchanged", () => {
+    expect(
+      resolveDataPlaneCacheResetReason(
+        {
+          runtimeScopeKey: "session-1:run-1",
+          domainGenerationRevision: 1,
+        },
+        {
+          runtimeScopeKey: "session-1:run-1",
+          domainGenerationRevision: 1,
+        },
+      ),
+    ).toBeNull();
   });
 });
 

@@ -1,8 +1,10 @@
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 
+import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import {
+  disposeViewportResourceOwner,
   getViewportResourceOwner,
   type ViewportResourceOwner,
 } from "@/lib/workspace/viewport-resource-owner";
@@ -17,6 +19,13 @@ export function ViewportResourceOwnerProvider({
   children: ReactNode;
 }) {
   const owner = useMemo(() => getViewportResourceOwner(ownerId), [ownerId]);
+  useEffect(() => {
+    incrementFrontendAuditCounter("viewportResourceOwnerMounted", 1);
+    return () => {
+      incrementFrontendAuditCounter("viewportResourceOwnerUnmounted", 1);
+      disposeViewportResourceOwner(ownerId, "provider-unmount");
+    };
+  }, [ownerId]);
   return (
     <ViewportResourceOwnerContext.Provider value={owner}>
       {children}

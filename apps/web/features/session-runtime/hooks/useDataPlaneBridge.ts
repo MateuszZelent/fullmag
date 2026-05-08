@@ -20,6 +20,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import {
   incrementFrontendAuditCounter,
+  incrementFrontendAuditResourceFetch,
   setFrontendAuditCounter,
 } from "@/lib/debug/frontendAudit";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
@@ -57,7 +58,28 @@ type DataPlaneRequest = {
 };
 
 const MAX_SCALAR_ROWS = 10_000;
+const MAX_SCALAR_ROWS_PER_FETCH = 2_000;
 const SCALAR_ROW_BYTES_APPROX = 15 * 8;
+
+export interface DataPlaneCacheScope {
+  runtimeScopeKey: string | null;
+  domainGenerationRevision: number;
+}
+
+export type DataPlaneCacheResetReason = "scope-change" | "domain-change" | null;
+
+export function resolveDataPlaneCacheResetReason(
+  previous: DataPlaneCacheScope | null,
+  current: DataPlaneCacheScope,
+): DataPlaneCacheResetReason {
+  if (!previous || previous.runtimeScopeKey !== current.runtimeScopeKey) {
+    return "scope-change";
+  }
+  if (previous.domainGenerationRevision !== current.domainGenerationRevision) {
+    return "domain-change";
+  }
+  return null;
+}
 
 export function isNegativeDataPlaneResponse(value: unknown): boolean {
   if (value instanceof LiveApiError) {
@@ -109,18 +131,26 @@ export function appendScalarRowsBounded(
   if (limit <= 0) {
     return [];
   }
-  const total = current.length + next.length;
+  const lastStep = current.length > 0 ? current[current.length - 1]?.step : null;
+  const rowsToAppend =
+    typeof lastStep === "number"
+      ? next.filter((row) => row.step > lastStep)
+      : next;
+  if (rowsToAppend.length === 0) {
+    return current;
+  }
+  const total = current.length + rowsToAppend.length;
   if (total <= limit) {
     const rows = current.slice();
-    rows.push(...next);
+    rows.push(...rowsToAppend);
     return rows;
   }
-  if (next.length >= limit) {
-    return next.slice(next.length - limit);
+  if (rowsToAppend.length >= limit) {
+    return rowsToAppend.slice(rowsToAppend.length - limit);
   }
-  const keepFromCurrent = limit - next.length;
+  const keepFromCurrent = limit - rowsToAppend.length;
   const rows = current.slice(Math.max(0, current.length - keepFromCurrent));
-  rows.push(...next);
+  rows.push(...rowsToAppend);
   return rows;
 }
 
@@ -250,6 +280,9 @@ export function useDataPlaneBridge(
   const meshRevision = useSessionRuntimeStore(
     (s) => s.resourceRevisions?.mesh_revision ?? 0,
   );
+  const domainGenerationRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.domain_generation_id ?? 0,
+  );
   const fieldsRevision = useSessionRuntimeStore(
     (s) => s.resourceRevisions?.fields_revision ?? 0,
   );
@@ -295,9 +328,12 @@ export function useDataPlaneBridge(
   const negativeResourceCacheRef = useRef<Set<string>>(new Set());
 
   // Reset accumulators when session changes
-  const prevRuntimeScopeRef = useRef<string | null>(null);
+  const prevCacheScopeRef = useRef<DataPlaneCacheScope | null>(null);
   useEffect(() => {
-    if (!enabled) {
+    const clearClientCache = () => {
+      getLiveSessionClient().getCache().clear();
+    };
+    const abortDataPlaneRequests = () => {
       for (const requestRef of [
         fieldRequestRef,
         scalarRequestRef,
@@ -310,9 +346,8 @@ export function useDataPlaneBridge(
         requestRef.current?.controller.abort();
         requestRef.current = null;
       }
-      prevRuntimeScopeRef.current = null;
-      scalarAccumulatorRef.current = [];
-      negativeResourceCacheRef.current.clear();
+    };
+    const resetFetchedResourceRefs = () => {
       fetchedFieldRevRef.current = null;
       fetchedScalarRevRef.current = null;
       fetchedDomainGenRef.current = null;
@@ -320,33 +355,38 @@ export function useDataPlaneBridge(
       fetchedCatalogKeyRef.current = null;
       fetchedArtifactsKeyRef.current = null;
       fetchedEngineLogKeyRef.current = null;
+    };
+    if (!enabled) {
+      abortDataPlaneRequests();
+      prevCacheScopeRef.current = null;
+      scalarAccumulatorRef.current = [];
+      negativeResourceCacheRef.current.clear();
+      resetFetchedResourceRefs();
+      clearClientCache();
       return;
     }
-    if (runtimeScopeKey !== prevRuntimeScopeRef.current) {
-      for (const requestRef of [
-        fieldRequestRef,
-        scalarRequestRef,
-        domainRequestRef,
-        meshRequestRef,
-        catalogRequestRef,
-        artifactsRequestRef,
-        engineLogRequestRef,
-      ]) {
-        requestRef.current?.controller.abort();
-        requestRef.current = null;
-      }
-      prevRuntimeScopeRef.current = runtimeScopeKey;
+    const currentCacheScope = { runtimeScopeKey, domainGenerationRevision };
+    const cacheResetReason = resolveDataPlaneCacheResetReason(
+      prevCacheScopeRef.current,
+      currentCacheScope,
+    );
+    if (cacheResetReason === "scope-change") {
+      abortDataPlaneRequests();
+      prevCacheScopeRef.current = currentCacheScope;
       scalarAccumulatorRef.current = [];
       negativeResourceCacheRef.current.clear();
-      fetchedFieldRevRef.current = null;
-      fetchedScalarRevRef.current = null;
-      fetchedDomainGenRef.current = null;
-      fetchedMeshRevRef.current = null;
-      fetchedCatalogKeyRef.current = null;
-      fetchedArtifactsKeyRef.current = null;
-      fetchedEngineLogKeyRef.current = null;
+      resetFetchedResourceRefs();
+      clearClientCache();
+      return;
     }
-  }, [enabled, runtimeScopeKey]);
+    if (cacheResetReason === "domain-change") {
+      abortDataPlaneRequests();
+      prevCacheScopeRef.current = currentCacheScope;
+      negativeResourceCacheRef.current.clear();
+      resetFetchedResourceRefs();
+      clearClientCache();
+    }
+  }, [domainGenerationRevision, enabled, runtimeScopeKey]);
 
   useEffect(() => {
     return () => {
@@ -400,7 +440,7 @@ export function useDataPlaneBridge(
       setFrontendAuditCounter("fieldVectorInflight", 1);
       const isCurrentRequest = () =>
         fieldRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
@@ -416,7 +456,7 @@ export function useDataPlaneBridge(
           result = cached.data;
         } else {
           incrementFrontendAuditCounter("fieldVectorRequests", 1);
-          incrementFrontendAuditCounter("dataPlaneFetches", 1);
+          incrementFrontendAuditResourceFetch("field-vector", 1);
           const response = await client.fields.getVectorResponse(
             envelope.quantityId,
             {
@@ -575,14 +615,16 @@ export function useDataPlaneBridge(
       scalarRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         scalarRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
         const client = getLiveSessionClient();
-        incrementFrontendAuditCounter("dataPlaneFetches", 1);
+        incrementFrontendAuditResourceFetch("scalars", 1);
         const window = await client.scalars.getWindow({
           sinceRevision: fetchedScalarRevRef.current ?? 0,
+          limit: MAX_SCALAR_ROWS_PER_FETCH,
+          maxPoints: MAX_SCALAR_ROWS_PER_FETCH,
         }, { signal: controller.signal });
         if (!isCurrentRequest()) return;
 
@@ -669,12 +711,11 @@ export function useDataPlaneBridge(
       domainRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         domainRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
         const client = getLiveSessionClient();
-        incrementFrontendAuditCounter("dataPlaneFetches", 1);
         const numericGenerationId = Number.parseInt(genId, 10);
         const meta = await getCachedJsonResource({
           client,
@@ -683,6 +724,7 @@ export function useDataPlaneBridge(
           generationId: Number.isFinite(numericGenerationId) ? numericGenerationId : 0,
           fetcher: () => client.domain.getMeta({ signal: controller.signal }),
           requestOptions: { signal: controller.signal },
+          auditResource: "domain-meta",
         });
         if (!isCurrentRequest()) return;
 
@@ -701,7 +743,7 @@ export function useDataPlaneBridge(
                       if (cached && cached.revision === meta.generation_id) {
                         return cached.data;
                       }
-                      incrementFrontendAuditCounter("dataPlaneFetches", 1);
+                      incrementFrontendAuditResourceFetch("domain-topology", 1);
                       const response = await client.domain.getTopologyResponse({
                         signal: controller.signal,
                         cache: "default",
@@ -819,7 +861,7 @@ export function useDataPlaneBridge(
       meshRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         meshRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
@@ -833,22 +875,24 @@ export function useDataPlaneBridge(
           leakIsolationFlags.enableSharedDomainMeshSummaryHydration
             ? getCachedJsonResource({
                 client,
-                cacheKey: `data-plane:mesh-summary:${requestScopeKey}:${revision}`,
+                cacheKey: `data-plane:mesh-summary:${requestScopeKey}`,
                 revision,
                 fetcher: () => client.mesh.getSummary({ signal: controller.signal }),
                 responseFetcher: (opts) => client.mesh.getSummaryResponse(opts),
                 requestOptions: { signal: controller.signal },
+                auditResource: "mesh-summary",
               })
             : Promise.resolve(null),
           leakIsolationFlags.enableSharedDomainMeshManifestHydration
             ? getCachedJsonResource({
                 client,
-                cacheKey: `data-plane:mesh-manifest:${requestScopeKey}:${revision}`,
+                cacheKey: `data-plane:mesh-manifest:${requestScopeKey}`,
                 revision,
                 fetcher: () => client.mesh.getSharedDomainManifest({ signal: controller.signal }),
                 responseFetcher: (opts) =>
                   client.mesh.getSharedDomainManifestResponse(opts),
                 requestOptions: { signal: controller.signal },
+                auditResource: "mesh-manifest",
               })
             : Promise.resolve(null),
           (async () => {
@@ -856,6 +900,7 @@ export function useDataPlaneBridge(
             if (cached && cached.revision === revision) {
               return cached.data;
             }
+            incrementFrontendAuditResourceFetch("mesh-topology", 1);
             const response = await client.mesh.getSharedDomainTopologyResponse({
               signal: controller.signal,
               cache: "default",
@@ -1075,7 +1120,7 @@ export function useDataPlaneBridge(
       catalogRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         catalogRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
@@ -1083,17 +1128,19 @@ export function useDataPlaneBridge(
         const [quantityCatalog, fieldCatalog] = await Promise.all([
           getCachedJsonResource({
             client,
-            cacheKey: `data-plane:quantities-catalog:${cacheKey}`,
+            cacheKey: `data-plane:quantities-catalog:${requestScopeKey}`,
             revision,
             fetcher: () => client.quantities.getCatalog({ signal: controller.signal }),
             requestOptions: { signal: controller.signal },
+            auditResource: "quantity-catalog",
           }),
           getCachedJsonResource({
             client,
-            cacheKey: `data-plane:fields-catalog:${cacheKey}`,
+            cacheKey: `data-plane:fields-catalog:${requestScopeKey}`,
             revision,
             fetcher: () => client.fields.getCatalog({ signal: controller.signal }),
             requestOptions: { signal: controller.signal },
+            auditResource: "field-catalog",
           }),
         ]);
         if (!isCurrentRequest()) return;
@@ -1164,18 +1211,19 @@ export function useDataPlaneBridge(
       artifactsRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         artifactsRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
         const client = getLiveSessionClient();
         const artifacts = await getCachedJsonResource({
           client,
-          cacheKey: `data-plane:artifacts:${cacheKey}`,
+          cacheKey: `data-plane:artifacts:${requestScopeKey}`,
           revision,
           fetcher: () => client.artifacts.list({ signal: controller.signal }),
           responseFetcher: (opts) => client.artifacts.listResponse(opts),
           requestOptions: { signal: controller.signal },
+          auditResource: "artifacts",
         });
         if (!isCurrentRequest()) return;
         fetchedArtifactsKeyRef.current = cacheKey;
@@ -1244,18 +1292,19 @@ export function useDataPlaneBridge(
       engineLogRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
       const isCurrentRequest = () =>
         engineLogRequestRef.current?.sequence === requestSequence &&
-        prevRuntimeScopeRef.current === requestScopeKey &&
+        prevCacheScopeRef.current?.runtimeScopeKey === requestScopeKey &&
         !controller.signal.aborted;
 
       try {
         const client = getLiveSessionClient();
         const engineLog = await getCachedJsonResource({
           client,
-          cacheKey: `data-plane:engine-log:${cacheKey}`,
+          cacheKey: `data-plane:engine-log:${requestScopeKey}`,
           revision,
           fetcher: () => client.logs.getEngine({ signal: controller.signal }),
           responseFetcher: (opts) => client.logs.getEngineResponse(opts),
           requestOptions: { signal: controller.signal },
+          auditResource: "engine-log",
         });
         if (!isCurrentRequest()) return;
         fetchedEngineLogKeyRef.current = cacheKey;

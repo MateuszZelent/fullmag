@@ -10,6 +10,8 @@ const QUALITY_PER_FACE_ID_CACHE = new WeakMap<object, number>();
 let NEXT_FIELD_DATA_CACHE_ID = 1;
 let NEXT_QUALITY_PER_FACE_CACHE_ID = 1;
 const VERTEX_COLOR_WORKER_NODE_THRESHOLD = 100_000;
+export const FEM_VERTEX_COLOR_CACHE_MAX_ENTRIES = 3;
+export const FEM_VERTEX_COLOR_CACHE_MAX_BYTES = 96 * 1024 * 1024;
 let femVertexColorWorker: Worker | null = null;
 let femVertexColorWorkerDisabled = false;
 let nextVertexColorWorkerRequestId = 1;
@@ -150,6 +152,48 @@ function getBaseVertexColorCache(meshData: FemMeshData): Map<string, Float32Arra
   return cache;
 }
 
+function estimateVertexColorCacheBytes(cache: Map<string, Float32Array>): number {
+  let bytes = 0;
+  for (const [key, colors] of cache) {
+    bytes += key.length * 2 + colors.byteLength;
+  }
+  return bytes;
+}
+
+export function getSharedVertexColorCacheStats(meshData: FemMeshData): {
+  entries: number;
+  estimatedBytes: number;
+} {
+  const cache = getBaseVertexColorCache(meshData);
+  return {
+    entries: cache.size,
+    estimatedBytes: estimateVertexColorCacheBytes(cache),
+  };
+}
+
+function rememberSharedVertexColors(
+  cache: Map<string, Float32Array>,
+  key: string,
+  colors: Float32Array,
+): void {
+  cache.delete(key);
+  cache.set(key, colors);
+  let estimatedBytes = estimateVertexColorCacheBytes(cache);
+  while (
+    cache.size > 0 &&
+    (cache.size > FEM_VERTEX_COLOR_CACHE_MAX_ENTRIES ||
+      estimatedBytes > FEM_VERTEX_COLOR_CACHE_MAX_BYTES)
+  ) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    const evicted = cache.get(oldestKey);
+    cache.delete(oldestKey);
+    estimatedBytes -= oldestKey.length * 2 + (evicted?.byteLength ?? 0);
+  }
+}
+
 export function getSharedVertexColors(args: {
   meshData: FemMeshData;
   field: FemColorField;
@@ -169,6 +213,8 @@ export function getSharedVertexColors(args: {
       : `field:${field}:ncomp:${meshData.fieldNComp ?? 3}:rev:${fieldRevision}:data:${fieldDataId}:quality:${qualityRevision}`;
   const cached = baseVertexColorCache.get(cacheKey);
   if (cached && cached.length === nNodes * 3) {
+    baseVertexColorCache.delete(cacheKey);
+    baseVertexColorCache.set(cacheKey, cached);
     return cached;
   }
   const computed =
@@ -192,6 +238,6 @@ export function getSharedVertexColors(args: {
           meshData.boundaryFaces,
           qualityPerFace,
         );
-  baseVertexColorCache.set(cacheKey, computed);
+  rememberSharedVertexColors(baseVertexColorCache, cacheKey, computed);
   return computed;
 }

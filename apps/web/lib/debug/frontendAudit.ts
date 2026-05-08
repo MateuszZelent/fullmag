@@ -3,12 +3,16 @@
 export type FrontendAuditCounter =
   | "viewportBridgeMounted"
   | "viewportBridgeActive"
+  | "viewportResourceOwnerMounted"
+  | "viewportResourceOwnerUnmounted"
   | "webglCanvasMounted"
   | "webglCanvasHidden"
   | "field2DRequests"
   | "field2DInflight"
   | "fieldVectorRequests"
   | "fieldVectorInflight"
+  | "fieldVectorGlyphRequests"
+  | "fieldVectorShaderRequests"
   | "dataPlaneFetches"
   | "liveStatusPolls"
   | "realtimeEvents"
@@ -24,9 +28,35 @@ export type FrontendAuditCounters = Record<FrontendAuditCounter, number>;
 
 export interface FrontendAuditSnapshot {
   counters: FrontendAuditCounters;
+  resourceFetches: Record<string, number>;
   webgl: Array<FrontendAuditWebGLInfo>;
   marks: Array<{ name: string; at: number }>;
   measures: Array<{ name: string; durationMs: number; at: number }>;
+  snapshotDelta: (seconds?: number) => Promise<FrontendAuditDelta>;
+}
+
+export interface FrontendAuditDelta {
+  seconds: number;
+  elapsedMs: number;
+  counters: FrontendAuditCounters;
+  resourceFetches: Record<string, number>;
+  memory: FrontendAuditMemoryDelta | null;
+  webgl: Array<FrontendAuditWebGLInfo>;
+  startedAt: number;
+  endedAt: number;
+}
+
+export interface FrontendAuditMemorySnapshot {
+  usedJSHeapSize: number;
+  totalJSHeapSize: number;
+  jsHeapSizeLimit: number;
+}
+
+export interface FrontendAuditMemoryDelta {
+  before: FrontendAuditMemorySnapshot;
+  after: FrontendAuditMemorySnapshot;
+  deltaUsedJSHeapSize: number;
+  deltaTotalJSHeapSize: number;
 }
 
 export interface FrontendAuditWebGLInfo {
@@ -44,12 +74,16 @@ export interface FrontendAuditWebGLInfo {
 const COUNTER_NAMES: FrontendAuditCounter[] = [
   "viewportBridgeMounted",
   "viewportBridgeActive",
+  "viewportResourceOwnerMounted",
+  "viewportResourceOwnerUnmounted",
   "webglCanvasMounted",
   "webglCanvasHidden",
   "field2DRequests",
   "field2DInflight",
   "fieldVectorRequests",
   "fieldVectorInflight",
+  "fieldVectorGlyphRequests",
+  "fieldVectorShaderRequests",
   "dataPlaneFetches",
   "liveStatusPolls",
   "realtimeEvents",
@@ -72,6 +106,117 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
+function readFrontendMemorySnapshot(): FrontendAuditMemorySnapshot | null {
+  if (typeof performance === "undefined") {
+    return null;
+  }
+  const memory = (
+    performance as Performance & {
+      memory?: Partial<FrontendAuditMemorySnapshot>;
+    }
+  ).memory;
+  if (!memory) {
+    return null;
+  }
+  const usedJSHeapSize = Number(memory.usedJSHeapSize);
+  const totalJSHeapSize = Number(memory.totalJSHeapSize);
+  const jsHeapSizeLimit = Number(memory.jsHeapSizeLimit);
+  if (
+    !Number.isFinite(usedJSHeapSize) ||
+    !Number.isFinite(totalJSHeapSize) ||
+    !Number.isFinite(jsHeapSizeLimit)
+  ) {
+    return null;
+  }
+  return {
+    usedJSHeapSize,
+    totalJSHeapSize,
+    jsHeapSizeLimit,
+  };
+}
+
+function copyCounters(counters: FrontendAuditCounters): FrontendAuditCounters {
+  return Object.fromEntries(
+    COUNTER_NAMES.map((name) => [name, counters[name] ?? 0]),
+  ) as FrontendAuditCounters;
+}
+
+function diffCounters(
+  before: FrontendAuditCounters,
+  after: FrontendAuditCounters,
+): FrontendAuditCounters {
+  return Object.fromEntries(
+    COUNTER_NAMES.map((name) => [name, (after[name] ?? 0) - (before[name] ?? 0)]),
+  ) as FrontendAuditCounters;
+}
+
+function copyNumberMap(values: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [key, Number.isFinite(value) ? value : 0]),
+  );
+}
+
+function diffNumberMap(
+  before: Record<string, number>,
+  after: Record<string, number>,
+): Record<string, number> {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return Object.fromEntries(
+    Array.from(keys)
+      .sort()
+      .map((key) => [key, (after[key] ?? 0) - (before[key] ?? 0)]),
+  );
+}
+
+function attachFrontendAuditMethods(audit: FrontendAuditSnapshot): void {
+  Object.defineProperty(audit, "snapshotDelta", {
+    configurable: true,
+    enumerable: false,
+    value: async (seconds = 60): Promise<FrontendAuditDelta> => {
+      const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 60;
+      const startedAt = nowMs();
+      const before = copyCounters(audit.counters);
+      const beforeResourceFetches = copyNumberMap(audit.resourceFetches ?? {});
+      const beforeMemory = readFrontendMemorySnapshot();
+      await new Promise((resolve) => setTimeout(resolve, safeSeconds * 1000));
+      const endedAt = nowMs();
+      const afterMemory = readFrontendMemorySnapshot();
+      const delta: FrontendAuditDelta = {
+        seconds: safeSeconds,
+        elapsedMs: endedAt - startedAt,
+        counters: diffCounters(before, audit.counters),
+        resourceFetches: diffNumberMap(beforeResourceFetches, audit.resourceFetches ?? {}),
+        memory:
+          beforeMemory && afterMemory
+            ? {
+                before: beforeMemory,
+                after: afterMemory,
+                deltaUsedJSHeapSize: afterMemory.usedJSHeapSize - beforeMemory.usedJSHeapSize,
+                deltaTotalJSHeapSize: afterMemory.totalJSHeapSize - beforeMemory.totalJSHeapSize,
+              }
+            : null,
+        webgl: audit.webgl.map((entry) => ({ ...entry })),
+        startedAt,
+        endedAt,
+      };
+      if (typeof console !== "undefined") {
+        console.table(delta.counters);
+        console.table(delta.resourceFetches);
+        if (delta.memory) {
+          console.table({
+            deltaUsedJSHeapSize: delta.memory.deltaUsedJSHeapSize,
+            deltaTotalJSHeapSize: delta.memory.deltaTotalJSHeapSize,
+            afterUsedJSHeapSize: delta.memory.after.usedJSHeapSize,
+            afterTotalJSHeapSize: delta.memory.after.totalJSHeapSize,
+          });
+        }
+        console.log("[fullmag:audit] webgl", delta.webgl);
+      }
+      return delta;
+    },
+  });
+}
+
 export function ensureFrontendAudit(): FrontendAuditSnapshot | null {
   if (typeof window === "undefined") {
     return null;
@@ -80,10 +225,15 @@ export function ensureFrontendAudit(): FrontendAuditSnapshot | null {
   if (!target.__FULLMAG_AUDIT__) {
     target.__FULLMAG_AUDIT__ = {
       counters: emptyCounters(),
+      resourceFetches: {},
       webgl: [],
       marks: [],
       measures: [],
-    };
+    } as unknown as FrontendAuditSnapshot;
+  }
+  target.__FULLMAG_AUDIT__.resourceFetches ??= {};
+  if (typeof target.__FULLMAG_AUDIT__.snapshotDelta !== "function") {
+    attachFrontendAuditMethods(target.__FULLMAG_AUDIT__);
   }
   return target.__FULLMAG_AUDIT__;
 }
@@ -95,6 +245,13 @@ export function incrementFrontendAuditCounter(
   const audit = ensureFrontendAudit();
   if (!audit) return;
   audit.counters[name] = (audit.counters[name] ?? 0) + delta;
+}
+
+export function incrementFrontendAuditResourceFetch(resource: string, delta = 1): void {
+  const audit = ensureFrontendAudit();
+  if (!audit) return;
+  audit.counters.dataPlaneFetches = (audit.counters.dataPlaneFetches ?? 0) + delta;
+  audit.resourceFetches[resource] = (audit.resourceFetches[resource] ?? 0) + delta;
 }
 
 export function setFrontendAuditCounter(name: FrontendAuditCounter, value: number): void {
