@@ -40,7 +40,7 @@
     "next": "^15.5.14",
     "openapi-fetch": "^0.17.0",
 
-    "postcss": "^8.5.8",
+    "postcss": "^8.5.11",
     "radix-ui": "^1.4.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
