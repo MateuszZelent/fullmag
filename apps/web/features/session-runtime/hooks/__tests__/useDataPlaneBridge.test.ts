@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendScalarRowsBounded,
   decideFieldVectorFetch,
+  isNegativeDataPlaneResponse,
   mapResourceQuantities,
 } from "../useDataPlaneBridge";
+import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 
 describe("decideFieldVectorFetch", () => {
   it("skips 3D vector fetch in 2D mode (slice API path)", () => {
@@ -49,6 +52,23 @@ describe("decideFieldVectorFetch", () => {
       shouldFetch: true,
       component: "full",
     });
+  });
+});
+
+describe("isNegativeDataPlaneResponse", () => {
+  it("treats not-found and no-content responses as negative-cacheable", () => {
+    expect(isNegativeDataPlaneResponse(LiveApiError.httpError(404, "missing", undefined, "mesh"))).toBe(true);
+    expect(isNegativeDataPlaneResponse(LiveApiError.httpError(204, "empty", undefined, "mesh"))).toBe(true);
+  });
+
+  it("treats empty binary payloads as negative-cacheable", () => {
+    expect(isNegativeDataPlaneResponse(new ArrayBuffer(0))).toBe(true);
+    expect(isNegativeDataPlaneResponse(new Uint8Array(0))).toBe(true);
+  });
+
+  it("does not negative-cache ordinary failures", () => {
+    expect(isNegativeDataPlaneResponse(LiveApiError.httpError(500, "boom", undefined, "mesh"))).toBe(false);
+    expect(isNegativeDataPlaneResponse(new Error("network"))).toBe(false);
   });
 });
 
@@ -129,6 +149,29 @@ describe("mapResourceQuantities", () => {
       available: true,
       data_available: true,
     });
+  });
+});
+
+describe("appendScalarRowsBounded", () => {
+  it("keeps only the newest scalar rows within the configured limit", () => {
+    const rows = appendScalarRowsBounded(
+      [
+        { step: 1 } as any,
+        { step: 2 } as any,
+      ],
+      [
+        { step: 3 } as any,
+        { step: 4 } as any,
+      ],
+      3,
+    );
+
+    expect(rows.map((row) => row.step)).toEqual([2, 3, 4]);
+  });
+
+  it("reuses the existing array when no rows are appended", () => {
+    const current = [{ step: 1 } as any];
+    expect(appendScalarRowsBounded(current, [], 3)).toBe(current);
   });
 });
 

@@ -90,7 +90,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "3D Viewport",
       closable: false,
       pinned: true,
-      mountPolicy: "hidden-mounted",
+      mountPolicy: "active-only",
       payload: { viewMode: "3D" },
     },
     {
@@ -100,7 +100,7 @@ function defaultCoreTabs(): WorkspaceTab[] {
       title: "2D Slice 3",
       closable: false,
       pinned: true,
-      mountPolicy: "hidden-mounted",
+      mountPolicy: "active-only",
       payload: { viewMode: "2D" },
     },
     {

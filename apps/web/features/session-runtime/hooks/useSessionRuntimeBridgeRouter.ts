@@ -10,10 +10,14 @@
 import { useDataPlaneBridge } from "./useDataPlaneBridge";
 import { useNewApiBridge } from "./useNewApiBridge";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 
 export function useSessionRuntimeBridgeRouter(): void {
+  const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
   useNewApiBridge();
   useDataPlaneBridge({
-    enabled: FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableSessionDataPlaneBridge,
+    enabled:
+      FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableSessionDataPlaneBridge &&
+      Boolean(sessionId),
   });
 }

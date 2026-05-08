@@ -60,6 +60,7 @@ import {
   resolveDockResponsivePreset,
 } from "@/components/workspace/docking/dockLayoutDefaults";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { ensureFrontendAudit } from "@/lib/debug/frontendAudit";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
 import {
@@ -245,6 +246,7 @@ function resetDockPanelSize(
 /* ── Inner shell (consumes context) ── */
 
 export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMode?: WorkspaceMode }) {
+  ensureFrontendAudit();
   if (FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging) {
     recordFrontendRender("ControlRoomShell", {
       initialWorkspaceMode: initialWorkspaceMode ?? "study",

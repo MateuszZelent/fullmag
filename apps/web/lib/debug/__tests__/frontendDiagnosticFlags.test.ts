@@ -175,6 +175,11 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(defaults.vectorSurfaceViewport.enableCanvas3D).toBe(true);
   });
 
+  it("keeps the WebGL visual activity readPixels probe disabled by default", () => {
+    const defaults = getDefaultFrontendDiagnosticFlags();
+    expect(defaults.viewportCore.enableCanvasVisualActivityProbe).toBe(false);
+  });
+
   it("keeps the VectorSurface ViewCube enabled in the normal defaults", () => {
     const defaults = getDefaultFrontendDiagnosticFlags();
     expect(defaults.vectorSurfaceViewport.showViewCube).toBe(true);

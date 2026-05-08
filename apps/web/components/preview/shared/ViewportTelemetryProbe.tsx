@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 const ENABLE_VIEWPORT_DEBUG_LOGS =
@@ -56,6 +57,7 @@ export default function ViewportTelemetryProbe({
   }, [dpr, gl, onStats, size.height, size.width]);
 
   useFrame(() => {
+    incrementFrontendAuditCounter("webglFrames", 1);
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (hidden || now - lastReportedAtRef.current < 250) {
       return;

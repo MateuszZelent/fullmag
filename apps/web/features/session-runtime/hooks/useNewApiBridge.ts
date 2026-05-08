@@ -8,12 +8,13 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
+import { incrementFrontendAuditCounter, measureFrontendAudit } from "@/lib/debug/frontendAudit";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { useLiveStatus } from "@/src/hooks/resources/useLiveStatus";
 import { previewComponentFromDisplaySelection } from "@/src/api/displaySelection";
 import { isFemDiscretization } from "@/src/domain/capabilities";
 import type { NormalizedSessionState } from "../model/deriveSessionReadModel";
-import type { LiveStatus, EnergySummary, MetricsSummary } from "@/src/api/types";
+import type { LiveStatus, EnergySummary, MetricsSummary, ResourceRevisionMap } from "@/src/api/types";
 import type {
   CurrentDisplaySelection,
   LatestFieldFrame,
@@ -35,6 +36,40 @@ const EMPTY_QUANTITIES: never[] = [];
 const EMPTY_ARTIFACTS: never[] = [];
 const EMPTY_LATEST_FIELD_FRAMES: Record<string, LatestFieldFrame> = {};
 const MU0 = 4 * Math.PI * 1e-7;
+
+export function buildLiveStatusRevisionKey({
+  sessionId,
+  runId,
+  resources,
+}: {
+  sessionId: string;
+  runId: string | null;
+  resources: ResourceRevisionMap;
+}): string {
+  return [
+    sessionId,
+    runId ?? "no-run",
+    resources.domain_generation_id,
+    resources.fields_revision,
+    resources.field_revision ?? 0,
+    resources.field_catalog_revision ?? 0,
+    resources.slice_revision ?? 0,
+    resources.scalars_revision,
+    resources.artifacts_revision,
+    resources.artifact_revision ?? 0,
+    resources.engine_log_revision,
+    resources.display_revision,
+    resources.visualization_state_revision,
+    resources.workspace_revision,
+    resources.mesh_revision,
+    resources.mesh_build_revision,
+    resources.topology_revision ?? 0,
+    resources.command_completion_revision ?? 0,
+    resources.commands_revision,
+    resources.stages_revision,
+    resources.scene_revision ?? "none",
+  ].join(":");
+}
 
 // ── Solver-state → RuntimeStatusKind mapping ────────────────────────
 
@@ -474,20 +509,23 @@ export function useNewApiBridge(
     }
     if (!status) return;
 
-    const nextRevisionKey = [
-      status.session.session_id,
-      status.run?.run_id ?? "no-run",
-      JSON.stringify(status.resources),
-    ].join(":");
+    const nextRevisionKey = buildLiveStatusRevisionKey({
+      sessionId: status.session.session_id,
+      runId: status.run?.run_id ?? null,
+      resources: status.resources,
+    });
     if (prevRevisionKeyRef.current === nextRevisionKey) {
       return;
     }
 
-    const normalized = preserveDataPlaneState(
-      useSessionRuntimeStore.getState(),
-      mapLiveStatusToNormalized(status, quantityById),
+    const normalized = measureFrontendAudit("applyNormalizedState", () =>
+      preserveDataPlaneState(
+        useSessionRuntimeStore.getState(),
+        mapLiveStatusToNormalized(status, quantityById),
+      ),
     );
     applyNormalizedState(normalized);
+    incrementFrontendAuditCounter("statusNormalizations", 1);
     prevRevisionKeyRef.current = nextRevisionKey;
-  }, [enabled, status, applyNormalizedState]);
+  }, [enabled, status, applyNormalizedState, quantityById]);
 }

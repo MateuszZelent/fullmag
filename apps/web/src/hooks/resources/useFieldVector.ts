@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { incrementFrontendAuditCounter, setFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import type { DecodedFieldVector } from "../../api/codecs/types";
 import type {
   FieldBinaryResponse,
@@ -109,10 +110,13 @@ export function loadFieldVectorRequest(
   const existing = inflightFieldVectorRequests.get(key);
   if (existing) {
     existing.consumers += 1;
+    setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
     return createFieldVectorRequestHandle(key, existing);
   }
 
   const controller = new AbortController();
+  incrementFrontendAuditCounter("fieldVectorRequests", 1);
+  incrementFrontendAuditCounter("dataPlaneFetches", 1);
   const entry: InflightFieldVectorRequest = {
     consumers: 1,
     controller,
@@ -125,15 +129,18 @@ export function loadFieldVectorRequest(
     ),
   };
   inflightFieldVectorRequests.set(key, entry);
+  setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
   void entry.promise.then(
     () => {
       if (inflightFieldVectorRequests.get(key) === entry) {
         inflightFieldVectorRequests.delete(key);
+        setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
       }
     },
     () => {
       if (inflightFieldVectorRequests.get(key) === entry) {
         inflightFieldVectorRequests.delete(key);
+        setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
       }
     },
   );
@@ -217,6 +224,7 @@ function releaseFieldVectorRequest(
   entry.consumers -= 1;
   if (entry.consumers > 0) return;
   inflightFieldVectorRequests.delete(key);
+  setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
   entry.controller.abort();
 }
 

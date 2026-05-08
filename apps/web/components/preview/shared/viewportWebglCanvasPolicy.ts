@@ -3,6 +3,9 @@ export function shouldRenderViewportWebglCanvas(args: {
   hostReady: boolean;
   bareCanvas: boolean;
 }): boolean {
+  if (args.hidden) {
+    return false;
+  }
   if (args.bareCanvas) {
     return true;
   }
@@ -26,4 +29,14 @@ export function shouldRenderVectorSurfaceCanvas({
     hostReady,
     bareCanvas: false,
   });
+}
+
+export function shouldRenderCanvasVisualActivityProbe({
+  enabled,
+  hasCallback,
+}: {
+  enabled: boolean;
+  hasCallback: boolean;
+}): boolean {
+  return enabled && hasCallback;
 }

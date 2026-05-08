@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import type { LiveStatus } from "../../api/contracts";
 import { getLiveSessionClient } from "../../api/client/LiveSessionClient";
 import { LiveApiError } from "../../api/client/errors/LiveApiError";
@@ -23,6 +24,7 @@ const ACTIVE_INTERVAL_MS = 500;
 const ERROR_BACKOFF_MS = 5000;
 const WS_IDLE_INTERVAL_MS = 10_000;
 const WS_ACTIVE_INTERVAL_MS = 2_000;
+const REALTIME_REFRESH_COALESCE_MS = 100;
 
 interface UseLiveStatusResult {
   status: LiveStatus | null;
@@ -182,24 +184,110 @@ function realtimeEventNeedsStatusRefresh(event: LiveRealtimeEvent): boolean {
   );
 }
 
+function statusSignature(status: LiveStatus): string {
+  return [
+    status.session.session_id,
+    status.run?.run_id ?? "no-run",
+    status.solver.state,
+    status.run?.solver_steps ?? 0,
+    status.resources.domain_generation_id,
+    status.resources.fields_revision,
+    status.resources.scalars_revision,
+    status.resources.artifacts_revision,
+    status.resources.engine_log_revision,
+    status.resources.display_revision,
+    status.resources.visualization_state_revision,
+    status.resources.workspace_revision,
+    status.resources.mesh_revision,
+    status.resources.mesh_build_revision,
+    status.resources.commands_revision,
+    status.resources.stages_revision,
+    status.resources.scene_revision ?? "none",
+  ].join(":");
+}
+
+function resourceRevisionMapsEqual(
+  left: ResourceRevisionMap,
+  right: ResourceRevisionMap,
+): boolean {
+  const leftKeys = Object.keys(left) as Array<keyof ResourceRevisionMap>;
+  const rightKeys = Object.keys(right) as Array<keyof ResourceRevisionMap>;
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if (left[key] !== right[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusResult {
   const enabled = options?.enabled ?? true;
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<LiveApiError | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queuedRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const pollGenerationRef = useRef(0);
+  const inFlightPollRef = useRef<{
+    generation: number;
+    controller: AbortController;
+  } | null>(null);
+  const lastStatusSignatureRef = useRef<string | null>(null);
   const realtimeClientRef = useRef<LiveRealtimeClient | null>(null);
   const refreshQueuedRef = useRef(false);
 
+  const clearPollTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const clearQueuedRefreshTimer = useCallback(() => {
+    if (queuedRefreshTimerRef.current) {
+      clearTimeout(queuedRefreshTimerRef.current);
+      queuedRefreshTimerRef.current = null;
+    }
+    refreshQueuedRef.current = false;
+  }, []);
+
+  const applyStatusResult = useCallback((result: LiveStatus) => {
+    const nextSignature = statusSignature(result);
+    if (lastStatusSignatureRef.current !== nextSignature) {
+      lastStatusSignatureRef.current = nextSignature;
+      setStatus(result);
+    }
+    setError(null);
+    setLoading(false);
+  }, []);
+
   const poll = useCallback(async function pollStatus(): Promise<void> {
+    if (!enabled || !mountedRef.current) {
+      return;
+    }
+    if (inFlightPollRef.current) {
+      return;
+    }
+    clearPollTimer();
+    const generation = ++pollGenerationRef.current;
+    const controller = new AbortController();
+    inFlightPollRef.current = { generation, controller };
     try {
       const client = getLiveSessionClient();
-      const result = await client.status.get();
-      if (!mountedRef.current) return;
-      setStatus(result);
-      setError(null);
-      setLoading(false);
+      incrementFrontendAuditCounter("liveStatusPolls", 1);
+      const result = await client.status.get({ signal: controller.signal });
+      if (
+        !mountedRef.current ||
+        inFlightPollRef.current?.generation !== generation ||
+        controller.signal.aborted
+      ) {
+        return;
+      }
+      applyStatusResult(result);
 
       // Adaptive interval based on solver state
       const isActive =
@@ -219,51 +307,69 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
       ) {
         return;
       }
+      clearPollTimer();
       timerRef.current = setTimeout(pollStatus, interval);
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (
+        controller.signal.aborted ||
+        !mountedRef.current ||
+        inFlightPollRef.current?.generation !== generation
+      ) {
+        return;
+      }
       const apiErr =
         err instanceof LiveApiError
           ? err
           : LiveApiError.networkError("status", err);
       setError(apiErr);
       setLoading(false);
-      timerRef.current = setTimeout(poll, ERROR_BACKOFF_MS);
+      clearPollTimer();
+      timerRef.current = setTimeout(pollStatus, ERROR_BACKOFF_MS);
+    } finally {
+      if (inFlightPollRef.current?.generation === generation) {
+        inFlightPollRef.current = null;
+      }
     }
-  }, []);
+  }, [applyStatusResult, clearPollTimer, enabled]);
 
   const queueRefresh = useCallback(() => {
     if (refreshQueuedRef.current) {
       return;
     }
     refreshQueuedRef.current = true;
-    window.setTimeout(() => {
+    queuedRefreshTimerRef.current = setTimeout(() => {
+      queuedRefreshTimerRef.current = null;
       refreshQueuedRef.current = false;
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
+      clearPollTimer();
       void poll();
-    }, 0);
-  }, [poll]);
+    }, REALTIME_REFRESH_COALESCE_MS);
+  }, [clearPollTimer, poll]);
 
   const applyRealtimeEvent = useCallback(
     (event: LiveRealtimeEvent) => {
       if (event.type === "heartbeat") {
         return;
       }
+      incrementFrontendAuditCounter("realtimeEvents", 1);
 
       if (event.type === "hello") {
         setStatus((previous) => {
           if (!previous) {
             return previous;
           }
-          return {
+          const resources = mergeRealtimeRevisionsIntoStatusResources(
+            previous.resources,
+            event.payload.resource_revisions,
+          );
+          if (resourceRevisionMapsEqual(previous.resources, resources)) {
+            return previous;
+          }
+          const next = {
             ...previous,
-            resources: mergeRealtimeRevisionsIntoStatusResources(
-              previous.resources,
-              event.payload.resource_revisions,
-            ),
+            resources,
           };
+          lastStatusSignatureRef.current = statusSignature(next);
+          return next;
         });
         return;
       }
@@ -273,13 +379,19 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
           if (!previous) {
             return previous;
           }
-          return {
+          const resources = mergeRealtimeBatchIntoStatusResources(
+            previous.resources,
+            event.payload,
+          );
+          if (resourceRevisionMapsEqual(previous.resources, resources)) {
+            return previous;
+          }
+          const next = {
             ...previous,
-            resources: mergeRealtimeBatchIntoStatusResources(
-              previous.resources,
-              event.payload,
-            ),
+            resources,
           };
+          lastStatusSignatureRef.current = statusSignature(next);
+          return next;
         });
       }
 
@@ -294,6 +406,10 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     if (!enabled) {
       setLoading(false);
       setError(null);
+      clearPollTimer();
+      clearQueuedRefreshTimer();
+      inFlightPollRef.current?.controller.abort();
+      inFlightPollRef.current = null;
       return;
     }
     mountedRef.current = true;
@@ -301,9 +417,12 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     poll();
     return () => {
       mountedRef.current = false;
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearPollTimer();
+      clearQueuedRefreshTimer();
+      inFlightPollRef.current?.controller.abort();
+      inFlightPollRef.current = null;
     };
-  }, [poll, enabled]);
+  }, [clearPollTimer, clearQueuedRefreshTimer, poll, enabled]);
 
   useEffect(() => {
     const hasActiveSession = Boolean(status?.session?.session_id);
@@ -341,9 +460,7 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
     loading,
     error,
     refresh: async () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
+      clearPollTimer();
       await poll();
     },
   };

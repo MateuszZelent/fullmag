@@ -49,7 +49,13 @@ export class LiveRealtimeClient {
     if (this.closed) {
       return;
     }
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+    if (
+      this.socket &&
+      (
+        this.socket.readyState === WebSocket.OPEN ||
+        this.socket.readyState === WebSocket.CONNECTING
+      )
+    ) {
       return;
     }
     const wsUrl = buildRealtimeWebSocketUrl(this.options.baseUrl, this.lastSeenSeq);

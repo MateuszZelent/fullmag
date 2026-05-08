@@ -1,26 +1,27 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldRenderCanvasVisualActivityProbe,
   shouldRenderVectorSurfaceCanvas,
   shouldRenderViewportWebglCanvas,
 } from "../viewportWebglCanvasPolicy";
 
 describe("viewport WebGL canvas policy", () => {
-  it("keeps hidden WebGL canvases mounted so frameloop can pause without losing GPU state", () => {
+  it("does not render hidden WebGL canvases", () => {
     expect(
       shouldRenderViewportWebglCanvas({
         hidden: true,
         hostReady: true,
         bareCanvas: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldRenderVectorSurfaceCanvas({
         canvasEnabled: true,
         hostReady: true,
         viewportVisible: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("shares the same host readiness gate for shell and vector surface canvases", () => {
@@ -43,6 +44,27 @@ describe("viewport WebGL canvas policy", () => {
         canvasEnabled: true,
         hostReady: true,
         viewportVisible: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mount the visual activity readPixels probe when disabled or callbackless", () => {
+    expect(
+      shouldRenderCanvasVisualActivityProbe({
+        enabled: false,
+        hasCallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderCanvasVisualActivityProbe({
+        enabled: true,
+        hasCallback: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderCanvasVisualActivityProbe({
+        enabled: true,
+        hasCallback: true,
       }),
     ).toBe(true);
   });

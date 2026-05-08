@@ -18,6 +18,10 @@
  */
 
 import { useEffect, useRef, useCallback } from "react";
+import {
+  incrementFrontendAuditCounter,
+  setFrontendAuditCounter,
+} from "@/lib/debug/frontendAudit";
 import { useSessionRuntimeStore } from "../store/useSessionRuntimeStore";
 import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
@@ -52,6 +56,26 @@ type DataPlaneRequest = {
   sequence: number;
 };
 
+const MAX_SCALAR_ROWS = 10_000;
+const SCALAR_ROW_BYTES_APPROX = 15 * 8;
+
+export function isNegativeDataPlaneResponse(value: unknown): boolean {
+  if (value instanceof LiveApiError) {
+    return (
+      value.status === 404 ||
+      value.status === 204 ||
+      value.message.toLowerCase().includes("not available yet")
+    );
+  }
+  if (value instanceof ArrayBuffer) {
+    return value.byteLength === 0;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return value.byteLength === 0;
+  }
+  return false;
+}
+
 function adaptScalarRow(
   row: Record<string, number | string | null>,
 ): StoreScalarRow {
@@ -72,6 +96,32 @@ function adaptScalarRow(
     max_h_eff: Number(row.max_h_eff ?? 0),
     max_h_demag: Number(row.max_h_demag ?? 0),
   };
+}
+
+export function appendScalarRowsBounded(
+  current: StoreScalarRow[],
+  next: StoreScalarRow[],
+  limit = MAX_SCALAR_ROWS,
+): StoreScalarRow[] {
+  if (next.length === 0) {
+    return current;
+  }
+  if (limit <= 0) {
+    return [];
+  }
+  const total = current.length + next.length;
+  if (total <= limit) {
+    const rows = current.slice();
+    rows.push(...next);
+    return rows;
+  }
+  if (next.length >= limit) {
+    return next.slice(next.length - limit);
+  }
+  const keepFromCurrent = limit - next.length;
+  const rows = current.slice(Math.max(0, current.length - keepFromCurrent));
+  rows.push(...next);
+  return rows;
 }
 
 export function mapResourceQuantities(
@@ -195,13 +245,24 @@ export function useDataPlaneBridge(
     (s) => s.fieldFrameEnvelope,
   );
   const scalarRevision = useSessionRuntimeStore(
-    (s) => s.liveState?.step ?? s.stateVersion,
+    (s) => s.resourceRevisions?.scalars_revision ?? 0,
+  );
+  const meshRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.mesh_revision ?? 0,
+  );
+  const fieldsRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.fields_revision ?? 0,
+  );
+  const artifactsRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.artifacts_revision ?? 0,
+  );
+  const engineLogRevision = useSessionRuntimeStore(
+    (s) => s.resourceRevisions?.engine_log_revision ?? 0,
   );
   const sessionId = useSessionRuntimeStore((s) => s.session?.session_id);
   const runId = useSessionRuntimeStore((s) => s.run?.run_id);
   const isFemBackend = useSessionRuntimeStore((s) => s.isFemBackend);
   const displaySelection = useSessionRuntimeStore((s) => s.displaySelection);
-  const resourceRevisions = useSessionRuntimeStore((s) => s.resourceRevisions);
   const currentViewMode = displaySelection?.selection.view_mode ?? null;
   const runtimeScopeKey =
     sessionId && runId
@@ -231,11 +292,34 @@ export function useDataPlaneBridge(
   const catalogRequestRef = useRef<DataPlaneRequest | null>(null);
   const artifactsRequestRef = useRef<DataPlaneRequest | null>(null);
   const engineLogRequestRef = useRef<DataPlaneRequest | null>(null);
+  const negativeResourceCacheRef = useRef<Set<string>>(new Set());
 
   // Reset accumulators when session changes
   const prevRuntimeScopeRef = useRef<string | null>(null);
   useEffect(() => {
     if (!enabled) {
+      for (const requestRef of [
+        fieldRequestRef,
+        scalarRequestRef,
+        domainRequestRef,
+        meshRequestRef,
+        catalogRequestRef,
+        artifactsRequestRef,
+        engineLogRequestRef,
+      ]) {
+        requestRef.current?.controller.abort();
+        requestRef.current = null;
+      }
+      prevRuntimeScopeRef.current = null;
+      scalarAccumulatorRef.current = [];
+      negativeResourceCacheRef.current.clear();
+      fetchedFieldRevRef.current = null;
+      fetchedScalarRevRef.current = null;
+      fetchedDomainGenRef.current = null;
+      fetchedMeshRevRef.current = null;
+      fetchedCatalogKeyRef.current = null;
+      fetchedArtifactsKeyRef.current = null;
+      fetchedEngineLogKeyRef.current = null;
       return;
     }
     if (runtimeScopeKey !== prevRuntimeScopeRef.current) {
@@ -253,6 +337,7 @@ export function useDataPlaneBridge(
       }
       prevRuntimeScopeRef.current = runtimeScopeKey;
       scalarAccumulatorRef.current = [];
+      negativeResourceCacheRef.current.clear();
       fetchedFieldRevRef.current = null;
       fetchedScalarRevRef.current = null;
       fetchedDomainGenRef.current = null;
@@ -305,11 +390,14 @@ export function useDataPlaneBridge(
       const requestScopeKey = runtimeScopeKey;
       if (!requestScopeKey) return;
       const requestKey = `${requestScopeKey}:${cacheKey}`;
+      const negativeCacheKey = `field:${requestKey}`;
+      if (negativeResourceCacheRef.current.has(negativeCacheKey)) return;
       if (fieldRequestRef.current?.key === requestKey) return;
       fieldRequestRef.current?.controller.abort();
       const controller = new AbortController();
       const requestSequence = ++requestSequenceRef.current;
       fieldRequestRef.current = { key: requestKey, controller, sequence: requestSequence };
+      setFrontendAuditCounter("fieldVectorInflight", 1);
       const isCurrentRequest = () =>
         fieldRequestRef.current?.sequence === requestSequence &&
         prevRuntimeScopeRef.current === requestScopeKey &&
@@ -327,6 +415,8 @@ export function useDataPlaneBridge(
         ) {
           result = cached.data;
         } else {
+          incrementFrontendAuditCounter("fieldVectorRequests", 1);
+          incrementFrontendAuditCounter("dataPlaneFetches", 1);
           const response = await client.fields.getVectorResponse(
             envelope.quantityId,
             {
@@ -339,8 +429,13 @@ export function useDataPlaneBridge(
           if (response.status === 304 && cached) {
             result = cached.data;
           } else {
-            if (response.buffer == null) {
-              throw new Error(`field vector response for ${envelope.quantityId} had no buffer`);
+            if (
+              response.buffer == null ||
+              isNegativeDataPlaneResponse(response.buffer)
+            ) {
+              negativeResourceCacheRef.current.add(negativeCacheKey);
+              fetchedFieldRevRef.current = cacheKey;
+              return;
             }
             result = await decodeFieldVectorOffThread(response.buffer, {
               transferInput: true,
@@ -446,14 +541,18 @@ export function useDataPlaneBridge(
         if (controller.signal.aborted) {
           return;
         }
-        if (err instanceof LiveApiError && err.isNotFound) {
+        if (isNegativeDataPlaneResponse(err)) {
+          if (!isCurrentRequest()) return;
           // Quantity not available yet — skip silently
+          negativeResourceCacheRef.current.add(negativeCacheKey);
+          fetchedFieldRevRef.current = cacheKey;
           return;
         }
         console.warn("[fullmag][data-plane] field fetch failed", err);
       } finally {
         if (fieldRequestRef.current?.sequence === requestSequence) {
           fieldRequestRef.current = null;
+          setFrontendAuditCounter("fieldVectorInflight", 0);
         }
       }
     },
@@ -481,6 +580,7 @@ export function useDataPlaneBridge(
 
       try {
         const client = getLiveSessionClient();
+        incrementFrontendAuditCounter("dataPlaneFetches", 1);
         const window = await client.scalars.getWindow({
           sinceRevision: fetchedScalarRevRef.current ?? 0,
         }, { signal: controller.signal });
@@ -488,10 +588,15 @@ export function useDataPlaneBridge(
 
         if (window.rows.length > 0) {
           const adapted = scalarWindowToRows(window).map(adaptScalarRow);
-          scalarAccumulatorRef.current = [
-            ...scalarAccumulatorRef.current,
-            ...adapted,
-          ];
+          scalarAccumulatorRef.current = appendScalarRowsBounded(
+            scalarAccumulatorRef.current,
+            adapted,
+          );
+          setFrontendAuditCounter("scalarRows", scalarAccumulatorRef.current.length);
+          setFrontendAuditCounter(
+            "scalarAccumulatorBytesApprox",
+            scalarAccumulatorRef.current.length * SCALAR_ROW_BYTES_APPROX,
+          );
         }
         fetchedScalarRevRef.current = revision;
 
@@ -555,6 +660,8 @@ export function useDataPlaneBridge(
       const requestScopeKey = runtimeScopeKey;
       if (!requestScopeKey) return;
       const requestKey = `${requestScopeKey}:${genId}`;
+      const negativeCacheKey = `domain:${requestKey}`;
+      if (negativeResourceCacheRef.current.has(negativeCacheKey)) return;
       if (domainRequestRef.current?.key === requestKey) return;
       domainRequestRef.current?.controller.abort();
       const controller = new AbortController();
@@ -567,6 +674,7 @@ export function useDataPlaneBridge(
 
       try {
         const client = getLiveSessionClient();
+        incrementFrontendAuditCounter("dataPlaneFetches", 1);
         const numericGenerationId = Number.parseInt(genId, 10);
         const meta = await getCachedJsonResource({
           client,
@@ -593,6 +701,7 @@ export function useDataPlaneBridge(
                       if (cached && cached.revision === meta.generation_id) {
                         return cached.data;
                       }
+                      incrementFrontendAuditCounter("dataPlaneFetches", 1);
                       const response = await client.domain.getTopologyResponse({
                         signal: controller.signal,
                         cache: "default",
@@ -608,6 +717,9 @@ export function useDataPlaneBridge(
                       }
                       if (response.status === 304 && cached) {
                         return cached.data;
+                      }
+                      if (isNegativeDataPlaneResponse(response.buffer)) {
+                        throw response.buffer;
                       }
                       client.getCache().set(
                         topologyCacheKey,
@@ -675,6 +787,12 @@ export function useDataPlaneBridge(
         if (controller.signal.aborted) {
           return;
         }
+        if (isNegativeDataPlaneResponse(err)) {
+          if (!isCurrentRequest()) return;
+          negativeResourceCacheRef.current.add(negativeCacheKey);
+          fetchedDomainGenRef.current = genId;
+          return;
+        }
         console.warn("[fullmag][data-plane] domain fetch failed", err);
       } finally {
         if (domainRequestRef.current?.sequence === requestSequence) {
@@ -692,6 +810,8 @@ export function useDataPlaneBridge(
       const requestScopeKey = runtimeScopeKey;
       if (!requestScopeKey) return;
       const requestKey = `${requestScopeKey}:${revision}`;
+      const negativeCacheKey = `mesh:${requestKey}`;
+      if (negativeResourceCacheRef.current.has(negativeCacheKey)) return;
       if (meshRequestRef.current?.key === requestKey) return;
       meshRequestRef.current?.controller.abort();
       const controller = new AbortController();
@@ -752,6 +872,9 @@ export function useDataPlaneBridge(
             if (response.status === 304 && cached) {
               return cached.data;
             }
+            if (isNegativeDataPlaneResponse(response.buffer)) {
+              throw response.buffer;
+            }
             client.getCache().set(
               topologyCacheKey,
               response.buffer,
@@ -766,6 +889,8 @@ export function useDataPlaneBridge(
 
         if (topologyBuffer.byteLength === 0) {
           if (!isCurrentRequest()) return;
+          negativeResourceCacheRef.current.add(negativeCacheKey);
+          fetchedMeshRevRef.current = revision;
           const current = useSessionRuntimeStore.getState();
           applyNormalizedState({
             stateVersion: current.stateVersion,
@@ -875,9 +1000,11 @@ export function useDataPlaneBridge(
           return;
         }
         if (
-          err instanceof LiveApiError &&
-          (err.status === 404 || err.status === 204)
+          isNegativeDataPlaneResponse(err)
         ) {
+          if (!isCurrentRequest()) return;
+          negativeResourceCacheRef.current.add(negativeCacheKey);
+          fetchedMeshRevRef.current = revision;
           const current = useSessionRuntimeStore.getState();
           if (!isCurrentRequest()) return;
           applyNormalizedState({
@@ -1232,7 +1359,7 @@ export function useDataPlaneBridge(
     ) {
       return;
     }
-    if (isFemBackend && (resourceRevisions?.mesh_revision ?? 0) > 0) {
+    if (isFemBackend && meshRevision > 0) {
       return;
     }
     if (fieldFrameEnvelope?.meshGenerationId) {
@@ -1245,7 +1372,7 @@ export function useDataPlaneBridge(
     isFemBackend,
     leakIsolationFlags.enableDomainTopologyHydration,
     leakIsolationFlags.enableMeshTopologyHydration,
-    resourceRevisions?.mesh_revision,
+    meshRevision,
     runtimeScopeKey,
   ]);
 
@@ -1261,13 +1388,12 @@ export function useDataPlaneBridge(
         !leakIsolationFlags.enableSharedDomainMeshStoreApply
       ) ||
       !runtimeScopeKey ||
-      !resourceRevisions ||
       !isFemBackend
     ) {
       return;
     }
-    if (resourceRevisions.mesh_revision > 0) {
-      void fetchMeshTopology(resourceRevisions.mesh_revision);
+    if (meshRevision > 0) {
+      void fetchMeshTopology(meshRevision);
     }
   }, [
     enabled,
@@ -1279,31 +1405,31 @@ export function useDataPlaneBridge(
     leakIsolationFlags.enableSharedDomainMeshTopologyHydration,
     leakIsolationFlags.enableSharedDomainMeshTopologyDecode,
     leakIsolationFlags.enableSharedDomainMeshTopologyFetch,
-    resourceRevisions,
+    meshRevision,
     runtimeScopeKey,
   ]);
 
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
-    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.fields_revision}`;
-    void fetchQuantities(cacheKey, resourceRevisions.fields_revision);
-  }, [enabled, fetchQuantities, resourceRevisions, runtimeScopeKey]);
+    const cacheKey = `${runtimeScopeKey}:${fieldsRevision}`;
+    void fetchQuantities(cacheKey, fieldsRevision);
+  }, [enabled, fetchQuantities, fieldsRevision, runtimeScopeKey]);
 
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
-    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.artifacts_revision}`;
-    void fetchArtifacts(cacheKey, resourceRevisions.artifacts_revision);
-  }, [enabled, fetchArtifacts, resourceRevisions, runtimeScopeKey]);
+    const cacheKey = `${runtimeScopeKey}:${artifactsRevision}`;
+    void fetchArtifacts(cacheKey, artifactsRevision);
+  }, [artifactsRevision, enabled, fetchArtifacts, runtimeScopeKey]);
 
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey || !resourceRevisions) {
+    if (!enabled || !runtimeScopeKey) {
       return;
     }
-    const cacheKey = `${runtimeScopeKey}:${resourceRevisions.engine_log_revision}`;
-    void fetchEngineLog(cacheKey, resourceRevisions.engine_log_revision);
-  }, [enabled, fetchEngineLog, resourceRevisions, runtimeScopeKey]);
+    const cacheKey = `${runtimeScopeKey}:${engineLogRevision}`;
+    void fetchEngineLog(cacheKey, engineLogRevision);
+  }, [enabled, engineLogRevision, fetchEngineLog, runtimeScopeKey]);
 }

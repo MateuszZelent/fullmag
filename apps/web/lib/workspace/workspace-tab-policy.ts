@@ -26,8 +26,5 @@ export function resolveWorkspaceTabMountPolicy(args: {
   kind: string;
   requestedMountPolicy: WorkspaceTabMountPolicyValue;
 }): WorkspaceTabMountPolicyValue {
-  if (isPersistentViewportWorkspaceTab(args)) {
-    return "hidden-mounted";
-  }
   return isWebGLWorkspaceTabKind(args.kind) ? "active-only" : args.requestedMountPolicy;
 }

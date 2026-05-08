@@ -1,6 +1,6 @@
 import type { WorkspaceMode, WorkspaceTab } from "@/lib/workspace/workspace-store";
 import { workspaceViewportResourceOwnerId } from "@/lib/workspace/viewport-resource-owner";
-import { isKeepAliveWorkspaceTab, isWebGLWorkspaceTab } from "./tabRenderPolicy";
+import { isWebGLWorkspaceTab } from "./tabRenderPolicy";
 
 export interface WorkspaceTabResourceDisposal {
   ownerId: string;
@@ -35,11 +35,7 @@ export function resolveWorkspaceTabResourceDisposals(
 
   if (previous.activeTabId && previous.activeTabId !== current.activeTabId) {
     const previousActiveTab = previous.tabs.find((tab) => tab.id === previous.activeTabId) ?? null;
-    if (
-      previousActiveTab &&
-      isWebGLWorkspaceTab(previousActiveTab) &&
-      !isKeepAliveWorkspaceTab(previousActiveTab)
-    ) {
+    if (previousActiveTab && isWebGLWorkspaceTab(previousActiveTab)) {
       disposals.push({
         ownerId: workspaceViewportResourceOwnerId(previous.stage, previousActiveTab.id),
         reason: "tab-hide",

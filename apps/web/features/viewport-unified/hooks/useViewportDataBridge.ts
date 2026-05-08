@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SetStateAction } from "react";
 import { MAGNETIC_PRESET_CATALOG } from "@/lib/magnetizationPresetCatalog";
+import {
+  incrementFrontendAuditCounter,
+  measureFrontendAudit,
+  setFrontendAuditCounter,
+} from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { useBuilderKeyboardShortcuts } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
@@ -275,6 +280,14 @@ function summarizeTransform(transform: {
  * `ViewportTabContent` consumes.
  */
 export function useViewportDataBridge() {
+  useEffect(() => {
+    incrementFrontendAuditCounter("viewportBridgeMounted", 1);
+    setFrontendAuditCounter("viewportBridgeActive", 1);
+    return () => {
+      setFrontendAuditCounter("viewportBridgeActive", 0);
+    };
+  }, []);
+
   /* ── Context ── */
   const _transport = useTransport();
   const _viewport = useViewport();
@@ -1122,20 +1135,26 @@ export function useViewportDataBridge() {
   }, [spatialPreview, scaleFactor]);
 
   const scaledVectors = useMemo(() => {
-    if (!ctx.selectedVectors || scaleFactor === 1.0) return ctx.selectedVectors;
-    const arr = new Float64Array(ctx.selectedVectors.length);
-    for (let i = 0; i < arr.length; i++) arr[i] = ctx.selectedVectors[i] * scaleFactor;
-    return arr;
+    return measureFrontendAudit("scaledVectors", () => {
+      if (!ctx.selectedVectors || scaleFactor === 1.0) return ctx.selectedVectors;
+      const arr = new Float64Array(ctx.selectedVectors.length);
+      incrementFrontendAuditCounter("typedArrayAllocations", 1);
+      for (let i = 0; i < arr.length; i++) arr[i] = ctx.selectedVectors[i] * scaleFactor;
+      return arr;
+    });
   }, [ctx.selectedVectors, scaleFactor]);
 
   const scaledFetched3DVectors = useMemo(() => {
-    if (viewport3DVectorField.status !== "ready") return null;
-    const values = viewport3DVectorField.data?.values ?? null;
-    if (!values) return null;
-    if (scaleFactor === 1.0) return values;
-    const arr = new Float64Array(values.length);
-    for (let i = 0; i < arr.length; i++) arr[i] = values[i] * scaleFactor;
-    return arr;
+    return measureFrontendAudit("scaledFetched3DVectors", () => {
+      if (viewport3DVectorField.status !== "ready") return null;
+      const values = viewport3DVectorField.data?.values ?? null;
+      if (!values) return null;
+      if (scaleFactor === 1.0) return values;
+      const arr = new Float64Array(values.length);
+      incrementFrontendAuditCounter("typedArrayAllocations", 1);
+      for (let i = 0; i < arr.length; i++) arr[i] = values[i] * scaleFactor;
+      return arr;
+    });
   }, [scaleFactor, viewport3DVectorField.data, viewport3DVectorField.status]);
 
   /* ── Slice 2D params ── */
@@ -1296,10 +1315,13 @@ export function useViewportDataBridge() {
   );
 
   const scaledSliceScalar = useMemo(() => {
-    const scalar = slice2D.scalar;
-    if (!scalar) return null;
-    if (scaleFactor === 1.0) return scalar.values;
-    return Float64Array.from(scalar.values, (v) => v * scaleFactor);
+    return measureFrontendAudit("scaledSliceScalar", () => {
+      const scalar = slice2D.scalar;
+      if (!scalar) return null;
+      if (scaleFactor === 1.0) return scalar.values;
+      incrementFrontendAuditCounter("typedArrayAllocations", 1);
+      return Float64Array.from(scalar.values, (v) => v * scaleFactor);
+    });
   }, [scaleFactor, slice2D.scalar]);
 
   const sliceScalarShape = useMemo<[number, number] | null>(() => {
@@ -1338,17 +1360,23 @@ export function useViewportDataBridge() {
   const femFieldData = femMeshData?.fieldData;
   const femShaderFieldData = femMeshData?.shaderFieldData;
   const scaledFemMeshData = useMemo(() => {
-    if (!femMeshData || scaleFactor === 1.0 || !femMeshData.fieldData) return femMeshData;
-    const fld = femMeshData.fieldData;
-    return {
-      ...femMeshData,
-      fieldData: {
-        ...fld,
-        x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) : null,
-        y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) : null,
-        z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) : null,
-      },
-    } as typeof femMeshData;
+    return measureFrontendAudit("scaledFemMeshData", () => {
+      if (!femMeshData || scaleFactor === 1.0 || !femMeshData.fieldData) return femMeshData;
+      const fld = femMeshData.fieldData;
+      incrementFrontendAuditCounter(
+        "typedArrayAllocations",
+        Number(Boolean(fld.x)) + Number(Boolean(fld.y)) + Number(Boolean(fld.z)),
+      );
+      return {
+        ...femMeshData,
+        fieldData: {
+          ...fld,
+          x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) : null,
+          y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) : null,
+          z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) : null,
+        },
+      } as typeof femMeshData;
+    });
   }, [
     femMeshData?.activeMask,
     femMeshData?.boundaryFaces,
@@ -1370,38 +1398,41 @@ export function useViewportDataBridge() {
   ]);
 
   const scopedFetchedFemMeshData = useMemo(() => {
-    if (
-      !scaledFemMeshData ||
-      !femDiscretization ||
-      vectorFetchScope.kind === "full" ||
-      viewport3DShaderField.status !== "ready" ||
-      !viewport3DShaderField.data
-    ) return scaledFemMeshData;
-    const dense = buildDenseFemVectorField({
-      nNodes: scaledFemMeshData.nNodes,
-      meshParts: ctx.meshParts,
-      frames: [{ scope: vectorFetchScope, field: viewport3DShaderField.data }],
+    return measureFrontendAudit("scopedFetchedFemMeshData", () => {
+      if (
+        !scaledFemMeshData ||
+        !femDiscretization ||
+        vectorFetchScope.kind === "full" ||
+        viewport3DShaderField.status !== "ready" ||
+        !viewport3DShaderField.data
+      ) return scaledFemMeshData;
+      const dense = buildDenseFemVectorField({
+        nNodes: scaledFemMeshData.nNodes,
+        meshParts: ctx.meshParts,
+        frames: [{ scope: vectorFetchScope, field: viewport3DShaderField.data }],
+      });
+      if (!dense) return scaledFemMeshData;
+      const values =
+        scaleFactor === 1.0
+          ? dense.values
+          : Float64Array.from(dense.values, (v) => v * scaleFactor);
+      const x = new Float64Array(scaledFemMeshData.nNodes);
+      const y = new Float64Array(scaledFemMeshData.nNodes);
+      const z = new Float64Array(scaledFemMeshData.nNodes);
+      incrementFrontendAuditCounter("typedArrayAllocations", scaleFactor === 1.0 ? 3 : 4);
+      for (let i = 0; i < scaledFemMeshData.nNodes; i++) {
+        x[i] = values[i * 3] ?? 0;
+        y[i] = values[i * 3 + 1] ?? 0;
+        z[i] = values[i * 3 + 2] ?? 0;
+      }
+      return {
+        ...scaledFemMeshData,
+        fieldData: { x, y, z },
+        fieldNComp: dense.nComp,
+        activeMask: dense.activeMask,
+        fieldRevision: viewport3DShaderField.fieldRevision ?? scaledFemMeshData.fieldRevision,
+      };
     });
-    if (!dense) return scaledFemMeshData;
-    const values =
-      scaleFactor === 1.0
-        ? dense.values
-        : Float64Array.from(dense.values, (v) => v * scaleFactor);
-    const x = new Float64Array(scaledFemMeshData.nNodes);
-    const y = new Float64Array(scaledFemMeshData.nNodes);
-    const z = new Float64Array(scaledFemMeshData.nNodes);
-    for (let i = 0; i < scaledFemMeshData.nNodes; i++) {
-      x[i] = values[i * 3] ?? 0;
-      y[i] = values[i * 3 + 1] ?? 0;
-      z[i] = values[i * 3 + 2] ?? 0;
-    }
-    return {
-      ...scaledFemMeshData,
-      fieldData: { x, y, z },
-      fieldNComp: dense.nComp,
-      activeMask: dense.activeMask,
-      fieldRevision: viewport3DShaderField.fieldRevision ?? scaledFemMeshData.fieldRevision,
-    };
   }, [
     ctx.meshParts,
     femDiscretization,
@@ -1414,16 +1445,18 @@ export function useViewportDataBridge() {
   ]);
 
   const shaderDownsampledFemMeshData = useMemo(() => {
-    if (!scopedFetchedFemMeshData?.fieldData) return scopedFetchedFemMeshData;
-    return {
-      ...scopedFetchedFemMeshData,
-      shaderFieldData: downsampleVectorFieldSpatialBins({
-        nodes: scopedFetchedFemMeshData.nodes,
-        nNodes: scopedFetchedFemMeshData.nNodes,
-        fieldData: scopedFetchedFemMeshData.fieldData,
-        targetBins: viz.femTextureDownsampleCells,
-      }),
-    };
+    return measureFrontendAudit("downsampleVectorFieldSpatialBins", () => {
+      if (!scopedFetchedFemMeshData?.fieldData) return scopedFetchedFemMeshData;
+      return {
+        ...scopedFetchedFemMeshData,
+        shaderFieldData: downsampleVectorFieldSpatialBins({
+          nodes: scopedFetchedFemMeshData.nodes,
+          nNodes: scopedFetchedFemMeshData.nNodes,
+          fieldData: scopedFetchedFemMeshData.fieldData,
+          targetBins: viz.femTextureDownsampleCells,
+        }),
+      };
+    });
   }, [viz.femTextureDownsampleCells, scopedFetchedFemMeshData]);
 
   const renderFemMeshData = shaderDownsampledFemMeshData ?? scopedFetchedFemMeshData;

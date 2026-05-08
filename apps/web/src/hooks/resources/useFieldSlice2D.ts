@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { incrementFrontendAuditCounter, setFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import type {
   FieldBinaryResponse,
   FieldProjectionMeta,
@@ -157,6 +158,21 @@ export function buildFieldSliceRequestKey(params: FieldSliceRequestParams): stri
   return `field-2d:${params.quantityId}:${params.fieldRevision}:${params.domainGenerationId}:${buildField2DRequestToken(params.request)}`;
 }
 
+export function resolveField2DEffectKey(
+  quantityId: string | null,
+  fieldRevision: number | null,
+  domainGenerationId: number,
+  request: Field2DResourceRequest | null,
+): string {
+  if (!quantityId || fieldRevision == null) {
+    return `inactive:${quantityId ?? "none"}:${fieldRevision ?? "none"}`;
+  }
+  if (!request) {
+    return `unsupported:${quantityId}:${fieldRevision}:${domainGenerationId}`;
+  }
+  return `${quantityId}:${fieldRevision}:${domainGenerationId}:${buildField2DRequestToken(request)}`;
+}
+
 export function getFieldSliceInflightCount(): number {
   return inflightFieldSliceRequests.size;
 }
@@ -179,10 +195,12 @@ export function loadFieldSliceRequest(
   const existing = inflightFieldSliceRequests.get(key);
   if (existing) {
     existing.consumers += 1;
+    setFrontendAuditCounter("field2DInflight", inflightFieldSliceRequests.size);
     return createFieldSliceRequestHandle(key, existing);
   }
 
   const controller = new AbortController();
+  incrementFrontendAuditCounter("field2DRequests", 1);
   const entry: InflightFieldSliceRequest = {
     consumers: 1,
     controller,
@@ -195,15 +213,18 @@ export function loadFieldSliceRequest(
     ),
   };
   inflightFieldSliceRequests.set(key, entry);
+  setFrontendAuditCounter("field2DInflight", inflightFieldSliceRequests.size);
   void entry.promise.then(
     () => {
       if (inflightFieldSliceRequests.get(key) === entry) {
         inflightFieldSliceRequests.delete(key);
+        setFrontendAuditCounter("field2DInflight", inflightFieldSliceRequests.size);
       }
     },
     () => {
       if (inflightFieldSliceRequests.get(key) === entry) {
         inflightFieldSliceRequests.delete(key);
+        setFrontendAuditCounter("field2DInflight", inflightFieldSliceRequests.size);
       }
     },
   );
@@ -337,6 +358,7 @@ function releaseFieldSliceRequest(
   entry.consumers -= 1;
   if (entry.consumers > 0) return;
   inflightFieldSliceRequests.delete(key);
+  setFrontendAuditCounter("field2DInflight", inflightFieldSliceRequests.size);
   entry.controller.abort();
 }
 
@@ -383,6 +405,20 @@ export function useField2DResource(
   const fetchedKeyRef = useRef<string | null>(null);
   const activeRequestRef = useRef<string | null>(null);
   const lastGoodRef = useRef<LoadedFieldSlice2D | null>(null);
+  const requestEffectKey = resolveField2DEffectKey(
+    quantityId,
+    fieldRevision,
+    domainGenerationId,
+    request,
+  );
+  const stableRequestRef = useRef<{
+    key: string;
+    request: Field2DResourceRequest | null;
+  } | null>(null);
+  if (stableRequestRef.current?.key !== requestEffectKey) {
+    stableRequestRef.current = { key: requestEffectKey, request };
+  }
+  const stableRequest = stableRequestRef.current.request;
 
   const fetchSlice = useCallback(
     (
@@ -449,7 +485,7 @@ export function useField2DResource(
         quantityId,
         fieldRevision,
         unsupportedReason,
-        request,
+        request: stableRequest,
       });
       setMeta(nextState.meta);
       setScalar(nextState.scalar);
@@ -460,14 +496,14 @@ export function useField2DResource(
       setUnsupportedStateReason(nextState.unsupportedReason);
       return undefined;
     }
-    if (!request) {
+    if (!stableRequest) {
       activeRequestRef.current = null;
       const nextState = resolveInactiveField2DState({
         previous: lastGoodRef.current,
         quantityId,
         fieldRevision,
         unsupportedReason,
-        request,
+        request: stableRequest,
       });
       setMeta(nextState.meta);
       setScalar(nextState.scalar);
@@ -478,8 +514,16 @@ export function useField2DResource(
       setUnsupportedStateReason(nextState.unsupportedReason);
       return undefined;
     }
-    return fetchSlice(quantityId, fieldRevision, domainGenerationId, request);
-  }, [quantityId, fieldRevision, domainGenerationId, request, unsupportedReason, fetchSlice]);
+    return fetchSlice(quantityId, fieldRevision, domainGenerationId, stableRequest);
+  }, [
+    quantityId,
+    fieldRevision,
+    domainGenerationId,
+    requestEffectKey,
+    stableRequest,
+    unsupportedReason,
+    fetchSlice,
+  ]);
 
   return {
     meta,

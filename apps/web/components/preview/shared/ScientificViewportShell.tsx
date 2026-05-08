@@ -20,10 +20,16 @@ import {
   applyCameraStepLock,
 } from "../camera/cameraProfiles";
 import { useViewportSceneBridgeSync } from "./useViewportSceneBridgeSync";
+import {
+  incrementFrontendAuditCounter,
+  recordFrontendAuditWebGLContext,
+  setFrontendAuditCounter,
+} from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import {
+  shouldRenderCanvasVisualActivityProbe,
   shouldRenderViewportWebglCanvas,
 } from "./viewportWebglCanvasPolicy";
 import {
@@ -39,7 +45,7 @@ export type ShellProjection = "perspective" | "orthographic";
 export type ShellNavigation = "trackball" | "cad";
 
 const DEFAULT_SHELL_TARGET: [number, number, number] = [0, 0, 0];
-export { shouldRenderViewportWebglCanvas };
+export { shouldRenderCanvasVisualActivityProbe, shouldRenderViewportWebglCanvas };
 
 export interface ViewportRenderPolicy {
   mode: "always" | "demand" | "paused";
@@ -468,6 +474,15 @@ export default function ScientificViewportShell({
     hostReady: Boolean(hostNode),
     bareCanvas: FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.useBareCanvasShell,
   });
+  const shouldRenderVisualActivityProbe = shouldRenderCanvasVisualActivityProbe({
+    enabled: FRONTEND_DIAGNOSTIC_FLAGS.viewportCore.enableCanvasVisualActivityProbe,
+    hasCallback: Boolean(onVisualActivityChange),
+  });
+
+  useEffect(() => {
+    setFrontendAuditCounter("webglCanvasHidden", resolvedHidden && shouldRenderCanvas ? 1 : 0);
+  }, [resolvedHidden, shouldRenderCanvas]);
+
   const renderShellCanvas = (useHostEventSource: boolean) => (
     <Canvas
       key={canvasContextGeneration}
@@ -483,6 +498,8 @@ export default function ScientificViewportShell({
         canvasContextCleanupRef.current?.();
         const canvas = gl.domElement;
         telemetry.recordLifecycleEvent("canvas_mount");
+        incrementFrontendAuditCounter("webglCanvasMounted", 1);
+        recordFrontendAuditWebGLContext(telemetryLabel, gl.getContext());
         if (
           FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
           FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
@@ -552,10 +569,12 @@ export default function ScientificViewportShell({
         hidden={resolvedHidden}
         onStats={telemetry.update}
       />
-      <CanvasVisualActivityProbe
-        backgroundColor={backgroundColor}
-        onVisualActivityChange={onVisualActivityChange}
-      />
+      {shouldRenderVisualActivityProbe ? (
+        <CanvasVisualActivityProbe
+          backgroundColor={backgroundColor}
+          onVisualActivityChange={onVisualActivityChange}
+        />
+      ) : null}
     </Canvas>
   );
 

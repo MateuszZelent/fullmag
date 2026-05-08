@@ -21,17 +21,17 @@ describe("workspace center tab render policy", () => {
     ).toBe(true);
   });
 
-  it("keeps hidden core viewport tabs mounted and invisible", () => {
+  it("unmounts hidden core viewport tabs instead of keeping WebGL alive", () => {
     expect(
       resolveWorkspaceTabRenderDecision(
         { id: "core:3d", kind: "viewport-3d", mountPolicy: "hidden-mounted" },
         "core:2d",
       ),
     ).toEqual({
-      render: true,
+      render: false,
       visible: false,
-      forceMount: true,
-      reason: "hidden-mounted",
+      forceMount: false,
+      reason: "active-only-hidden",
     });
     expect(
       resolveWorkspaceTabRenderDecision(
@@ -39,10 +39,10 @@ describe("workspace center tab render policy", () => {
         "core:3d",
       ),
     ).toEqual({
-      render: true,
+      render: false,
       visible: false,
-      forceMount: true,
-      reason: "hidden-mounted",
+      forceMount: false,
+      reason: "active-only-hidden",
     });
     expect(
       resolveWorkspaceTabRenderDecision(

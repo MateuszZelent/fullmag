@@ -19,7 +19,7 @@ export interface CacheStats {
   utilization: number;
 }
 
-const DEFAULT_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+const DEFAULT_MAX_BYTES = 512 * 1024 * 1024; // 512 MB
 const OBJECT_OVERHEAD_BYTES = 32;
 const ARRAY_OVERHEAD_BYTES = 24;
 const PRIMITIVE_FALLBACK_BYTES = 8;

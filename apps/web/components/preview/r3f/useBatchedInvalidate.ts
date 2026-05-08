@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { useThree } from "@react-three/fiber";
+import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 
 const pendingInvalidates = new Set<() => void>();
 let pendingFrame: number | null = null;
@@ -16,6 +17,7 @@ function flushPendingInvalidates() {
 }
 
 export function scheduleBatchedViewportInvalidate(invalidate: () => void) {
+  incrementFrontendAuditCounter("viewportInvalidates", 1);
   if (typeof window === "undefined") {
     invalidate();
     return;

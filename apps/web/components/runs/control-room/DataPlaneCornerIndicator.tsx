@@ -25,7 +25,7 @@ export const DataPlaneCornerIndicator = memo(function DataPlaneCornerIndicator({
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNow(Date.now());
-    }, 100);
+    }, 1000);
     return () => window.clearInterval(timer);
   }, []);
 

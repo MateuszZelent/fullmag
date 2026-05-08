@@ -81,6 +81,7 @@ const DESCRIPTIONS: Record<string, string> = {
   "femViewport.enableSelectionOnlyInteractionMode": "Selection mode: disables camera controls and enables face picking.",
   "femViewport.enableGeometryHoverInteractions": "Hover raycast on mouse move (expensive on large meshes).",
   "viewportCore.frameloopMode": "Render loop mode for viewport canvas.",
+  "viewportCore.enableCanvasVisualActivityProbe": "Sample WebGL pixels with readPixels to detect blank canvases; expensive and off by default.",
   "workspace.standaloneDiagnosticViewportMode": "Standalone diagnostic viewport mode.",
   "workspace.enableWorkspaceTree": "Master kill-switch for entire Workspace tree (Entry -> Shell -> ControlRoom -> Docking).",
   "workspace.enableWorkspaceEntryPage": "Enable WorkspaceEntryPage mount/effects layer.",

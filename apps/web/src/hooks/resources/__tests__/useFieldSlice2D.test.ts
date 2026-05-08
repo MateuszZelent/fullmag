@@ -6,6 +6,7 @@ import {
   buildFieldSliceRequestKey,
   getFieldSliceInflightCount,
   loadFieldSliceRequest,
+  resolveField2DEffectKey,
   type FieldSliceRequestClient,
 } from "../useFieldSlice2D";
 import type { FieldSliceMeta } from "../../../api/types";
@@ -96,6 +97,21 @@ describe("useFieldSlice2D decode helpers", () => {
 });
 
 describe("field slice request lifecycle", () => {
+  it("derives the same effect key for equivalent request objects", () => {
+    const requestA = {
+      kind: "slice" as const,
+      query: { plane: "xy" as const, component: "x" as const, cut_norm: 0.5 },
+    };
+    const requestB = {
+      kind: "slice" as const,
+      query: { plane: "xy" as const, component: "x" as const, cut_norm: 0.5 },
+    };
+
+    expect(resolveField2DEffectKey("m", 11, 7, requestA)).toBe(
+      resolveField2DEffectKey("m", 11, 7, requestB),
+    );
+  });
+
   it("dedupes matching inflight slice requests and aborts after the last release", () => {
     const cache = new ResourceCache();
     let signal: AbortSignal | null = null;

@@ -89,9 +89,19 @@ export function useCommandCompletion(
 
   useEffect(() => {
     mountedRef.current = true;
-    if (!enabled) {
+    if (!enabled || commandId == null) {
       setLoading(false);
       setError(null);
+      setQueue(null);
+      setCommand(null);
+      setDetail(null);
+      return () => {
+        mountedRef.current = false;
+      };
+    }
+
+    if (command != null && TERMINAL_STATES.has(command.status)) {
+      setLoading(false);
       return () => {
         mountedRef.current = false;
       };
@@ -106,7 +116,7 @@ export function useCommandCompletion(
       mountedRef.current = false;
       clearInterval(timer);
     };
-  }, [enabled, pollIntervalMs, refresh]);
+  }, [command, commandId, enabled, pollIntervalMs, refresh]);
 
   return {
     queue,

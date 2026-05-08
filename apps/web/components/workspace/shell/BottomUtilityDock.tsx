@@ -152,13 +152,15 @@ export default function BottomTelemetryDock({
   const lastUpdateTimestamp = useSessionRuntimeStore((state) => state.lastUpdateTimestamp);
   const viewportEntries = useViewportTelemetrySnapshot();
   const [now, setNow] = useState(() => Date.now());
+  const isIdleWorkspaceState =
+    workspaceStatus === "waiting_for_compute" || workspaceStatus === "materializing_script";
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNow(Date.now());
-    }, 200);
+    }, isIdleWorkspaceState ? 2000 : 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isIdleWorkspaceState]);
 
   const statusClassName =
     workspaceStatus === "completed"
@@ -185,8 +187,6 @@ export default function BottomTelemetryDock({
     return timestamp != null && timestamp > 0 ? Math.max(0, now - timestamp) : null;
   }, [now, primary3dViewportEntry?.lastFrameAtUnixMs]);
   // During idle states the backend intentionally stops sending updates — suppress false warnings.
-  const isIdleWorkspaceState =
-    workspaceStatus === "waiting_for_compute" || workspaceStatus === "materializing_script";
   const backendAgeClassName = ageValueClassName(
     isIdleWorkspaceState ? "ok" : ageTone(backendAgeMs),
   );

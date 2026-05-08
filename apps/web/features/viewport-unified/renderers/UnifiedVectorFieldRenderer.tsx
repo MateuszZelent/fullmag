@@ -5,6 +5,10 @@ import * as THREE from "three";
 import { Canvas, useThree } from "@react-three/fiber";
 import { TrackballControls } from "@react-three/drei";
 import { cn } from "@/lib/utils";
+import {
+  incrementFrontendAuditCounter,
+  recordFrontendAuditWebGLContext,
+} from "@/lib/debug/frontendAudit";
 import ViewCube from "@/components/preview/ViewCube";
 import HslSphere from "@/components/preview/HslSphere";
 import FdmInstances from "@/components/preview/r3f/FdmInstances";
@@ -2148,6 +2152,8 @@ function UnifiedVectorFieldRendererInner({
             onCreated={({ gl, scene, camera }) => {
               canvasContextCleanupRef.current?.();
               telemetry.recordLifecycleEvent("canvas_mount");
+              incrementFrontendAuditCounter("webglCanvasMounted", 1);
+              recordFrontendAuditWebGLContext("vector-surface-viewport", gl.getContext());
               canvasRef.current = gl.domElement;
               glRef.current = gl;
               r3fSceneRef.current = scene;

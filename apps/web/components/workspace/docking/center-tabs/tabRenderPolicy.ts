@@ -42,9 +42,6 @@ export function resolveWorkspaceTabRenderDecision(
       reason: "active",
     };
   }
-  if (isKeepAliveWorkspaceTab(tab)) {
-    return { render: true, visible: false, forceMount: true, reason: "hidden-mounted" };
-  }
   if (isWebGLWorkspaceTab(tab)) {
     return {
       render: false,
@@ -52,6 +49,9 @@ export function resolveWorkspaceTabRenderDecision(
       forceMount: false,
       reason: "active-only-hidden",
     };
+  }
+  if (isKeepAliveWorkspaceTab(tab)) {
+    return { render: true, visible: false, forceMount: true, reason: "hidden-mounted" };
   }
   if (tab.mountPolicy === "hidden-mounted") {
     return { render: true, visible: false, forceMount: true, reason: "hidden-mounted" };
@@ -61,9 +61,8 @@ export function resolveWorkspaceTabRenderDecision(
 
 /**
  * Center-tab panels can own WebGL canvases, Plotly charts, timers, observers,
- * and live subscriptions. The core 3D and 2D viewports stay mounted while
- * hidden so renderer state survives tab switches. Other WebGL tabs remain
- * active-only to avoid GPU memory growth.
+ * and live subscriptions. WebGL tabs are active-only: camera/display state is
+ * persisted separately, while hidden canvases and data hooks are torn down.
  */
 export function shouldRenderWorkspaceTabPanel(
   tab: RenderPolicyTab,
