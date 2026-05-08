@@ -41,12 +41,19 @@ export function useFemMeshTopologyHydration(opts: {
   const { enabled, liveApi, streamFemMesh } = opts;
   const [hydratedFemMesh, setHydratedFemMesh] = useState<FemLiveMesh | null>(null);
   const streamFemMeshKey = useMemo(() => femMeshTransportKey(streamFemMesh), [streamFemMesh]);
-  const needsBinaryFemTopologyHydration =
-    enabled &&
+  const streamFemMeshGenerationId = streamFemMesh?.generation_id ?? null;
+  const isBinaryMetadataOnlyMesh =
     streamFemMesh?.topology_transport === "binary" &&
     !streamFemMesh.topology_buffers;
+  const needsBinaryFemTopologyHydration =
+    enabled &&
+    isBinaryMetadataOnlyMesh;
 
   useEffect(() => {
+    if (!enabled) {
+      setHydratedFemMesh(null);
+      return;
+    }
     if (!needsBinaryFemTopologyHydration || !streamFemMesh || !streamFemMeshKey) {
       setHydratedFemMesh(null);
       return;
@@ -59,7 +66,7 @@ export function useFemMeshTopologyHydration(opts: {
     setHydratedFemMesh(null);
     const controller = new AbortController();
     void liveApi
-      .getFemMeshTopologyBinary(streamFemMesh.generation_id ?? null, {
+      .getFemMeshTopologyBinary(streamFemMeshGenerationId, {
         signal: controller.signal,
       })
       .then((buffer) => {
@@ -90,11 +97,17 @@ export function useFemMeshTopologyHydration(opts: {
       });
     return () => controller.abort();
   }, [
+    enabled,
     liveApi,
     needsBinaryFemTopologyHydration,
     streamFemMesh,
+    streamFemMeshGenerationId,
     streamFemMeshKey,
   ]);
+
+  if (!enabled && isBinaryMetadataOnlyMesh) {
+    return null;
+  }
 
   return hydratedFemMesh && streamFemMeshKey && femMeshTransportKey(hydratedFemMesh) === streamFemMeshKey
     ? hydratedFemMesh

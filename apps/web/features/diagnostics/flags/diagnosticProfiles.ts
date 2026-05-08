@@ -18,6 +18,7 @@ import {
 export type DiagnosticProfileId =
   | "default"
   | "performance"
+  | "leak-isolation"
   | "debug-render"
   | "debug-viewport"
   | "minimal-shell"
@@ -70,6 +71,56 @@ export const DIAGNOSTIC_PROFILES: readonly DiagnosticProfile[] = [
         showSelectionHud: false,
         enableGeometryHoverInteractions: false,
         forceLowQualityProfile: true,
+      },
+    },
+  },
+  {
+    id: "leak-isolation",
+    label: "Leak Isolation",
+    description: "Disable suspected idle memory-growth paths for browser leak triage.",
+    overrides: {
+      session: {
+        enableLiveWebSocket: false,
+      },
+      leakIsolation: {
+        enableHiddenViewportBridge: false,
+        enableSessionDataPlaneBridge: true,
+        enableScalarHydration: false,
+        enableMeshTopologyHydration: false,
+        enableDomainTopologyHydration: false,
+        enableSharedDomainMeshTopologyHydration: false,
+        enableSharedDomainMeshSummaryHydration: false,
+        enableSharedDomainMeshManifestHydration: false,
+        enableSharedDomainMeshTopologyFetch: false,
+        enableSharedDomainMeshTopologyDecode: false,
+        enableSharedDomainMeshStoreMerge: false,
+        enableSharedDomainMeshStoreRead: false,
+        enableSharedDomainMeshMergeWithExistingStoreMesh: false,
+        enableSharedDomainMeshStoreFemMeshWrite: false,
+        enableSharedDomainMeshStoreApply: false,
+        enableControlRoomFemMeshConsumption: false,
+        enableControlRoomFemMeshDomainLayoutInput: false,
+        enableControlRoomFemMeshFieldDataInput: false,
+        enableControlRoomFemMeshDerivedModelInput: false,
+        enableControlRoomFemMeshContextPublish: false,
+        enableViewportFemMeshView3DRender: false,
+        enableViewportHostedFemMeshTabRender: false,
+        enableViewportHostedFem3DRender: false,
+        enableViewportMinimalFem3DRender: false,
+        enableFemMeshView3DSceneRender: false,
+        enableFemMeshView3DGeometryRender: false,
+        enableFemMeshView3DArrowRender: false,
+        enableFemMeshView3DOverlayRender: false,
+        enableFemMeshView3DAutoFit: false,
+        enableFemMeshView3DAutoFitGenerationEffect: false,
+        enableFemMeshView3DBlankViewportRecovery: false,
+        enableFemMeshView3DAutoFitComponent: false,
+        enableFemMeshView3DAutoFitCameraApply: false,
+        enableFemMeshView3DAutoFitInvalidate: false,
+        enableFemMeshView3DAutoFitRecord: false,
+        enableLegacyBinaryFemTopologyHydration: false,
+        enableBinaryFieldHydration: false,
+        enableIdleLiveStatusPolling: false,
       },
     },
   },

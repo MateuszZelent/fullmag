@@ -635,11 +635,38 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   const spatialPreview = preview?.kind === "spatial" ? preview : null;
   const globalScalarPreview = preview?.kind === "global_scalar" ? preview : null;
   const streamFemMesh = runtimeFemMesh ?? liveState?.fem_mesh ?? null;
+  const legacyFemTopologyHydrationEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport &&
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableMeshTopologyHydration &&
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableLegacyBinaryFemTopologyHydration &&
+    (
+      !FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.resourceFirstSessionRuntime ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableSessionDataPlaneBridge
+    );
   const femMesh = useFemMeshTopologyHydration({
-    enabled: FRONTEND_DIAGNOSTIC_FLAGS.dataPlaneRollout.binaryFemTopologyTransport,
+    enabled: legacyFemTopologyHydrationEnabled,
     liveApi,
     streamFemMesh,
   });
+  const controlRoomFemMesh = FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshConsumption
+    ? femMesh
+    : null;
+  const domainLayoutFemMesh =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshDomainLayoutInput
+      ? controlRoomFemMesh
+      : null;
+  const fieldDataFemMesh =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshFieldDataInput
+      ? controlRoomFemMesh
+      : null;
+  const derivedModelFemMesh =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshDerivedModelInput
+      ? controlRoomFemMesh
+      : null;
+  const contextFemMesh =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshContextPublish
+      ? controlRoomFemMesh
+      : null;
   useEffect(() => {
     setRemoteSceneDocument(resourceSceneDocument);
   }, [resourceSceneDocument, setRemoteSceneDocument]);
@@ -1216,7 +1243,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     session,
     gpuTelemetry,
     metadata,
-    femMesh,
+    femMesh: domainLayoutFemMesh,
     scriptBuilderGeometries,
     scriptBuilderUniverse,
     scriptBuilderCurrentModules,
@@ -1507,7 +1534,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     effectiveIsFemBackend,
     effectiveStep,
     effectiveViewMode,
-    femMesh,
+    femMesh: fieldDataFemMesh,
     isFemBackend,
     isGlobalScalarQuantity,
     isWaitingForCompute,
@@ -1578,7 +1605,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
   } = useFemMeshDerived({
     isMeshPreview,
     renderPreview,
-    femMesh,
+    femMesh: derivedModelFemMesh,
     meshEntityViewState,
     selectedEntityId,
     focusedEntityId,
@@ -1634,6 +1661,14 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     setMeshSelection,
     appendFrontendTrace,
   });
+  const contextEffectiveFemMesh =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshContextPublish
+      ? effectiveFemMesh
+      : null;
+  const contextFemMeshData =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshContextPublish
+      ? femMeshData
+      : null;
 
   /* ═══════════════════════════════════════════════════════════════
    * SPLIT useMemo — each context domain has its own memo so that
@@ -1796,12 +1831,19 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
         modelBuilderGraph?.study.requested_cpu_threads ??
         null,
     },
-    material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
+    material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh: contextFemMesh, resolvedRenderPlan,
     visualizationProjectPresets: projectVisualizationPresets,
     visualizationLocalPresets: localVisualizationPresets,
     activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
-    effectiveFemMesh, femMeshData, femTopologyKey, femColorField,
+    effectiveFemMesh: contextEffectiveFemMesh,
+    femMeshData: contextFemMeshData,
+    femTopologyKey: FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshContextPublish
+      ? femTopologyKey
+      : null,
+    femColorField: FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableControlRoomFemMeshContextPublish
+      ? femColorField
+      : "none",
     femMagnetization3DActive, femShouldShowArrows, arrowVisibility, isMeshWorkspaceView,
     meshFaceDetail, meshQualitySummary, meshWorkspace,
     meshConfigDirty, meshConfigSignature, lastBuiltMeshConfigSignature,
@@ -1846,10 +1888,10 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     resetViewportDisplayState,
   }), [
     sceneResourceSessionKey, runtimeResourceRevisions,
-    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, femMesh, resolvedRenderPlan,
+    localBuilderDraft, remoteSceneDocument, modelBuilderGraph, material, solverPlan, solverSettings, studyStages, studyPipeline, scriptBuilderDemagRealization, scriptBuilderUniverse, scriptBuilderGeometries, scriptBuilderCurrentModules, scriptBuilderExcitationAnalysis, antennaOverlays, objectOverlays, contextFemMesh, resolvedRenderPlan,
     projectVisualizationPresets, localVisualizationPresets, activeVisualizationPresetRef,
     meshSelection, meshOptions, meshQualityData, meshGenerating, femDockTab,
-    effectiveFemMesh, femMeshData, femTopologyKey, femColorField,
+    contextEffectiveFemMesh, contextFemMeshData, femTopologyKey, femColorField,
     femMagnetization3DActive, femShouldShowArrows, arrowVisibility, isMeshWorkspaceView,
     meshFaceDetail, meshQualitySummary, meshWorkspace,
     meshConfigDirty, meshConfigSignature, lastBuiltMeshConfigSignature,

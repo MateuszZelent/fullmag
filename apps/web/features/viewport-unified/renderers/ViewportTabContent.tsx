@@ -56,6 +56,18 @@ function requireFemTopologyKey(value: string | null): string {
   throw new Error("[ViewportTabContent] Missing required FEM topologyKey for FemMeshView3D.");
 }
 
+function renderFemRendererDisabled(label: string) {
+  return (
+    <div className="flex h-full w-full items-center justify-center opacity-80">
+      <EmptyState
+        title="FEM renderer disabled"
+        description={label}
+        tone="info"
+      />
+    </div>
+  );
+}
+
 const VIEWPORT_BADGE_STYLE = { zIndex: "var(--z-viewport-badge)" } as const;
 
 /* ── Props ── */
@@ -326,6 +338,12 @@ export function ViewportTabContent({
   const femAirboxPassesForViewport = bridge.viewport3DRenderState.airboxPasses;
 
   const renderHostedFemMeshViewport = () => {
+    if (
+      !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportFemMeshView3DRender ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportHostedFemMeshTabRender
+    ) {
+      return renderFemRendererDisabled("Hosted Mesh tab renderer disabled by leak isolation.");
+    }
     if (!ctx.femMeshData) {
       if (
         bridge.showFemBoundsPreview &&
@@ -458,6 +476,12 @@ export function ViewportTabContent({
   };
 
   const renderHostedFem3DViewport = () => {
+    if (
+      !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportFemMeshView3DRender ||
+      !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportHostedFem3DRender
+    ) {
+      return renderFemRendererDisabled("Hosted 3D FEM renderer disabled by leak isolation.");
+    }
     if (!ctx.femMeshData) {
       if (
         bridge.showFemBoundsPreview &&
@@ -625,7 +649,11 @@ export function ViewportTabContent({
   let conditionalContent: React.ReactNode = null;
 
   if (bridge.minimalViewportSelectionPath) {
-    if (ctx.femMeshData) {
+    if (
+      ctx.femMeshData &&
+      FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportFemMeshView3DRender &&
+      FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableViewportMinimalFem3DRender
+    ) {
       conditionalContent = (
         <ViewportErrorBoundary label="Minimal FEM Wireframe Viewport">
           <FemMeshView3D
@@ -671,6 +699,8 @@ export function ViewportTabContent({
           />
         </ViewportErrorBoundary>
       );
+    } else if (ctx.femMeshData) {
+      conditionalContent = renderFemRendererDisabled("Minimal FEM renderer disabled by leak isolation.");
     } else if (
       FRONTEND_DIAGNOSTIC_FLAGS.viewportRouting.enableBoundsPreview &&
       bridge.femObjectOverlaysForRender.length > 0

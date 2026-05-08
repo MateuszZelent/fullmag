@@ -213,6 +213,12 @@ export function useLiveStatus(options?: { enabled?: boolean }): UseLiveStatusRes
         : isActive
           ? ACTIVE_INTERVAL_MS
           : IDLE_INTERVAL_MS;
+      if (
+        !isActive &&
+        !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableIdleLiveStatusPolling
+      ) {
+        return;
+      }
       timerRef.current = setTimeout(pollStatus, interval);
     } catch (err) {
       if (!mountedRef.current) return;

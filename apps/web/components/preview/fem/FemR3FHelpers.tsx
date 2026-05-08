@@ -13,6 +13,7 @@ const FEM_R3F_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
   process.env.NODE_ENV !== "production";
 const CAMERA_AUTO_FIT_SETTLE_FRAMES = 3;
+const CAMERA_AUTO_FIT_MAX_WAIT_FRAMES = 60;
 
 /** Manage WebGL clipping planes for mesh cross-section view. */
 export function FemClipPlanes({ enabled, axis, posPercentage, flip = false, geomSize }: { enabled: boolean; axis: ClipAxis; posPercentage: number; flip?: boolean; geomSize: [number, number, number] }) {
@@ -55,6 +56,8 @@ export function CameraAutoFit({
   controlsRef,
   lastAppliedRef: externalLastAppliedRef,
   onFitApplied,
+  enableCameraApply = true,
+  enableInvalidate = true,
 }: {
   maxDim: number;
   generation: number;
@@ -62,6 +65,8 @@ export function CameraAutoFit({
   controlsRef?: React.MutableRefObject<any>;
   lastAppliedRef?: React.MutableRefObject<{ generation: number; camera: THREE.Camera | null }>;
   onFitApplied?: () => void;
+  enableCameraApply?: boolean;
+  enableInvalidate?: boolean;
 }) {
   const { camera, invalidate } = useThree();
   const internalLastAppliedRef = useRef<{ generation: number; camera: THREE.Camera | null }>({
@@ -85,25 +90,33 @@ export function CameraAutoFit({
     let raf = 0;
     let disposed = false;
     let settledFrames = 0;
+    let waitedFrames = 0;
 
     const syncFit = () => {
       if (disposed) {
         return;
       }
       const controlsReady = controlsRef ? Boolean(controlsRef.current) : true;
-      if (!controlsReady || settledFrames < CAMERA_AUTO_FIT_SETTLE_FRAMES) {
-        settledFrames += controlsReady ? 1 : 0;
+      if (!controlsReady && waitedFrames < CAMERA_AUTO_FIT_MAX_WAIT_FRAMES) {
+        waitedFrames += 1;
+        raf = window.requestAnimationFrame(syncFit);
+        return;
+      }
+      if (controlsReady && settledFrames < CAMERA_AUTO_FIT_SETTLE_FRAMES) {
+        settledFrames += 1;
         raf = window.requestAnimationFrame(syncFit);
         return;
       }
 
-      fitCameraToBounds(
-        camera,
-        maxDim,
-        targetCenter,
-        controlsRef?.current ?? undefined,
-      );
-      onFitApplied?.();
+      if (enableCameraApply) {
+        fitCameraToBounds(
+          camera,
+          maxDim,
+          targetCenter,
+          controlsRef?.current ?? undefined,
+        );
+        onFitApplied?.();
+      }
       if (FEM_R3F_DEBUG_LOGS) {
         console.info("[viewport3d:fem] camera auto-fit applied", {
           generation,
@@ -111,9 +124,13 @@ export function CameraAutoFit({
           targetCenter: targetCenter
             ? [targetCenter.x, targetCenter.y, targetCenter.z]
             : null,
+          controlsReady,
+          waitedFrames,
         });
       }
-      invalidate();
+      if (enableCameraApply && enableInvalidate) {
+        invalidate();
+      }
     };
 
     syncFit();
@@ -124,6 +141,16 @@ export function CameraAutoFit({
         window.cancelAnimationFrame(raf);
       }
     };
-  }, [camera, controlsRef, generation, invalidate, maxDim, onFitApplied, targetCenter]);
+  }, [
+    camera,
+    controlsRef,
+    enableCameraApply,
+    enableInvalidate,
+    generation,
+    invalidate,
+    maxDim,
+    onFitApplied,
+    targetCenter,
+  ]);
   return null;
 }

@@ -9,8 +9,11 @@
 
 import { useDataPlaneBridge } from "./useDataPlaneBridge";
 import { useNewApiBridge } from "./useNewApiBridge";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 
 export function useSessionRuntimeBridgeRouter(): void {
   useNewApiBridge();
-  useDataPlaneBridge();
+  useDataPlaneBridge({
+    enabled: FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableSessionDataPlaneBridge,
+  });
 }

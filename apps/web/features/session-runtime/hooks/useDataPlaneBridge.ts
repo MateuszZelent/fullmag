@@ -189,6 +189,7 @@ export function useDataPlaneBridge(
   options?: { enabled?: boolean },
 ): void {
   const enabled = options?.enabled ?? true;
+  const leakIsolationFlags = FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation;
   // Read revision signals from the store (set by useNewApiBridge)
   const fieldFrameEnvelope = useSessionRuntimeStore(
     (s) => s.fieldFrameEnvelope,
@@ -704,24 +705,32 @@ export function useDataPlaneBridge(
       try {
         const client = getLiveSessionClient();
         const topologyCacheKey = `data-plane:mesh-shared-domain-topology:${requestScopeKey}`;
+        if (!leakIsolationFlags.enableSharedDomainMeshTopologyFetch) {
+          fetchedMeshRevRef.current = revision;
+          return;
+        }
         const [summaryResource, manifestResource, topologyBuffer] = await Promise.all([
-          getCachedJsonResource({
-            client,
-            cacheKey: `data-plane:mesh-summary:${requestScopeKey}:${revision}`,
-            revision,
-            fetcher: () => client.mesh.getSummary({ signal: controller.signal }),
-            responseFetcher: (opts) => client.mesh.getSummaryResponse(opts),
-            requestOptions: { signal: controller.signal },
-          }),
-          getCachedJsonResource({
-            client,
-            cacheKey: `data-plane:mesh-manifest:${requestScopeKey}:${revision}`,
-            revision,
-            fetcher: () => client.mesh.getSharedDomainManifest({ signal: controller.signal }),
-            responseFetcher: (opts) =>
-              client.mesh.getSharedDomainManifestResponse(opts),
-            requestOptions: { signal: controller.signal },
-          }),
+          leakIsolationFlags.enableSharedDomainMeshSummaryHydration
+            ? getCachedJsonResource({
+                client,
+                cacheKey: `data-plane:mesh-summary:${requestScopeKey}:${revision}`,
+                revision,
+                fetcher: () => client.mesh.getSummary({ signal: controller.signal }),
+                responseFetcher: (opts) => client.mesh.getSummaryResponse(opts),
+                requestOptions: { signal: controller.signal },
+              })
+            : Promise.resolve(null),
+          leakIsolationFlags.enableSharedDomainMeshManifestHydration
+            ? getCachedJsonResource({
+                client,
+                cacheKey: `data-plane:mesh-manifest:${requestScopeKey}:${revision}`,
+                revision,
+                fetcher: () => client.mesh.getSharedDomainManifest({ signal: controller.signal }),
+                responseFetcher: (opts) =>
+                  client.mesh.getSharedDomainManifestResponse(opts),
+                requestOptions: { signal: controller.signal },
+              })
+            : Promise.resolve(null),
           (async () => {
             const cached = client.getCache().get<ArrayBuffer>(topologyCacheKey);
             if (cached && cached.revision === revision) {
@@ -788,9 +797,14 @@ export function useDataPlaneBridge(
           return;
         }
 
+        if (!leakIsolationFlags.enableSharedDomainMeshTopologyDecode) {
+          fetchedMeshRevRef.current = revision;
+          return;
+        }
+
         const meshSummary =
           normalizeMeshWorkspace({
-            mesh_summary: summaryResource.mesh_summary ?? null,
+            mesh_summary: summaryResource?.mesh_summary ?? null,
           })?.mesh_summary ?? null;
         const resourceFemMesh = applyMeshSharedDomainManifest(
           buildFemMeshFromDecodedTopology(
@@ -804,6 +818,22 @@ export function useDataPlaneBridge(
 
         const current = useSessionRuntimeStore.getState();
         fetchedMeshRevRef.current = revision;
+        if (!leakIsolationFlags.enableSharedDomainMeshStoreMerge) {
+          return;
+        }
+        if (!leakIsolationFlags.enableSharedDomainMeshStoreRead) {
+          return;
+        }
+        const nextFemMesh = leakIsolationFlags.enableSharedDomainMeshStoreFemMeshWrite
+          ? (
+              leakIsolationFlags.enableSharedDomainMeshMergeWithExistingStoreMesh
+                ? mergeFemMeshResource(resourceFemMesh, current.femMesh)
+                : resourceFemMesh
+            )
+          : current.femMesh;
+        if (!leakIsolationFlags.enableSharedDomainMeshStoreApply) {
+          return;
+        }
         applyNormalizedState({
           stateVersion: current.stateVersion,
           session: current.session,
@@ -814,7 +844,7 @@ export function useDataPlaneBridge(
           engineLog: current.engineLog,
           quantities: current.quantities,
           artifacts: current.artifacts,
-          femMesh: mergeFemMeshResource(resourceFemMesh, current.femMesh),
+          femMesh: nextFemMesh,
           preview: current.preview,
           scriptBuilder: current.scriptBuilder,
           runtimeStatus: current.runtimeStatus,
@@ -886,7 +916,20 @@ export function useDataPlaneBridge(
         }
       }
     },
-    [applyNormalizedState, enabled, runtimeScopeKey],
+    [
+      applyNormalizedState,
+      enabled,
+      leakIsolationFlags.enableSharedDomainMeshManifestHydration,
+      leakIsolationFlags.enableSharedDomainMeshMergeWithExistingStoreMesh,
+      leakIsolationFlags.enableSharedDomainMeshStoreApply,
+      leakIsolationFlags.enableSharedDomainMeshStoreFemMeshWrite,
+      leakIsolationFlags.enableSharedDomainMeshStoreMerge,
+      leakIsolationFlags.enableSharedDomainMeshStoreRead,
+      leakIsolationFlags.enableSharedDomainMeshSummaryHydration,
+      leakIsolationFlags.enableSharedDomainMeshTopologyDecode,
+      leakIsolationFlags.enableSharedDomainMeshTopologyFetch,
+      runtimeScopeKey,
+    ],
   );
 
   // ── Quantities / artifacts fetching ────────────────────────────
@@ -1145,42 +1188,100 @@ export function useDataPlaneBridge(
 
   // Watch field revision changes
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey) {
+    if (
+      !enabled ||
+      !leakIsolationFlags.enableBinaryFieldHydration ||
+      !runtimeScopeKey
+    ) {
       return;
     }
     if (fieldFrameEnvelope && fieldFrameEnvelope.fieldRevision > 0) {
       fetchFieldVector(fieldFrameEnvelope);
     }
-  }, [enabled, fetchFieldVector, fieldFrameEnvelope, runtimeScopeKey]);
+  }, [
+    enabled,
+    fetchFieldVector,
+    fieldFrameEnvelope,
+    leakIsolationFlags.enableBinaryFieldHydration,
+    runtimeScopeKey,
+  ]);
 
   // Watch scalar revision changes
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey) {
+    if (!enabled || !leakIsolationFlags.enableScalarHydration || !runtimeScopeKey) {
       return;
     }
     if (scalarRevision != null && scalarRevision > 0) {
       fetchScalars(scalarRevision);
     }
-  }, [enabled, fetchScalars, runtimeScopeKey, scalarRevision]);
+  }, [
+    enabled,
+    fetchScalars,
+    leakIsolationFlags.enableScalarHydration,
+    runtimeScopeKey,
+    scalarRevision,
+  ]);
 
   // Watch domain generation changes
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey) {
+    if (
+      !enabled ||
+      !leakIsolationFlags.enableMeshTopologyHydration ||
+      !leakIsolationFlags.enableDomainTopologyHydration ||
+      !runtimeScopeKey
+    ) {
+      return;
+    }
+    if (isFemBackend && (resourceRevisions?.mesh_revision ?? 0) > 0) {
       return;
     }
     if (fieldFrameEnvelope?.meshGenerationId) {
       fetchDomain(fieldFrameEnvelope.meshGenerationId);
     }
-  }, [enabled, fetchDomain, fieldFrameEnvelope?.meshGenerationId, runtimeScopeKey]);
+  }, [
+    enabled,
+    fetchDomain,
+    fieldFrameEnvelope?.meshGenerationId,
+    isFemBackend,
+    leakIsolationFlags.enableDomainTopologyHydration,
+    leakIsolationFlags.enableMeshTopologyHydration,
+    resourceRevisions?.mesh_revision,
+    runtimeScopeKey,
+  ]);
 
   useEffect(() => {
-    if (!enabled || !runtimeScopeKey || !resourceRevisions || !isFemBackend) {
+    if (
+      !enabled ||
+      !leakIsolationFlags.enableMeshTopologyHydration ||
+      !leakIsolationFlags.enableSharedDomainMeshTopologyHydration ||
+      (
+        !leakIsolationFlags.enableSharedDomainMeshTopologyFetch &&
+        !leakIsolationFlags.enableSharedDomainMeshTopologyDecode &&
+        !leakIsolationFlags.enableSharedDomainMeshStoreMerge &&
+        !leakIsolationFlags.enableSharedDomainMeshStoreApply
+      ) ||
+      !runtimeScopeKey ||
+      !resourceRevisions ||
+      !isFemBackend
+    ) {
       return;
     }
     if (resourceRevisions.mesh_revision > 0) {
       void fetchMeshTopology(resourceRevisions.mesh_revision);
     }
-  }, [enabled, fetchMeshTopology, isFemBackend, resourceRevisions, runtimeScopeKey]);
+  }, [
+    enabled,
+    fetchMeshTopology,
+    isFemBackend,
+    leakIsolationFlags.enableMeshTopologyHydration,
+    leakIsolationFlags.enableSharedDomainMeshStoreApply,
+    leakIsolationFlags.enableSharedDomainMeshStoreMerge,
+    leakIsolationFlags.enableSharedDomainMeshTopologyHydration,
+    leakIsolationFlags.enableSharedDomainMeshTopologyDecode,
+    leakIsolationFlags.enableSharedDomainMeshTopologyFetch,
+    resourceRevisions,
+    runtimeScopeKey,
+  ]);
 
   useEffect(() => {
     if (!enabled || !runtimeScopeKey || !resourceRevisions) {

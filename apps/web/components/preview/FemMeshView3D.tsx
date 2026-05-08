@@ -359,6 +359,7 @@ function FemMeshView3DInner({
     attempts: 0,
   });
   const blankViewportInactiveSinceRef = useRef<number | null>(null);
+  const leakIsolationFlags = FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation;
 
   const {
     renderMode,
@@ -761,7 +762,10 @@ function FemMeshView3DInner({
     shouldRenderMagneticGeometryResolved,
     enableBoundsDerivedModel: wrapperFlags.enableBoundsDerivedModel,
     enableTextureTransformModel: wrapperFlags.enableTextureTransformModel,
-    enableCameraFitEffect: wrapperFlags.enableCameraFitEffect,
+    enableCameraFitEffect:
+      wrapperFlags.enableCameraFitEffect &&
+      leakIsolationFlags.enableFemMeshView3DAutoFit &&
+      leakIsolationFlags.enableFemMeshView3DAutoFitGenerationEffect,
     enableScreenshotCapture: wrapperFlags.enableScreenshotCapture,
     suppressInitialCameraFit: Boolean(persistedCameraState),
     activeTextureTransform,
@@ -790,8 +794,24 @@ function FemMeshView3DInner({
     setCaptureActive,
     setQualityProfile,
   });
+  const expectedCanvasVisualContent =
+    expectedViewportContent &&
+    leakIsolationFlags.enableFemMeshView3DSceneRender &&
+    (
+      leakIsolationFlags.enableFemMeshView3DGeometryRender ||
+      leakIsolationFlags.enableFemMeshView3DArrowRender ||
+      leakIsolationFlags.enableFemMeshView3DOverlayRender
+    );
+  const blankViewportRecoveryEnabled =
+    leakIsolationFlags.enableFemMeshView3DAutoFit &&
+    leakIsolationFlags.enableFemMeshView3DBlankViewportRecovery;
   useEffect(() => {
-    if (!expectedViewportContent || missingExactScopeSegment || canvasVisualActive !== false) {
+    if (
+      !blankViewportRecoveryEnabled ||
+      !expectedCanvasVisualContent ||
+      missingExactScopeSegment ||
+      canvasVisualActive !== false
+    ) {
       if (canvasVisualActive === true) {
         blankViewportRecoveryRef.current = { key: null, attempts: 0 };
       }
@@ -844,10 +864,11 @@ function FemMeshView3DInner({
     }
     setCameraFitGeneration((generation) => generation + 1);
   }, [
+    blankViewportRecoveryEnabled,
     canvasVisualActive,
     dynamicMaxDim,
     effectiveShowArrows,
-    expectedViewportContent,
+    expectedCanvasVisualContent,
     missingExactScopeSegment,
     renderableGeometryLayerCount,
     topologyKey,
@@ -1178,21 +1199,30 @@ function FemMeshView3DInner({
       >
         {!missingExactScopeSegment ? (
           <>
-          {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit &&
-          wrapperFlags.enableCameraFitEffect ? (
-            <CameraAutoFit
-              maxDim={dynamicMaxDim}
-              generation={cameraFitGeneration}
-              targetCenter={dynamicGeomCenter}
-              controlsRef={controlsRef}
-              lastAppliedRef={cameraAutoFitAppliedRef}
-              onFitApplied={recordCameraFit}
-            />
-          ) : null}
-          {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
-            <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} flip={clipFlip} geomSize={dynamicGeomSize} />
-          ) : null}
-          <FemViewportScene
+            {leakIsolationFlags.enableFemMeshView3DAutoFit &&
+            leakIsolationFlags.enableFemMeshView3DAutoFitComponent &&
+            FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showCameraAutoFit &&
+            wrapperFlags.enableCameraFitEffect ? (
+              <CameraAutoFit
+                maxDim={dynamicMaxDim}
+                generation={cameraFitGeneration}
+                targetCenter={dynamicGeomCenter}
+                controlsRef={controlsRef}
+                lastAppliedRef={cameraAutoFitAppliedRef}
+                enableCameraApply={leakIsolationFlags.enableFemMeshView3DAutoFitCameraApply}
+                enableInvalidate={leakIsolationFlags.enableFemMeshView3DAutoFitInvalidate}
+                onFitApplied={
+                  leakIsolationFlags.enableFemMeshView3DAutoFitRecord
+                    ? recordCameraFit
+                    : undefined
+                }
+              />
+            ) : null}
+            {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
+              <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} flip={clipFlip} geomSize={dynamicGeomSize} />
+            ) : null}
+            {FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DSceneRender ? (
+              <FemViewportScene
             meshData={meshData}
             hasMeshParts={hasMeshParts}
             visibleLayers={visibleLayers}
@@ -1223,7 +1253,10 @@ function FemMeshView3DInner({
             clipPos={clipPos}
             dynamicGeomCenter={dynamicGeomCenter}
             dynamicMaxDim={dynamicMaxDim}
-            effectiveShowArrows={effectiveShowArrows}
+            effectiveShowArrows={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DArrowRender &&
+              effectiveShowArrows
+            }
             arrowField={arrowField}
             arrowDensity={runtimeArrowDensity}
             arrowColorMode={arrowColorMode}
@@ -1253,7 +1286,10 @@ function FemMeshView3DInner({
             onFaceHover={geometryHoverInteractionsEnabled && !interactionActive ? handleFaceHover : undefined}
             onFaceUnhover={geometryHoverInteractionsEnabled ? handleFaceUnhover : undefined}
             onFaceContextMenu={geometryContextMenuEnabled ? handleFaceContextMenu : undefined}
-            showSceneGeometry={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneGeometry}
+            showSceneGeometry={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DGeometryRender &&
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneGeometry
+            }
             showPerPartGeometry={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showPerPartGeometry}
             showAirGeometry={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAirGeometry}
             showMagneticGeometry={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showMagneticGeometry}
@@ -1268,13 +1304,23 @@ function FemMeshView3DInner({
             enableGeometryVertexColors={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryVertexColors}
             enableGeometryPointerInteractions={geometryPointerInteractionsEnabled}
             enableGeometryHoverInteractions={geometryHoverInteractionsEnabled}
-            showSelectionHighlight={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHighlight}
-            showAntennaOverlays={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAntennaOverlays}
-            showSceneAxes={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes}
+            showSelectionHighlight={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHighlight
+            }
+            showAntennaOverlays={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAntennaOverlays
+            }
+            showSceneAxes={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes
+            }
             onArrowSampledCount={setSampledArrowCount}
             telemetryLabel={telemetryLabel}
-          />
-          {authoringOverlay}
+              />
+            ) : null}
+            {authoringOverlay}
           </>
         ) : null}
 
