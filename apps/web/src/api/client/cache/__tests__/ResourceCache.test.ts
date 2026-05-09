@@ -120,9 +120,9 @@ describe("ResourceCache", () => {
 
   // ── estimateSize for typed arrays ────────────────────────────────
 
-  it("has enough default budget to retain large FEM payloads", () => {
+  it("keeps the default budget bounded for live numerical payloads", () => {
     const cache = new ResourceCache();
-    expect(cache.getCacheStats().maxBytes).toBe(512 * 1024 * 1024);
+    expect(cache.getCacheStats().maxBytes).toBe(128 * 1024 * 1024);
   });
 
   it("correctly sizes ArrayBuffer entries", () => {

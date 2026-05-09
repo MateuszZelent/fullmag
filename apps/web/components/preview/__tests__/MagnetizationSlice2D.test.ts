@@ -43,6 +43,9 @@ describe("buildSlice2DChartTopologyKey", () => {
       buildSlice2DChartTopologyKey("xy", 32, 24),
     );
     expect(buildSlice2DChartTopologyKey("xy", 32, 24, 0, 5)).toBe("xy:32:24:mesh:0:vectors:5");
+    expect(buildSlice2DChartTopologyKey("xy", 32, 24, 3, 0, "mesh-rev:7")).toBe(
+      "xy:32:24:mesh:mesh-rev:7:vectors:0",
+    );
   });
 });
 
@@ -178,6 +181,47 @@ describe("slice plane metadata", () => {
       id: "slice-heatmap",
       type: "heatmap",
     });
+  });
+
+  it("keeps world axes and mesh series in overlay-only mode", () => {
+    const option = buildSlice2DChartOption({
+      data: [],
+      xLen: 2,
+      yLen: 2,
+      scale: {
+        min: 0,
+        max: 1,
+        palette: ["#000000", "#ffffff"],
+      },
+      quantityLabel: "m",
+      quantityComponentCount: 3,
+      component: "magnitude",
+      plane: "xy",
+      bounds: {
+        u_min: -50e-9,
+        u_max: 50e-9,
+        v_min: -20e-9,
+        v_max: 20e-9,
+      },
+      showQuantity: false,
+      meshOverlay: {
+        topologyKey: "mesh-rev:7",
+        segments: [
+          {
+            a: [-50e-9, -20e-9],
+            b: [50e-9, 20e-9],
+          },
+        ],
+      },
+    });
+
+    expect((option.xAxis as { type: string }).type).toBe("value");
+    expect((option.yAxis as { type: string }).type).toBe("value");
+    expect((option.series as Array<{ id: string }>).map((entry) => entry.id)).toEqual([
+      "slice-heatmap",
+      "slice-mesh-overlay",
+    ]);
+    expect((option.visualMap as Array<{ show: boolean }>)[0]?.show).toBe(false);
   });
 });
 

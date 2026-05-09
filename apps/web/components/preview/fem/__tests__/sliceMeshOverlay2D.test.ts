@@ -4,7 +4,11 @@ import type { FieldSliceMeta } from "@/src/api/types";
 import type { Slice2DToolbarState } from "@/src/features/slice2d";
 import type { FemMeshPart } from "../../../../lib/session/types";
 import type { FemMeshData } from "../femMeshTypes";
-import { buildExactSliceMeshOverlay2D } from "../sliceMeshOverlay2D";
+import {
+  SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP,
+  capSliceMeshOverlay2D,
+  buildExactSliceMeshOverlay2D,
+} from "../sliceMeshOverlay2D";
 
 function makeToolbar(): Slice2DToolbarState {
   return {
@@ -103,6 +107,19 @@ function makeMeshData(): FemMeshData {
 }
 
 describe("buildExactSliceMeshOverlay2D", () => {
+  it("caps very large 2D mesh overlays before rendering", () => {
+    const overlay = capSliceMeshOverlay2D({
+      topologyKey: "mesh",
+      segments: Array.from({ length: SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP + 10 }, (_, index) => ({
+        a: [index, index],
+        b: [index + 1, index + 1],
+      })),
+    });
+
+    expect(overlay.segments).toHaveLength(SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP);
+    expect(overlay.topologyKey).toContain(":sampled:");
+  });
+
   it("builds exact FEM slice segments from backend slice metadata", () => {
     const overlay = buildExactSliceMeshOverlay2D({
       meshData: makeMeshData(),
@@ -218,5 +235,76 @@ describe("buildExactSliceMeshOverlay2D", () => {
     });
 
     expect(visibleOverlay?.segments.length).toBeGreaterThan(hiddenOverlay?.segments.length ?? 0);
+  });
+
+  it("can build an airbox-only wireframe overlay from exact FEM topology", () => {
+    const meshData: FemMeshData = {
+      nodes: [
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        2, 0, 0,
+        3, 0, 0,
+        2, 1, 0,
+        2, 0, 1,
+      ],
+      elements: [0, 1, 2, 3, 4, 5, 6, 7],
+      boundaryFaces: [],
+      nNodes: 8,
+      nElements: 2,
+      quantityDomain: "full_domain",
+    };
+    const basePart = {
+      label: "",
+      object_id: null,
+      geometry_id: null,
+      material_id: null,
+      boundary_face_start: 0,
+      boundary_face_count: 0,
+      boundary_face_indices: [],
+      node_start: 0,
+      node_count: 0,
+      node_indices: [],
+      surface_faces: [],
+      bounds_min: null,
+      bounds_max: null,
+    } satisfies Omit<FemMeshPart, "id" | "role" | "element_start" | "element_count">;
+    const meshParts: FemMeshPart[] = [
+      {
+        ...basePart,
+        id: "mag",
+        label: "magnetic",
+        role: "magnetic_object",
+        object_id: "body",
+        element_start: 0,
+        element_count: 1,
+      },
+      {
+        ...basePart,
+        id: "air",
+        label: "airbox",
+        role: "air",
+        element_start: 1,
+        element_count: 1,
+      },
+    ];
+
+    const overlay = buildExactSliceMeshOverlay2D({
+      meshData,
+      meta: makeSliceMeta(),
+      toolbar: makeToolbar(),
+      meshParts,
+      meshEntityViewState: {
+        air: { visible: true, renderMode: "wireframe", opacity: 28, colorField: "none" },
+      },
+      airSegmentVisible: true,
+      objectViewMode: "context",
+      visibleObjectIds: ["body"],
+      partRoleFilter: new Set(["air", "outer_boundary"]),
+    });
+
+    expect(overlay?.segments.length).toBeGreaterThan(0);
+    expect(overlay?.segments.every((segment) => segment.partId === "air")).toBe(true);
   });
 });

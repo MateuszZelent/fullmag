@@ -9,6 +9,12 @@ export interface FemLayerRenderState<TOverlay> {
   showArrows: boolean;
 }
 
+export function resolveMagneticTextureColorField(args: {
+  showMagneticTexture: boolean;
+}): FemColorField {
+  return args.showMagneticTexture ? "orientation" : "none";
+}
+
 export function deriveFemLayerRenderState<TOverlay>(args: {
   layers: FemViewportLayerState;
   objectOverlays: TOverlay[];

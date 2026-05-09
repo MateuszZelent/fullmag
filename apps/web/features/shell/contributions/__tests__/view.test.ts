@@ -108,6 +108,7 @@ function baseContext(overrides: Partial<RibbonBuildContext> = {}): RibbonBuildCo
     airMeshWireframeScope: "surface",
     airMeshPointsScope: "surface",
     airMeshVectorsScope: "surface",
+    hasSlice2DAirboxParts: true,
     slice2DEnabled: false,
     slice2DToolbar,
     slice2DDiagnostics: null,
@@ -482,6 +483,34 @@ describe("View ribbon contribution", () => {
     ) {
       throw new Error("2D airbox controls missing");
     }
+
+    expect(visible).toMatchObject({ disabled: false });
+    expect(renderMode).toMatchObject({ disabled: false });
+    expect(renderMode.items).toEqual([
+      {
+        value: "surface",
+        label: "Shaded",
+        disabled: true,
+        disabledReason: "2D airbox surface mode is staged; wireframe is implemented",
+      },
+      { value: "wireframe", label: "Wireframe" },
+      {
+        value: "surface+edges",
+        label: "Shaded + wireframe",
+        disabled: true,
+        disabledReason: "2D airbox surface mode is staged; wireframe is implemented",
+      },
+      {
+        value: "points",
+        label: "Points",
+        disabled: true,
+        disabledReason: "2D airbox points mode is staged; wireframe is implemented",
+      },
+    ]);
+    expect(vectors).toMatchObject({
+      disabled: true,
+      disabledReason: "2D airbox vectors are staged until vector domains are split",
+    });
 
     visible.onCheckedChange(false);
     renderMode.onValueChange("points");

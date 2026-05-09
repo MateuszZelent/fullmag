@@ -19,9 +19,9 @@ export type ScopedBinaryFieldFrame = {
   scopes: FemVectorScope[];
 };
 
-const BINARY_FIELD_CACHE_MAX_ENTRIES = 4;
-export const BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
-export const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+const BINARY_FIELD_CACHE_MAX_ENTRIES = 1;
+export const BINARY_FIELD_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+export const SCOPED_BINARY_FIELD_CACHE_MAX_BYTES = 64 * 1024 * 1024;
 
 export interface ViewportFieldDataCacheStats {
   entries: number;

@@ -116,23 +116,15 @@ export function usePreviewSelectionState({
     }
     return `gen:${runtimeFemMesh.generation_id}`;
   }, [runtimeFemMesh?.generation_id]);
-  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(() => {
-    const frames = runtimeLatestFieldFrames;
-    if (!frames) return new Set<string>();
-    const next = new Set<string>();
-    for (const [quantityId, frame] of Object.entries(frames)) {
-      if (
-        activeFemGenerationSignature &&
-        frame.topology_signature &&
-        frame.topology_signature.startsWith("gen:") &&
-        frame.topology_signature !== activeFemGenerationSignature
-      ) {
-        continue;
-      }
-      next.add(quantityId);
-    }
-    return next;
-  }, [activeFemGenerationSignature, runtimeLatestFieldFrames]);
+  const cachedFieldQuantities = useMemo<ReadonlySet<string>>(
+    () =>
+      resolveCachedFieldQuantities({
+        activeFemGenerationSignature,
+        quantityDescriptorById,
+        runtimeLatestFieldFrames,
+      }),
+    [activeFemGenerationSignature, quantityDescriptorById, runtimeLatestFieldFrames],
+  );
 
   return {
     activeFemGenerationSignature,
@@ -162,4 +154,33 @@ export function usePreviewSelectionState({
     requestedPreviewYChosenSize,
     renderPreview,
   };
+}
+
+export function resolveCachedFieldQuantities({
+  activeFemGenerationSignature,
+  quantityDescriptorById,
+  runtimeLatestFieldFrames,
+}: {
+  activeFemGenerationSignature: string | null;
+  quantityDescriptorById: Map<string, QuantityDescriptor>;
+  runtimeLatestFieldFrames: Record<string, LatestFieldFrame>;
+}): ReadonlySet<string> {
+  const next = new Set<string>();
+  for (const quantity of quantityDescriptorById.values()) {
+    if (quantity.data_available) {
+      next.add(quantity.id);
+    }
+  }
+  for (const [quantityId, frame] of Object.entries(runtimeLatestFieldFrames)) {
+    if (
+      activeFemGenerationSignature &&
+      frame.topology_signature &&
+      frame.topology_signature.startsWith("gen:") &&
+      frame.topology_signature !== activeFemGenerationSignature
+    ) {
+      continue;
+    }
+    next.add(quantityId);
+  }
+  return next;
 }

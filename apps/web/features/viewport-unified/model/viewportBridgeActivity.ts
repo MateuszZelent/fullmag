@@ -30,12 +30,13 @@ export function resolveViewportBridgeActivity({
 }: ViewportBridgeActivityInput): ViewportBridgeActivity {
   const data3DActive = active && (viewportMode === "3D" || viewportMode === "Mesh");
   const slice2DActive = active && viewportMode === "2D" && sliceApiFeatureEnabled && sliceTopologyReady;
+  const slice2DFieldDataNeeded = slice2DActive && Boolean(selectedQuantity);
   return {
     data3DActive,
     glyphVectorDataNeeded: data3DActive && showArrows,
     shaderFieldDataNeeded:
-      data3DActive &&
-      (showArrows || showQuantity || (showMagneticTexture && selectedQuantity === "m")),
+      (data3DActive && (showArrows || showQuantity || showMagneticTexture)) ||
+      slice2DFieldDataNeeded,
     slice2DActive,
   };
 }

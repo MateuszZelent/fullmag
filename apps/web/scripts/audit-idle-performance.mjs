@@ -19,6 +19,7 @@ function parseArgs(argv) {
     out: DEFAULT_OUTPUT,
     chrome: process.env.FULLMAG_CHROME_BIN ?? null,
     keepOpen: false,
+    heapSampling: true,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -27,6 +28,7 @@ function parseArgs(argv) {
     else if (arg === "--out") args.out = path.resolve(argv[++i] ?? args.out);
     else if (arg === "--chrome") args.chrome = argv[++i] ?? args.chrome;
     else if (arg === "--keep-open") args.keepOpen = true;
+    else if (arg === "--no-heap-sampling") args.heapSampling = false;
     else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -49,6 +51,7 @@ Options:
   --out <path>         JSON output path. Default: ${DEFAULT_OUTPUT}
   --chrome <path>      Chrome/Chromium binary. Also accepts FULLMAG_CHROME_BIN.
   --keep-open          Do not terminate the launched browser.
+  --no-heap-sampling   Skip CDP HeapProfiler sampling.
 `);
 }
 
@@ -197,6 +200,44 @@ async function evaluate(client, expression, awaitPromise = false) {
   return result.result.value;
 }
 
+async function safeCdpCall(client, method, params = {}) {
+  try {
+    return await client.call(method, params);
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function collectCdpMemorySnapshot(client) {
+  const [heapUsage, performanceMetrics] = await Promise.all([
+    safeCdpCall(client, "Runtime.getHeapUsage"),
+    safeCdpCall(client, "Performance.getMetrics"),
+  ]);
+  return {
+    capturedAt: new Date().toISOString(),
+    heapUsage,
+    performanceMetrics,
+  };
+}
+
+function summarizeHeapSamplingProfile(profile) {
+  if (!profile || profile.error) {
+    return profile ?? null;
+  }
+  const samples = Array.isArray(profile.samples) ? profile.samples : [];
+  let sampledBytes = 0;
+  for (const sample of samples) {
+    sampledBytes += Number(sample?.size ?? 0);
+  }
+  return {
+    sampleCount: samples.length,
+    sampledBytes,
+    profile,
+  };
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -226,17 +267,34 @@ async function main() {
     await client.ready;
     await client.call("Runtime.enable");
     await client.call("Page.enable");
+    await safeCdpCall(client, "Performance.enable");
     await client.call("Page.navigate", { url: args.url });
     await waitForPageReady(client);
+    const before = await collectCdpMemorySnapshot(client);
+    if (args.heapSampling) {
+      await safeCdpCall(client, "HeapProfiler.enable");
+      await safeCdpCall(client, "HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+      });
+    }
     const result = await evaluate(
       client,
       `window.__FULLMAG_AUDIT__?.snapshotDelta ? window.__FULLMAG_AUDIT__.snapshotDelta(${args.seconds}) : Promise.resolve({ error: "__FULLMAG_AUDIT__ unavailable" })`,
       true,
     );
+    const after = await collectCdpMemorySnapshot(client);
+    const heapSamplingProfile = args.heapSampling
+      ? summarizeHeapSamplingProfile(await safeCdpCall(client, "HeapProfiler.stopSampling"))
+      : null;
     const payload = {
       url: args.url,
       seconds: args.seconds,
       capturedAt: new Date().toISOString(),
+      cdp: {
+        before,
+        after,
+        heapSamplingProfile,
+      },
       result,
     };
     await fs.mkdir(path.dirname(args.out), { recursive: true });

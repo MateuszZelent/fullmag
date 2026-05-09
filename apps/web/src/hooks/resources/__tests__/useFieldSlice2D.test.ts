@@ -9,7 +9,7 @@ import {
   resolveField2DEffectKey,
   type FieldSliceRequestClient,
 } from "../useFieldSlice2D";
-import type { FieldSliceMeta } from "../../../api/types";
+import type { FieldProjectionMeta, FieldSliceMeta } from "../../../api/types";
 
 function buildFmvpBuffer(values: number[], nComp: number): ArrayBuffer {
   const headerBytes = 48;
@@ -68,6 +68,48 @@ const META: FieldSliceMeta = {
     max: null,
     etag: "\"arrows\"",
     href: "/arrows",
+  },
+};
+
+const PROJECTION_META: FieldProjectionMeta = {
+  quantity_id: "m",
+  plane: "xy",
+  component: "magnitude",
+  reduction: "mean_occupied",
+  include_air_as_zero: false,
+  field_revision: 12,
+  domain_generation_id: 7,
+  sampling_method: "projection",
+  samples: 8,
+  etag: "\"projection-meta\"",
+  projection_revision: "projection:token",
+  x_pixels: 2,
+  y_pixels: 2,
+  grid: {
+    x_size: 2,
+    y_size: 2,
+    point_count: 4,
+  },
+  bounds: null,
+  occupied_count: 4,
+  occupied_measure: 1,
+  empty_count: 0,
+  error_estimate: null,
+  error_method: null,
+  scalar: {
+    available: true,
+    n_comp: 1,
+    point_count: 4,
+    min: 0,
+    max: 4,
+    etag: "\"projection-scalar\"",
+    href: "/projection-scalar",
+  },
+  empty_mask: {
+    available: false,
+    point_count: 0,
+    etag: null,
+    href: null,
   },
 };
 
@@ -203,6 +245,47 @@ describe("field slice request lifecycle", () => {
     expect(client.fields.getSliceMeta).toHaveBeenCalledTimes(1);
     expect(client.fields.getSliceScalarResponse).toHaveBeenCalledTimes(1);
     expect(client.fields.getSliceArrowsResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not request arrow payloads for projection resources", async () => {
+    const cache = new ResourceCache();
+    const scalarBuffer = buildFmvpBuffer([1, 2, 3, 4], 1);
+    const client: FieldSliceRequestClient = {
+      getCache: () => cache,
+      fields: {
+        getProjectionMeta: vi.fn().mockResolvedValue(PROJECTION_META),
+        getProjectionScalarResponse: vi.fn().mockResolvedValue({
+          buffer: scalarBuffer,
+          etag: "\"projection-scalar-1\"",
+          status: 200,
+          headers: new Headers(),
+        }),
+        getSliceArrowsResponse: vi.fn(),
+      } as any,
+    };
+    const params = {
+      quantityId: "m",
+      fieldRevision: 12,
+      domainGenerationId: 7,
+      request: {
+        kind: "projection" as const,
+        query: {
+          plane: "xy" as const,
+          component: "magnitude" as const,
+          reduction: "mean_occupied" as const,
+        },
+      },
+    };
+
+    const request = loadFieldSliceRequest(client, params);
+    const result = await request.promise;
+    request.release();
+
+    expect(Array.from(result.scalar.values)).toEqual([1, 2, 3, 4]);
+    expect(result.arrows).toBeNull();
+    expect(client.fields.getProjectionMeta).toHaveBeenCalledTimes(1);
+    expect(client.fields.getProjectionScalarResponse).toHaveBeenCalledTimes(1);
+    expect(client.fields.getSliceArrowsResponse).not.toHaveBeenCalled();
   });
 });
 

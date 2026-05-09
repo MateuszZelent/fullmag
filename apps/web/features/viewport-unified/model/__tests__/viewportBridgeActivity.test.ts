@@ -23,7 +23,7 @@ describe("resolveViewportBridgeActivity", () => {
     });
   });
 
-  it("keeps 3D vector and shader paths off in 2D mode", () => {
+  it("keeps 3D glyphs off but requests dense field data in 2D slice mode", () => {
     expect(
       resolveViewportBridgeActivity({
         active: true,
@@ -32,6 +32,26 @@ describe("resolveViewportBridgeActivity", () => {
         showQuantity: true,
         showMagneticTexture: true,
         selectedQuantity: "m",
+        sliceApiFeatureEnabled: true,
+        sliceTopologyReady: true,
+      }),
+    ).toMatchObject({
+      data3DActive: false,
+      glyphVectorDataNeeded: false,
+      shaderFieldDataNeeded: true,
+      slice2DActive: true,
+    });
+  });
+
+  it("does not request dense field data for 2D slice mode without a quantity", () => {
+    expect(
+      resolveViewportBridgeActivity({
+        active: true,
+        viewportMode: "2D",
+        showArrows: false,
+        showQuantity: true,
+        showMagneticTexture: false,
+        selectedQuantity: null,
         sliceApiFeatureEnabled: true,
         sliceTopologyReady: true,
       }),
@@ -83,7 +103,7 @@ describe("resolveViewportBridgeActivity", () => {
     });
   });
 
-  it("uses magnetic texture shader data only for magnetization quantity", () => {
+  it("keeps magnetic texture shader data active even when another quantity is selected", () => {
     expect(
       resolveViewportBridgeActivity({
         active: true,
@@ -108,7 +128,7 @@ describe("resolveViewportBridgeActivity", () => {
         sliceApiFeatureEnabled: false,
         sliceTopologyReady: true,
       }).shaderFieldDataNeeded,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("keeps Analyze mode dormant for viewport data", () => {

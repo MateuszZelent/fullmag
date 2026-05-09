@@ -179,7 +179,13 @@ export default function MagnetizationSlice2D({
     }
 
     if (!vectors || grid[0] === 0) {
-      return { data: [] as [number, number, number][], xLen: 0, yLen: 0, dMin: 0, dMax: 0 };
+      return {
+        data: [] as [number, number, number][],
+        xLen: meta?.grid?.x_size ?? 0,
+        yLen: meta?.grid?.y_size ?? 0,
+        dMin: meta?.scalar?.min ?? 0,
+        dMax: meta?.scalar?.max ?? 0,
+      };
     }
 
     const [Nx, Ny, Nz] = grid;
@@ -233,12 +239,25 @@ export default function MagnetizationSlice2D({
     if (!Number.isFinite(dMax)) dMax = 0;
 
     return { data: points, xLen, yLen, dMin, dMax };
-  }, [component, grid, meta?.bounds, plane, scalarShape, scalarValues, sliceIndex, vectors]);
+  }, [
+    component,
+    grid,
+    meta?.bounds,
+    meta?.grid?.x_size,
+    meta?.grid?.y_size,
+    meta?.scalar?.max,
+    meta?.scalar?.min,
+    plane,
+    scalarShape,
+    scalarValues,
+    sliceIndex,
+    vectors,
+  ]);
 
   // ─── Init / update chart ──────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
-    if (!data.length) {
+    if (!data.length && !meshOverlay?.segments.length && !arrows?.arrowCount) {
       chartRef.current?.clear();
       return;
     }
@@ -274,6 +293,7 @@ export default function MagnetizationSlice2D({
       yLen,
       meshOverlay?.segments.length ?? 0,
       styledVectorGlyphs.length,
+      meshOverlay?.topologyKey ?? null,
     );
     const topologyChanged = chartTopologyKeyRef.current !== topologyKey;
     chartTopologyKeyRef.current = topologyKey;

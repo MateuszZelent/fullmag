@@ -70,6 +70,19 @@ interface InflightFieldVectorRequest {
 
 const inflightFieldVectorRequests = new Map<string, InflightFieldVectorRequest>();
 
+interface QueuedFieldVectorRequest {
+  key: string;
+  params: FieldVectorRequestParams;
+  consumers: number;
+  promise: Promise<DecodedFieldVector>;
+  resolve: (value: DecodedFieldVector) => void;
+  reject: (reason?: unknown) => void;
+  started: FieldVectorRequestHandle | null;
+}
+
+const activeFieldVectorLanes = new Map<string, string>();
+const queuedFieldVectorRequests = new Map<string, QueuedFieldVectorRequest>();
+
 export function buildFieldVectorScopeToken(
   scopeKind: FieldSampleScopeKind,
   scopeId: string | null,
@@ -88,6 +101,13 @@ export function buildFieldVectorResourceKey(params: FieldVectorRequestParams): s
 
 export function buildFieldVectorRequestKey(params: FieldVectorRequestParams): string {
   return `field-vector:${params.quantityId}:${params.revision}:${params.domainGenerationId}:${params.component}:${buildFieldVectorScopeToken(
+    params.scopeKind,
+    params.scopeId,
+  )}`;
+}
+
+export function buildFieldVectorLaneKey(params: FieldVectorRequestParams): string {
+  return `field-vector:${params.quantityId}:${params.domainGenerationId}:${params.component}:${buildFieldVectorScopeToken(
     params.scopeKind,
     params.scopeId,
   )}`;
@@ -120,6 +140,12 @@ export function loadFieldVectorRequest(
     return createFieldVectorRequestHandle(key, existing);
   }
 
+  const laneKey = buildFieldVectorLaneKey(params);
+  const activeLaneRequestKey = activeFieldVectorLanes.get(laneKey);
+  if (activeLaneRequestKey && activeLaneRequestKey !== key) {
+    return queueLatestFieldVectorRequest(client, params, laneKey);
+  }
+
   const controller = new AbortController();
   incrementFrontendAuditCounter("fieldVectorRequests", 1);
   incrementFrontendAuditResourceFetch(params.auditResource ?? "field-vector", 1);
@@ -135,23 +161,112 @@ export function loadFieldVectorRequest(
     ),
   };
   inflightFieldVectorRequests.set(key, entry);
+  activeFieldVectorLanes.set(laneKey, key);
   setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
   void entry.promise.then(
     () => {
       if (inflightFieldVectorRequests.get(key) === entry) {
         inflightFieldVectorRequests.delete(key);
+        if (activeFieldVectorLanes.get(laneKey) === key) {
+          activeFieldVectorLanes.delete(laneKey);
+          drainQueuedFieldVectorRequest(client, laneKey);
+        }
         setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
       }
     },
     () => {
       if (inflightFieldVectorRequests.get(key) === entry) {
         inflightFieldVectorRequests.delete(key);
+        if (activeFieldVectorLanes.get(laneKey) === key) {
+          activeFieldVectorLanes.delete(laneKey);
+          drainQueuedFieldVectorRequest(client, laneKey);
+        }
         setFrontendAuditCounter("fieldVectorInflight", inflightFieldVectorRequests.size);
       }
     },
   );
 
   return createFieldVectorRequestHandle(key, entry);
+}
+
+function queueLatestFieldVectorRequest(
+  client: FieldVectorRequestClient,
+  params: FieldVectorRequestParams,
+  laneKey: string,
+): FieldVectorRequestHandle {
+  const key = buildFieldVectorRequestKey(params);
+  const existing = queuedFieldVectorRequests.get(laneKey);
+  if (existing) {
+    if (existing.key === key) {
+      existing.consumers += 1;
+      return createQueuedFieldVectorRequestHandle(laneKey, existing);
+    }
+    existing.reject(createAbortError("field vector request superseded"));
+    existing.started?.release();
+    queuedFieldVectorRequests.delete(laneKey);
+  }
+
+  let resolvePromise!: (value: DecodedFieldVector) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const queued: QueuedFieldVectorRequest = {
+    key,
+    params,
+    consumers: 1,
+    started: null,
+    promise: new Promise<DecodedFieldVector>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    }),
+    resolve: resolvePromise,
+    reject: rejectPromise,
+  };
+  queuedFieldVectorRequests.set(laneKey, queued);
+  void client;
+  return createQueuedFieldVectorRequestHandle(laneKey, queued);
+}
+
+function createQueuedFieldVectorRequestHandle(
+  laneKey: string,
+  queued: QueuedFieldVectorRequest,
+): FieldVectorRequestHandle {
+  let released = false;
+  return {
+    key: queued.key,
+    promise: queued.promise,
+    release: () => {
+      if (released) return;
+      released = true;
+      releaseQueuedFieldVectorRequest(laneKey, queued);
+    },
+  };
+}
+
+function releaseQueuedFieldVectorRequest(
+  laneKey: string,
+  queued: QueuedFieldVectorRequest,
+): void {
+  if (queuedFieldVectorRequests.get(laneKey) !== queued && queued.started == null) {
+    return;
+  }
+  queued.consumers -= 1;
+  if (queued.consumers > 0) return;
+  if (queuedFieldVectorRequests.get(laneKey) === queued) {
+    queuedFieldVectorRequests.delete(laneKey);
+  }
+  queued.started?.release();
+  queued.reject(createAbortError("field vector request aborted"));
+}
+
+function drainQueuedFieldVectorRequest(
+  client: FieldVectorRequestClient,
+  laneKey: string,
+): void {
+  const queued = queuedFieldVectorRequests.get(laneKey);
+  if (!queued || queued.consumers <= 0) return;
+  queuedFieldVectorRequests.delete(laneKey);
+  const started = loadFieldVectorRequest(client, queued.params);
+  queued.started = started;
+  void started.promise.then(queued.resolve, queued.reject);
 }
 
 function createFieldVectorRequestHandle(
@@ -214,10 +329,14 @@ async function fetchDecodeAndCacheFieldVector(
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
+  throw createAbortError("field vector request aborted");
+}
+
+function createAbortError(message: string): Error {
   if (typeof DOMException !== "undefined") {
-    throw new DOMException("field vector request aborted", "AbortError");
+    return new DOMException(message, "AbortError");
   }
-  throw new Error("field vector request aborted");
+  return new Error(message);
 }
 
 function releaseFieldVectorRequest(

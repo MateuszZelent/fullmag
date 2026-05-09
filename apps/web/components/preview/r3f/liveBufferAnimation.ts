@@ -78,7 +78,6 @@ export function applyLiveBufferTransition({
   }
 
   const from = destination.slice(0, length);
-  const to = target.slice(0, length);
   const start = now();
   let frame = 0;
   let cancelled = false;
@@ -91,7 +90,7 @@ export function applyLiveBufferTransition({
     const linear = Math.min(1, elapsed / durationMs);
     const eased = linear * linear * (3 - 2 * linear);
     for (let index = 0; index < length; index += 1) {
-      destination[index] = from[index] + (to[index] - from[index]) * eased;
+      destination[index] = from[index] + (target[index] - from[index]) * eased;
     }
     markNeedsUpdate();
     scheduleInvalidate();

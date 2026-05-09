@@ -101,6 +101,37 @@ describe("deriveFemVectorScopes", () => {
 });
 
 describe("buildDenseFemVectorField", () => {
+  it("keeps full-domain vector payloads dense without masking", () => {
+    const values = new Float64Array([
+      1, 0, 0,
+      0, 1, 0,
+      0, 0, 1,
+      2, 2, 2,
+    ]);
+
+    const result = buildDenseFemVectorField({
+      nNodes: 4,
+      meshParts: [part({})],
+      frames: [
+        {
+          scope: { kind: "full" },
+          field: {
+            quantityId: "H_demag",
+            nComp: 3,
+            grid: [4, 1, 1],
+            pointCount: 4,
+            valueCount: 12,
+            dtype: "float64",
+            values,
+          },
+        },
+      ],
+    });
+
+    expect(result?.values).toBe(values);
+    expect(result?.activeMask).toBeNull();
+  });
+
   it("expands an object-scoped vector payload into dense node storage and mask", () => {
     const result = buildDenseFemVectorField({
       nNodes: 4,

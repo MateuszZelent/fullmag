@@ -39,7 +39,7 @@ export interface ResolvedFdmGridBounds {
 
 interface FdmInstancesProps {
   grid: [number, number, number];
-  vectors: Float64Array | null;
+  vectors: Float32Array | null;
   geometryMode: boolean;
   activeMask: boolean[] | null;
   settings: {

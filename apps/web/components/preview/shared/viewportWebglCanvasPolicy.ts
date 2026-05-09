@@ -3,9 +3,6 @@ export function shouldRenderViewportWebglCanvas(args: {
   hostReady: boolean;
   bareCanvas: boolean;
 }): boolean {
-  if (args.hidden) {
-    return false;
-  }
   if (args.bareCanvas) {
     return true;
   }

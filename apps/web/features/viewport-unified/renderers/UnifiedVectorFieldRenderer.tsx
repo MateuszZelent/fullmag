@@ -93,6 +93,7 @@ import {
   type VoxelSampling,
   type TopoComponent,
 } from "@/components/preview/useFdmViewportSettings";
+import { isViewport3DVectorFieldRenderable } from "@/features/viewport-unified/hooks/useViewport3DVectorFieldModel";
 import {
   shouldRenderVectorSurfaceCanvas,
 } from "@/components/preview/shared/viewportWebglCanvasPolicy";
@@ -202,7 +203,8 @@ function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>)
 // ─── Types ──────────────────────────────────────────────────────────
 interface Props {
   grid: [number, number, number];
-  vectors: Float64Array | null;
+  vectors: Float32Array | Float64Array | null;
+  vectorValueScale?: number;
   fieldLabel?: string;
   liveRenderDebugData?: VectorLiveRenderDebugData | null;
   geometryMode?: boolean;
@@ -300,7 +302,7 @@ function sampledVectorRowIndices(vectorCount: number, sampleCount = 8): number[]
   return Array.from(indices).sort((lhs, rhs) => lhs - rhs);
 }
 
-function buildRenderedVectorSample(vectors: Float64Array | null): string[] {
+function buildRenderedVectorSample(vectors: Float32Array | null): string[] {
   if (!vectors || vectors.length < 3) {
     return [];
   }
@@ -310,6 +312,24 @@ function buildRenderedVectorSample(vectors: Float64Array | null): string[] {
     const base = rowIndex * 3;
     return `${String(rowIndex).padStart(width, "0")} | [${formatDebugScalar(vectors[base])}, ${formatDebugScalar(vectors[base + 1])}, ${formatDebugScalar(vectors[base + 2])}]`;
   });
+}
+
+export function toVectorSurfaceRenderBuffer(
+  vectors: Float32Array | Float64Array | null,
+  scale = 1,
+): Float32Array | null {
+  if (!vectors) {
+    return null;
+  }
+  if (vectors instanceof Float32Array && scale === 1) {
+    return vectors;
+  }
+  const renderBuffer = new Float32Array(vectors.length);
+  for (let index = 0; index < vectors.length; index += 1) {
+    renderBuffer[index] = vectors[index] * scale;
+  }
+  incrementFrontendAuditCounter("typedArrayAllocations", 1);
+  return renderBuffer;
 }
 
 function combineOverlayBounds(
@@ -868,6 +888,7 @@ function FdmAntennaOverlayMeshes({
 function UnifiedVectorFieldRendererInner({
   grid,
   vectors,
+  vectorValueScale = 1,
   fieldLabel = "Vector Field",
   liveRenderDebugData = null,
   geometryMode = false,
@@ -986,15 +1007,19 @@ function UnifiedVectorFieldRendererInner({
   // Hidden viewport should not consume high-frequency vector updates.
   const modelVectorField = viewport3DModel?.vectorField ?? null;
   const modelVectorData =
-    !geometryMode && modelVectorField?.visible && modelVectorField.status === "ready"
-      ? modelVectorField.data
+    !geometryMode && isViewport3DVectorFieldRenderable(modelVectorField)
+      ? modelVectorField?.data ?? null
       : null;
   const effectiveVectors = modelVectorData?.values ?? vectors;
   const effectiveGrid =
     modelVectorData?.grid && modelVectorData.grid.every((value) => value > 0)
       ? modelVectorData.grid
       : grid;
-  const deferredVectors = useDeferredValue(effectiveVectors);
+  const renderVectors = useMemo(
+    () => toVectorSurfaceRenderBuffer(effectiveVectors, vectorValueScale),
+    [effectiveVectors, vectorValueScale],
+  );
+  const deferredVectors = useDeferredValue(renderVectors);
   const deferredGrid = useDeferredValue(effectiveGrid);
   const deferredSettings = useDeferredValue(settings);
   // Vectors-visible flag from toolbar (glyph mode toggle).

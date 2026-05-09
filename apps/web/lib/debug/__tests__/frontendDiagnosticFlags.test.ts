@@ -149,7 +149,7 @@ describe("frontendDiagnosticFlags loader", () => {
     expect(defaults.leakIsolation.enableFemMeshView3DAutoFitInvalidate).toBe(true);
     expect(defaults.leakIsolation.enableFemMeshView3DAutoFitRecord).toBe(true);
     expect(defaults.leakIsolation.enableLegacyBinaryFemTopologyHydration).toBe(true);
-    expect(defaults.leakIsolation.enableBinaryFieldHydration).toBe(true);
+    expect(defaults.leakIsolation.enableBinaryFieldHydration).toBe(false);
     expect(defaults.leakIsolation.enableIdleLiveStatusPolling).toBe(false);
   });
 
@@ -167,7 +167,7 @@ describe("frontendDiagnosticFlags loader", () => {
     const loaded = loadFrontendDiagnosticFlagsFromStorage();
     expect(loaded.leakIsolation.enableHiddenViewportBridge).toBe(false);
     expect(loaded.leakIsolation.enableScalarHydration).toBe(false);
-    expect(loaded.leakIsolation.enableBinaryFieldHydration).toBe(true);
+    expect(loaded.leakIsolation.enableBinaryFieldHydration).toBe(false);
   });
 
   it("keeps the VectorSurface 3D canvas enabled in the normal defaults", () => {

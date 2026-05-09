@@ -1209,7 +1209,7 @@ function FemMeshView3DInner({
                 targetCenter={dynamicGeomCenter}
                 controlsRef={controlsRef}
                 lastAppliedRef={cameraAutoFitAppliedRef}
-                enableCameraApply={leakIsolationFlags.enableFemMeshView3DAutoFitCameraApply}
+                enableCameraApply={leakIsolationFlags.enableFemMeshView3DAutoFitCameraApply && !persistedCameraState}
                 enableInvalidate={leakIsolationFlags.enableFemMeshView3DAutoFitInvalidate}
                 onFitApplied={
                   leakIsolationFlags.enableFemMeshView3DAutoFitRecord

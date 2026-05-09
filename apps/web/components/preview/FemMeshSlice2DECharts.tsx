@@ -22,6 +22,7 @@ import {
   computeProjectionSlice,
   type ProjectionResult,
   type ProjectionReduction,
+  type SliceArrow2D,
   type SlicePlane,
   type VectorComponent,
 } from "./fem/femSliceGeometry";
@@ -31,7 +32,13 @@ import {
   smartAutoScale,
   interpolatePalette,
 } from "./fem/femSliceColorScale";
+import {
+  styleSliceVectorGlyphs,
+  type StyledVectorGlyph2D,
+  type VectorGlyph2D,
+} from "./magnetizationSliceUtils";
 import { useFemSliceSampling } from "./fem/useFemSliceSampling";
+import { SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP } from "./fem/sliceMeshOverlay2D";
 import {
   projectionCacheKey,
   readProjectionCache,
@@ -70,6 +77,9 @@ interface Props {
   antennaOverlays?: AntennaOverlay[];
   selectedAntennaId?: string | null;
   showArrows?: boolean;
+  vectorDensity?: number | null;
+  vectorColorMode?: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+  vectorMonoColor?: string;
   previewMaxPoints?: number;
   /** Slice toolbar mode — "all_layers" triggers Z-projection averaging. */
   sliceMode?: "single" | "slab" | "all_layers";
@@ -92,11 +102,80 @@ const THEME = ECHARTS_THEME;
 const BG = "#1e1e2e";
 const PROJECTION_MAX_ELEMENTS = 150_000;
 
+function isAirboxPartRole(role: string | null | undefined): boolean {
+  return role === "air" || role === "outer_boundary";
+}
+
+function capRenderableSegments<T>(segments: T[]): T[] {
+  if (segments.length <= SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP) {
+    return segments;
+  }
+  return Array.from(
+    { length: SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP },
+    (_, index) => segments[Math.floor((index * segments.length) / SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP)]!,
+  );
+}
+
 function formatMagnitude(v: number): string {
   if (v === 0) return "0";
   const abs = Math.abs(v);
   if (abs >= 1e3 || (abs > 0 && abs < 1e-2)) return v.toExponential(2);
   return v.toPrecision(4);
+}
+
+export function buildFemExactVectorGlyphs({
+  arrows,
+  plane,
+  bounds,
+  everyN,
+  maxGlyphs,
+  colorMode,
+  monoColor,
+}: {
+  arrows: SliceArrow2D[];
+  plane: SlicePlane;
+  bounds: { uMin: number; uMax: number; vMin: number; vMax: number };
+  everyN: number;
+  maxGlyphs: number;
+  colorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+  monoColor: string;
+}): StyledVectorGlyph2D[] {
+  const step = Math.max(1, Math.round(everyN));
+  const cap = Math.max(0, Math.trunc(maxGlyphs));
+  if (cap === 0 || arrows.length === 0) {
+    return [];
+  }
+  let maxMagnitude = 0;
+  for (const arrow of arrows) {
+    maxMagnitude = Math.max(maxMagnitude, arrow.magnitude);
+  }
+  const safeMagnitude = Math.max(maxMagnitude, 1e-12);
+  const span = Math.max(
+    Math.abs(bounds.uMax - bounds.uMin),
+    Math.abs(bounds.vMax - bounds.vMin),
+    1e-12,
+  );
+  const targetLength = span * 0.045;
+  const glyphs: VectorGlyph2D[] = [];
+  for (let index = 0; index < arrows.length && glyphs.length < cap; index += step) {
+    const arrow = arrows[index];
+    if (!arrow || !Number.isFinite(arrow.magnitude) || arrow.magnitude <= 0) {
+      continue;
+    }
+    const scale = targetLength / safeMagnitude;
+    glyphs.push({
+      origin: arrow.origin,
+      vector: arrow.vector,
+      magnitude: arrow.magnitude,
+      delta: [arrow.vector[0] * scale, arrow.vector[1] * scale],
+    });
+  }
+  return styleSliceVectorGlyphs({
+    glyphs,
+    plane,
+    colorMode,
+    monoColor,
+  });
 }
 
 function projectionTitle(reduction: ProjectionReduction): string {
@@ -136,6 +215,9 @@ export default function FemMeshSlice2DECharts({
   antennaOverlays = [],
   selectedAntennaId,
   showArrows,
+  vectorDensity = null,
+  vectorColorMode = "orientation",
+  vectorMonoColor = "#38d9ff",
   previewMaxPoints = PREVIEW_MAX_POINTS_DEFAULT,
   sliceMode = "single",
   projectionReduction = "mean_occupied",
@@ -191,9 +273,9 @@ export default function FemMeshSlice2DECharts({
         airSegmentVisible,
         objectViewMode,
         visibleObjectIds,
-        vectorDomainFilter: "full_domain",
+        vectorDomainFilter,
       }),
-    [airSegmentVisible, meshData, meshEntityViewState, meshParts, objectViewMode, visibleObjectIds],
+    [airSegmentVisible, meshData, meshEntityViewState, meshParts, objectViewMode, vectorDomainFilter, visibleObjectIds],
   );
   const quantityExtentMask = useMemo(
     () =>
@@ -695,7 +777,33 @@ export default function FemMeshSlice2DECharts({
       const bounds = slice.bounds;
 
       const customData = polygons.map((p, i) => [i, p.value]);
-      const segments = showMesh ? slice.segments : [];
+      const meshSegments = capRenderableSegments(showMesh
+        ? slice.segments.filter((segment) => {
+            const part = segment.partId ? visibilityState.partById.get(segment.partId) : null;
+            return !isAirboxPartRole(part?.role);
+          })
+        : []);
+      const airboxSegments = capRenderableSegments(airSegmentVisible
+        ? slice.segments.filter((segment) => {
+            const part = segment.partId ? visibilityState.partById.get(segment.partId) : null;
+            return isAirboxPartRole(part?.role);
+          })
+        : []);
+      const magneticArrows = showArrows
+        ? slice.arrows.filter((arrow) => {
+            const part = arrow.partId ? visibilityState.partById.get(arrow.partId) : null;
+            return !isAirboxPartRole(part?.role);
+          })
+        : [];
+      const vectorGlyphs = buildFemExactVectorGlyphs({
+        arrows: magneticArrows,
+        plane: effectivePlane,
+        bounds,
+        everyN: vectorDensity ?? 4,
+        maxGlyphs: previewMaxPoints,
+        colorMode: vectorColorMode,
+        monoColor: vectorMonoColor,
+      });
 
       chart.setOption({
         animation: false,
@@ -795,13 +903,13 @@ export default function FemMeshSlice2DECharts({
             },
           },
           // Wireframe segments
-          ...(segments.length > 0 ? [{
+          ...(meshSegments.length > 0 ? [{
             type: "custom" as const,
             coordinateSystem: "cartesian2d" as const,
-            data: segments.map((_, i) => [i]),
+            data: meshSegments.map((_, i) => [i]),
             renderItem: (_params: unknown, api: echarts.CustomSeriesRenderItemAPI) => {
               const idx = api.value(0) as number;
-              const seg = segments[idx];
+              const seg = meshSegments[idx];
               if (!seg) return { type: "group" as const, children: [] };
               const a = api.coord([seg.a[0], seg.a[1]]);
               const b = api.coord([seg.b[0], seg.b[1]]);
@@ -812,6 +920,76 @@ export default function FemMeshSlice2DECharts({
               };
             },
             silent: true,
+          }] : []),
+          ...(airboxSegments.length > 0 ? [{
+            type: "custom" as const,
+            coordinateSystem: "cartesian2d" as const,
+            data: airboxSegments.map((_, i) => [i]),
+            renderItem: (_params: unknown, api: echarts.CustomSeriesRenderItemAPI) => {
+              const idx = api.value(0) as number;
+              const seg = airboxSegments[idx];
+              if (!seg) return { type: "group" as const, children: [] };
+              const a = api.coord([seg.a[0], seg.a[1]]);
+              const b = api.coord([seg.b[0], seg.b[1]]);
+              return {
+                type: "line" as const,
+                shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] },
+                style: { stroke: "rgba(217, 70, 239, 0.66)", lineWidth: 0.95 },
+              };
+            },
+            silent: true,
+            z: 4,
+          }] : []),
+          ...(vectorGlyphs.length > 0 ? [{
+            type: "custom" as const,
+            coordinateSystem: "cartesian2d" as const,
+            silent: true,
+            z: 30,
+            data: vectorGlyphs.map((_, i) => [i]),
+            renderItem: (_params: unknown, api: echarts.CustomSeriesRenderItemAPI) => {
+              const idx = api.value(0) as number;
+              const glyph = vectorGlyphs[idx];
+              if (!glyph) return { type: "group" as const, children: [] };
+              const start = api.coord(glyph.origin);
+              const end = api.coord([
+                glyph.origin[0] + glyph.delta[0],
+                glyph.origin[1] + glyph.delta[1],
+              ]);
+              const dx = end[0] - start[0];
+              const dy = end[1] - start[1];
+              const length = Math.hypot(dx, dy);
+              if (length < 1e-6) return { type: "group" as const, children: [] };
+              const headLength = Math.min(8, Math.max(4, length * 0.3));
+              const angle = Math.atan2(dy, dx);
+              const left = [
+                end[0] - headLength * Math.cos(angle - Math.PI / 6),
+                end[1] - headLength * Math.sin(angle - Math.PI / 6),
+              ] as const;
+              const right = [
+                end[0] - headLength * Math.cos(angle + Math.PI / 6),
+                end[1] - headLength * Math.sin(angle + Math.PI / 6),
+              ] as const;
+              return {
+                type: "group" as const,
+                children: [
+                  {
+                    type: "line" as const,
+                    shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] },
+                    style: { stroke: glyph.stroke, lineWidth: 1.2, opacity: 0.92 },
+                  },
+                  {
+                    type: "line" as const,
+                    shape: { x1: end[0], y1: end[1], x2: left[0], y2: left[1] },
+                    style: { stroke: glyph.stroke, lineWidth: 1.2, opacity: 0.92 },
+                  },
+                  {
+                    type: "line" as const,
+                    shape: { x1: end[0], y1: end[1], x2: right[0], y2: right[1] },
+                    style: { stroke: glyph.stroke, lineWidth: 1.2, opacity: 0.92 },
+                  },
+                ],
+              };
+            },
           }] : []),
         ],
         grid: { containLabel: true, left: 70, right: 92, top: 48, bottom: 52 },
@@ -835,8 +1013,14 @@ export default function FemMeshSlice2DECharts({
     }
   }, [
     isProjectionMode, projectionResult, exactSlice.slice,
-    hasField, showQuantity, showMesh, colorScale, palette,
+    hasField, showQuantity, showMesh, showArrows, airSegmentVisible, colorScale, palette,
     quantityTitle, quantityLabel,
+    effectivePlane,
+    previewMaxPoints,
+    vectorColorMode,
+    vectorDensity,
+    vectorMonoColor,
+    visibilityState.partById,
   ]);
 
   // ── Resize observer ────────────────────────────────────────────

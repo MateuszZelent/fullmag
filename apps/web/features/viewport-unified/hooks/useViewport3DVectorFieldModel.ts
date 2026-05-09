@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import { useFieldVector } from "@/src/hooks/resources/useFieldVector";
@@ -87,7 +87,7 @@ export function useViewport3DVectorFieldModel({
     },
   );
 
-  return useMemo(() => buildViewport3DVectorFieldModel({
+  const currentModel = useMemo(() => buildViewport3DVectorFieldModel({
     quantityId,
     fieldRevision,
     domainGenerationId,
@@ -122,6 +122,66 @@ export function useViewport3DVectorFieldModel({
     vectorCapabilityEnabled,
     vectorsVisible,
   ]);
+  const [lastRenderableModel, setLastRenderableModel] =
+    useState<Viewport3DVectorFieldModel | null>(null);
+
+  useEffect(() => {
+    if (isViewport3DVectorFieldRenderable(currentModel) && currentModel.status === "ready") {
+      setLastRenderableModel(currentModel);
+    }
+  }, [currentModel]);
+
+  return useMemo(
+    () => retainRenderableViewport3DVectorFieldData(currentModel, lastRenderableModel),
+    [currentModel, lastRenderableModel],
+  );
+}
+
+export function isViewport3DVectorFieldRenderable(
+  model: Viewport3DVectorFieldModel | null | undefined,
+): model is Viewport3DVectorFieldModel & { data: DecodedFieldVector } {
+  return Boolean(model?.visible && model.data && model.data.nComp >= 3 && model.data.values.length > 0);
+}
+
+function sameViewport3DVectorScope(
+  a: Viewport3DVectorScope,
+  b: Viewport3DVectorScope,
+): boolean {
+  return a.kind === b.kind && (a.id ?? null) === (b.id ?? null);
+}
+
+export function canReuseViewport3DVectorFieldModelData(
+  current: Viewport3DVectorFieldModel,
+  previous: Viewport3DVectorFieldModel | null | undefined,
+): boolean {
+  return Boolean(
+    current.status === "loading" &&
+      current.visible &&
+      previous &&
+      isViewport3DVectorFieldRenderable(previous) &&
+      current.quantityId === previous.quantityId &&
+      current.domainGenerationId === previous.domainGenerationId &&
+      current.directionComponent === previous.directionComponent &&
+      sameViewport3DVectorScope(current.scope, previous.scope) &&
+      (current.adapterPointCount <= 0 || current.adapterPointCount === previous.pointCount),
+  );
+}
+
+export function retainRenderableViewport3DVectorFieldData(
+  current: Viewport3DVectorFieldModel,
+  previous: Viewport3DVectorFieldModel | null | undefined,
+): Viewport3DVectorFieldModel {
+  if (!canReuseViewport3DVectorFieldModelData(current, previous) || !previous?.data) {
+    return current;
+  }
+  return {
+    ...current,
+    data: previous.data,
+    positions: previous.positions,
+    pointCount: previous.pointCount,
+    sampledCount: previous.sampledCount,
+    error: null,
+  };
 }
 
 export function buildViewport3DVectorFieldModel({

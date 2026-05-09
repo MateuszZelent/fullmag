@@ -37,6 +37,7 @@ export default function ViewportTelemetryProbe({
 }) {
   const { gl, size } = useThree();
   const lastReportedAtRef = useRef(0);
+  const lastStatsRef = useRef<any>(null);
 
   useEffect(() => {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -57,14 +58,12 @@ export default function ViewportTelemetryProbe({
   }, [dpr, gl, onStats, size.height, size.width]);
 
   useFrame(() => {
-    incrementFrontendAuditCounter("webglFrames", 1);
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (hidden || now - lastReportedAtRef.current < 250) {
       return;
     }
-    lastReportedAtRef.current = now;
     const wallClockNow = Date.now();
-    onStats({
+    const stats = {
       drawCalls: gl.info.render.calls,
       triangles: gl.info.render.triangles,
       lines: gl.info.render.lines,
@@ -76,7 +75,22 @@ export default function ViewportTelemetryProbe({
       dpr,
       lastFrameAt: now,
       lastFrameAtUnixMs: wallClockNow,
-    });
+    };
+    const prev = lastStatsRef.current;
+    if (
+      !prev ||
+      prev.drawCalls !== stats.drawCalls ||
+      prev.triangles !== stats.triangles ||
+      prev.geometries !== stats.geometries ||
+      prev.textures !== stats.textures ||
+      prev.width !== stats.width ||
+      prev.height !== stats.height ||
+      prev.dpr !== stats.dpr
+    ) {
+      lastReportedAtRef.current = now;
+      lastStatsRef.current = stats;
+      onStats(stats);
+    }
     if (
       ENABLE_VIEWPORT_DEBUG_LOGS &&
       wallClockNow - (lastViewportDebugLogAtByLabel.get(label) ?? 0) >= 1000

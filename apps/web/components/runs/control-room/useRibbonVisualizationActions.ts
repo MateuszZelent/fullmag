@@ -177,6 +177,15 @@ export function useRibbonVisualizationActions({
     if (typeof slice2DToolbarPatch.vectorDensity === "number") {
       localProjectionPatch.vectorDensity = slice2DToolbarPatch.vectorDensity;
     }
+    if (typeof slice2DToolbarPatch.showAirbox === "boolean") {
+      localProjectionPatch.showAirbox = slice2DToolbarPatch.showAirbox;
+    }
+    if (slice2DToolbarPatch.airboxRenderMode) {
+      localProjectionPatch.airboxRenderMode = slice2DToolbarPatch.airboxRenderMode;
+    }
+    if (typeof slice2DToolbarPatch.showAirboxVectors === "boolean") {
+      localProjectionPatch.showAirboxVectors = slice2DToolbarPatch.showAirboxVectors;
+    }
     if (typeof slice2DToolbarPatch.positionPercent === "number") {
       localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
     }

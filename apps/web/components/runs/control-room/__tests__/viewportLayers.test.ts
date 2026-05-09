@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveFemLayerRenderState } from "../viewportLayers";
+import {
+  deriveFemLayerRenderState,
+  resolveMagneticTextureColorField,
+} from "../viewportLayers";
 
 describe("deriveFemLayerRenderState", () => {
   it("passes through all layers when toggles are enabled", () => {
@@ -126,5 +129,10 @@ describe("deriveFemLayerRenderState", () => {
     expect(result.magneticColorField).toBe("none");
     expect(result.airColorField).toBe("none");
     expect(result.showArrows).toBe(true);
+  });
+
+  it("keeps magnetic texture orientation independent from the active quantity", () => {
+    expect(resolveMagneticTextureColorField({ showMagneticTexture: true })).toBe("orientation");
+    expect(resolveMagneticTextureColorField({ showMagneticTexture: false })).toBe("none");
   });
 });

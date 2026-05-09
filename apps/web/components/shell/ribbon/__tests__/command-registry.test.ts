@@ -650,6 +650,7 @@ describe("ribbon viewport commands", () => {
         projectionSamples: 20,
         projectionResolution: 128,
       },
+      hasSlice2DAirboxParts: true,
       onSetSlice2DToolbar,
     });
 
@@ -658,6 +659,7 @@ describe("ribbon viewport commands", () => {
     executeRibbonCommand(ctx, { id: "viewport.set-slice-mode", mode: "slab" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-position", positionPercent: 42 });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox", visible: true });
+    executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "wireframe" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "points" });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-airbox-vectors", visible: true });
     executeRibbonCommand(ctx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" });
@@ -665,12 +667,14 @@ describe("ribbon viewport commands", () => {
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { axis: "x" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { component: "z" });
     expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(3, { positionPercent: 42 });
-    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, {
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(4, { showAirbox: true });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(5, { airboxRenderMode: "wireframe" });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(6, {
       renderMode: "mesh-overlay",
       showMesh: true,
       showVectors: false,
     });
-    expect(onSetSlice2DToolbar).toHaveBeenCalledTimes(4);
+    expect(onSetSlice2DToolbar).toHaveBeenCalledTimes(6);
   });
 
   it("rejects unsupported 2D slice commands instead of mutating impossible UI state", () => {
@@ -716,6 +720,7 @@ describe("ribbon viewport commands", () => {
     expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-mesh", visible: true })).toBe(false);
     expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-primitives", visible: true })).toBe(false);
     expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-airbox", visible: true })).toBe(false);
+    expect(canExecuteRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "wireframe" })).toBe(false);
 
     executeRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-render-mode", renderMode: "contour" });
     executeRibbonCommand(unsupportedCtx, { id: "viewport.set-slice-airbox", visible: true });
@@ -761,6 +766,59 @@ describe("ribbon viewport commands", () => {
     expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-render-mode", renderMode: "vectors" })).toBe(true);
     expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-render-mode", renderMode: "mesh-overlay" })).toBe(true);
     expect(canExecuteRibbonCommand(singleFemCtx, { id: "viewport.set-slice-mesh", visible: true })).toBe(true);
+  });
+
+  it("allows 2D airbox commands only on FEM single slices with airbox parts", () => {
+    const onSetSlice2DToolbar = vi.fn();
+    const supportedCtx = context({
+      isFemBackend: true,
+      hasSlice2DAirboxParts: true,
+      slice2DToolbar: {
+        quantityId: "m",
+        component: "magnitude",
+        axis: "z",
+        mode: "single",
+        layerIndex: 0,
+        positionPercent: 50,
+        positionWorld: null,
+        normalAxisBounds: null,
+        magneticExtent: null,
+        thicknessPercent: null,
+        colormap: "viridis",
+        autoContrast: true,
+        showPrimitives: false,
+        showMesh: false,
+        showMagneticTexture: true,
+        showAirbox: false,
+        airboxRenderMode: "wireframe",
+        showAirboxVectors: false,
+        showQuantity: true,
+        showVectors: false,
+        vectorDensity: 4,
+        renderMode: "heatmap",
+        projectionReduction: "mean_occupied",
+        projectionIncludeAirAsZero: false,
+        projectionSamples: 20,
+        projectionResolution: 128,
+      },
+      onSetSlice2DToolbar,
+    });
+    const missingAirboxCtx = { ...supportedCtx, hasSlice2DAirboxParts: false };
+
+    expect(canExecuteRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox", visible: true })).toBe(true);
+    expect(canExecuteRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "wireframe" })).toBe(true);
+    expect(canExecuteRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "points" })).toBe(false);
+    expect(canExecuteRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-vectors", visible: true })).toBe(false);
+    expect(canExecuteRibbonCommand(missingAirboxCtx, { id: "viewport.set-slice-airbox", visible: true })).toBe(false);
+
+    executeRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox", visible: true });
+    executeRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "wireframe" });
+    executeRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-render-mode", renderMode: "points" });
+    executeRibbonCommand(supportedCtx, { id: "viewport.set-slice-airbox-vectors", visible: true });
+
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(1, { showAirbox: true });
+    expect(onSetSlice2DToolbar).toHaveBeenNthCalledWith(2, { airboxRenderMode: "wireframe" });
+    expect(onSetSlice2DToolbar).toHaveBeenCalledTimes(2);
   });
 
   it("requires the 2D slice callback for slice commands", () => {

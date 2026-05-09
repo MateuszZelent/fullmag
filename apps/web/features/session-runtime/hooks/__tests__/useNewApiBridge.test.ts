@@ -1,64 +1,40 @@
 import { describe, expect, it } from "vitest";
 
-import { buildLiveStatusRevisionKey } from "../useNewApiBridge";
+import { metadataOnlyLatestFieldFrame } from "../useNewApiBridge";
+import type { FieldFrameEnvelope } from "@/lib/fieldFrame/types";
 
-describe("buildLiveStatusRevisionKey", () => {
-  it("is stable for equivalent resource revisions without JSON stringifying the object", () => {
-    const resources = {
-      fields_revision: 2,
-      scalars_revision: 3,
-      domain_generation_id: 4,
-      artifacts_revision: 5,
-      engine_log_revision: 6,
-      display_revision: 7,
-      visualization_state_revision: 8,
-      workspace_revision: 9,
-      mesh_revision: 10,
-      mesh_build_revision: 11,
-      commands_revision: 12,
-      stages_revision: 13,
-    };
+function envelope(overrides: Partial<FieldFrameEnvelope> = {}): FieldFrameEnvelope {
+  return {
+    sessionId: "session-a",
+    runId: "run-a",
+    backendEpoch: 0,
+    meshGenerationId: "7",
+    topologyHash: null,
+    fieldRevision: 12,
+    sourceStep: 34,
+    sourceTime: 5e-9,
+    quantityId: "H_eff",
+    component: "3D",
+    nComp: 3,
+    domain: "magnetic_only",
+    location: "node",
+    dtype: "f64",
+    payloadKind: "binary-ref",
+    payloadId: null,
+    activeMaskId: null,
+    stats: null,
+    ...overrides,
+  };
+}
 
-    expect(
-      buildLiveStatusRevisionKey({
-        sessionId: "session-a",
-        runId: "run-a",
-        resources,
-      }),
-    ).toBe(
-      buildLiveStatusRevisionKey({
-        sessionId: "session-a",
-        runId: "run-a",
-        resources: { ...resources },
-      }),
-    );
-  });
+describe("metadataOnlyLatestFieldFrame", () => {
+  it("preserves field identity without retaining raw field values", () => {
+    const frame = metadataOnlyLatestFieldFrame(envelope(), [8, 4, 2]);
 
-  it("changes when a watched revision changes", () => {
-    const base = {
-      sessionId: "session-a",
-      runId: "run-a",
-      resources: {
-        fields_revision: 2,
-        scalars_revision: 3,
-        domain_generation_id: 4,
-        artifacts_revision: 5,
-        engine_log_revision: 6,
-        display_revision: 7,
-        visualization_state_revision: 8,
-        workspace_revision: 9,
-        mesh_revision: 10,
-        mesh_build_revision: 11,
-        commands_revision: 12,
-        stages_revision: 13,
-      },
-    };
-
-    expect(buildLiveStatusRevisionKey(base)).not.toBe(
-      buildLiveStatusRevisionKey({
-        ...base,
-        resources: { ...base.resources, mesh_revision: 14 },
-      }),
-    );
+    expect(frame.quantity_id).toBe("H_eff");
+    expect(frame.field_revision).toBe(12);
+    expect(frame.grid).toEqual([8, 4, 2]);
+    expect(frame.topology_signature).toBe("gen:7");
+    expect(frame.values.byteLength).toBe(0);
   });
 });

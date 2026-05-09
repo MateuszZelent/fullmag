@@ -133,6 +133,7 @@ function buildContext(
     airMeshWireframeScope: props.airMeshWireframeScope ?? null,
     airMeshPointsScope: props.airMeshPointsScope ?? null,
     airMeshVectorsScope: props.airMeshVectorsScope ?? null,
+    hasSlice2DAirboxParts: props.hasSlice2DAirboxParts ?? null,
     slice2DEnabled: Boolean(props.slice2DEnabled),
     slice2DToolbar: props.slice2DToolbar ?? null,
     slice2DDiagnostics: props.slice2DDiagnostics ?? null,

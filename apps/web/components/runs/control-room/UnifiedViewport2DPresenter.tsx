@@ -20,9 +20,15 @@ import type {
 } from "@/src/api/types";
 import type { SliceArrowData } from "@/src/hooks/resources/useFieldSlice2D";
 import { useSliceMeshOverlay2D } from "@/src/hooks/resources/useSliceMeshOverlay2D";
+import type { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import type { FemMeshData, FemVectorDomainFilter } from "@/components/preview/FemMeshView3D";
 import MagnetizationSlice2D from "@/components/preview/MagnetizationSlice2D";
-import { buildExactSliceMeshOverlay2D } from "@/components/preview/fem/sliceMeshOverlay2D";
+import {
+  buildExactSliceMeshOverlay2D,
+  capSliceMeshOverlay2D,
+  SLICE_MESH_OVERLAY_SOFT_SEGMENT_CAP,
+  type SliceMeshOverlay2D,
+} from "@/components/preview/fem/sliceMeshOverlay2D";
 import EmptyState from "../../ui/EmptyState";
 import {
   type MeshEntityViewStateMap,
@@ -34,6 +40,15 @@ import { resolveSlice2DAirboxViewState } from "./slice2DAirboxViewState";
 type SlicePlane = "xy" | "xz" | "yz";
 type VectorComponent = "x" | "y" | "z" | "magnitude";
 type FemArrowColorMode = "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";
+type SliceMeshOverlaySourceKind = "backend" | "local" | "none";
+type SliceMeshOverlayStatus = "ready" | "loading" | "error" | "unavailable";
+
+export interface SliceMeshOverlaySourceState {
+  overlay: SliceMeshOverlay2D | null;
+  source: SliceMeshOverlaySourceKind;
+  status: SliceMeshOverlayStatus;
+  message: string | null;
+}
 
 interface QuantityOption {
   id: string;
@@ -55,6 +70,77 @@ const FemMeshSlice2D = dynamic(() => import("@/components/preview/FemMeshSlice2D
   loading: () => <ViewportModuleLoading label="Loading FEM slice viewport..." />,
 });
 
+export function resolveSliceMeshOverlaySource({
+  backend,
+  local,
+  loading,
+  error,
+  enabled,
+}: {
+  backend: SliceMeshOverlay2D | null;
+  local: SliceMeshOverlay2D | null;
+  loading: boolean;
+  error: LiveApiError | null;
+  enabled: boolean;
+}): SliceMeshOverlaySourceState {
+  if (!enabled) {
+    return {
+      overlay: null,
+      source: "none",
+      status: "unavailable",
+      message: "Mesh overlay disabled",
+    };
+  }
+  if (backend) {
+    const capped = capSliceMeshOverlay2D(backend);
+    return {
+      overlay: capped,
+      source: "backend",
+      status: "ready",
+      message:
+        backend.segments.length > SLICE_MESH_OVERLAY_SOFT_SEGMENT_CAP
+          ? "mesh: backend sampled"
+          : "mesh: backend",
+    };
+  }
+  if (local) {
+    const capped = capSliceMeshOverlay2D(local);
+    return {
+      overlay: capped,
+      source: "local",
+      status: loading ? "loading" : "ready",
+      message:
+        local.segments.length > SLICE_MESH_OVERLAY_SOFT_SEGMENT_CAP
+          ? "mesh: local sampled"
+          : error
+            ? "mesh: local fallback after backend error"
+            : "mesh: local",
+    };
+  }
+  if (loading) {
+    return {
+      overlay: null,
+      source: "none",
+      status: "loading",
+      message: "mesh: loading",
+    };
+  }
+  if (error) {
+    return {
+      overlay: null,
+      source: "none",
+      status: "error",
+      message: error.message || "mesh overlay request failed",
+    };
+  }
+  return {
+    overlay: null,
+    source: "none",
+    status: "unavailable",
+    message: "mesh: unavailable",
+  };
+}
+
 export interface UnifiedViewport2DPresenterProps {
   slice2DModel?: Slice2DModel | null;
   workspaceSelection?: CrossSurfaceSelectionState | null;
@@ -62,6 +148,7 @@ export interface UnifiedViewport2DPresenterProps {
   hasSliceScalar: boolean;
   sliceLoading: boolean;
   sliceStateKind?: "empty" | "loading" | "ready" | "unsupported" | "error";
+  sliceHasStaleData?: boolean;
   sliceErrorMessage: string | null;
   sliceMeta: FieldSliceMeta | FieldProjectionMeta | null;
   sliceArrows: SliceArrowData | null;
@@ -118,6 +205,7 @@ export default function UnifiedViewport2DPresenter({
   hasSliceScalar,
   sliceLoading,
   sliceStateKind,
+  sliceHasStaleData = false,
   sliceErrorMessage,
   sliceMeta,
   sliceArrows,
@@ -174,10 +262,7 @@ export default function UnifiedViewport2DPresenter({
     ? toolbar.showQuantity
     : toolbar?.showQuantity ?? showQuantity;
   const effectiveShowPrimitives = toolbar?.showPrimitives ?? showPrimitives;
-  const effectiveShowArrows =
-    toolbar
-      ? Boolean(toolbar.showAirboxVectors || toolbar.showVectors)
-      : showArrows;
+  const effectiveShowArrows = toolbar ? Boolean(toolbar.showVectors) : showArrows;
   const effectiveClipAxis = toolbar?.axis ?? clipAxis;
   const effectiveClipPos =
     toolbar?.normalAxisBounds && typeof toolbar.positionWorld === "number"
@@ -188,6 +273,7 @@ export default function UnifiedViewport2DPresenter({
       )
       : toolbar?.positionPercent ?? clipPos;
   const effectiveAirboxVisible = toolbar?.showAirbox ?? airSegmentVisible;
+  const effectiveMeshOverlayEnabled = effectiveShowMesh || effectiveAirboxVisible;
   const effectiveVectorDomainFilter: FemVectorDomainFilter =
     toolbar?.showAirboxVectors && effectiveAirboxVisible
       ? "airbox_only"
@@ -239,14 +325,18 @@ export default function UnifiedViewport2DPresenter({
     sliceMeta,
     visibleObjectIds,
   ]);
-  const { overlay: backendSliceMeshOverlay } = useSliceMeshOverlay2D(
+  const {
+    overlay: backendSliceMeshOverlay,
+    loading: backendSliceMeshOverlayLoading,
+    error: backendSliceMeshOverlayError,
+  } = useSliceMeshOverlay2D(
     backendSliceMeshOverlayRequest,
   );
   const apiSliceMeshOverlay = useMemo(() => {
     if (
       !shouldUseSliceApi2D ||
       !femMeshData ||
-      !effectiveShowMesh ||
+      !effectiveMeshOverlayEnabled ||
       !toolbar ||
       toolbar.mode !== "single" ||
       !isSliceMeta(sliceMeta)
@@ -262,11 +352,15 @@ export default function UnifiedViewport2DPresenter({
       airSegmentVisible: effectiveAirboxVisible,
       objectViewMode,
       visibleObjectIds,
+      partRoleFilter:
+        effectiveAirboxVisible && !effectiveShowMesh
+          ? new Set<FemMeshPart["role"]>(["air", "outer_boundary"])
+          : undefined,
     });
   }, [
     effectiveAirboxVisible,
     effectiveMeshEntityViewState,
-    effectiveShowMesh,
+    effectiveMeshOverlayEnabled,
     femMeshData,
     meshParts,
     objectViewMode,
@@ -275,6 +369,23 @@ export default function UnifiedViewport2DPresenter({
     toolbar,
     visibleObjectIds,
   ]);
+  const meshOverlaySource = useMemo(
+    () =>
+      resolveSliceMeshOverlaySource({
+        backend: backendSliceMeshOverlay,
+        local: apiSliceMeshOverlay,
+        loading: backendSliceMeshOverlayLoading,
+        error: backendSliceMeshOverlayError,
+        enabled: effectiveMeshOverlayEnabled,
+      }),
+    [
+      apiSliceMeshOverlay,
+      backendSliceMeshOverlay,
+      backendSliceMeshOverlayError,
+      backendSliceMeshOverlayLoading,
+      effectiveMeshOverlayEnabled,
+    ],
+  );
 
   const sliceDebugPanel = useMemo(() => {
     if (!slice2DModel) {
@@ -328,6 +439,14 @@ export default function UnifiedViewport2DPresenter({
               {sliceErrorMessage}
             </div>
           ) : null}
+          {sliceStateKind === "error" && sliceHasStaleData && sliceErrorMessage ? (
+            <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 shadow-sm backdrop-blur-sm">
+              stale 2D slice: {sliceErrorMessage}
+            </div>
+          ) : null}
+          {effectiveMeshOverlayEnabled ? (
+            <Slice2DOverlayStatusChip state={meshOverlaySource} />
+          ) : null}
         </div>
       </Slice2DShell>
     ) : content;
@@ -363,7 +482,7 @@ export default function UnifiedViewport2DPresenter({
         scalarShape={sliceScalarShape}
         meta={sliceMeta}
         arrows={sliceArrows}
-        meshOverlay={backendSliceMeshOverlay ?? apiSliceMeshOverlay}
+        meshOverlay={meshOverlaySource.overlay}
         quantityLabel={quantityLabel}
         quantityId={quantityId}
         quantityUnit={quantityUnit}
@@ -406,6 +525,9 @@ export default function UnifiedViewport2DPresenter({
         antennaOverlays={antennaOverlays}
         selectedAntennaId={selectedAntennaId}
         showArrows={effectiveShowArrows}
+        vectorDensity={toolbar?.vectorDensity ?? null}
+        vectorColorMode={vectorColorMode}
+        vectorMonoColor={vectorMonoColor}
         previewMaxPoints={previewMaxPoints}
         sliceMode={toolbar?.mode ?? "single"}
         projectionReduction={toolbar?.projectionReduction}
@@ -444,6 +566,26 @@ export default function UnifiedViewport2DPresenter({
       plane={plane}
       sliceIndex={sliceIndex}
     />,
+  );
+}
+
+function Slice2DOverlayStatusChip({
+  state,
+}: {
+  state: SliceMeshOverlaySourceState;
+}) {
+  const tone =
+    state.status === "ready"
+      ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-100"
+      : state.status === "loading"
+        ? "border-sky-400/35 bg-sky-500/10 text-sky-100"
+        : state.status === "error"
+          ? "border-rose-400/40 bg-rose-500/10 text-rose-100"
+          : "border-slate-400/25 bg-slate-500/10 text-slate-200";
+  return (
+    <div className={`pointer-events-none absolute right-3 top-3 rounded-md border px-2.5 py-1 text-[11px] shadow-sm backdrop-blur-sm ${tone}`}>
+      {state.message ?? `mesh: ${state.source}`}
+    </div>
   );
 }
 

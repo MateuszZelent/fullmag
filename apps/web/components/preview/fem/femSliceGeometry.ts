@@ -12,6 +12,7 @@ export interface Segment2D {
   b: Point2;
   va: number;
   vb: number;
+  partId: string | null;
 }
 
 export interface Polygon2D {
@@ -52,6 +53,7 @@ export interface BoundarySegmentTopology2D {
   b: Point2;
   sampleA: SliceSampleRef;
   sampleB: SliceSampleRef;
+  partId: string | null;
 }
 
 export interface PolygonTopology2D {
@@ -293,12 +295,18 @@ function collectBoundaryTopology(
   const segments: BoundarySegmentTopology2D[] = [];
   let intersectionBounds: Bounds2D | null = null;
 
-  const addSegment = (pa: Point3, pb: Point3, sampleA: SliceSampleRef, sampleB: SliceSampleRef) => {
+  const addSegment = (
+    pa: Point3,
+    pb: Point3,
+    sampleA: SliceSampleRef,
+    sampleB: SliceSampleRef,
+    partId: string | null,
+  ) => {
     const a = project(pa, plane);
     const b = project(pb, plane);
     intersectionBounds = includePointInBounds(intersectionBounds, a);
     intersectionBounds = includePointInBounds(intersectionBounds, b);
-    segments.push({ a, b, sampleA, sampleB });
+    segments.push({ a, b, sampleA, sampleB, partId });
   };
 
   const edges = [
@@ -309,6 +317,7 @@ function collectBoundaryTopology(
 
   for (let faceIndex = 0; faceIndex < numFaces; faceIndex++) {
     if (visibility?.visibleBoundaryFaces && visibility.visibleBoundaryFaces[faceIndex] !== 1) continue;
+    const partId = visibility?.boundaryFacePartIds[faceIndex] ?? null;
     const ia = flatFaces[faceIndex * 3];
     const ib = flatFaces[faceIndex * 3 + 1];
     const ic = flatFaces[faceIndex * 3 + 2];
@@ -330,9 +339,9 @@ function collectBoundaryTopology(
     ] as const;
 
     if (near[0] && near[1] && near[2]) {
-      addSegment(points[0], points[1], nodeRef(ids[0]), nodeRef(ids[1]));
-      addSegment(points[1], points[2], nodeRef(ids[1]), nodeRef(ids[2]));
-      addSegment(points[2], points[0], nodeRef(ids[2]), nodeRef(ids[0]));
+      addSegment(points[0], points[1], nodeRef(ids[0]), nodeRef(ids[1]), partId);
+      addSegment(points[1], points[2], nodeRef(ids[1]), nodeRef(ids[2]), partId);
+      addSegment(points[2], points[0], nodeRef(ids[2]), nodeRef(ids[0]), partId);
       continue;
     }
 
@@ -364,11 +373,11 @@ function collectBoundaryTopology(
 
     const unique = uniqueIntersectionPoints(intersections, epsilon);
     if (unique.length === 2) {
-      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef);
+      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef, partId);
     } else if (unique.length === 3) {
       unique.sort((lhs, rhs) => lhs.point[u] - rhs.point[u] || lhs.point[v] - rhs.point[v]);
-      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef);
-      addSegment(unique[1].point, unique[2].point, unique[1].sampleRef, unique[2].sampleRef);
+      addSegment(unique[0].point, unique[1].point, unique[0].sampleRef, unique[1].sampleRef, partId);
+      addSegment(unique[1].point, unique[2].point, unique[1].sampleRef, unique[2].sampleRef, partId);
     }
   }
 
@@ -539,6 +548,7 @@ export function sampleSliceField(
       b: segment.b,
       va,
       vb,
+      partId: segment.partId,
     });
   }
 
@@ -1062,6 +1072,7 @@ export function extractEdgesFromPolygons(
         b: pts[j],
         sampleA: refs[i],
         sampleB: refs[j],
+        partId: polygon.partId,
       });
     }
   }

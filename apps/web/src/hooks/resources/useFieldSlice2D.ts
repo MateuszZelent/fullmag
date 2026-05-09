@@ -57,6 +57,7 @@ export interface UseFieldSlice2DResult {
   loading: boolean;
   error: LiveApiError | null;
   stateKind: "empty" | "loading" | "ready" | "unsupported" | "error";
+  hasStaleData: boolean;
   unsupportedReason: string | null;
 }
 
@@ -537,6 +538,7 @@ export function useField2DResource(
     loading,
     error,
     stateKind,
+    hasStaleData: stateKind !== "ready" && Boolean(scalar),
     unsupportedReason: unsupportedStateReason,
   };
 }

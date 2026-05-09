@@ -81,6 +81,7 @@ export interface RibbonBarProps extends RibbonCommandContext {
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
+  hasSlice2DAirboxParts?: boolean | null;
   slice2DEnabled?: boolean;
   slice2DToolbar?: Slice2DToolbarState | null;
   slice2DDiagnostics?: Slice2DDiagnostics | null;

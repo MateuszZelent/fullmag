@@ -53,6 +53,35 @@ describe("liveBufferAnimation", () => {
     expect(scheduleInvalidate).toHaveBeenCalledTimes(2);
   });
 
+  it("does not clone the target buffer for animated transitions", () => {
+    const destination = new Float32Array([0, 10]);
+    const target = new Float32Array([10, 20]);
+    const originalSlice = target.slice.bind(target);
+    target.slice = (() => {
+      throw new Error("target buffer should not be cloned");
+    }) as typeof target.slice;
+    const frames: FrameRequestCallback[] = [];
+
+    applyLiveBufferTransition({
+      destination,
+      target,
+      durationMs: 100,
+      reducedMotion: false,
+      now: () => 0,
+      requestFrame: (callback) => {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelFrame: vi.fn(),
+      markNeedsUpdate: vi.fn(),
+      scheduleInvalidate: vi.fn(),
+    });
+
+    target.slice = originalSlice;
+    frames.shift()?.(100);
+    expect(Array.from(destination)).toEqual([10, 20]);
+  });
+
   it("can finish the target buffer when an interrupted transition is superseded", () => {
     const destination = new Float32Array([0, 0]);
     const target = new Float32Array([10, 20]);

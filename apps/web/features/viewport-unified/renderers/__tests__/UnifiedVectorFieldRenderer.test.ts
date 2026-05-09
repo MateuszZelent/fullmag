@@ -5,18 +5,19 @@ import {
   shouldApplyVectorSurfaceCameraAutoFit,
   shouldRenderVectorSurfaceCanvas,
   shouldShowVectorSurfaceOrientationReference,
+  toVectorSurfaceRenderBuffer,
 } from "../UnifiedVectorFieldRenderer";
 import type { Viewport3DModel } from "../../model/viewport3dContracts";
 
 describe("shouldRenderVectorSurfaceCanvas", () => {
-  it("keeps a hidden VectorSurface canvas mounted so frameloop=never can preserve GPU state", () => {
+  it("does not render a hidden VectorSurface canvas", () => {
     expect(
       shouldRenderVectorSurfaceCanvas({
         canvasEnabled: true,
         hostReady: true,
         viewportVisible: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("renders only when the canvas feature, event host, and visible viewport are all active", () => {
@@ -41,6 +42,23 @@ describe("shouldRenderVectorSurfaceCanvas", () => {
         viewportVisible: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("toVectorSurfaceRenderBuffer", () => {
+  it("converts backend Float64 vectors to a scaled Float32 render buffer", () => {
+    const raw = new Float64Array([1, 2, 3]);
+    const render = toVectorSurfaceRenderBuffer(raw, 0.5);
+
+    expect(render).toBeInstanceOf(Float32Array);
+    expect(render).not.toBe(raw);
+    expect(Array.from(render)).toEqual([0.5, 1, 1.5]);
+  });
+
+  it("reuses an unscaled Float32 render buffer without copying", () => {
+    const raw = new Float32Array([1, 2, 3]);
+
+    expect(toVectorSurfaceRenderBuffer(raw, 1)).toBe(raw);
   });
 });
 

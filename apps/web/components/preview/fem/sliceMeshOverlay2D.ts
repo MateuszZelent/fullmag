@@ -11,11 +11,32 @@ import { buildSliceVisibilityState } from "./femSliceUtils";
 export interface SliceMeshOverlaySegment2D {
   a: [number, number];
   b: [number, number];
+  partId?: string | null;
 }
 
 export interface SliceMeshOverlay2D {
   topologyKey: string;
   segments: SliceMeshOverlaySegment2D[];
+}
+
+export const SLICE_MESH_OVERLAY_SOFT_SEGMENT_CAP = 20_000;
+export const SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP = 50_000;
+
+export function capSliceMeshOverlay2D(
+  overlay: SliceMeshOverlay2D,
+  hardCap = SLICE_MESH_OVERLAY_HARD_SEGMENT_CAP,
+): SliceMeshOverlay2D {
+  if (overlay.segments.length <= hardCap) {
+    return overlay;
+  }
+  const stride = Math.ceil(overlay.segments.length / hardCap);
+  return {
+    topologyKey: `${overlay.topologyKey}:sampled:${stride}`,
+    segments: Array.from(
+      { length: hardCap },
+      (_, index) => overlay.segments[Math.floor((index * overlay.segments.length) / hardCap)]!,
+    ),
+  };
 }
 
 export interface BuildExactSliceMeshOverlay2DArgs {
@@ -27,6 +48,7 @@ export interface BuildExactSliceMeshOverlay2DArgs {
   airSegmentVisible: boolean;
   objectViewMode: ObjectViewMode;
   visibleObjectIds: Iterable<string>;
+  partRoleFilter?: ReadonlySet<FemMeshPart["role"]>;
 }
 
 function resolveExactSliceCutWorld(
@@ -95,12 +117,19 @@ export function buildExactSliceMeshOverlay2D(
       "visible-context",
     ),
   ).value;
+  const segments = args.partRoleFilter
+    ? topology.segments.filter((segment) => {
+        const part = segment.partId ? visibility.partById.get(segment.partId) : null;
+        return part ? args.partRoleFilter?.has(part.role) === true : false;
+      })
+    : topology.segments;
 
   return {
     topologyKey: key,
-    segments: topology.segments.map((segment) => ({
+    segments: segments.map((segment) => ({
       a: [segment.a[0], segment.a[1]],
       b: [segment.b[0], segment.b[1]],
+      partId: segment.partId,
     })),
   };
 }

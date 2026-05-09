@@ -626,6 +626,7 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
         airMeshWireframeScope={airboxDisplayState.wireframeScope}
         airMeshPointsScope={airboxDisplayState.pointsScope}
         airMeshVectorsScope={airboxDisplayState.vectorsScope}
+        hasSlice2DAirboxParts={_model.meshParts.some((part) => part.role === "air" || part.role === "outer_boundary")}
         slice2DEnabled={_viewport.effectiveViewMode === "2D"}
         slice2DToolbar={slice2DToolbar}
         slice2DDiagnostics={null}

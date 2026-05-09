@@ -215,8 +215,9 @@ export function buildSlice2DChartTopologyKey(
   yLen: number,
   meshSegmentCount = 0,
   vectorGlyphCount = 0,
+  meshTopologyKey: string | null = null,
 ): string {
-  return `${plane}:${xLen}:${yLen}:mesh:${meshSegmentCount}:vectors:${vectorGlyphCount}`;
+  return `${plane}:${xLen}:${yLen}:mesh:${meshTopologyKey ?? meshSegmentCount}:vectors:${vectorGlyphCount}`;
 }
 
 export function resolveHeatmapTooltipValue(params: unknown): [number, number, number] | null {
@@ -288,7 +289,10 @@ export function buildSlice2DChartOption(args: {
   plane: SlicePlane;
   bounds?: FieldSliceBounds | null;
   showQuantity: boolean;
-  meshOverlay?: { segments: Array<{ a: [number, number]; b: [number, number] }> } | null;
+  meshOverlay?: {
+    topologyKey?: string | null;
+    segments: Array<{ a: [number, number]; b: [number, number] }>;
+  } | null;
   vectorGlyphs?: StyledVectorGlyph2D[];
 }): Record<string, unknown> {
   const THEME = ECHARTS_THEME;

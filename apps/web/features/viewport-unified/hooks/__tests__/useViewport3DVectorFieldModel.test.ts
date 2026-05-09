@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildViewport3DVectorFieldModel } from "../useViewport3DVectorFieldModel";
+import {
+  buildViewport3DVectorFieldModel,
+  canReuseViewport3DVectorFieldModelData,
+  isViewport3DVectorFieldRenderable,
+  retainRenderableViewport3DVectorFieldData,
+} from "../useViewport3DVectorFieldModel";
 import type { DecodedFieldVector } from "@/src/api/codecs/types";
 
 function vector(overrides: Partial<DecodedFieldVector> = {}): DecodedFieldVector {
@@ -98,5 +103,76 @@ describe("buildViewport3DVectorFieldModel", () => {
     expect(model.status).toBe("mismatch");
     expect(model.error).toContain("field.pointCount=4");
     expect(model.error).toContain("adapterPointCount=5");
+  });
+});
+
+describe("retainRenderableViewport3DVectorFieldData", () => {
+  it("keeps the last ready vector payload renderable while the next revision is loading", () => {
+    const previous = buildViewport3DVectorFieldModel({
+      quantityId: "m",
+      fieldRevision: 11,
+      domainGenerationId: 7,
+      colorComponent: "3D",
+      vectorsVisible: true,
+      vectorCapabilityEnabled: true,
+      quantityComponentCount: 3,
+      everyN: 1,
+      adapterPointCount: 4,
+      field: vector(),
+      loading: false,
+      error: null,
+    });
+    const loading = buildViewport3DVectorFieldModel({
+      quantityId: "m",
+      fieldRevision: 12,
+      domainGenerationId: 7,
+      colorComponent: "3D",
+      vectorsVisible: true,
+      vectorCapabilityEnabled: true,
+      quantityComponentCount: 3,
+      everyN: 1,
+      adapterPointCount: 4,
+      field: null,
+      loading: true,
+      error: null,
+    });
+
+    const retained = retainRenderableViewport3DVectorFieldData(loading, previous);
+
+    expect(retained.status).toBe("loading");
+    expect(retained.data).toBe(previous.data);
+    expect(retained.pointCount).toBe(4);
+    expect(retained.sampledCount).toBe(4);
+    expect(isViewport3DVectorFieldRenderable(retained)).toBe(true);
+  });
+
+  it("does not reuse a previous payload for a different quantity or topology", () => {
+    const previous = buildViewport3DVectorFieldModel({
+      quantityId: "m",
+      fieldRevision: 11,
+      domainGenerationId: 7,
+      colorComponent: "3D",
+      vectorsVisible: true,
+      vectorCapabilityEnabled: true,
+      quantityComponentCount: 3,
+      everyN: 1,
+      adapterPointCount: 4,
+      field: vector(),
+      loading: false,
+      error: null,
+    });
+
+    expect(
+      canReuseViewport3DVectorFieldModelData(
+        { ...previous, status: "loading", quantityId: "H_eff", data: null },
+        previous,
+      ),
+    ).toBe(false);
+    expect(
+      canReuseViewport3DVectorFieldModelData(
+        { ...previous, status: "loading", domainGenerationId: 8, data: null },
+        previous,
+      ),
+    ).toBe(false);
   });
 });

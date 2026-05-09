@@ -5,7 +5,10 @@ import type { BooleanOp, PrimitiveKind } from "@/features/geometry-builder/model
 import type { CapabilityMap } from "@/src/api/types";
 import type { ResolvedTrimState } from "@/components/runs/control-room/visualizationStateSync";
 import { isFemDiscretization } from "@/src/domain/capabilities";
-import type { Slice2DToolbarState } from "@/src/features/slice2d";
+import {
+  resolveSlice2DAvailability,
+  type Slice2DToolbarState,
+} from "@/src/features/slice2d";
 import type { VisualizationStatePatch } from "@/src/api/types";
 
 export type ResultAnalysisKind =
@@ -66,6 +69,7 @@ export interface RibbonCommandContext {
   airMeshWireframeScope?: AirboxDisplayScope | null;
   airMeshPointsScope?: AirboxDisplayScope | null;
   airMeshVectorsScope?: AirboxDisplayScope | null;
+  hasSlice2DAirboxParts?: boolean | null;
   slice2DToolbar?: Slice2DToolbarState | null;
   viewportAxesScope?: "universe" | "object";
   universeWireframeVisible?: boolean;
@@ -577,7 +581,11 @@ function supportsSlice2DRenderMode(
   ctx: RibbonCommandContext,
   renderMode: Slice2DToolbarState["renderMode"],
 ): boolean {
-  const mode = currentSlice2DMode(ctx);
+  const availability = resolveSlice2DAvailability({
+    isFemBackend: supportsFemMeshActions(ctx),
+    mode: currentSlice2DMode(ctx),
+    hasAirboxParts: ctx.hasSlice2DAirboxParts,
+  });
   switch (renderMode) {
     case "heatmap":
       return true;
@@ -585,16 +593,28 @@ function supportsSlice2DRenderMode(
     case "heatmap+contour":
       return false;
     case "vectors":
-      return mode === "single";
+      return availability.vectors.enabled;
     case "mesh-overlay":
-      return mode === "single" && supportsFemMeshActions(ctx);
+      return availability.meshOverlay.enabled;
     default:
       return false;
   }
 }
 
 function supportsSlice2DMeshOverlay(ctx: RibbonCommandContext): boolean {
-  return currentSlice2DMode(ctx) === "single" && supportsFemMeshActions(ctx);
+  return resolveSlice2DAvailability({
+    isFemBackend: supportsFemMeshActions(ctx),
+    mode: currentSlice2DMode(ctx),
+    hasAirboxParts: ctx.hasSlice2DAirboxParts,
+  }).meshOverlay.enabled;
+}
+
+function supportsSlice2DAirbox(ctx: RibbonCommandContext): boolean {
+  return resolveSlice2DAvailability({
+    isFemBackend: supportsFemMeshActions(ctx),
+    mode: currentSlice2DMode(ctx),
+    hasAirboxParts: ctx.hasSlice2DAirboxParts,
+  }).airbox.enabled;
 }
 
 function supportsSlice2DModeCommand(
@@ -856,10 +876,15 @@ export function canExecuteRibbonCommand(
       return supportsSlice2DRenderMode(ctx, command.renderMode)
         && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function");
     case "viewport.set-slice-primitives":
-    case "viewport.set-slice-airbox":
-    case "viewport.set-slice-airbox-render-mode":
     case "viewport.set-slice-airbox-vectors":
       return false;
+    case "viewport.set-slice-airbox":
+      return supportsSlice2DAirbox(ctx)
+        && typeof ctx.onSetSlice2DToolbar === "function";
+    case "viewport.set-slice-airbox-render-mode":
+      return command.renderMode === "wireframe"
+        && supportsSlice2DAirbox(ctx)
+        && typeof ctx.onSetSlice2DToolbar === "function";
     case "viewport.set-slice-mesh":
       return supportsSlice2DMeshOverlay(ctx)
         && (canPatchVisualizationCommand(ctx, command) || typeof ctx.onSetSlice2DToolbar === "function");
@@ -996,6 +1021,18 @@ export function executeRibbonCommand(
     typeof ctx.onSetAirboxDisplay === "function"
   ) {
     ctx.onSetAirboxDisplay(command.patch);
+    return;
+  }
+  if (
+    (command.id === "viewport.set-slice-airbox" ||
+      command.id === "viewport.set-slice-airbox-render-mode") &&
+    typeof ctx.onSetSlice2DToolbar === "function"
+  ) {
+    if (command.id === "viewport.set-slice-airbox") {
+      ctx.onSetSlice2DToolbar({ showAirbox: command.visible });
+    } else {
+      ctx.onSetSlice2DToolbar({ airboxRenderMode: command.renderMode });
+    }
     return;
   }
   const visualizationPatch = visualizationPatchFromRibbonCommand(command);

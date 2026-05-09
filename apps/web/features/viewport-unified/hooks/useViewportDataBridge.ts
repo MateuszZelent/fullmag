@@ -33,7 +33,10 @@ import { selectionFromControlRoomState } from "@/src/features/workspaceSync";
 import type { MeshWorkspaceModel } from "@/src/features/meshWorkspace";
 import type { Slice2DModel } from "@/src/features/slice2d";
 import { useViewport3DController } from "@/features/viewport-unified/hooks/useViewport3DController";
-import { useViewport3DVectorFieldModel } from "@/features/viewport-unified/hooks/useViewport3DVectorFieldModel";
+import {
+  isViewport3DVectorFieldRenderable,
+  useViewport3DVectorFieldModel,
+} from "@/features/viewport-unified/hooks/useViewport3DVectorFieldModel";
 import { resolveViewportInternalToolbarModes } from "@/features/viewport-unified/registry/viewport3dRenderRegistry";
 import { mapRouteFlagsToViewport3DStages } from "@/features/viewport-unified/model/viewport3dFlags";
 import { resolveViewport3DRolloutRoute } from "@/features/viewport-unified/model/viewport3dRolloutRoute";
@@ -54,6 +57,7 @@ import {
   resolveViewportBridgeActivity,
   type ViewportBridgeMode,
 } from "@/features/viewport-unified/model/viewportBridgeActivity";
+import { resolveViewport3DFieldRoles } from "@/features/viewport-unified/model/viewport3dFieldRoles";
 import {
   buildViewportFitSeed,
   useViewportGraphCameraBridge,
@@ -92,7 +96,10 @@ import {
   textureTransformToLocal,
 } from "@/components/runs/control-room/viewportUtils";
 import type { Vec3, Quat } from "@/components/runs/control-room/viewportUtils";
-import { deriveFemLayerRenderState } from "@/components/runs/control-room/viewportLayers";
+import {
+  deriveFemLayerRenderState,
+  resolveMagneticTextureColorField,
+} from "@/components/runs/control-room/viewportLayers";
 import {
   visualizationPatchForClip,
   visualizationPatchForFemLayers,
@@ -208,6 +215,18 @@ function numericRevision(value: number | string | null | undefined): number | nu
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function scaleFieldComponentForRender(
+  values: ArrayLike<number> | null | undefined,
+  scaleFactor: number,
+): Float32Array | null {
+  if (!values) return null;
+  const scaled = new Float32Array(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    scaled[index] = values[index] * scaleFactor;
+  }
+  return scaled;
 }
 
 function deriveSliceSampling(
@@ -471,15 +490,45 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
     null;
   const vectorDomainGenerationId = runtimeResourceRevisions?.domain_generation_id ?? 0;
 
+  const quantityDescriptorByIdFor3D = useMemo(
+    () => new Map(ctx.quantities.map((quantity) => [quantity.id, quantity] as const)),
+    [ctx.quantities],
+  );
+  const viewport3DFieldRoles = useMemo(
+    () =>
+      resolveViewport3DFieldRoles({
+        selectedQuantity: ctx.selectedQuantity ?? null,
+        quantities: ctx.quantities,
+        showQuantity: viz.femViewportLayers.showQuantity,
+        showMagneticTexture: viz.femViewportLayers.showMagneticTexture,
+        vectorDomainFilter: vectorViz.domainFilter,
+      }),
+    [
+      ctx.quantities,
+      ctx.selectedQuantity,
+      vectorViz.domainFilter,
+      viz.femViewportLayers.showMagneticTexture,
+      viz.femViewportLayers.showQuantity,
+    ],
+  );
+  const glyphQuantityDescriptor =
+    viewport3DFieldRoles.glyphQuantityId
+      ? quantityDescriptorByIdFor3D.get(viewport3DFieldRoles.glyphQuantityId) ?? null
+      : null;
+  const shaderQuantityDescriptor =
+    viewport3DFieldRoles.shaderQuantityId
+      ? quantityDescriptorByIdFor3D.get(viewport3DFieldRoles.shaderQuantityId) ?? null
+      : null;
+
   /* ── FEM vector scopes ── */
-  const femVectorScopes = useMemo(
+  const glyphFemVectorScopes = useMemo(
     () =>
       deriveFemVectorScopes({
         meshParts: ctx.meshParts,
         meshEntityViewState: ctx.meshEntityViewState,
         airMeshVisible: viz.airMeshVisible,
         vectorDomainFilter: vectorViz.domainFilter,
-        selectedFieldDomain: femMeshData?.quantityDomain ?? null,
+        selectedFieldDomain: glyphQuantityDescriptor?.domain ?? femMeshData?.quantityDomain ?? null,
       }),
     [
       viz.airMeshVisible,
@@ -487,16 +536,46 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
       ctx.meshEntityViewState,
       ctx.meshParts,
       femMeshData?.quantityDomain,
+      glyphQuantityDescriptor?.domain,
     ],
   );
-  const vectorFetchScope =
-    femDiscretization && femVectorScopes.length === 1
-      ? femVectorScopes[0]
+  const shaderFemVectorScopes = useMemo(
+    () =>
+      deriveFemVectorScopes({
+        meshParts: ctx.meshParts,
+        meshEntityViewState: ctx.meshEntityViewState,
+        airMeshVisible: viz.airMeshVisible,
+        vectorDomainFilter: vectorViz.domainFilter,
+        selectedFieldDomain: shaderQuantityDescriptor?.domain ?? femMeshData?.quantityDomain ?? null,
+      }),
+    [
+      viz.airMeshVisible,
+      vectorViz.domainFilter,
+      ctx.meshEntityViewState,
+      ctx.meshParts,
+      femMeshData?.quantityDomain,
+      shaderQuantityDescriptor?.domain,
+    ],
+  );
+  const glyphVectorFetchScope =
+    femDiscretization && glyphFemVectorScopes.length === 1
+      ? glyphFemVectorScopes[0]
       : { kind: "full" as const };
-  const vectorAdapterPointCount = femDiscretization
-    ? vectorFetchScope.kind !== "full"
+  const shaderVectorFetchScope =
+    femDiscretization && shaderFemVectorScopes.length === 1
+      ? shaderFemVectorScopes[0]
+      : { kind: "full" as const };
+  const glyphVectorAdapterPointCount = femDiscretization
+    ? glyphVectorFetchScope.kind !== "full"
       ? null
-      : ctx.quantityDescriptor?.location === "cell"
+      : glyphQuantityDescriptor?.location === "cell"
+        ? ctx.femMeshData?.nElements ?? null
+        : ctx.femMeshData?.nNodes ?? null
+    : Math.max(0, ctx.previewGrid[0] * ctx.previewGrid[1] * ctx.previewGrid[2]);
+  const shaderVectorAdapterPointCount = femDiscretization
+    ? shaderVectorFetchScope.kind !== "full"
+      ? null
+      : shaderQuantityDescriptor?.location === "cell"
         ? ctx.femMeshData?.nElements ?? null
         : ctx.femMeshData?.nNodes ?? null
     : Math.max(0, ctx.previewGrid[0] * ctx.previewGrid[1] * ctx.previewGrid[2]);
@@ -526,36 +605,36 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
 
   /* ── 3D vector glyph model: arrows only, with glyph-density controls. ── */
   const viewport3DVectorField = useViewport3DVectorFieldModel({
-    quantityId: ctx.selectedQuantity ?? null,
+    quantityId: viewport3DFieldRoles.glyphQuantityId,
     fieldRevision: vectorFieldRevision,
     domainGenerationId: vectorDomainGenerationId,
-    adapterPointCount: vectorAdapterPointCount,
+    adapterPointCount: glyphVectorAdapterPointCount,
     colorComponent:
       ctx.effectiveVectorComponent === "magnitude" ? "|v|" : ctx.effectiveVectorComponent,
     vectorsVisible: vectorGlyphDataNeeded,
     vectorCapabilityEnabled,
     unsupportedReason: null,
-    quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
+    quantityComponentCount: glyphQuantityDescriptor?.n_comp ?? null,
     everyN: ctx.requestedPreviewEveryN,
     maxGlyphs: ctx.requestedPreviewMaxPoints,
-    scope: vectorFetchScope,
+    scope: glyphVectorFetchScope,
     auditRole: "glyph",
   });
   /* ── 3D shader field model: dense field data for mesh coloring/texture. ── */
   const viewport3DShaderField = useViewport3DVectorFieldModel({
-    quantityId: ctx.selectedQuantity ?? null,
+    quantityId: viewport3DFieldRoles.shaderQuantityId,
     fieldRevision: vectorFieldRevision,
     domainGenerationId: vectorDomainGenerationId,
-    adapterPointCount: vectorAdapterPointCount,
+    adapterPointCount: shaderVectorAdapterPointCount,
     colorComponent:
       ctx.effectiveVectorComponent === "magnitude" ? "|v|" : ctx.effectiveVectorComponent,
     vectorsVisible: shaderFieldDataNeeded,
     vectorCapabilityEnabled,
     unsupportedReason: null,
-    quantityComponentCount: ctx.quantityDescriptor?.n_comp ?? null,
+    quantityComponentCount: shaderQuantityDescriptor?.n_comp ?? null,
     everyN: 1,
     maxGlyphs: null,
-    scope: vectorFetchScope,
+    scope: shaderVectorFetchScope,
     auditRole: "shader",
   });
   const hasVectorData = Boolean(
@@ -830,8 +909,9 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
         objectOverlays: displayObjectOverlays,
         meshOpacity: renderPlan?.layers.meshOpacityPercent ?? viz.meshOpacity,
         colorField: ctx.femColorField,
-        magneticTextureColorField:
-          ctx.selectedQuantity === "m" ? "orientation" : "none",
+        magneticTextureColorField: resolveMagneticTextureColorField({
+          showMagneticTexture: femLayerState.showMagneticTexture,
+        }),
         showArrows: renderPlan?.layers.vectorsVisible ?? vectorViz.showArrows,
       }),
     [
@@ -1159,13 +1239,9 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
 
   const scaledVectors = useMemo(() => {
     return measureFrontendAudit("scaledVectors", () => {
-      if (!ctx.selectedVectors || scaleFactor === 1.0) return ctx.selectedVectors;
-      const arr = new Float64Array(ctx.selectedVectors.length);
-      incrementFrontendAuditCounter("typedArrayAllocations", 1);
-      for (let i = 0; i < arr.length; i++) arr[i] = ctx.selectedVectors[i] * scaleFactor;
-      return arr;
+      return ctx.selectedVectors;
     });
-  }, [ctx.selectedVectors, scaleFactor]);
+  }, [ctx.selectedVectors]);
 
   const scaledFetched3DVectors = useMemo(() => {
     return measureFrontendAudit("scaledFetched3DVectors", () => {
@@ -1173,15 +1249,10 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
       if (viewport3DVectorField.status !== "ready") return null;
       const values = viewport3DVectorField.data?.values ?? null;
       if (!values) return null;
-      if (scaleFactor === 1.0) return values;
-      const arr = new Float64Array(values.length);
-      incrementFrontendAuditCounter("typedArrayAllocations", 1);
-      for (let i = 0; i < arr.length; i++) arr[i] = values[i] * scaleFactor;
-      return arr;
+      return values;
     });
   }, [
     bridgeActivity.data3DActive,
-    scaleFactor,
     viewport3DVectorField.data,
     viewport3DVectorField.status,
   ]);
@@ -1270,15 +1341,21 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
     if (typeof slice2DToolbarPatch.positionPercent === "number") {
       localProjectionPatch.positionPercent = slice2DToolbarPatch.positionPercent;
     }
+    if (typeof slice2DToolbarPatch.showAirbox === "boolean") {
+      localProjectionPatch.showAirbox = slice2DToolbarPatch.showAirbox;
+    }
+    if (slice2DToolbarPatch.airboxRenderMode) {
+      localProjectionPatch.airboxRenderMode = slice2DToolbarPatch.airboxRenderMode;
+    }
+    if (typeof slice2DToolbarPatch.showAirboxVectors === "boolean") {
+      localProjectionPatch.showAirboxVectors = slice2DToolbarPatch.showAirboxVectors;
+    }
     const layerControlledToolbar = femDiscretization
         ? {
           ...slice2DBaseModel.toolbar,
           showPrimitives: viz.femViewportLayers.showPrimitives,
           showMesh: viz.femViewportLayers.showMesh,
           showMagneticTexture: viz.femViewportLayers.showMagneticTexture,
-          showAirbox: false,
-          airboxRenderMode: "wireframe" as const,
-          showAirboxVectors: false,
           showQuantity: viz.femViewportLayers.showQuantity,
         }
       : slice2DBaseModel.toolbar;
@@ -1395,9 +1472,9 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
         ...femMeshData,
         fieldData: {
           ...fld,
-          x: fld.x ? Float64Array.from(fld.x, (v) => v * scaleFactor) : null,
-          y: fld.y ? Float64Array.from(fld.y, (v) => v * scaleFactor) : null,
-          z: fld.z ? Float64Array.from(fld.z, (v) => v * scaleFactor) : null,
+          x: scaleFieldComponentForRender(fld.x, scaleFactor),
+          y: scaleFieldComponentForRender(fld.y, scaleFactor),
+          z: scaleFieldComponentForRender(fld.z, scaleFactor),
         },
       } as typeof femMeshData;
     });
@@ -1424,32 +1501,27 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
   const scopedFetchedFemMeshData = useMemo(() => {
     return measureFrontendAudit("scopedFetchedFemMeshData", () => {
       if (
-        !bridgeActivity.data3DActive ||
         !bridgeActivity.shaderFieldDataNeeded ||
         !scaledFemMeshData ||
         !femDiscretization ||
-        vectorFetchScope.kind === "full" ||
-        viewport3DShaderField.status !== "ready" ||
-        !viewport3DShaderField.data
+        !isViewport3DVectorFieldRenderable(viewport3DShaderField)
       ) return scaledFemMeshData;
+      const shaderField = viewport3DShaderField.data;
+      if (!shaderField) return scaledFemMeshData;
       const dense = buildDenseFemVectorField({
         nNodes: scaledFemMeshData.nNodes,
         meshParts: ctx.meshParts,
-        frames: [{ scope: vectorFetchScope, field: viewport3DShaderField.data }],
+        frames: [{ scope: shaderVectorFetchScope, field: shaderField }],
       });
       if (!dense) return scaledFemMeshData;
-      const values =
-        scaleFactor === 1.0
-          ? dense.values
-          : Float64Array.from(dense.values, (v) => v * scaleFactor);
-      const x = new Float64Array(scaledFemMeshData.nNodes);
-      const y = new Float64Array(scaledFemMeshData.nNodes);
-      const z = new Float64Array(scaledFemMeshData.nNodes);
-      incrementFrontendAuditCounter("typedArrayAllocations", scaleFactor === 1.0 ? 3 : 4);
+      const x = new Float32Array(scaledFemMeshData.nNodes);
+      const y = new Float32Array(scaledFemMeshData.nNodes);
+      const z = new Float32Array(scaledFemMeshData.nNodes);
+      incrementFrontendAuditCounter("typedArrayAllocations", 3);
       for (let i = 0; i < scaledFemMeshData.nNodes; i++) {
-        x[i] = values[i * 3] ?? 0;
-        y[i] = values[i * 3 + 1] ?? 0;
-        z[i] = values[i * 3 + 2] ?? 0;
+        x[i] = (dense.values[i * 3] ?? 0) * scaleFactor;
+        y[i] = (dense.values[i * 3 + 1] ?? 0) * scaleFactor;
+        z[i] = (dense.values[i * 3 + 2] ?? 0) * scaleFactor;
       }
       return {
         ...scaledFemMeshData,
@@ -1460,13 +1532,12 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
       };
     });
   }, [
-    bridgeActivity.data3DActive,
     bridgeActivity.shaderFieldDataNeeded,
     ctx.meshParts,
     femDiscretization,
     scaleFactor,
     scaledFemMeshData,
-    vectorFetchScope,
+    shaderVectorFetchScope,
     viewport3DShaderField.data,
     viewport3DShaderField.fieldRevision,
     viewport3DShaderField.status,
@@ -1557,6 +1628,7 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
       focusObjectRequest: selection.focusObjectRequest,
       objectViewMode: ctx.objectViewMode,
       settings: fdmVisualizationSettings,
+      vectorValueScale: scaleFactor,
       onSettingsChange: setFdmVisualizationSettingsAction,
       onAntennaTranslate: ctx.applyAntennaTranslation,
       onGeometryTranslate: ctx.applyGeometryTranslation,
@@ -1584,6 +1656,7 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
       ctx.objectViewMode,
       ctx.previewGrid,
       setFdmVisualizationSettingsAction,
+      scaleFactor,
       ctx.worldCenter,
       ctx.worldExtent,
       handleVectorSurfaceTransformScopeChange,

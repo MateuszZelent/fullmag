@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendScalarRowsBounded,
+  buildMetadataOnlyLatestFieldFramesFromCatalogs,
   decideFieldVectorFetch,
   isNegativeDataPlaneResponse,
   mapResourceQuantities,
@@ -150,6 +151,129 @@ describe("mapResourceQuantities", () => {
       available: true,
       data_available: true,
     });
+  });
+});
+
+describe("buildMetadataOnlyLatestFieldFramesFromCatalogs", () => {
+  it("creates metadata-only latest frames for every available vector field", () => {
+    const frames = buildMetadataOnlyLatestFieldFramesFromCatalogs({
+      sessionId: "session-a",
+      runId: "run-a",
+      sourceStep: 7,
+      sourceTime: 2e-9,
+      fallbackGrid: [0, 0, 0],
+      quantityCatalog: {
+        quantities: [
+          {
+            id: "m",
+            label: "Magnetization",
+            unit: "",
+            location: "node",
+            domain: "magnetic_only",
+            n_comp: 3,
+            normalization_hint: "unit_vector",
+            interactive_preview: true,
+            supports_preview_2d: true,
+            supports_preview_3d: true,
+            supports_history: false,
+            supports_export: true,
+            quick_access_label: "m",
+            scalar_metric_key: null,
+            shape: "vector_field",
+          },
+          {
+            id: "H_eff",
+            label: "Effective field",
+            unit: "A/m",
+            location: "node",
+            domain: "full_domain",
+            n_comp: 3,
+            normalization_hint: "max_abs",
+            interactive_preview: true,
+            supports_preview_2d: true,
+            supports_preview_3d: true,
+            supports_history: false,
+            supports_export: true,
+            quick_access_label: "H_eff",
+            scalar_metric_key: null,
+            shape: "vector_field",
+          },
+          {
+            id: "E_total",
+            label: "Energy",
+            unit: "J",
+            location: "global",
+            domain: "magnetic_only",
+            n_comp: 1,
+            normalization_hint: "none",
+            interactive_preview: false,
+            supports_preview_2d: false,
+            supports_preview_3d: false,
+            supports_history: true,
+            supports_export: true,
+            quick_access_label: null,
+            scalar_metric_key: "E_total",
+            shape: "scalar",
+          },
+        ],
+      },
+      fieldCatalog: {
+        revision: 12,
+        domain_generation_id: 5,
+        quantities: [
+          {
+            quantity_id: "m",
+            label: "Magnetization",
+            kind: "vector_field",
+            components: 3,
+            location: "node",
+            unit: "",
+            field_revision: 12,
+            domain_generation_id: 5,
+            available: true,
+          },
+          {
+            quantity_id: "H_eff",
+            label: "Effective field",
+            kind: "vector_field",
+            components: 3,
+            location: "node",
+            unit: "A/m",
+            field_revision: 13,
+            domain_generation_id: 5,
+            available: true,
+          },
+          {
+            quantity_id: "H_demag",
+            label: "Demag field",
+            kind: "vector_field",
+            components: 3,
+            location: "node",
+            unit: "A/m",
+            field_revision: 14,
+            domain_generation_id: 5,
+            available: false,
+          },
+          {
+            quantity_id: "E_total",
+            label: "Energy",
+            kind: "scalar",
+            components: 1,
+            location: "global",
+            unit: "J",
+            field_revision: 12,
+            domain_generation_id: 5,
+            available: true,
+          },
+        ],
+      },
+    });
+
+    expect(Object.keys(frames).sort()).toEqual(["H_eff", "m"]);
+    expect(frames.m.values.byteLength).toBe(0);
+    expect(frames.m.topology_signature).toBe("gen:5");
+    expect(frames.H_eff.domain).toBe("full_domain");
+    expect(frames.H_eff.field_revision).toBe(13);
   });
 });
 

@@ -223,6 +223,69 @@ export function mapResourceQuantities(
   });
 }
 
+export function buildMetadataOnlyLatestFieldFramesFromCatalogs(args: {
+  sessionId: string | null;
+  runId: string | null;
+  sourceStep: number | null;
+  sourceTime: number | null;
+  fallbackGrid: [number, number, number];
+  quantityCatalog: {
+    quantities: Array<{
+      id: string;
+      domain: string;
+    }>;
+  };
+  fieldCatalog: {
+    domain_generation_id: number;
+    quantities: Array<{
+      quantity_id: string;
+      kind: string;
+      components: number;
+      location: string;
+      unit: string;
+      field_revision: number;
+      domain_generation_id: number;
+      available: boolean;
+    }>;
+  };
+}): Record<string, LatestFieldFrame> {
+  if (!args.sessionId || !args.runId) {
+    return {};
+  }
+  const quantityDomainById = new Map(
+    args.quantityCatalog.quantities.map((quantity) => [quantity.id, quantity.domain] as const),
+  );
+  const frames: Record<string, LatestFieldFrame> = {};
+  for (const field of args.fieldCatalog.quantities) {
+    if (!field.available || field.components < 3 || field.kind !== "vector_field") {
+      continue;
+    }
+    frames[field.quantity_id] = {
+      quantity_id: field.quantity_id,
+      unit: field.unit,
+      n_comp: field.components,
+      grid: args.fallbackGrid,
+      values: new Float64Array(0),
+      active_mask: null,
+      location: field.location,
+      domain:
+        quantityDomainById.get(field.quantity_id) === "full_domain"
+          ? "full_domain"
+          : "magnetic_only",
+      topology_signature:
+        field.domain_generation_id > 0
+          ? `gen:${field.domain_generation_id}`
+          : args.fieldCatalog.domain_generation_id > 0
+            ? `gen:${args.fieldCatalog.domain_generation_id}`
+            : null,
+      field_revision: field.field_revision,
+      source_step: args.sourceStep,
+      source_time: args.sourceTime,
+    };
+  }
+  return frames;
+}
+
 export interface FieldVectorFetchDecision {
   shouldFetch: boolean;
   component: FieldComponent;
@@ -511,26 +574,6 @@ export function useDataPlaneBridge(
           stats,
           nComp: result.nComp as FieldFrameEnvelope["nComp"],
         };
-        const nextFieldFrame: LatestFieldFrame = {
-          quantity_id: envelope.quantityId,
-          unit: "",
-          n_comp: result.nComp,
-          grid: result.grid,
-          values: result.values,
-          active_mask: null,
-          location: envelope.location,
-          domain: envelope.domain,
-          topology_signature:
-            envelope.meshGenerationId && envelope.meshGenerationId.length > 0
-              ? `gen:${envelope.meshGenerationId}`
-              : envelope.topologyHash && envelope.topologyHash.length > 0
-                ? `hash:${envelope.topologyHash}`
-                : null,
-          field_revision: rev,
-          source_step: envelope.sourceStep,
-          source_time: envelope.sourceTime,
-        };
-
         // Merge into store — only update field-related fields
         if (!isCurrentRequest()) return;
         const current = useSessionRuntimeStore.getState();
@@ -557,10 +600,7 @@ export function useDataPlaneBridge(
           resourceRevisions: current.resourceRevisions,
           displaySelection: current.displaySelection,
           previewConfig: current.previewConfig,
-          latestFieldFrames: {
-            ...current.latestFieldFrames,
-            [envelope.quantityId]: nextFieldFrame,
-          },
+          latestFieldFrames: current.latestFieldFrames,
           latestFieldGrid: result.grid,
           fieldFrameEnvelope: updatedEnvelope,
         });
@@ -1148,6 +1188,16 @@ export function useDataPlaneBridge(
 
         const current = useSessionRuntimeStore.getState();
         if (!isCurrentRequest()) return;
+        const quantities = mapResourceQuantities(quantityCatalog, fieldCatalog);
+        const metadataOnlyFieldFrames = buildMetadataOnlyLatestFieldFramesFromCatalogs({
+          sessionId: current.session?.session_id ?? null,
+          runId: current.run?.run_id ?? null,
+          sourceStep: current.liveState?.step ?? null,
+          sourceTime: current.liveState?.time ?? null,
+          fallbackGrid: current.liveState?.grid ?? [0, 0, 0],
+          quantityCatalog,
+          fieldCatalog,
+        });
         applyNormalizedState({
           stateVersion: current.stateVersion,
           session: current.session,
@@ -1156,7 +1206,7 @@ export function useDataPlaneBridge(
           liveState: current.liveState,
           scalarRows: current.scalarRows,
           engineLog: current.engineLog,
-          quantities: mapResourceQuantities(quantityCatalog, fieldCatalog),
+          quantities,
           artifacts: current.artifacts,
           femMesh: current.femMesh,
           preview: current.preview,
@@ -1171,7 +1221,10 @@ export function useDataPlaneBridge(
           resourceRevisions: current.resourceRevisions,
           displaySelection: current.displaySelection,
           previewConfig: current.previewConfig,
-          latestFieldFrames: current.latestFieldFrames,
+          latestFieldFrames: {
+            ...current.latestFieldFrames,
+            ...metadataOnlyFieldFrames,
+          },
           latestFieldGrid: current.latestFieldGrid,
           fieldFrameEnvelope: current.fieldFrameEnvelope,
         });

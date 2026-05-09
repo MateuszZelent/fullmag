@@ -32,6 +32,7 @@ import {
   GLYPH_BUDGET_MAX,
   GLYPH_BUDGET_MIN,
 } from "@/components/preview/fem/vectorDensityBudget";
+import { resolveSlice2DAvailability } from "@/src/features/slice2d";
 
 const QUANTITY_FALLBACKS = [
   { id: "m", label: "Magnetization / m" },
@@ -1037,23 +1038,20 @@ function queueSlicePositionCommand(
 function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
   const slice = canUse2D(ctx);
   const toolbar = ctx.slice2DToolbar;
-  const unsupportedAirboxReason = "2D airbox overlay is not implemented E2E yet";
-  const unsupportedContourReason = "2D contour rendering is not implemented E2E yet";
-  const unsupportedSlabReason = "Slab mode is not implemented E2E yet";
-  const unsupportedPrimitiveReason = "2D primitive overlays are not implemented E2E yet";
+  const availability = resolveSlice2DAvailability({
+    isFemBackend: Boolean(ctx.isFemBackend),
+    mode: toolbar?.mode ?? "single",
+    hasAirboxParts: ctx.hasSlice2DAirboxParts,
+  });
+  const unsupportedAirboxReason = availability.airbox.reason;
+  const unsupportedContourReason = availability.contour.reason;
+  const unsupportedSlabReason = availability.slab.reason;
+  const unsupportedPrimitiveReason = availability.primitives.reason;
   const component = toolbar?.component ?? "magnitude";
   const axis = toolbar?.axis ?? "z";
   const mode = toolbar?.mode ?? "single";
-  const unsupportedVectorReason =
-    mode !== "single"
-      ? "2D vectors currently support Single mode only"
-      : null;
-  const unsupportedMeshOverlayReason =
-    !ctx.isFemBackend
-      ? "2D mesh overlay requires FEM explicit topology"
-      : mode !== "single"
-        ? "2D mesh overlay currently supports Single mode only"
-        : null;
+  const unsupportedVectorReason = availability.vectors.reason;
+  const unsupportedMeshOverlayReason = availability.meshOverlay.reason;
   const unsupported2DMeshRenderModeReason =
     "2D uses slice overlay modes; 3D mesh render mode does not apply here";
   const renderMode = toolbar?.renderMode ?? "heatmap";
@@ -1242,9 +1240,9 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
         id: "view-slice-airbox",
         icon: <Box size={20} />,
         label: "Airbox",
-        tooltip: slice.reason ?? unsupportedAirboxReason,
+        tooltip: slice.reason ?? unsupportedAirboxReason ?? "Show 2D airbox overlay",
         active: showAirbox,
-        disabled: true,
+        disabled: Boolean(slice.reason ?? !availability.airbox.enabled),
         iconColor: "text-fuchsia-300",
         menu: [
           { type: "label", id: "slice:airbox:header", label: "2D airbox", badge: showAirbox ? "visible" : "hidden" },
@@ -1253,7 +1251,7 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:airbox:visible",
             label: "Airbox on/off",
             checked: showAirbox,
-            disabled: true,
+            disabled: Boolean(slice.reason ?? !availability.airbox.enabled),
             disabledReason: slice.reason ?? unsupportedAirboxReason,
             onCheckedChange: (visible) =>
               ctx.dispatchVisualization
@@ -1265,7 +1263,7 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             id: "slice:airbox:render-mode",
             label: "Airbox render",
             value: airboxRenderMode,
-            disabled: true,
+            disabled: Boolean(slice.reason ?? !availability.airbox.enabled),
             disabledReason: slice.reason ?? unsupportedAirboxReason,
             onValueChange: (renderMode) =>
               ctx.run({
@@ -1273,10 +1271,25 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
                 renderMode: renderMode as "surface" | "wireframe" | "surface+edges" | "points",
               }),
             items: [
-              { value: "surface", label: "Shaded" },
+              {
+                value: "surface",
+                label: "Shaded",
+                disabled: true,
+                disabledReason: "2D airbox surface mode is staged; wireframe is implemented",
+              },
               { value: "wireframe", label: "Wireframe" },
-              { value: "surface+edges", label: "Shaded + wireframe" },
-              { value: "points", label: "Points" },
+              {
+                value: "surface+edges",
+                label: "Shaded + wireframe",
+                disabled: true,
+                disabledReason: "2D airbox surface mode is staged; wireframe is implemented",
+              },
+              {
+                value: "points",
+                label: "Points",
+                disabled: true,
+                disabledReason: "2D airbox points mode is staged; wireframe is implemented",
+              },
             ],
           },
           {
@@ -1285,7 +1298,7 @@ function buildSlice2DGroup(ctx: RibbonBuildContext): RibbonGroup {
             label: "Vectors",
             checked: showAirboxVectors,
             disabled: true,
-            disabledReason: slice.reason ?? unsupportedAirboxReason,
+            disabledReason: slice.reason ?? availability.airboxVectors.reason,
             onCheckedChange: (visible) =>
               ctx.run({ id: "viewport.set-slice-airbox-vectors", visible }),
           },

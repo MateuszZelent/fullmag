@@ -78,7 +78,7 @@ const DEFAULT_FRONTEND_DIAGNOSTIC_FLAGS = {
     enableFemMeshView3DAutoFitInvalidate: true,
     enableFemMeshView3DAutoFitRecord: true,
     enableLegacyBinaryFemTopologyHydration: true,
-    enableBinaryFieldHydration: true,
+    enableBinaryFieldHydration: false,
     enableIdleLiveStatusPolling: false,
   },
   shell: {

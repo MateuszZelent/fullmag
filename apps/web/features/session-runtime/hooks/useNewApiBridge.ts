@@ -393,6 +393,7 @@ function mapLiveStatusToNormalized(
   const workspaceStatus = runtimeStatus.code || status.solver.state || "idle";
   const displaySelection = mapCurrentDisplaySelection(status);
   const previewConfig = mapPreviewConfig(status);
+  const fieldFrameEnvelope = mapFieldFrameEnvelope(status, quantityById);
 
   return {
     stateVersion: status.resources.fields_revision,
@@ -417,9 +418,38 @@ function mapLiveStatusToNormalized(
     resourceRevisions: status.resources,
     displaySelection,
     previewConfig,
-    latestFieldFrames: EMPTY_LATEST_FIELD_FRAMES,
+    latestFieldFrames: fieldFrameEnvelope
+      ? {
+          [fieldFrameEnvelope.quantityId]: metadataOnlyLatestFieldFrame(fieldFrameEnvelope, liveState.grid),
+        }
+      : EMPTY_LATEST_FIELD_FRAMES,
     latestFieldGrid: liveState.grid.some((value) => value > 0) ? liveState.grid : null,
-    fieldFrameEnvelope: mapFieldFrameEnvelope(status, quantityById),
+    fieldFrameEnvelope,
+  };
+}
+
+export function metadataOnlyLatestFieldFrame(
+  envelope: FieldFrameEnvelope,
+  fallbackGrid: [number, number, number],
+): LatestFieldFrame {
+  return {
+    quantity_id: envelope.quantityId,
+    unit: "",
+    n_comp: envelope.nComp,
+    grid: fallbackGrid,
+    values: new Float64Array(0),
+    active_mask: null,
+    location: envelope.location,
+    domain: envelope.domain,
+    topology_signature:
+      envelope.meshGenerationId && envelope.meshGenerationId.length > 0
+        ? `gen:${envelope.meshGenerationId}`
+        : envelope.topologyHash && envelope.topologyHash.length > 0
+          ? `hash:${envelope.topologyHash}`
+          : null,
+    field_revision: envelope.fieldRevision,
+    source_step: envelope.sourceStep,
+    source_time: envelope.sourceTime,
   };
 }
 
@@ -452,7 +482,10 @@ function preserveDataPlaneState(
     commandStatus: previous.commandStatus,
     meshWorkspace: previous.meshWorkspace,
     stepUpdateV2: previous.stepUpdateV2,
-    latestFieldFrames: previous.latestFieldFrames,
+    latestFieldFrames: {
+      ...previous.latestFieldFrames,
+      ...next.latestFieldFrames,
+    },
     latestFieldGrid: previous.latestFieldGrid,
   };
 }

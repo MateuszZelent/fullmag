@@ -66,4 +66,52 @@ describe("global viewport field data cache", () => {
     expect(getGlobalBinaryFieldFrame(key)).toBe(frame);
     expect(getGlobalBinaryFieldCacheStats().entries).toBe(1);
   });
+
+  it("keeps only the newest binary frame in the live viewport cache", () => {
+    const firstKey = buildViewportFieldDataCacheKey({
+      identity: {
+        sessionId: "session-a",
+        runId: "run-a",
+        meshGenerationId: "gen:mesh-a",
+      },
+      fieldRevision: 1,
+      quantityId: "m",
+      component: "full",
+      scopeKey: "full",
+      nComp: 3,
+      grid: [1, 1, 1],
+    });
+    const secondKey = buildViewportFieldDataCacheKey({
+      identity: {
+        sessionId: "session-a",
+        runId: "run-a",
+        meshGenerationId: "gen:mesh-a",
+      },
+      fieldRevision: 2,
+      quantityId: "m",
+      component: "full",
+      scopeKey: "full",
+      nComp: 3,
+      grid: [1, 1, 1],
+    });
+
+    putGlobalBinaryFieldFrame({
+      key: firstKey,
+      quantityId: "m",
+      values: new Float64Array([1, 2, 3]),
+      nComp: 3,
+      grid: [1, 1, 1],
+    });
+    putGlobalBinaryFieldFrame({
+      key: secondKey,
+      quantityId: "m",
+      values: new Float64Array([4, 5, 6]),
+      nComp: 3,
+      grid: [1, 1, 1],
+    });
+
+    expect(getGlobalBinaryFieldCacheStats().entries).toBe(1);
+    expect(getGlobalBinaryFieldFrame(firstKey)).toBeNull();
+    expect(getGlobalBinaryFieldFrame(secondKey)?.values[0]).toBe(4);
+  });
 });

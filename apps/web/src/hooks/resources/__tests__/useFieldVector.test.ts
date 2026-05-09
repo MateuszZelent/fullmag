@@ -183,6 +183,39 @@ describe("useFieldVector request helpers", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("queues only the newest revision while the same field lane is in flight", async () => {
+    let resolveFirst!: (v: FieldBinaryResponse) => void;
+    const getVectorResponse = vi.fn()
+      .mockImplementationOnce(
+        () => new Promise<FieldBinaryResponse>((resolve) => { resolveFirst = resolve; }),
+      )
+      .mockResolvedValue(binaryResponse());
+    const client = createClient(getVectorResponse);
+    const firstParams = baseParams();
+
+    const first = loadFieldVectorRequest(client, firstParams);
+    const second = loadFieldVectorRequest(client, {
+      ...firstParams,
+      revision: firstParams.revision + 1,
+    });
+    const third = loadFieldVectorRequest(client, {
+      ...firstParams,
+      revision: firstParams.revision + 2,
+    });
+
+    expect(getVectorResponse).toHaveBeenCalledTimes(1);
+    void second.promise.catch(() => undefined);
+    second.release();
+    resolveFirst(binaryResponse());
+    await first.promise;
+
+    await third.promise;
+    expect(getVectorResponse).toHaveBeenCalledTimes(2);
+    expect(getVectorResponse.mock.calls[1]?.[0]).toBe("m");
+    first.release();
+    third.release();
+  });
+
   it("does not cache a decoded response after all consumers released it", async () => {
     let resolveDecode:
       | ((value: DecodedFieldVector) => void)

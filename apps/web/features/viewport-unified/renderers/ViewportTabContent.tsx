@@ -284,6 +284,7 @@ export function ViewportTabContent({
         hasSliceScalar={bridge.hasSliceScalar}
         sliceLoading={bridge.slice2D.loading}
         sliceStateKind={bridge.slice2D.stateKind}
+        sliceHasStaleData={bridge.slice2D.hasStaleData}
         sliceErrorMessage={bridge.slice2D.error?.message ?? bridge.slice2D.unsupportedReason ?? null}
         sliceMeta={bridge.slice2D.meta}
         sliceArrows={bridge.slice2D.arrows}
@@ -300,7 +301,7 @@ export function ViewportTabContent({
         plane={ctx.plane}
         sliceIndex={ctx.sliceIndex}
         preferFemMesh={preferFemMesh}
-        femMeshData={bridge.scaledFemMeshData}
+        femMeshData={bridge.renderFemMeshData}
         femQuantityLabel={bridge.resolvedFemSliceQuantityLabel}
         femQuantityId={femQuantityId ?? undefined}
         femQuantityUnit={ctx.quantityDescriptor?.unit ?? undefined}
