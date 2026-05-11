@@ -1,0 +1,374 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 05 — Testing, Performance, and Quality Gates
+
+## 1. Test Tiers
+
+| Tier | What | How | Gate |
+|---|---|---|---|
+| **Unit** | Adapters, geometry builders, render model, store, colormap, glyph sampling, LOD | Vitest, no WebGL | Every PR |
+| **Integration** | Resource hook → adapter → render model flow, pane config updates | Vitest, mocked API | Every PR |
+| **R3F render** | Layer components mount/unmount, invalidate on prop change | `@react-three/test-renderer` | Every PR |
+| **Memory stress** | Resource leaks across 3D↔2D switches, quantity cycles, layout changes | Vitest + disposal counters | Weekly |
+| **Visual** | Screenshot diff of rendered scenes | Playwright + canvas snapshot | Pre-release |
+
+## 2. Unit Tests
+
+### Cell Geometry Builders
+
+```typescript
+describe("buildCuboidGeometry", () => {
+  it("produces correct cell count from grid shape", () => {
+    const grid = { shape: [4, 4, 2], origin: [0, 0, 0], spacing: [5e-9, 5e-9, 5e-9] };
+    const result = buildCuboidGeometry(grid);
+    expect(result.kind).toBe("instanced-cuboids");
+    expect(result.cellCount).toBe(32);
+    expect(result.instanceMatrices.length).toBe(32 * 16);
+  });
+
+  it("cell centers are at correct positions", () => {
+    const grid = { shape: [2, 1, 1], origin: [0, 0, 0], spacing: [10, 10, 10] };
+    const result = buildCuboidGeometry(grid);
+    expect(result.cellCenters[0]).toBe(5);   // first cell center x
+    expect(result.cellCenters[3]).toBe(15);  // second cell center x
+  });
+});
+
+describe("buildTetBoundaryGeometry", () => {
+  it("converts Float64 positions to Float32", () => {
+    const decoded = mockDecodedTopology();
+    const result = buildTetBoundaryGeometry(decoded);
+    expect(result.kind).toBe("tet-boundary");
+    const posAttr = result.geometry.getAttribute("position");
+    expect(posAttr.array).toBeInstanceOf(Float32Array);
+  });
+
+  it("computes normals", () => {
+    const decoded = mockDecodedTopology();
+    const result = buildTetBoundaryGeometry(decoded);
+    expect(result.geometry.getAttribute("normal")).not.toBeNull();
+  });
+
+  it("preserves element markers", () => {
+    const decoded = mockDecodedTopology({ elementCount: 10 });
+    const result = buildTetBoundaryGeometry(decoded);
+    expect(result.elementMarkers.length).toBe(10);
+  });
+});
+```
+
+### Domain Adapters
+
+```typescript
+describe("FdmDomainAdapter", () => {
+  it("returns instanced-cuboids geometry", () => {
+    const adapter = new FdmDomainAdapter(mockFdmMeta(), mockObjects());
+    const geo = adapter.buildCellGeometry();
+    expect(geo.kind).toBe("instanced-cuboids");
+  });
+
+  it("bounds match meta", () => {
+    const meta = mockFdmMeta();
+    const adapter = new FdmDomainAdapter(meta, []);
+    expect(adapter.getBounds()).toBe(meta.bounds);
+  });
+});
+
+describe("FemDomainAdapter", () => {
+  it("returns tet-boundary geometry", () => {
+    const adapter = new FemDomainAdapter(mockFemMeta(), mockDecodedTopology(), mockObjects());
+    const geo = adapter.buildCellGeometry();
+    expect(geo.kind).toBe("tet-boundary");
+  });
+
+  it("maps element markers to objects", () => {
+    const objects = [{ id: "disk", name: "Disk" }, { id: "air", name: "Airbox", isAirbox: true }];
+    const adapter = new FemDomainAdapter(mockFemMeta(), mockDecodedTopology(), objects);
+    const mapping = adapter.getObjectMapping();
+    expect(mapping.get(0)).toBe("disk");
+    expect(mapping.get(1)).toBe("air");
+  });
+
+  it("identifies airbox markers", () => {
+    const objects = [{ id: "disk" }, { id: "air", isAirbox: true }];
+    const adapter = new FemDomainAdapter(mockFemMeta(), mockDecodedTopology(), objects);
+    const markers = adapter.getAirboxMarkers();
+    expect(markers.has(1)).toBe(true);
+    expect(markers.has(0)).toBe(false);
+  });
+});
+
+describe("createDomainAdapter", () => {
+  it("returns FdmDomainAdapter for fdm discretization", () => {
+    const adapter = createDomainAdapter({ ...mockMeta(), discretization: "fdm" }, null, []);
+    expect(adapter.discretization).toBe("fdm");
+  });
+
+  it("returns FemDomainAdapter for fem discretization", () => {
+    const adapter = createDomainAdapter({ ...mockMeta(), discretization: "fem" }, mockTopology(), []);
+    expect(adapter.discretization).toBe("fem");
+  });
+
+  it("throws for fem without topology", () => {
+    expect(() => createDomainAdapter({ ...mockMeta(), discretization: "fem" }, null, [])).toThrow();
+  });
+});
+```
+
+### Render Model Builder
+
+```typescript
+describe("buildViewport3DRenderModel", () => {
+  it("returns empty model when adapter is null", () => {
+    const model = buildViewport3DRenderModel(null, null, null, emptySelection, []);
+    expect(model.objects).toHaveLength(0);
+    expect(model.scalarField).toBeNull();
+  });
+
+  it("separates airbox from objects", () => {
+    const objects = [{ id: "disk" }, { id: "air", isAirbox: true }];
+    const adapter = createDomainAdapter(mockFemMeta(), mockTopology(), objects);
+    const model = buildViewport3DRenderModel(adapter, null, null, emptySelection, objects);
+    expect(model.objects).toHaveLength(1);         // only disk
+    expect(model.objects[0].objectId).toBe("disk");
+    expect(model.airbox).not.toBeNull();
+  });
+
+  it("quantity switch does NOT change topology revision", () => {
+    const adapter = createDomainAdapter(mockFdmMeta(), null, []);
+    const model1 = buildViewport3DRenderModel(adapter, fieldA, vizState, sel, objs);
+    const model2 = buildViewport3DRenderModel(adapter, fieldB, vizState, sel, objs);
+    // Geometry reference is the same
+    expect(model1.objects[0].geometry).toBe(model2.objects[0].geometry);
+    // But scalar field changed
+    expect(model1.scalarField?.quantityId).not.toBe(model2.scalarField?.quantityId);
+  });
+});
+```
+
+### Glyph Sampling
+
+```typescript
+describe("subsampleGlyphs", () => {
+  it("returns all glyphs when count <= budget", () => {
+    const vectors = mockVectors(100);
+    const result = subsampleGlyphs(vectors, 100);
+    expect(result.sampledCount).toBe(100);
+  });
+
+  it("reduces glyph count to budget", () => {
+    const vectors = mockVectors(10000);
+    const result = subsampleGlyphs(vectors, 500);
+    expect(result.sampledCount).toBeLessThanOrEqual(500);
+  });
+
+  it("preserves direction and magnitude proportions", () => {
+    const vectors = mockVectors(1000);
+    const result = subsampleGlyphs(vectors, 100);
+    // Spot-check: sampled entries match source entries
+    expect(result.directions.length).toBe(result.sampledCount * 3);
+    expect(result.magnitudes.length).toBe(result.sampledCount);
+  });
+});
+```
+
+### LOD Strategy
+
+```typescript
+describe("lodStrategy", () => {
+  it("returns full render for small grids", () => {
+    const strategy = computeLodStrategy(50000);
+    expect(strategy.meshStride).toBe(1);
+    expect(strategy.glyphBudget).toBeGreaterThan(1000);
+  });
+
+  it("reduces stride for large grids", () => {
+    const strategy = computeLodStrategy(5000000);
+    expect(strategy.meshStride).toBeGreaterThan(1);
+  });
+
+  it("uses memory_saver for very large grids", () => {
+    const strategy = computeLodStrategy(20000000);
+    expect(strategy.samplingProfile).toBe("memory_saver");
+  });
+});
+```
+
+### Viewport Store
+
+```typescript
+describe("viewport3DStore", () => {
+  it("setGridLayout updates panes to match preset", () => {
+    const { result } = renderHook(() => useViewport3DStore());
+    act(() => result.current.setGridLayout("quad"));
+    expect(result.current.panes).toHaveLength(4);
+    expect(result.current.panes[0].id).toBe("tl");
+  });
+
+  it("togglePaneLayer toggles individual layer", () => {
+    const { result } = renderHook(() => useViewport3DStore());
+    act(() => result.current.togglePaneLayer("main", "vectorGlyphs"));
+    expect(result.current.panes[0].layers.vectorGlyphs).toBe(false);
+  });
+
+  it("camera change is reflected in all pane reads", () => {
+    const { result } = renderHook(() => useViewport3DStore());
+    act(() => result.current.setCamera({ position: [1, 2, 3] }));
+    expect(result.current.camera.position).toEqual([1, 2, 3]);
+  });
+});
+```
+
+## 3. Integration Tests
+
+### Quantity Switch Without Topology Rebuild
+
+```typescript
+test("quantity switch does not trigger topology refetch", async () => {
+  const topologyFetchCount = jest.fn();
+  // Mount with quantity "m"
+  // Switch to quantity "h_eff"
+  // Assert topologyFetchCount was called exactly once (initial load)
+});
+```
+
+### Multi-Object Picking
+
+```typescript
+test("face click resolves correct object ID", () => {
+  const objects = [{ id: "disk", name: "Disk" }, { id: "wire", name: "Wire" }];
+  const adapter = createDomainAdapter(femMeta, topology, objects);
+  const faceMap = buildFaceToObjectMap(adapter.buildCellGeometry(), adapter.getObjectMapping());
+  // Face 0 belongs to marker 0 → "disk"
+  expect(faceMap[0]).toBe("disk");
+});
+```
+
+### Camera Sync Across Panes
+
+```typescript
+test("camera update from pane 1 propagates to pane 2", () => {
+  const store = createViewport3DStore();
+  store.getState().setCamera({ position: [5, 5, 5] });
+  // Both panes read the same camera
+  expect(store.getState().camera.position).toEqual([5, 5, 5]);
+});
+```
+
+## 4. Memory Stress Test
+
+Automated procedure (Vitest + disposal tracking):
+
+```
+1. Mount viewport-3d module
+2. Load FDM domain with 100k cells + field
+3. Record baseline: geometry count, material count, texture count
+4. Switch quantity 5 times
+   → Assert: no geometry growth (field updates only)
+5. Switch layout: single → quad → single
+   → Assert: canvases created/destroyed cleanly, geometry count bounded
+6. Switch to viewport-2d module (unmount 3D)
+   → Assert: all 3D resources released (R3F auto-dispose)
+7. Switch back to viewport-3d
+   → Assert: resources recreated at baseline level
+8. Repeat steps 4-7 three times
+   → Assert: no cumulative growth
+9. Unmount viewport-3d
+   → Assert: zero residual resources
+```
+
+## 5. Idle Performance Audit
+
+```
+1. Mount viewport with data loaded
+2. Wait for initial settling (all layers rendered)
+3. Start frame counter (spy on renderer.render)
+4. Wait 5 seconds, no interaction
+5. Assert frame count === 0
+6. Assert no requestAnimationFrame pending
+7. Assert no active setTimeout/setInterval
+8. Assert no pending fetch requests
+```
+
+This validates R3F `frameloop="demand"` is working correctly.
+
+## 6. Context Loss Recovery Test
+
+```
+1. Mount viewport, render initial frame
+2. Dispatch webglcontextlost event on canvas
+3. Assert no render errors
+4. Dispatch webglcontextrestored event
+5. Assert scene is intact (objects visible, correct quantity)
+6. Assert no resource leaks from the lost context
+```
+
+R3F handles this internally, but we test to catch regressions.
+
+## 7. Large Simulation Performance Test
+
+```
+1. Create mock FDM domain: 500×500×4 = 1M cells
+2. Mount viewport, measure time to first frame
+   → Budget: < 200ms
+3. Switch quantity
+   → Budget: < 50ms (no geometry rebuild)
+4. Measure glyph subsampling time for 1M → 10k glyphs
+   → Budget: < 20ms
+5. Measure camera interaction frame time with 1M cells
+   → Budget: < 16ms (60fps)
+```
+
+## 8. Performance Budgets
+
+| Metric | Budget |
+|---|---|
+| First frame (100k cells) | < 100ms |
+| First frame (1M cells) | < 200ms |
+| Quantity switch (color update) | < 50ms |
+| Topology rebuild (new mesh) | < 300ms for 1M cells |
+| Camera frame (interactive) | < 16ms |
+| Glyph subsampling (1M → 10k) | < 20ms |
+| Idle frame count (per minute) | 0 |
+| Memory per quantity switch | < 1MB net |
+| Memory per layout switch | 0 net (after GC) |
+| Memory per 3D↔2D switch | 0 net (after GC) |
+
+## 9. Quality Gate Commands
+
+```bash
+# All viewport tests
+pnpm --dir apps/control-room test -- --run src/modules/viewport-3d
+pnpm --dir apps/control-room test -- --run src/domain/adapters
+
+# Memory stress (when implemented)
+pnpm --dir apps/control-room test -- --run src/modules/viewport-3d/__tests__/memory-stress.test.ts
+
+# Typecheck + lint (zero-tolerance)
+pnpm --dir apps/control-room typecheck
+pnpm --dir apps/control-room lint
+```
+
+## 10. Diagnostics Surface
+
+Exposed via kernel diagnostics module (dev mode only):
+
+```typescript
+interface ViewportDiagnostics {
+  frameCount: number;
+  fps: number;
+  paneCount: number;
+  cellCount: number;
+  displayedGlyphCount: number;
+  budgetGlyphCount: number;
+  samplingProfile: string;
+  activeQuantityId: string | null;
+  topologyRevision: number | null;
+  fieldRevision: number | null;
+  objectCount: number;
+  hasAirbox: boolean;
+  activePaneId: string;
+  gridLayout: string;
+}
+```

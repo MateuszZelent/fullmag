@@ -1,0 +1,342 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 01 — Viewport 3D Module Architecture
+
+## 1. Foundational Premise: Cuboids vs Tetrahedra, Nothing Else Differs
+
+The **only** rendering difference between FDM and FEM is the primitive:
+
+| | FDM | FEM |
+|---|---|---|
+| **Cell shape** | Cuboid (axis-aligned voxel) | Tetrahedron (unstructured) |
+| **Topology source** | Structured grid descriptor (shape + origin + spacing) | Binary topology (FMMT: positions + indices + boundaryFaces) |
+| **Normals** | Implicit (cube faces) | Computed from boundary face triangles |
+| **Field location** | Cell-center values | Node values or cell values |
+
+Everything else — camera, layers, picking, selection, quantity switching, coloring, clipping, glyph rendering, LOD — is **identical**. This is the v1 lesson learned: the mistake was forking the renderer instead of forking only the geometry-builder.
+
+### Design rule
+
+```
+DomainAdapter.buildCellGeometry() → THREE.BufferGeometry
+```
+
+The adapter returns a standard `BufferGeometry`. The renderer never asks "is this FDM or FEM?".
+
+## 2. Universe / Multi-Object Model
+
+The simulation space has a hierarchical structure that the viewport must understand from day one:
+
+```
+Universe
+  ├── Object A (ferromagnet, e.g. disk)
+  │     └── mesh part(s) → topology → field values
+  ├── Object B (ferromagnet, e.g. waveguide)
+  │     └── mesh part(s) → topology → field values
+  └── Airbox (optional, non-magnetic volume)
+        └── mesh part(s) → topology (no field for non-interacting)
+```
+
+### Backend API mapping
+
+| Concept | API endpoint | Resource |
+|---|---|---|
+| Scene with all objects | `GET /model/scene` | Object list, universe config |
+| Object list | `GET /model/objects` | Object IDs, names, materials |
+| Single object | `GET /model/objects/{object_id}` | Geometry, material, interactions |
+| Object topology | `GET /meshing/meshes/objects/{object_id}/topology` | Binary FMMT per object |
+| Shared domain topology | `GET /meshing/meshes/shared-domain/topology` | Binary FMMT full domain |
+| Universe | `GET /model/universe` | Bounds, airbox config |
+| Domain meta | `GET /data/domain/meta` | Discretization, grid, bounds, generation_id |
+| Full domain topology | `GET /data/domain/topology` | Binary FMMT solver domain |
+| Field data | `GET /data/fields/{qty}/samples/vector` | Binary field vector |
+| Visualization state | `GET /visualization/state` | Layers, quantity, sampling, clip, scopes |
+| Visualization scope | `VisualizationScopeKind` | `full` / `magnetic` / `airbox` / `object` / `part` / `selection` |
+| Vector domain scope | `VectorLayerDomain` | `auto` / `magnetic_only` / `full_domain` / `airbox_only` / `object` / `part` |
+
+### Viewport implications
+
+1. The viewport must render **multiple objects** as distinct selectable entities within one scene.
+2. Each object can have a different material color / per-object highlight.
+3. Airbox is a separate layer with its own visibility toggle — some simulations have no airbox.
+4. Clicking on a face/cell must identify which **object** it belongs to (via element markers or boundary markers in the FMMT topology).
+5. Field data may be scoped: full domain, magnetic only, single object, single part, or selection.
+
+## 3. Module Identity
+
+```
+Module ID:    viewport-3d
+Slot:         viewport-main
+Capability:   preview_3d
+Depends on:   kernel API, domain adapters, selection controller
+```
+
+## 4. File Tree
+
+```
+src/modules/viewport-3d/
+  manifest.ts                         # Module manifest
+  Viewport3DModule.tsx                 # Module root (thin adapter)
+  store.ts                            # Zustand: camera, grid layout, pane configs, LOD
+  components/
+    ViewportGrid.tsx                   # Multi-pane CSS grid layout
+    ViewportPane.tsx                   # Single <Canvas> + R3F scene
+    ViewportToolbar.tsx                # Per-pane controls (display mode, layers, density)
+    ViewportOverlayStack.tsx           # Legend, stale chips, probe readout, pane label
+    SyncedOrbitControls.tsx            # Camera sync between panes
+    ProbeTooltip.tsx                   # Hover/click value readout
+  layers/                              # R3F scene-graph components
+    ObjectMeshLayer.tsx                # Per-object mesh surface (cuboids or tets)
+    ScalarFieldLayer.tsx               # Vertex/cell color from field
+    VectorGlyphLayer.tsx               # Instanced arrow/cone glyphs (density-controlled)
+    WireframeLayer.tsx                 # Edge overlay (= mesh view)
+    AirboxLayer.tsx                    # Airbox wireframe/transparent surface
+    AxesGridLayer.tsx                  # Axes helper + ground grid
+    SelectionHighlightLayer.tsx        # Outline/tint for selected object/face
+    ClipPlaneLayer.tsx                 # Clipping plane + cap
+    BoundsBoxLayer.tsx                 # Universe bounds wireframe
+  hooks/
+    useViewport3DResources.ts          # Aggregates topology + field + viz state
+    useDomainMeta.ts                   # GET /data/domain/meta
+    useMeshTopology.ts                 # GET /data/domain/topology (binary)
+    useObjectTopology.ts               # GET /meshing/meshes/objects/{id}/topology
+    useFieldData.ts                    # GET /data/fields/{qty}/samples/vector (binary)
+    useVisualizationState.ts           # GET /visualization/state
+    useSceneObjects.ts                 # GET /model/objects → object list
+    useProbeValue.ts                   # Raycasting → field value lookup
+  model/
+    viewport3DTypes.ts                 # All TypeScript interfaces
+    buildViewport3DRenderModel.ts      # adapter + field + viz → RenderModel
+    cellGeometry.ts                    # Cuboid/tet geometry builders
+    fieldColorMapping.ts               # Scalar → RGB via colormap LUT
+    glyphSampling.ts                   # Density-aware glyph position selection
+    lodStrategy.ts                     # Level-of-detail decimation strategy
+  __tests__/
+    store.test.ts
+    buildViewport3DRenderModel.test.ts
+    cellGeometry.test.ts
+    glyphSampling.test.ts
+    lodStrategy.test.ts
+
+src/domain/
+  adapters/
+    SpatialDomainAdapter.ts            # Interface
+    FdmDomainAdapter.ts                # Structured grid → cuboid geometry
+    FemDomainAdapter.ts                # FMMT topology → tet boundary geometry
+    createDomainAdapter.ts             # Factory
+  render-models/
+    topologyRenderModel.ts
+    fieldRenderModel.ts
+    sceneObjectModel.ts                # Multi-object scene model
+  units/
+    coordinates.ts
+    quantities.ts
+```
+
+## 5. Data Flow
+
+```mermaid
+flowchart TD
+  Status["useSessionStatus()"] --> Revs["ResourceRevisionMap"]
+  Revs --> |topology_revision| MeshHook["useMeshTopology()"]
+  Revs --> |field_revision| FieldHook["useFieldData(quantityId)"]
+  Revs --> |visualization_state_revision| VizHook["useVisualizationState()"]
+
+  SceneHook["useSceneObjects()"] --> Objects["Object[]: id, name, material"]
+
+  MeshHook --> DomainAdapter["createDomainAdapter(meta, topology)"]
+  Objects --> DomainAdapter
+
+  DomainAdapter --> RMB["buildViewport3DRenderModel()"]
+  FieldHook --> RMB
+  VizHook --> RMB
+
+  RMB --> RM["Viewport3DRenderModel"]
+  RM --> Grid["<ViewportGrid>"]
+  Grid --> Pane1["<ViewportPane> layers={...}"]
+  Grid --> Pane2["<ViewportPane> layers={...}"]
+  Grid --> PaneN["..."]
+
+  Pane1 --> Canvas["<Canvas frameloop=demand>"]
+  Canvas --> OML["<ObjectMeshLayer> per object"]
+  Canvas --> SFL["<ScalarFieldLayer>"]
+  Canvas --> VGL["<VectorGlyphLayer>"]
+  Canvas --> WFL["<WireframeLayer>"]
+  Canvas --> ABL["<AirboxLayer>"]
+```
+
+## 6. Render Model Contract
+
+```typescript
+interface Viewport3DRenderModel {
+  /** Scene objects — one per simulation object. */
+  objects: ObjectRenderData[];
+  /** Optional airbox geometry. */
+  airbox: AirboxRenderData | null;
+  /** Universe bounds. */
+  universeBounds: Bounds3 | null;
+  /** Active scalar field mapped onto topology. */
+  scalarField: ScalarFieldRenderData | null;
+  /** Sampled vector glyphs. */
+  vectorField: VectorFieldRenderData | null;
+  /** Canonical layer visibility from backend viz state. */
+  layers: VisualizationLayerState;
+  /** Selection state. */
+  selection: SelectionRenderData;
+  /** Clip plane config. */
+  clip: ClipPlaneConfig | null;
+  /** Overall resource loading status. */
+  status: ViewportResourceStatus;
+  /** Sampling/LOD budget from backend. */
+  sampling: SamplingConfig;
+  /** Display config (colormap, contrast, component). */
+  quantity: QuantityDisplayConfig;
+}
+
+interface ObjectRenderData {
+  objectId: string;
+  objectName: string;
+  /** Standard BufferGeometry — cuboids for FDM, tets for FEM. */
+  geometry: THREE.BufferGeometry;
+  /** Per-cell or per-vertex element markers for picking. */
+  elementMarkers: Uint32Array;
+  /** Object color (from material or palette). */
+  baseColor: [number, number, number];
+  /** Whether this object has field data. */
+  hasFieldData: boolean;
+}
+
+interface AirboxRenderData {
+  geometry: THREE.BufferGeometry;
+  bounds: Bounds3;
+  elementMarkers: Uint32Array;
+}
+
+interface SamplingConfig {
+  maxPoints: number;
+  maxGlyphs: number;
+  profile: "quality" | "balanced" | "interactive" | "memory_saver";
+  progressive: boolean;
+}
+```
+
+## 7. State Ownership
+
+| State | Owner | Update path |
+|---|---|---|
+| Camera (shared across panes) | `viewport-3d/store.ts` | `SyncedOrbitControls` |
+| Grid layout + pane configs | `viewport-3d/store.ts` | Toolbar / commands |
+| Active quantity | `VisualizationStateResource` (backend) | `PATCH /visualization/state` |
+| Sampling/LOD budget | `VisualizationStateResource.sampling` (backend) | `PATCH /visualization/state` |
+| Layer visibility | `VisualizationStateResource.layers` (backend) | `PATCH /visualization/state` |
+| Vector density | `VisualizationStateResource.layers.vectors.density` (backend) | `PATCH /visualization/state` |
+| Vector domain scope | `VisualizationStateResource.layers.vectors.domain` (backend) | `PATCH /visualization/state` |
+| Topology + field revisions | `ResourceRevisionMap` (backend, via realtime) | WS invalidation |
+| WebGL objects | R3F (automatic disposal) | Component lifecycle |
+| Selected object/face | Kernel `SelectionController` | Picking / explorer |
+| Probe value (hover) | Local ref (not state) | Raycasting |
+
+## 8. Interactive Picking & Probe
+
+### Face/cell picking
+
+R3F's `<mesh onPointerDown={...}>` gives us raycasting for free. The `intersect` result provides:
+
+```typescript
+{
+  faceIndex: number;         // which triangle was hit
+  point: THREE.Vector3;      // world-space hit point
+  object: THREE.Object3D;    // which mesh (→ which object)
+}
+```
+
+From `faceIndex` + `elementMarkers` we can determine:
+- Which **object** was clicked
+- Which **element/cell** was clicked
+- The **field value** at that cell/node
+
+### Probe tooltip
+
+On hover or click, display a tooltip showing:
+- Object name
+- Cell/element index
+- Field value (quantity + component + unit)
+- Position (x, y, z in SI)
+
+```tsx
+<mesh
+  onPointerMove={(e) => {
+    e.stopPropagation();
+    const cellIdx = faceToCell(e.faceIndex, markers);
+    const value = fieldValues[cellIdx];
+    setProbe({ position: e.point, objectId, cellIdx, value });
+  }}
+  onPointerDown={(e) => {
+    e.stopPropagation();
+    const objectId = meshToObjectId(e.object);
+    kernel.bus.emit("viewport:object-picked", { objectId, faceIndex: e.faceIndex });
+  }}
+/>
+```
+
+### Selection flow
+
+```
+User clicks face → viewport:object-picked event → SelectionController.select(objectId)
+  → selectionStore updates → explorer highlights → inspector shows object
+  → SelectionHighlightLayer re-renders with outline
+```
+
+## 9. Lifecycle
+
+### Mount
+1. Manifest registered, capability gate `preview_3d` passes.
+2. `Viewport3DModule` mounts, subscribes to resource hooks.
+3. `useSceneObjects()` fetches object list.
+4. `useMeshTopology()` fetches domain topology binary.
+5. `createDomainAdapter()` builds geometry (cuboids or tets).
+6. `useFieldData()` fetches field binary for active quantity.
+7. `buildViewport3DRenderModel()` produces render model.
+8. `ViewportGrid` mounts panes, each creates `<Canvas>`.
+9. R3F renders first frame, then stops (`frameloop="demand"`).
+
+### Quantity switch
+1. User selects new quantity → `PATCH /visualization/state`.
+2. Backend updates → `visualization_state_revision` ticks.
+3. `useVisualizationState()` refetches.
+4. `useFieldData(newQuantityId)` fetches new field binary.
+5. `buildViewport3DRenderModel()` updates `scalarField` — topology unchanged.
+6. `ScalarFieldLayer` updates vertex colors.
+7. R3F renders one frame.
+
+**No topology rebuild.**
+
+### Topology change (mesh rebuilt)
+1. Mesh build completes → `topology_revision` ticks.
+2. `useMeshTopology()` refetches binary.
+3. `createDomainAdapter()` builds new geometry.
+4. `ObjectMeshLayer` receives new geometry → R3F disposes old, mounts new.
+5. `useFieldData()` may also refetch if field_revision changed.
+6. R3F renders one frame.
+
+### Unmount
+1. Module unmounts → all `<Canvas>` unmount.
+2. R3F automatically disposes all Three.js resources.
+3. Resource hook abort controllers cancel pending requests.
+4. Event subscriptions cleaned up by React.
+
+## 10. v1 vs v2 Comparison
+
+| Aspect | v1 | v2 |
+|---|---|---|
+| FDM/FEM | `discretization` prop fork | Adapter: cuboid vs tet geometry builder |
+| Layers | React DOM wrappers (`<ArrowLayer>`) | R3F scene components (`<VectorGlyphLayer>`) |
+| Render loop | Always-on RAF | `frameloop="demand"` |
+| Resource tracking | Manual, scattered | R3F automatic + minimal manual for non-GPU |
+| State | Giant `ControlRoomContext` | Module store + kernel selection + resource hooks |
+| Multi-view | Not supported | `ViewportGrid` with synced camera |
+| Picking | None in production | R3F raycasting → object/face/cell + value probe |
+| Multi-object | Flat topology, no object identity | Per-object `ObjectRenderData` with markers |
+| LOD | None | Sampling profiles, glyph density, mesh decimation |
+| Wireframe = mesh | Separate concept | Wireframe layer IS the mesh view |

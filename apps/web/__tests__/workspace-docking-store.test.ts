@@ -118,7 +118,7 @@ describe("workspace docking store", () => {
     expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.model).toMatchObject(nextModel);
     expect(
       useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.dockingLayoutSchemaVersion,
-    ).toBe(1);
+    ).toBe(2);
     expect(useWorkspaceStore.getState().dockLayoutByStage.study.desktop?.wasRecovered).toBe(false);
 
     vi.runAllTimers();

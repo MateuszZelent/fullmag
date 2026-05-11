@@ -4,7 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -23,6 +23,8 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+const themeListeners = new Set<() => void>();
+let currentTheme: ThemeMode = DEFAULT_THEME_MODE;
 
 function readStoredTheme(): string | null {
   try {
@@ -49,27 +51,55 @@ function persistTheme(theme: ThemeMode): void {
   }
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeMode>(() => {
-    if (typeof window === "undefined") {
-      return DEFAULT_THEME_MODE;
-    }
+function emitThemeChange(): void {
+  for (const listener of themeListeners) {
+    listener();
+  }
+}
 
-    return resolveThemePreference(readStoredTheme(), readSystemPrefersDark());
-  });
+function getThemeSnapshot(): ThemeMode {
+  return currentTheme;
+}
+
+function getServerThemeSnapshot(): ThemeMode {
+  return DEFAULT_THEME_MODE;
+}
+
+function subscribeTheme(listener: () => void): () => void {
+  themeListeners.add(listener);
+  return () => themeListeners.delete(listener);
+}
+
+function setThemePreference(nextTheme: ThemeMode): void {
+  if (currentTheme === nextTheme) {
+    applyTheme(nextTheme);
+    return;
+  }
+
+  currentTheme = nextTheme;
+  applyTheme(nextTheme);
+  persistTheme(nextTheme);
+  emitThemeChange();
+}
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    getThemeSnapshot,
+    getServerThemeSnapshot,
+  );
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+    const resolvedTheme = resolveThemePreference(
+      readStoredTheme(),
+      readSystemPrefersDark(),
+    );
+    setThemePreference(resolvedTheme);
+  }, []);
 
   useEffect(() => {
     function handleThemeToggle() {
-      setThemeState((currentTheme) => {
-        const nextTheme = currentTheme === "dark" ? "light" : "dark";
-        applyTheme(nextTheme);
-        persistTheme(nextTheme);
-        return nextTheme;
-      });
+      setThemePreference(getThemeSnapshot() === "dark" ? "light" : "dark");
     }
 
     window.addEventListener(THEME_TOGGLE_EVENT, handleThemeToggle);
@@ -79,9 +109,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function setTheme(nextTheme: ThemeMode): void {
-    setThemeState(nextTheme);
-    applyTheme(nextTheme);
-    persistTheme(nextTheme);
+    setThemePreference(nextTheme);
   }
 
   return (

@@ -1,0 +1,6 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Revised render pipeline — cell geometry builders (cuboids vs tets), per-object rendering, density-aware glyphs, LOD strategies, wireframe=mesh, progressive rendering.",
+  "updatedAt":  "2026-05-11T19:25:03.809987477Z",
+  "version":  "2"
+}

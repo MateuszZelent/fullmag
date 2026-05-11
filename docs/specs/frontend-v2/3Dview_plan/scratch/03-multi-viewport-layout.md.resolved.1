@@ -1,0 +1,187 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 03 — Multi-Viewport Layout (ViewportGrid) — Revised for R3F + Synced Camera
+
+## 1. Concept
+
+Like 3ds Max — split viewport into multiple panes. All panes show the same model and share the same camera. Each pane controls which layers are visible and in which display mode.
+
+**Key difference from 3ds Max:** Camera is always synchronized. You rotate in any pane → all panes rotate together. This makes the split useful for comparing different visualizations (vectors vs wireframe vs airbox) of the same scene from the same angle.
+
+## 2. Layout Presets
+
+```typescript
+export type ViewportGridLayout =
+  | "single"         // 1×1
+  | "split-h"        // left + right
+  | "split-v"        // top + bottom
+  | "quad"           // 2×2
+  | "one-plus-two";  // large left + two stacked right
+```
+
+```
+single:        split-h:       quad:          one-plus-two:
+┌──────────┐   ┌─────┬─────┐  ┌─────┬─────┐  ┌────────┬────┐
+│  shaded  │   │vec  │wire │  │shade│wire │  │ shaded │wire│
+│  +vec    │   │field│frame│  ├─────┼─────┤  │ +vec   ├────┤
+└──────────┘   └─────┴─────┘  │air  │flat │  │        │air │
+                               └─────┴─────┘  └────────┴────┘
+```
+
+## 3. Per-Pane Config
+
+```typescript
+interface ViewportPaneConfig {
+  id: string;                    // "main" | "tl" | "tr" | "bl" | "br" | "left" | "right-1" | "right-2"
+  label: string;                 // "Shaded" | "Wireframe" | "Vector Field" | "Airbox"
+  displayMode: DisplayMode;
+  layers: PaneLayerVisibility;
+}
+
+interface PaneLayerVisibility {
+  meshSurface: boolean;
+  scalarField: boolean;
+  vectorGlyphs: boolean;
+  wireframe: boolean;
+  airbox: boolean;
+  axesGrid: boolean;
+  selection: boolean;
+  clipPlane: boolean;
+}
+```
+
+### Default Presets
+
+| Layout | Panes |
+|---|---|
+| `single` | `[{ shaded, all layers on }]` |
+| `split-h` | `[{ shaded, vectors on }, { wireframe, mesh only }]` |
+| `quad` | `[{ shaded, all }, { wireframe, mesh }, { shaded, airbox only }, { flat-shaded, mesh }]` |
+| `one-plus-two` | `[{ shaded, all }, { wireframe, mesh }, { shaded, airbox }]` |
+
+## 4. Camera Synchronization
+
+### Architecture
+
+```
+                    ┌─────────────────┐
+                    │  Zustand Store   │
+                    │  camera: {       │
+                    │    position,     │
+                    │    target,       │
+                    │    up, fov       │
+                    │  }               │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+         ┌─────────┐   ┌─────────┐   ┌─────────┐
+         │ Pane 1   │   │ Pane 2   │   │ Pane 3   │
+         │ <Canvas> │   │ <Canvas> │   │ <Canvas> │
+         │ Synced   │   │ Synced   │   │ Synced   │
+         │ Controls │   │ Controls │   │ Controls │
+         └─────────┘   └─────────┘   └─────────┘
+```
+
+Any pane's `SyncedOrbitControls` writes to the shared store. All panes read from it and `invalidate()` their canvas when camera changes.
+
+### SyncedOrbitControls
+
+```tsx
+import { OrbitControls } from "@react-three/drei";
+import { useThree } from "@react-three/fiber";
+
+export function SyncedOrbitControls() {
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+  const camera = useViewport3DStore((s) => s.camera);
+  const setCamera = useViewport3DStore((s) => s.setCamera);
+  const { invalidate } = useThree();
+
+  // Write: user interaction → store
+  const handleChange = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    setCamera({
+      position: controls.object.position.toArray(),
+      target: controls.target.toArray(),
+    });
+  }, [setCamera]);
+
+  // Read: store → camera (from other pane's interaction)
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.object.position.fromArray(camera.position);
+    controls.target.fromArray(camera.target);
+    controls.update();
+    invalidate();
+  }, [camera, invalidate]);
+
+  return <OrbitControls ref={controlsRef} onChange={handleChange} />;
+}
+```
+
+### Performance
+
+- Camera updates are in Zustand (fast, no re-render of React tree)
+- Each `<Canvas>` subscribes to the camera state via `useViewport3DStore` selector
+- `invalidate()` triggers a single R3F frame per pane
+- 4 panes × 1 frame each = 4 frames per camera interaction — acceptable at 60fps
+
+## 5. CSS Grid
+
+```css
+.fm-viewport-grid {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  gap: 1px;
+  background: var(--fm-surface-0);
+}
+
+.fm-viewport-grid[data-layout="single"]       { grid-template: 1fr / 1fr; }
+.fm-viewport-grid[data-layout="split-h"]      { grid-template: 1fr / 1fr 1fr; }
+.fm-viewport-grid[data-layout="split-v"]      { grid-template: 1fr 1fr / 1fr; }
+.fm-viewport-grid[data-layout="quad"]         { grid-template: 1fr 1fr / 1fr 1fr; }
+.fm-viewport-grid[data-layout="one-plus-two"] { grid-template: 1fr 1fr / 2fr 1fr; }
+.fm-viewport-grid[data-layout="one-plus-two"] > :first-child { grid-row: 1 / -1; }
+```
+
+## 6. Pane Toolbar (per-pane)
+
+Each pane gets a small overlay toolbar for:
+- Display mode toggle (shaded / wireframe / shaded+wireframe)
+- Layer toggles (vectors, airbox, wireframe, grid)
+- Label showing current config
+
+The toolbar is a DOM overlay positioned over the R3F canvas, not inside the Three.js scene.
+
+## 7. Maximise / Restore
+
+Double-click pane label → that pane fills the viewport. Other panes hidden via CSS (`display: none`) — their canvases don't render. Double-click again to restore.
+
+## 8. Active Pane
+
+Clicking inside a pane sets it as active (subtle border highlight). Active pane:
+- Receives keyboard shortcuts (numpad camera presets)
+- Is the target for toolbar commands
+- Shows focus indicator
+
+## 9. Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Alt+1` | Single layout |
+| `Alt+2` | Split horizontal |
+| `Alt+3` | Split vertical |
+| `Alt+4` | Quad |
+| `Alt+5` | One + two |
+| `Space` | Maximise/restore active pane |
+| `Numpad 0` | Reset camera to perspective |
+| `Numpad 1` | Front view |
+| `Numpad 3` | Right view |
+| `Numpad 7` | Top view |
+| `Z` | Toggle wireframe on active pane |
+| `V` | Toggle vectors on active pane |
+| `A` | Toggle airbox on active pane |

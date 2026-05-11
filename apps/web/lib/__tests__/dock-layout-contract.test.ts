@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { IJsonBorderNode, IJsonModel, IJsonNode, IJsonTabSetNode } from "flexlayout-react";
 
 import {
-  DOCKING_MIN_HEIGHT_BOTTOM,
+  DOCKING_MIN_HEIGHT_BOTTOM_DESKTOP,
+  DOCKING_DEFAULT_HEIGHT_BOTTOM_TABLET,
   DOCKING_MIN_WIDTH_LEFT,
   createDefaultDockLayout,
 } from "@/components/workspace/docking/dockLayoutDefaults";
-import { parseDockLayoutRecordForPreset } from "../workspace/dockLayoutContract";
+import {
+  normalizeDockLayoutRuntimeModel,
+  parseDockLayoutRecordForPreset,
+} from "../workspace/dockLayoutContract";
 
 function collectComponentsFromLayout(model: IJsonModel): Set<string> {
   const found = new Set<string>();
@@ -105,7 +109,7 @@ describe("dock layout contract", () => {
     const repaired = parseDockLayoutRecordForPreset("nonsense", "desktop");
     const defaultModel = createDefaultDockLayout("desktop");
 
-    expect(repaired.dockingLayoutSchemaVersion).toBe(1);
+    expect(repaired.dockingLayoutSchemaVersion).toBe(2);
     expect(repaired.templateId).toBe("default-desktop");
     expect(repaired.model).toMatchObject(defaultModel);
     expect(repaired.wasRecovered).toBe(true);
@@ -120,7 +124,7 @@ describe("dock layout contract", () => {
 
     const repaired = parseDockLayoutRecordForPreset(legacyPayload, "desktop");
 
-    expect(repaired.dockingLayoutSchemaVersion).toBe(1);
+    expect(repaired.dockingLayoutSchemaVersion).toBe(2);
     expect(repaired.wasRecovered).toBe(true);
     expect(typeof repaired.lastRepairReason).toBe("string");
   });
@@ -257,10 +261,10 @@ describe("dock layout contract", () => {
     const repairedBottom = findBottomBorder(repaired.model as IJsonModel);
 
     expect(repairedLeft?.minWidth ?? 0).toBeGreaterThanOrEqual(DOCKING_MIN_WIDTH_LEFT);
-    expect(repairedBottom?.size ?? 0).toBeGreaterThanOrEqual(DOCKING_MIN_HEIGHT_BOTTOM);
+    expect(repairedBottom?.size ?? 0).toBeGreaterThanOrEqual(DOCKING_MIN_HEIGHT_BOTTOM_DESKTOP);
   });
 
-  it("normalizes persisted center and bottom weights so the viewport gets the available height", () => {
+  it("normalizes legacy persisted center and bottom weights to the compact dock defaults", () => {
     const desktopDefault = createDefaultDockLayout("desktop");
     const persisted = JSON.parse(JSON.stringify(desktopDefault)) as IJsonModel;
     const mainColumn = (persisted.layout.children?.[1] ?? null) as
@@ -285,10 +289,56 @@ describe("dock layout contract", () => {
     const normalized = findNestedCenterBottomTabsets(repaired.model);
 
     expect(normalized.center?.weight).toBe(100);
-    expect(normalized.bottom?.weight).toBe(12);
+    expect(normalized.bottom?.weight).toBe(10);
     expect(repaired.wasRecovered).toBe(true);
     expect(repaired.lastRepairReason).toBe(
-      "Normalized center/bottom dock weights for full-height viewport.",
+      "Normalized center/bottom dock weights for compact bottom dock defaults.",
     );
+  });
+
+  it("normalizes legacy tablet bottom border sizes to the compact responsive default", () => {
+    const tabletDefault = createDefaultDockLayout("tablet");
+    const persisted = JSON.parse(JSON.stringify(tabletDefault)) as IJsonModel;
+    const bottomBorder = findBottomBorder(persisted);
+    if (!bottomBorder) {
+      throw new Error("default tablet layout shape changed");
+    }
+    bottomBorder.size = 220;
+
+    const repaired = parseDockLayoutRecordForPreset(
+      {
+        dockingLayoutSchemaVersion: 1,
+        templateId: "default-tablet",
+        model: persisted,
+      },
+      "tablet",
+    );
+
+    expect(findBottomBorder(repaired.model)?.size).toBe(DOCKING_DEFAULT_HEIGHT_BOTTOM_TABLET);
+    expect(repaired.wasRecovered).toBe(true);
+    expect(repaired.lastRepairReason).toBe(
+      "Normalized bottom border size for compact responsive defaults.",
+    );
+  });
+
+  it("does not shrink a live runtime resize back to the legacy default weight", () => {
+    const desktopDefault = createDefaultDockLayout("desktop");
+    const liveModel = JSON.parse(JSON.stringify(desktopDefault)) as IJsonModel;
+    const mainColumn = (liveModel.layout.children?.[1] ?? null) as
+      | { children?: IJsonTabSetNode[] }
+      | null;
+    const center = mainColumn?.children?.[0];
+    const bottom = mainColumn?.children?.[1];
+    if (!center || !bottom) {
+      throw new Error("default desktop layout shape changed");
+    }
+    center.weight = 100;
+    bottom.weight = 24;
+
+    const normalized = normalizeDockLayoutRuntimeModel(liveModel, "desktop");
+    const next = findNestedCenterBottomTabsets(normalized.model);
+
+    expect(normalized.changed).toBe(false);
+    expect(next.bottom?.weight).toBe(24);
   });
 });

@@ -1,0 +1,217 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 01 — Viewport 3D Module Architecture
+
+## 1. Module Identity
+
+```
+Module ID:    viewport-3d
+Slot:         viewport-main
+Capability:   preview_3d
+```
+
+The `viewport-3d` module renders the physical domain, mesh topology, field quantities (scalar + vector), selection highlighting, geometry authoring overlays, and camera tools. It operates through a **domain-neutral render model** — it never sees `fdm` or `fem` strings.
+
+## 2. Target File Tree
+
+```
+src/modules/viewport-3d/
+  manifest.ts                       # Module manifest for kernel registry
+  Viewport3DModule.tsx              # Module root: thin adapter, subscribes to store + hooks
+  store.ts                          # Module-local Zustand: camera, dirty, display mode, grid layout
+  components/
+    ViewportSurface.tsx             # Canvas host + imperative renderer bridge
+    ViewportToolbar.tsx             # Local display controls (wireframe, grid layout switch)
+    ViewportOverlayStack.tsx        # Stacked overlays: legend, status chips, gizmo hints
+    ViewportGrid.tsx                # Multi-pane layout (1×1, 1×2, 2×2, 1+2)
+    ViewportPane.tsx                # Single pane: owns its SceneController instance
+  hooks/
+    useViewport3DResources.ts       # Aggregates topology/field/viz resource hooks
+    useViewportCamera.ts            # Camera state, presets, serialization
+    useDirtyRenderLoop.ts           # RAF scheduling gated by dirty reasons
+    useViewportResize.ts            # ResizeObserver → dirty(resize)
+    useViewportPicking.ts           # Mouse → raycasting → selection event
+  renderers/
+    SceneController.ts              # Three.js scene, camera, renderer, lights lifecycle
+    MeshLayerRenderer.ts            # Topology geometry (surface mesh for FEM, cell cubes for FDM)
+    FieldSurfaceRenderer.ts         # Scalar color mapping on topology
+    VectorGlyphRenderer.ts          # Sampled arrow/cone instances
+    SelectionLayerRenderer.ts       # Selection highlighting (outline, tint)
+    WireframeLayerRenderer.ts       # Wireframe overlay
+    AxesGridRenderer.ts             # Axes helper + ground grid
+    AirboxRenderer.ts               # Airbox wireframe boundary
+    ClipPlaneRenderer.ts            # Clipping plane visualisation
+  resources/
+    WebglResourceTracker.ts         # Registry: geometry, material, texture, buffer → dispose
+    BufferPool.ts                   # Reusable typed array pool for field data
+  model/
+    viewport3DTypes.ts              # All TypeScript interfaces
+    buildViewport3DRenderModel.ts   # Domain adapter output → Viewport3DRenderModel
+```
+
+## 3. Manifest
+
+```typescript
+import type { ModuleManifest } from "@/kernel/types";
+
+export const viewport3dManifest: ModuleManifest = {
+  id: "viewport-3d",
+  title: "3D Viewport",
+  version: "0.1.0",
+  slots: ["viewport-main"],
+  capabilityGate: ["preview_3d"],
+  component: () => import("./Viewport3DModule"),
+  contributes: {
+    commands: [
+      {
+        id: "viewport-3d:toggle-wireframe",
+        title: "Toggle Wireframe",
+        scope: "viewport",
+        defaultShortcut: "Z",
+        run: /* toggled via store */
+      },
+      {
+        id: "viewport-3d:reset-camera",
+        title: "Reset Camera",
+        scope: "viewport",
+        defaultShortcut: "Home",
+        run: /* camera reset */
+      },
+      {
+        id: "viewport-3d:layout-single",
+        title: "Single Viewport",
+        scope: "viewport",
+        run: /* layout change */
+      },
+      {
+        id: "viewport-3d:layout-2x2",
+        title: "Quad Viewport",
+        scope: "viewport",
+        run: /* layout change */
+      },
+      // ... more layout commands
+    ],
+  },
+  emits: ["viewport:object-picked", "viewport:camera-changed"],
+  listens: ["workspace:selection-changed", "session:field-revision-changed"],
+};
+```
+
+## 4. Data Flow
+
+```mermaid
+flowchart TD
+  SessionStatus["useSessionStatus()"] --> Revisions["revision map"]
+  Revisions --> MeshHook["useMeshTopology()"]
+  Revisions --> FieldHook["useFieldData()"]
+  Revisions --> VizHook["useVisualizationState()"]
+
+  MeshHook --> DomainAdapter["createDomainAdapter()"]
+  FieldHook --> DomainAdapter
+
+  DomainAdapter --> RenderModelBuilder["buildViewport3DRenderModel()"]
+  VizHook --> RenderModelBuilder
+
+  RenderModelBuilder --> RenderModel["Viewport3DRenderModel"]
+  RenderModel --> SceneController["SceneController"]
+  SceneController --> Layers["Layer Renderers"]
+  Layers --> Canvas["<canvas>"]
+```
+
+Key rule: **The renderer never receives API payloads.** Everything goes through domain adapters → render model builders → typed `Viewport3DRenderModel`.
+
+## 5. State Ownership
+
+| State | Owner | Update path |
+|---|---|---|
+| Camera (position, target, up, projection) | `viewport-3d/store.ts` | `useViewportCamera` hook, per-pane |
+| Display mode (shaded/wireframe/...) | `viewport-3d/store.ts` | ViewportToolbar or command |
+| Multi-pane layout config | `viewport-3d/store.ts` | ViewportToolbar or command |
+| Selected quantity | Visualization resource (kernel-level) | Command registry |
+| Topology revision | Session resource revisions | Realtime invalidation |
+| Field revision | Session resource revisions | Realtime invalidation |
+| Decoded field buffers | Resource cache + BufferPool | Resource hook |
+| WebGL objects | `WebglResourceTracker` (imperative) | Renderer classes |
+| Selected object | Kernel `SelectionController` | Explorer / viewport picking |
+| Hover/probe position | Local ref (not state) | Pointer events |
+| Dirty reasons | `viewport-3d/store.ts` (bitfield) | All above triggers |
+
+**Forbidden patterns:**
+- Decoded field arrays in React `useState` or Zustand.
+- WebGL geometry/material/texture in any store.
+- Importing inspector or explorer store from viewport module.
+
+## 6. Module Root Component
+
+```typescript
+// Viewport3DModule.tsx — thin adapter
+export default function Viewport3DModule({ kernel, moduleId, slotId }: ModuleProps) {
+  const resources = useViewport3DResources(kernel);
+  const renderModel = useMemo(
+    () => buildViewport3DRenderModel(resources),
+    [resources],
+  );
+
+  return (
+    <section className="fm-viewport-3d" data-module-id={moduleId}>
+      <ViewportToolbar />
+      <ViewportGrid renderModel={renderModel} kernel={kernel} />
+      <ViewportOverlayStack renderModel={renderModel} />
+    </section>
+  );
+}
+```
+
+The root component:
+1. Subscribes to resource hooks.
+2. Builds a render model (pure transform).
+3. Passes the render model to `ViewportGrid`.
+4. Never touches Three.js or WebGL directly.
+
+## 7. Lifecycle
+
+### Mount
+1. Module registered → capability gate passes → manifest lazy-loaded.
+2. `Viewport3DModule` mounts, subscribes to resource hooks.
+3. `ViewportGrid` mounts panes based on layout config.
+4. Each `ViewportPane` creates a `SceneController` → Three.js renderer, scene, camera.
+5. `SceneController` registers all WebGL resources with `WebglResourceTracker`.
+6. `DirtyRenderLoop` starts but does **not** render (no dirty reasons yet).
+7. First data arrives → dirty(topology + field) → first frame.
+
+### Update (quantity switch)
+1. Quantity command changes visualization resource.
+2. Field hook detects revision change → fetches new field data.
+3. `buildViewport3DRenderModel` produces updated `scalarField`.
+4. `FieldSurfaceRenderer` updates buffer data (uniforms + attribute) — **no topology rebuild**.
+5. dirty(field) → one frame rendered.
+
+### Update (topology change)
+1. Mesh rebuild triggers topology revision change.
+2. Mesh hook fetches new topology binary.
+3. `buildViewport3DRenderModel` produces updated `topology`.
+4. `MeshLayerRenderer` disposes old geometry → creates new → registers with tracker.
+5. `FieldSurfaceRenderer` also gets new geometry reference (field buffer may need re-upload).
+6. dirty(topology) → one frame.
+
+### Unmount
+1. Module unmounts (e.g., user switches to 2D-only view).
+2. Each `ViewportPane` calls `SceneController.dispose()`.
+3. `SceneController` calls `WebglResourceTracker.releaseAll()`.
+4. All geometries, materials, textures, render targets, buffers released.
+5. Animation frame handles cancelled.
+6. Resize observers disconnected.
+7. Event subscriptions cleaned up by React hooks.
+
+## 8. v1 Comparison
+
+| Aspect | v1 (legacy) | v2 (this plan) |
+|---|---|---|
+| FDM/FEM handling | `discretization` prop fork in React tree | Adapter pattern: `FdmAdapter` / `FemAdapter` → uniform `RenderModel` |
+| Layers | React wrapper components (`ArrowLayer`, `MeshLayer`) | Imperative renderer classes |
+| Render loop | Always-on `requestAnimationFrame` | Dirty-driven: frame only on change |
+| Resource tracking | None (manual dispose scattered) | `WebglResourceTracker` with counted registration |
+| State | Giant `ControlRoomContext` + hooks + stores | Module-local store + kernel selection + resource hooks |
+| Multi-view | Not supported | `ViewportGrid` with 1×1, 1×2, 2×2, 1+2 layouts |
+| Picking | Mixed with rendering | Dedicated `useViewportPicking` with canonical selection events |

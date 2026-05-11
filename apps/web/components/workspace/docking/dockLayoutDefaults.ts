@@ -27,7 +27,45 @@ export const REQUIRED_DOCK_PANEL_COMPONENTS: DockPanelComponent[] = [
 export const DOCKING_MIN_WIDTH_LEFT = 220;
 export const DOCKING_MIN_WIDTH_RIGHT = 220;
 export const DOCKING_MIN_WIDTH_CENTER = 360;
-export const DOCKING_MIN_HEIGHT_BOTTOM = 140;
+export const DOCKING_MIN_HEIGHT_BOTTOM_DESKTOP = 84;
+export const DOCKING_MIN_HEIGHT_BOTTOM_TABLET = 84;
+export const DOCKING_MIN_HEIGHT_BOTTOM_MOBILE = 76;
+export const DOCKING_DEFAULT_HEIGHT_BOTTOM_TABLET = 104;
+export const DOCKING_DEFAULT_HEIGHT_BOTTOM_MOBILE = 96;
+export const DOCKING_DEFAULT_WEIGHT_BOTTOM_DESKTOP = 10;
+
+export function resolveBottomDockMinHeight(
+  preset: DockResponsivePreset,
+): number {
+  switch (preset) {
+    case "mobile":
+      return DOCKING_MIN_HEIGHT_BOTTOM_MOBILE;
+    case "tablet":
+      return DOCKING_MIN_HEIGHT_BOTTOM_TABLET;
+    default:
+      return DOCKING_MIN_HEIGHT_BOTTOM_DESKTOP;
+  }
+}
+
+export function resolveBottomDockDefaultBorderSize(
+  preset: DockResponsivePreset,
+): number {
+  switch (preset) {
+    case "mobile":
+      return DOCKING_DEFAULT_HEIGHT_BOTTOM_MOBILE;
+    case "tablet":
+      return DOCKING_DEFAULT_HEIGHT_BOTTOM_TABLET;
+    default:
+      return DOCKING_DEFAULT_HEIGHT_BOTTOM_TABLET;
+  }
+}
+
+export function resolveBottomDockDefaultWeight(
+  preset: DockResponsivePreset,
+): number {
+  void preset;
+  return DOCKING_DEFAULT_WEIGHT_BOTTOM_DESKTOP;
+}
 
 export interface DockPanelDefaults {
   component: DockPanelComponent;
@@ -78,12 +116,17 @@ function createTabsetNode(params: {
   };
 }
 
-function createBottomPanelTabBorder(size: number, component: DockPanelComponent, id: string): IJsonBorderNode {
+function createBottomPanelTabBorder(
+  size: number,
+  minSize: number,
+  component: DockPanelComponent,
+  id: string,
+): IJsonBorderNode {
   return {
     type: "border",
     location: "bottom",
     size,
-    minSize: DOCKING_MIN_HEIGHT_BOTTOM,
+    minSize,
     children: [
       {
         type: "tab",
@@ -161,7 +204,7 @@ function makeDesktopRootLayout(params: {
     id: "dock-bottom-tabset",
     title: "Telemetry",
     component: "dock-bottom",
-    minHeight: DOCKING_MIN_HEIGHT_BOTTOM,
+    minHeight: resolveBottomDockMinHeight("desktop"),
     weight: params.bottomWeight,
   });
 
@@ -203,7 +246,12 @@ function makeDesktopRootLayout(params: {
     borders: params.rightBottomInBorder
       ? [
           createRightPanelTabBorder(360, "dock-right", "dock-right"),
-          createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
+          createBottomPanelTabBorder(
+            resolveBottomDockDefaultBorderSize("desktop"),
+            resolveBottomDockMinHeight("desktop"),
+            "dock-bottom",
+            "dock-bottom",
+          ),
         ]
       : [],
     layout: mainRow,
@@ -247,7 +295,12 @@ function makeTabletLayout(): IJsonModel {
     },
     borders: [
       createRightPanelTabBorder(360, "dock-right", "dock-right"),
-      createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
+      createBottomPanelTabBorder(
+        resolveBottomDockDefaultBorderSize("tablet"),
+        resolveBottomDockMinHeight("tablet"),
+        "dock-bottom",
+        "dock-bottom",
+      ),
     ],
     layout: {
       type: "row",
@@ -287,7 +340,12 @@ function makeMobileLayout(): IJsonModel {
     borders: [
       createLeftPanelTabBorder(260, "dock-left", "dock-left"),
       createRightPanelTabBorder(280, "dock-right", "dock-right"),
-      createBottomPanelTabBorder(220, "dock-bottom", "dock-bottom"),
+      createBottomPanelTabBorder(
+        resolveBottomDockDefaultBorderSize("mobile"),
+        resolveBottomDockMinHeight("mobile"),
+        "dock-bottom",
+        "dock-bottom",
+      ),
     ],
     layout: {
       type: "row",
@@ -308,7 +366,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 64,
       rightWeight: 20,
       centerWeight: 100,
-      bottomWeight: 12,
+      bottomWeight: 10,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -330,7 +388,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek narzędzi",
-        preferredHeightPx: 156,
+        preferredHeightPx: 108,
       },
     },
   },
@@ -344,7 +402,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 58,
       rightWeight: 18,
       centerWeight: 100,
-      bottomWeight: 16,
+      bottomWeight: 10,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -366,7 +424,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek analityczny",
-        preferredHeightPx: 220,
+        preferredHeightPx: 108,
       },
     },
   },
@@ -380,7 +438,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 58,
       rightWeight: 18,
       centerWeight: 100,
-      bottomWeight: 14,
+      bottomWeight: 10,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -402,7 +460,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 176,
+        preferredHeightPx: 108,
       },
     },
   },
@@ -416,7 +474,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       centerColumnWeight: 68,
       rightWeight: 12,
       centerWeight: 100,
-      bottomWeight: 12,
+      bottomWeight: 10,
       rightBottomInBorder: false,
     }),
     panels: {
@@ -438,7 +496,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 156,
+        preferredHeightPx: 108,
       },
     },
   },
@@ -464,7 +522,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
-        preferredHeightPx: 220,
+        preferredHeightPx: 104,
       },
     },
   },
@@ -490,6 +548,7 @@ const DOCK_LAYOUT_TEMPLATES_BY_ID: Record<DockLayoutTemplateId, DockLayoutTempla
       "dock-bottom": {
         component: "dock-bottom",
         label: "Pasek telemetry",
+        preferredHeightPx: 96,
       },
     },
   },

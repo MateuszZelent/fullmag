@@ -1,0 +1,185 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 05 — Testing and Performance
+
+## 1. Test Strategy
+
+The viewport is the hardest module to test because of WebGL dependencies. Tests are split into three tiers:
+
+| Tier | What | How | Gate |
+|---|---|---|---|
+| **Unit** | Render model builders, adapters, store logic, resource tracker | Vitest, no WebGL | Every PR |
+| **Integration** | Dirty loop scheduling, resource hook → adapter → render model flow | Vitest with mocked canvas | Every PR |
+| **Memory stress** | Resource leaks across 3D↔2D switches, quantity cycles | Vitest with tracked disposal counts | Weekly / pre-release |
+
+## 2. Required Unit Tests
+
+### Domain Adapters
+- `FdmDomainAdapter` builds correct cell-center positions from grid metadata
+- `FemDomainAdapter` produces correct positions, indices, normals from decoded topology
+- `createDomainAdapter` selects correct adapter class
+- Adapter caches positions (second call returns same reference)
+
+### Render Model Builder
+- `buildViewport3DRenderModel` produces null topology when adapter is null
+- Topology revision matches adapter generationId
+- Scalar field mapped correctly from field resource
+- Layer visibility flags propagated
+- Selection data mapped from kernel selection state
+
+### WebGL Resource Tracker
+- `track` + `releaseCategory` disposes all in category
+- `releaseAll` disposes everything
+- `getCounts` reflects actual registrations
+- Double-dispose doesn't throw
+
+### Viewport Store
+- Grid layout switch produces correct pane configs
+- Active pane change updates state
+- Display mode change per pane
+- Camera linking toggle
+- Maximise/restore toggles correctly
+
+## 3. Required Integration Tests
+
+### Dirty Render Loop
+```typescript
+test("no frame rendered when nothing is dirty", () => {
+  const loop = createDirtyRenderLoop(mockScene, mockModel);
+  advanceTimers(1000);
+  expect(mockScene.render).not.toHaveBeenCalled();
+});
+
+test("one frame after markDirty(camera)", () => {
+  const loop = createDirtyRenderLoop(mockScene, mockModel);
+  loop.markDirty("camera");
+  advanceToNextFrame();
+  expect(mockScene.render).toHaveBeenCalledTimes(1);
+});
+
+test("multiple dirty marks coalesce to one frame", () => {
+  const loop = createDirtyRenderLoop(mockScene, mockModel);
+  loop.markDirty("camera");
+  loop.markDirty("field");
+  loop.markDirty("selection");
+  advanceToNextFrame();
+  expect(mockScene.render).toHaveBeenCalledTimes(1);
+});
+```
+
+### Quantity Switch Without Topology Rebuild
+```typescript
+test("quantity switch updates field but not topology", () => {
+  const adapter = new FdmDomainAdapter(mockMeta);
+  const model1 = buildRenderModel(adapter, fieldA, viz);
+  const model2 = buildRenderModel(adapter, fieldB, viz);
+
+  expect(model1.topology!.topologyRevision).toBe(model2.topology!.topologyRevision);
+  expect(model1.scalarField!.quantityId).not.toBe(model2.scalarField!.quantityId);
+});
+```
+
+### Selection Does Not Refetch Field
+```typescript
+test("selection change does not trigger field resource fetch", () => {
+  // Mount viewport, load data
+  // Change selection
+  // Assert field hook did not refetch
+});
+```
+
+## 4. Memory Stress Test
+
+Procedure (automated in Vitest):
+
+```
+1. Mount viewport-3d module
+2. Load FDM domain + field
+3. Assert tracker.getCounts() > 0
+4. Switch quantity 5 times
+5. Assert tracker.getCounts() stays bounded (no growth per switch)
+6. Switch to viewport-2d module
+7. Assert 3D tracker.getCounts() === all zeros (3D resources released)
+8. Switch back to viewport-3d
+9. Assert tracker.getCounts() > 0 again (rebuilt)
+10. Switch grid layout: single → quad → single
+11. Assert tracker.getCounts() bounded
+12. Unmount viewport-3d
+13. Assert tracker.getCounts() === all zeros
+```
+
+## 5. Idle Performance Audit
+
+Automated test:
+
+```
+1. Mount viewport with data loaded
+2. Wait for initial settling (all dirty reasons processed)
+3. Start frame counter
+4. Wait 5 seconds
+5. Assert frame count === 0
+6. Assert no requestAnimationFrame active
+7. Assert no setInterval active
+8. Assert no fetch requests in progress
+```
+
+## 6. Context Loss Recovery Test
+
+```
+1. Mount viewport, render initial frame
+2. Simulate webglcontextlost event
+3. Assert no render attempts during lost state
+4. Simulate webglcontextrestored event
+5. Assert one frame rendered
+6. Assert tracker.getCounts() matches initial (no leaks from lost resources)
+```
+
+## 7. Performance Budgets
+
+| Metric | Budget |
+|---|---|
+| Initial render (first frame after data load) | < 100ms |
+| Quantity switch (field buffer swap) | < 50ms |
+| Topology rebuild (new mesh) | < 200ms for 1M cells |
+| Camera orbit (interactive frame) | < 16ms (60fps) |
+| Idle frame count (per minute) | 0 |
+| Memory growth per quantity switch | < 1MB |
+| Memory growth per 3D↔2D switch | 0 (net, after GC) |
+
+## 8. Diagnostics Surface
+
+The viewport module exposes diagnostic data to the `diagnostics` module:
+
+```typescript
+export interface ViewportDiagnostics {
+  frameCount: number;
+  lastFrameDirtyReasons: DirtyReason[];
+  fps: number;
+  resourceCounts: Record<string, number>;
+  activeAnimationFrames: number;
+  topologyRevision: number | null;
+  fieldRevision: number | null;
+  paneCount: number;
+  activeDisplayModes: DisplayMode[];
+}
+```
+
+Visible in the diagnostics panel in development mode. Not shipped to production.
+
+## 9. Verification Commands
+
+```bash
+# Unit + integration tests
+pnpm --dir apps/control-room test -- --run viewport
+
+# Memory stress
+pnpm --dir apps/control-room test -- --run viewport-memory-stress
+
+# Idle audit
+pnpm --dir apps/control-room audit:idle-performance
+
+# Typecheck + lint (zero-tolerance gate)
+pnpm --dir apps/control-room typecheck
+pnpm --dir apps/control-room lint
+```

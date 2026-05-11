@@ -7,7 +7,6 @@ import type {
 } from "flexlayout-react";
 
 import {
-  DOCKING_MIN_HEIGHT_BOTTOM,
   DOCKING_MIN_WIDTH_CENTER,
   DOCKING_MIN_WIDTH_LEFT,
   DOCKING_MIN_WIDTH_RIGHT,
@@ -17,13 +16,16 @@ import {
   REQUIRED_DOCK_PANEL_COMPONENTS,
   createDefaultDockLayout,
   getDockLayoutTemplate,
+  resolveBottomDockDefaultBorderSize,
+  resolveBottomDockDefaultWeight,
+  resolveBottomDockMinHeight,
   resolveDockResponsivePreset,
   resolveDockLayoutTemplateId,
 } from "@/components/workspace/docking/dockLayoutDefaults";
 
 export type DockLayoutModel = IJsonModel;
 
-export const DOCKING_LAYOUT_SCHEMA_VERSION = 1;
+export const DOCKING_LAYOUT_SCHEMA_VERSION = 2;
 export const DOCKING_LAYOUT_SCHEMA_VERSION_KEY = "dockingLayoutSchemaVersion";
 
 export interface DockLayoutEnvelope {
@@ -166,7 +168,10 @@ function collectTabComponents(model: IJsonModel): Set<string> {
   return found;
 }
 
-function clampNodeMinSizes(node: DockLayoutTreeNode): boolean {
+function clampNodeMinSizes(
+  node: DockLayoutTreeNode,
+  preset: DockResponsivePreset,
+): boolean {
   let changed = false;
   if (isTabSetNode(node)) {
     const firstChild = node.children[0];
@@ -182,7 +187,9 @@ function clampNodeMinSizes(node: DockLayoutTreeNode): boolean {
             ? DOCKING_MIN_WIDTH_CENTER
             : undefined;
 
-    const minHeight = component === "dock-bottom" ? DOCKING_MIN_HEIGHT_BOTTOM : undefined;
+    const minHeight = component === "dock-bottom"
+      ? resolveBottomDockMinHeight(preset)
+      : undefined;
 
     if (isNumber(minWidth) && (!isNumber(node.minWidth) || node.minWidth < minWidth)) {
       node.minWidth = minWidth;
@@ -201,7 +208,7 @@ function clampNodeMinSizes(node: DockLayoutTreeNode): boolean {
 
   if ("children" in node && Array.isArray(node.children)) {
     for (const child of node.children) {
-      if (isTreeNode(child) && clampNodeMinSizes(child)) {
+      if (isTreeNode(child) && clampNodeMinSizes(child, preset)) {
         changed = true;
       }
     }
@@ -220,8 +227,12 @@ function tabSetComponent(node: IJsonTabSetNode): DockPanelComponent | null {
     : null;
 }
 
-function clampCenterBottomWeights(node: DockLayoutTreeNode): boolean {
+function repairCenterBottomWeightsForLoad(
+  node: DockLayoutTreeNode,
+  preset: DockResponsivePreset,
+): boolean {
   let changed = false;
+  const defaultBottomWeight = resolveBottomDockDefaultWeight(preset);
 
   if (node.type === "row" && Array.isArray(node.children)) {
     let center: IJsonTabSetNode | null = null;
@@ -244,8 +255,8 @@ function clampCenterBottomWeights(node: DockLayoutTreeNode): boolean {
         center.weight = 100;
         changed = true;
       }
-      if (!isNumber(bottom.weight) || bottom.weight > 12) {
-        bottom.weight = 12;
+      if (!isNumber(bottom.weight) || bottom.weight > defaultBottomWeight) {
+        bottom.weight = defaultBottomWeight;
         changed = true;
       }
     }
@@ -253,7 +264,7 @@ function clampCenterBottomWeights(node: DockLayoutTreeNode): boolean {
 
   if ("children" in node && Array.isArray(node.children)) {
     for (const child of node.children) {
-      if (isTreeNode(child) && clampCenterBottomWeights(child)) {
+      if (isTreeNode(child) && repairCenterBottomWeightsForLoad(child, preset)) {
         changed = true;
       }
     }
@@ -262,7 +273,52 @@ function clampCenterBottomWeights(node: DockLayoutTreeNode): boolean {
   return changed;
 }
 
-function clampBorderPanelSizes(model: IJsonModel): boolean {
+function clampCenterBottomWeightsRuntime(node: DockLayoutTreeNode): boolean {
+  let changed = false;
+
+  if (node.type === "row" && Array.isArray(node.children)) {
+    let center: IJsonTabSetNode | null = null;
+    let bottom: IJsonTabSetNode | null = null;
+
+    for (const child of node.children) {
+      if (!isTreeNode(child) || !isTabSetNode(child)) {
+        continue;
+      }
+      const component = tabSetComponent(child);
+      if (component === "dock-center") {
+        center = child;
+      } else if (component === "dock-bottom") {
+        bottom = child;
+      }
+    }
+
+    if (center && bottom) {
+      if (!isNumber(center.weight) || center.weight <= 0) {
+        center.weight = 100;
+        changed = true;
+      }
+      if (!isNumber(bottom.weight) || bottom.weight <= 0) {
+        bottom.weight = resolveBottomDockDefaultWeight("desktop");
+        changed = true;
+      }
+    }
+  }
+
+  if ("children" in node && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      if (isTreeNode(child) && clampCenterBottomWeightsRuntime(child)) {
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+function clampBorderPanelSizes(
+  model: IJsonModel,
+  preset: DockResponsivePreset,
+): boolean {
   if (!Array.isArray(model.borders)) {
     return false;
   }
@@ -276,12 +332,54 @@ function clampBorderPanelSizes(model: IJsonModel): boolean {
     const firstChild = Array.isArray(border.children) ? border.children[0] : null;
     const component =
       isPlainObject(firstChild) && firstChild.type === "tab" && isString(firstChild.component)
-        ? firstChild.component
+        ? firstChild.component as DockPanelComponent
         : null;
-    const requiredMinSize = component === "dock-bottom" ? DOCKING_MIN_HEIGHT_BOTTOM : null;
+    const requiredMinSize = component === "dock-bottom"
+      ? resolveBottomDockMinHeight(preset)
+      : null;
 
     if (isNumber(requiredMinSize) && (!isNumber(border.minSize) || border.minSize < requiredMinSize)) {
       border.minSize = requiredMinSize;
+      changed = true;
+    }
+    if (isNumber(border.size) && isNumber(border.minSize) && border.size < border.minSize) {
+      border.size = border.minSize;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function repairBottomBorderSizesForLoad(
+  model: IJsonModel,
+  preset: DockResponsivePreset,
+): boolean {
+  if (!Array.isArray(model.borders) || preset === "desktop") {
+    return false;
+  }
+
+  let changed = false;
+  const defaultBottomSize = resolveBottomDockDefaultBorderSize(preset);
+  const minBottomSize = resolveBottomDockMinHeight(preset);
+  for (const border of model.borders) {
+    if (!isPlainObject(border)) {
+      continue;
+    }
+    const firstChild = Array.isArray(border.children) ? border.children[0] : null;
+    const component =
+      isPlainObject(firstChild) && firstChild.type === "tab" && isString(firstChild.component)
+        ? firstChild.component as DockPanelComponent
+        : null;
+    if (component !== "dock-bottom") {
+      continue;
+    }
+    if (isNumber(border.size) && border.size > defaultBottomSize) {
+      border.size = defaultBottomSize;
+      changed = true;
+    }
+    if (!isNumber(border.minSize) || border.minSize < minBottomSize) {
+      border.minSize = minBottomSize;
       changed = true;
     }
     if (isNumber(border.size) && isNumber(border.minSize) && border.size < border.minSize) {
@@ -302,8 +400,13 @@ function ensureGlobalDefaults(model: IJsonModel, templateModel: IJsonModel): IJs
   return next;
 }
 
-function recoverFromTemplate(model: IJsonModel, templateModel: IJsonModel, reasons: string[]): IJsonModel {
-  const merged = mergeTemplatePreservingPanels(model, templateModel);
+function recoverFromTemplate(
+  model: IJsonModel,
+  templateModel: IJsonModel,
+  preset: DockResponsivePreset,
+  reasons: string[],
+): IJsonModel {
+  const merged = mergeTemplatePreservingPanels(model, templateModel, preset);
   reasons.push("Repaired missing required dock panels by template fallback.");
   return merged;
 }
@@ -361,7 +464,11 @@ function injectCenterPanelIntoLayout(model: IJsonModel, replacement: IJsonTabSet
   return true;
 }
 
-function mergeTemplatePreservingPanels(model: IJsonModel, templateModel: IJsonModel): IJsonModel {
+function mergeTemplatePreservingPanels(
+  model: IJsonModel,
+  templateModel: IJsonModel,
+  preset: DockResponsivePreset,
+): IJsonModel {
   const template = cloneJson(templateModel);
   const active = cloneJson(model);
   const activeComponents = collectTabComponents(active);
@@ -454,8 +561,8 @@ function mergeTemplatePreservingPanels(model: IJsonModel, templateModel: IJsonMo
     const border: IJsonBorderNode = {
       type: "border",
       location: "bottom",
-      size: replacement.minHeight ?? DOCKING_MIN_HEIGHT_BOTTOM,
-      minSize: DOCKING_MIN_HEIGHT_BOTTOM,
+      size: replacement.minHeight ?? resolveBottomDockMinHeight(preset),
+      minSize: resolveBottomDockMinHeight(preset),
       children: [
         {
           type: "tab",
@@ -535,7 +642,7 @@ function normalizeCandidateJson(value: unknown, preset: DockResponsivePreset): I
       reasons.push(`Missing required panel: ${component}`);
     });
     changed = true;
-    const recovered = recoverFromTemplate(normalizedModel, templateModel, reasons);
+    const recovered = recoverFromTemplate(normalizedModel, templateModel, preset, reasons);
     if (recovered) {
       return {
         model: recovered,
@@ -550,22 +657,27 @@ function normalizeCandidateJson(value: unknown, preset: DockResponsivePreset): I
   }
 
   const clamped = cloneJson(normalizedModel) as IJsonModel;
-  if (clampNodeMinSizes(clamped.layout)) {
+  if (!isNumber(candidateVersion) || candidateVersion < DOCKING_LAYOUT_SCHEMA_VERSION) {
+    reasons.push("Schema migration applied to current docking version.");
+    changed = true;
+    if (repairCenterBottomWeightsForLoad(clamped.layout, preset)) {
+      reasons.push("Normalized center/bottom dock weights for compact bottom dock defaults.");
+    }
+    if (repairBottomBorderSizesForLoad(clamped, preset)) {
+      reasons.push("Normalized bottom border size for compact responsive defaults.");
+    }
+  }
+  if (clampNodeMinSizes(clamped.layout, preset)) {
     reasons.push("Clamped layout min-size constraints to safe values.");
     changed = true;
   }
-  if (clampCenterBottomWeights(clamped.layout)) {
-    reasons.push("Normalized center/bottom dock weights for full-height viewport.");
+  if (clampCenterBottomWeightsRuntime(clamped.layout)) {
+    reasons.push("Normalized invalid center/bottom dock weights.");
     changed = true;
   }
 
-  if (clampBorderPanelSizes(clamped)) {
+  if (clampBorderPanelSizes(clamped, preset)) {
     reasons.push("Clamped border sizes to satisfy min-size guardrails.");
-    changed = true;
-  }
-
-  if (!isNumber(candidateVersion) || candidateVersion < DOCKING_LAYOUT_SCHEMA_VERSION) {
-    reasons.push("Schema migration applied to current docking version.");
     changed = true;
   }
 
@@ -618,21 +730,21 @@ export function normalizeDockLayoutRuntimeModel(
       reasons.push(`Missing required panel: ${component}`);
     }
     changed = true;
-    model = recoverFromTemplate(cloneJson(model), templateModel, reasons) as IJsonModel;
+    model = recoverFromTemplate(cloneJson(model), templateModel, preset, reasons) as IJsonModel;
   }
 
   // Clamp min-size constraints.
   const clamped = cloneJson(model) as IJsonModel;
-  if (clampNodeMinSizes(clamped.layout)) {
+  if (clampNodeMinSizes(clamped.layout, preset)) {
     reasons.push("Clamped layout min-size constraints to safe values.");
     changed = true;
   }
-  if (clampCenterBottomWeights(clamped.layout)) {
-    reasons.push("Normalized center/bottom dock weights for full-height viewport.");
+  if (clampCenterBottomWeightsRuntime(clamped.layout)) {
+    reasons.push("Normalized invalid center/bottom dock weights.");
     changed = true;
   }
 
-  if (clampBorderPanelSizes(clamped)) {
+  if (clampBorderPanelSizes(clamped, preset)) {
     reasons.push("Clamped border sizes to satisfy min-size guardrails.");
     changed = true;
   }

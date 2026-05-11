@@ -37,8 +37,8 @@ flowchart TD
   FieldHook --> Adapter
   VizHook --> RenderModel["render model builder"]
   Adapter --> RenderModel
-  RenderModel --> Renderer["imperative renderer"]
-  Renderer --> Canvas["viewport surface"]
+  RenderModel --> Renderer["single R3F renderer"]
+  Renderer --> Canvas["one viewport canvas"]
 ```
 
 The renderer receives render models, not API payloads.

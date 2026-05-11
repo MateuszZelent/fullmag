@@ -1,0 +1,102 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 02 — Render Pipeline
+
+## 1. Overview
+
+The render pipeline is fully imperative and lives outside React. React owns `<canvas>` and the `Viewport3DRenderModel`. Everything below is Three.js managed by `SceneController`.
+
+```
+Viewport3DRenderModel → SceneController → Layer Renderers → <canvas>
+```
+
+## 2. Render Model Contract
+
+```typescript
+export interface Viewport3DRenderModel {
+  domain: DomainRenderModel | null;
+  topology: TopologyRenderData | null;
+  scalarField: ScalarFieldRenderData | null;
+  vectorField: VectorFieldRenderData | null;
+  layers: LayerVisibility;
+  selection: SelectionRenderData;
+  cameraHint: CameraHint | null;
+  displayMode: DisplayMode;
+  clip: ClipPlaneConfig | null;
+  status: ViewportResourceStatus;
+}
+
+export type DisplayMode = "shaded" | "wireframe" | "shaded+wireframe" | "flat-shaded" | "points";
+```
+
+### Key Sub-Types
+
+- **TopologyRenderData:** `positions: Float32Array`, `indices: Uint32Array | null`, `normals`, `topologyRevision`, `domainKind`
+- **ScalarFieldRenderData:** `values: Float32Array`, `min/max`, `quantityId`, `colorMapName`, `fieldRevision`
+- **VectorFieldRenderData:** sampled glyph origins, directions, magnitudes, `fieldRevision`
+- **LayerVisibility:** boolean flags per layer (meshSurface, wireframe, vectors, scalar, selection, axes, airbox, clip)
+
+## 3. SceneController
+
+One instance per `ViewportPane`. Plain TypeScript class, not React.
+
+- Creates `THREE.WebGLRenderer`, `THREE.Scene`, camera (perspective or orthographic per pane preset)
+- Instantiates all layer renderers and registers them
+- `render(model)` → updates all layers → `renderer.render(scene, camera)`
+- `resize(w, h)` → updates camera aspect + renderer size
+- `dispose()` → calls `WebglResourceTracker.releaseAll()`
+
+## 4. Layer Renderers
+
+Each implements `LayerRenderer { update(model): void; dispose(): void; }`. Independent — one layer cannot own another's resources.
+
+| Layer | Rebuild trigger | GPU resources | Key logic |
+|---|---|---|---|
+| `MeshLayerRenderer` | topology revision | BufferGeometry, Material, Mesh | FEM: triangles; FDM: instanced cubes. No `discretization` fork — topology data is pre-adapted. |
+| `FieldSurfaceRenderer` | field revision | vertex color attribute or shader texture | Updates attribute buffer, **not** geometry. Quantity switch ≠ topology rebuild. |
+| `VectorGlyphRenderer` | field revision | InstancedMesh with cone geometry | Reuses base glyph; updates instance matrices. |
+| `WireframeLayerRenderer` | topology revision | LineSegments or WireframeGeometry | Overlay on shaded mesh. |
+| `SelectionLayerRenderer` | selection change | Outline material or separate highlighted mesh | Stencil outline or scaled-normal shell. |
+| `AxesGridRenderer` | domain bounds | AxesHelper, GridHelper | Static after load. |
+| `AirboxRenderer` | domain bounds | Wireframe BoxGeometry | Static after load. |
+| `ClipPlaneRenderer` | clip config | THREE.Plane + cap geometry | Sets clip plane on renderer. |
+
+## 5. Dirty Render Loop
+
+```typescript
+type DirtyReason = "camera" | "resize" | "topology" | "field" | "quantity"
+  | "layer" | "selection" | "display-mode" | "clip" | "context-restored" | "explicit-animation";
+```
+
+- `markDirty(reason)` adds to set + schedules single RAF
+- Coalescing: multiple marks in same microtask → one frame
+- After render: dirty set cleared, reasons logged to diagnostics
+- **Idle = zero frames.** No render without dirty reason.
+
+## 6. WebGL Resource Tracker
+
+Categorized registry (`geometry`, `material`, `texture`, `renderTarget`, `instance`).
+
+- `track(category, resource)` — register
+- `releaseCategory(category)` — dispose all in category
+- `releaseAll()` — module unmount
+- `getCounts()` — diagnostics surface
+
+## 7. Context Loss Recovery
+
+1. `contextlost` → `preventDefault()`, mark resources stale
+2. `contextrestored` → `releaseAll()`, rebuild from current model, dirty(`context-restored`)
+3. No data refetch — CPU-side buffers still valid in resource hooks
+
+## 8. Display Mode per Pane
+
+| Mode | Material | Wireframe | Lighting |
+|---|---|---|---|
+| `shaded` | MeshStandardMaterial | no | 3-point + ambient |
+| `wireframe` | MeshBasicMaterial(wireframe) | — | none |
+| `shaded+wireframe` | MeshStandardMaterial | yes (overlay) | 3-point |
+| `flat-shaded` | MeshStandardMaterial(flatShading) | no | ambient |
+| `points` | PointsMaterial | no | none |
+
+Mode switch changes material uniforms — **no topology rebuild**.

@@ -1,0 +1,6 @@
+{
+  "artifactType":  "ARTIFACT_TYPE_OTHER",
+  "summary":  "Revised testing and performance document — comprehensive unit tests for all new code (geometry builders, adapters, render model, glyph sampling, LOD, store), integration tests, memory stress, idle audit, large-sim perf, quality gates.",
+  "updatedAt":  "2026-05-11T19:27:56.257466281Z",
+  "version":  "1"
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type {
@@ -140,10 +140,17 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     setQuery,
     toggle,
   } = useCommandPalette();
-  const commands = useSyncExternalStore(
+  const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
-    () => kernel.commands.all(),
-    () => kernel.commands.all(),
+    () => kernel.commands.getVersion(),
+    () => kernel.commands.getVersion(),
+  );
+  const commands = useMemo(
+    () => {
+      void commandVersion;
+      return kernel.commands.all();
+    },
+    [commandVersion, kernel.commands],
   );
 
   useEffect(() => {

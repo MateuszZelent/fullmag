@@ -1,0 +1,380 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 02 — Render Pipeline (R3F + Cuboids/Tets + LOD)
+
+## 1. Scene Graph Structure
+
+```
+<Canvas frameloop="demand">
+  <SyncedOrbitControls />
+  <SceneLighting displayMode={...} />
+
+  {/* Per-object meshes */}
+  {objects.map(obj => (
+    <ObjectMeshLayer key={obj.objectId} object={obj} mode={displayMode} />
+  ))}
+
+  {/* Field visualization — one layer spanning all objects */}
+  <ScalarFieldLayer field={scalarField} />
+  <VectorGlyphLayer vectors={vectorField} sampling={sampling} />
+
+  {/* Overlays */}
+  <WireframeLayer topology={topology} />
+  <AirboxLayer airbox={airbox} />
+  <AxesGridLayer bounds={universeBounds} />
+  <BoundsBoxLayer bounds={universeBounds} />
+  <SelectionHighlightLayer selection={selection} />
+  <ClipPlaneLayer clip={clip} />
+</Canvas>
+```
+
+## 2. Cell Geometry Builders
+
+The **only** place where FDM and FEM diverge. Both produce standard `THREE.BufferGeometry`.
+
+### FDM: Cuboid cells
+
+```typescript
+// cellGeometry.ts
+export function buildCuboidGeometry(
+  grid: StructuredGridDescriptor,
+  elementMarkers?: Uint32Array,
+): CellGeometryResult {
+  const { shape, origin, spacing } = grid;
+  const [nx, ny, nz] = shape;
+  const [ox, oy, oz] = origin;
+  const [dx, dy, dz] = spacing;
+
+  // For large grids, use InstancedMesh with a unit cube
+  // instance matrix = translate(cellCenter) * scale(dx, dy, dz)
+  const cellCount = nx * ny * nz;
+  const matrices = new Float32Array(cellCount * 16);
+  const cellCenters = new Float32Array(cellCount * 3);
+
+  let idx = 0;
+  for (let iz = 0; iz < nz; iz++) {
+    for (let iy = 0; iy < ny; iy++) {
+      for (let ix = 0; ix < nx; ix++) {
+        const cx = ox + (ix + 0.5) * dx;
+        const cy = oy + (iy + 0.5) * dy;
+        const cz = oz + (iz + 0.5) * dz;
+        cellCenters[idx * 3] = cx;
+        cellCenters[idx * 3 + 1] = cy;
+        cellCenters[idx * 3 + 2] = cz;
+        // build 4x4 matrix: translate(cx,cy,cz) * scale(dx,dy,dz)
+        buildInstanceMatrix(matrices, idx, cx, cy, cz, dx, dy, dz);
+        idx++;
+      }
+    }
+  }
+
+  return {
+    kind: "instanced-cuboids",
+    cellCount,
+    cellCenters,
+    instanceMatrices: matrices,
+    baseGeometry: new THREE.BoxGeometry(1, 1, 1),
+    elementMarkers: elementMarkers ?? new Uint32Array(cellCount), // default: all one object
+  };
+}
+```
+
+**Rendering:** `<instancedMesh>` with shared `BoxGeometry`, per-instance matrix → zero topology cost.
+
+### FEM: Tetrahedral boundary faces
+
+```typescript
+export function buildTetBoundaryGeometry(
+  decoded: DecodedTopology,
+): CellGeometryResult {
+  // boundary faces are triangles (3 node indices per face)
+  const positions = new Float32Array(decoded.nodeCount * 3);
+  // Convert Float64Array → Float32Array for GPU
+  for (let i = 0; i < decoded.positions.length; i++) {
+    positions[i] = decoded.positions[i];
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.Uint32BufferAttribute(decoded.boundaryFaces, 1));
+  geometry.computeVertexNormals();
+
+  return {
+    kind: "tet-boundary",
+    cellCount: decoded.elementCount,
+    faceCount: decoded.boundaryFaceCount,
+    geometry,
+    elementMarkers: decoded.elementMarkers,
+    boundaryMarkers: decoded.boundaryMarkers,
+  };
+}
+```
+
+**Rendering:** Standard `<mesh>` with `BufferGeometry` + index buffer.
+
+### Interface
+
+```typescript
+type CellGeometryResult =
+  | {
+      kind: "instanced-cuboids";
+      cellCount: number;
+      cellCenters: Float32Array;
+      instanceMatrices: Float32Array;
+      baseGeometry: THREE.BoxGeometry;
+      elementMarkers: Uint32Array;
+    }
+  | {
+      kind: "tet-boundary";
+      cellCount: number;
+      faceCount: number;
+      geometry: THREE.BufferGeometry;
+      elementMarkers: Uint32Array;
+      boundaryMarkers: Uint32Array;
+    };
+```
+
+The renderer pattern-matches on `kind` once to choose `<instancedMesh>` vs `<mesh>`. Everything else is shared.
+
+## 3. ObjectMeshLayer — Per-Object Rendering
+
+```tsx
+function ObjectMeshLayer({ object, mode }: {
+  object: ObjectRenderData;
+  mode: DisplayMode;
+}) {
+  const meshRef = useRef<THREE.Mesh | THREE.InstancedMesh>(null);
+
+  if (object.geometry.kind === "instanced-cuboids") {
+    return (
+      <instancedMesh
+        ref={meshRef}
+        args={[object.geometry.baseGeometry, undefined, object.geometry.cellCount]}
+        userData={{ objectId: object.objectId }}
+        onPointerDown={handlePick}
+      >
+        <meshStandardMaterial
+          color={object.baseColor}
+          wireframe={mode === "wireframe"}
+          flatShading={mode === "flat-shaded"}
+        />
+      </instancedMesh>
+    );
+  }
+
+  // FEM: standard mesh
+  return (
+    <mesh
+      geometry={object.geometry.geometry}
+      userData={{ objectId: object.objectId }}
+      onPointerDown={handlePick}
+    >
+      <meshStandardMaterial
+        color={object.baseColor}
+        wireframe={mode === "wireframe"}
+        flatShading={mode === "flat-shaded"}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+```
+
+## 4. ScalarFieldLayer
+
+Maps field values to vertex/instance colors.
+
+```tsx
+function ScalarFieldLayer({ field }: { field: ScalarFieldRenderData | null }) {
+  const { invalidate } = useThree();
+  // Reference to mesh(es) in scene for color attribute update
+  // ...
+
+  useEffect(() => {
+    if (!field) return;
+    // Build color buffer from field.values using colormap LUT
+    const colors = applyColormap(
+      field.values,
+      field.min,
+      field.max,
+      field.colorMapName,
+    );
+    // Update vertex color attribute on mesh geometry
+    // For instanced (FDM): update per-instance color attribute
+    // For standard (FEM): update per-vertex color attribute
+    invalidate();
+  }, [field?.fieldRevision, invalidate]);
+
+  // ...
+}
+```
+
+**Key:** Color buffer update, never geometry rebuild.
+
+## 5. VectorGlyphLayer — Density-Aware
+
+The backend already provides `sampling.maxGlyphs` and `layers.vectors.density`. The layer respects these budgets.
+
+```tsx
+function VectorGlyphLayer({ vectors, sampling }: {
+  vectors: VectorFieldRenderData | null;
+  sampling: SamplingConfig;
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const { invalidate } = useThree();
+
+  // Subsample if glyph count exceeds budget
+  const displayedGlyphs = useMemo(() => {
+    if (!vectors) return null;
+    if (vectors.sampledCount <= sampling.maxGlyphs) return vectors;
+    return subsampleGlyphs(vectors, sampling.maxGlyphs);
+  }, [vectors, sampling.maxGlyphs]);
+
+  useEffect(() => {
+    if (!displayedGlyphs || !meshRef.current) return;
+    updateGlyphInstances(meshRef.current, displayedGlyphs);
+    invalidate();
+  }, [displayedGlyphs, invalidate]);
+
+  if (!displayedGlyphs) return null;
+
+  return (
+    <instancedMesh ref={meshRef} args={[undefined, undefined, displayedGlyphs.sampledCount]}>
+      <coneGeometry args={[0.15, 0.5, 6]} />
+      <meshStandardMaterial vertexColors />
+    </instancedMesh>
+  );
+}
+```
+
+### Glyph subsampling strategies
+
+```typescript
+// glyphSampling.ts
+export function subsampleGlyphs(
+  vectors: VectorFieldRenderData,
+  budget: number,
+): VectorFieldRenderData {
+  // Strategy 1: Uniform stride
+  const stride = Math.ceil(vectors.sampledCount / budget);
+  // Strategy 2: Importance sampling (prefer high-magnitude vectors)
+  // Strategy 3: Spatial grid subsampling (one glyph per grid cell)
+  // For now: uniform stride, simplest and predictable
+  return filterByStride(vectors, stride);
+}
+```
+
+## 6. WireframeLayer = Mesh View
+
+Wireframe is often the primary mesh visualization. It renders the same topology as edge lines.
+
+```tsx
+function WireframeLayer({ objects }: { objects: ObjectRenderData[] }) {
+  return (
+    <>
+      {objects.map(obj => {
+        if (obj.geometry.kind === "instanced-cuboids") {
+          // Instanced wireframe cubes: use EdgesGeometry on unit cube
+          return (
+            <instancedMesh key={obj.objectId} /* same instance matrices */>
+              <edgesGeometry args={[new THREE.BoxGeometry(1, 1, 1)]} />
+              <lineBasicMaterial color="#888" />
+            </instancedMesh>
+          );
+        }
+        return (
+          <lineSegments key={obj.objectId}>
+            <edgesGeometry args={[obj.geometry.geometry]} />
+            <lineBasicMaterial color="#888" />
+          </lineSegments>
+        );
+      })}
+    </>
+  );
+}
+```
+
+## 7. LOD / Large Simulation Strategy
+
+For giant simulations (millions of cells), we need multiple strategies:
+
+### 7a. Backend sampling budget
+
+The backend's `SamplingVisualizationState` controls:
+- `max_points`: cap on number of rendered points
+- `max_glyphs`: cap on number of vector glyphs
+- `profile`: preset (quality / balanced / interactive / memory_saver)
+
+The viewport respects these budgets. It does **not** try to render everything.
+
+### 7b. Mesh decimation (client-side)
+
+For FEM meshes with millions of boundary faces, client-side decimation:
+
+```typescript
+// lodStrategy.ts
+export function decimateMesh(
+  geometry: THREE.BufferGeometry,
+  targetFaceCount: number,
+): THREE.BufferGeometry {
+  // Use three.js SimplifyModifier or custom edge-collapse
+  // Return reduced geometry
+}
+```
+
+### 7c. FDM: skip cells by stride
+
+For FDM grids with millions of cells, render every Nth cell:
+
+```typescript
+export function stridedCuboidGeometry(
+  grid: StructuredGridDescriptor,
+  stride: number,
+): CellGeometryResult {
+  // Sample every `stride`th cell in each dimension
+  // Reduces cell count by stride^3
+}
+```
+
+### 7d. Progressive rendering
+
+If `sampling.progressive` is enabled:
+1. First render: low-density (every 4th cell + 10% glyphs).
+2. After 500ms idle: medium density.
+3. After 2s idle: full density (up to budget).
+
+### 7e. LOD thresholds
+
+| Cell count | Strategy |
+|---|---|
+| < 100k | Full render, no decimation |
+| 100k – 1M | Backend sampling profile `balanced`, stride=2 for FDM |
+| 1M – 10M | Backend `interactive` profile, stride=4, mesh decimation |
+| > 10M | Backend `memory_saver`, stride=8, only active scope rendered |
+
+## 8. Dirty Rendering with R3F
+
+R3F `frameloop="demand"` handles this natively:
+
+- Component prop changes → `invalidate()` → one frame
+- `SyncedOrbitControls` interaction → `invalidate()` → frames during drag
+- Idle → zero frames
+
+No custom dirty loop needed. The store + component reactivity drives `invalidate()`.
+
+## 9. Context Loss
+
+R3F handles `webglcontextlost` / `webglcontextrestored` internally. The declarative scene graph is rebuilt from current React state on restoration. No manual recovery code needed.
+
+## 10. Display Modes
+
+| Mode | Implementation | Lighting |
+|---|---|---|
+| `shaded` | `MeshStandardMaterial` | 3-point + ambient |
+| `wireframe` | `MeshBasicMaterial({ wireframe: true })` or `WireframeLayer` only | none |
+| `shaded+wireframe` | Both: surface + edge overlay | 3-point |
+| `flat-shaded` | `MeshStandardMaterial({ flatShading: true })` | ambient |
+| `points` | `<points>` with `PointsMaterial` | none |
+
+Mode is per-pane. Change swaps material — no geometry rebuild.

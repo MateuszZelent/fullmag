@@ -12,6 +12,7 @@ import type { KernelEventMap } from "../events/eventTypes";
 export class CommandRegistry {
   private readonly commands = new Map<CommandId, CommandContribution>();
   private readonly listeners = new Set<() => void>();
+  private version = 0;
   private bus: EventBus<KernelEventMap> | null = null;
 
   /** Attach bus for event emission. Called once during kernel init. */
@@ -39,6 +40,10 @@ export class CommandRegistry {
 
   all(): CommandContribution[] {
     return Array.from(this.commands.values());
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   /** Return all commands matching a category. */
@@ -90,6 +95,7 @@ export class CommandRegistry {
   }
 
   private notify(): void {
+    this.version += 1;
     for (const listener of this.listeners) {
       listener();
     }

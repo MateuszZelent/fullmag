@@ -333,30 +333,31 @@ export default function BottomTelemetryDock({
       </div>
 
       {/* ── Telemetry grid ── */}
-      <div className="flex-1 overflow-hidden">
-        <div className="border-b border-border/15 px-3 py-1 text-[0.58rem] text-muted-foreground/75">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-border/15 px-3 py-1 text-[0.58rem] text-muted-foreground/75">
           Live solver telemetry • hover kafelek aby zobaczyć co oznacza dana metryka.
           {activityLabel ? ` • aktywność: ${activityLabel}` : ""}
         </div>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-1.5 p-2">
-          {telemetryCards.map((card) => (
-            <div
-              key={card.label}
-              title={card.hint}
-              className={cn(
-                "flex flex-col gap-0.5 rounded-md border-l-[3px] bg-card/20 p-2 shadow-sm",
-                card.accent,
-              )}
-            >
-              <span className="text-[0.58rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                {card.label}
-              </span>
-              <span className={cn("font-mono text-[0.78rem] font-semibold text-foreground", card.valueClassName)}>
-                {card.value}
-              </span>
-            </div>
-          ))}
-
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          <div className="grid auto-rows-min grid-cols-[repeat(auto-fill,minmax(100px,1fr))] gap-1.5">
+            {telemetryCards.map((card) => (
+              <div
+                key={card.label}
+                title={card.hint}
+                className={cn(
+                  "flex flex-col gap-0.5 rounded-md border-l-[3px] bg-card/20 px-2 py-1.5 shadow-sm",
+                  card.accent,
+                )}
+              >
+                <span className="text-[0.56rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {card.label}
+                </span>
+                <span className={cn("font-mono text-[0.74rem] font-semibold text-foreground", card.valueClassName)}>
+                  {card.value}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

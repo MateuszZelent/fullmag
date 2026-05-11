@@ -1,0 +1,358 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 04 — Domain Adapters (Universe, Objects, Cuboids, Tetrahedra)
+
+## 1. The v1 Problem (reiterated)
+
+In v1, FDM and FEM were forked inside the renderer. The renderer asked "what discretization?" and branched. Every new feature (clipping, selection, arrows) had to handle both branches. The "unified" viewport was unified in name only.
+
+## 2. v2 Strategy: One Adapter, Two Geometry Builders
+
+```
+DomainMeta.discretization
+       │
+       ├── "fdm" → FdmDomainAdapter.buildCellGeometry(grid) → CellGeometryResult(instanced-cuboids)
+       └── "fem" → FemDomainAdapter.buildCellGeometry(topology) → CellGeometryResult(tet-boundary)
+```
+
+After this point, the renderer sees only `CellGeometryResult`. It doesn't know or care about FDM vs FEM.
+
+## 3. Universe / Multi-Object Topology
+
+The backend provides topology at multiple scopes:
+
+| Scope | Endpoint | Use case |
+|---|---|---|
+| Full solver domain | `GET /data/domain/topology` | Single merged mesh for field rendering |
+| Per-object mesh | `GET /meshing/meshes/objects/{id}/topology` | Object-level picking, per-object color |
+| Per-part mesh | `GET /meshing/meshes/parts/{id}/topology` | Part-level detail (e.g., airbox vs magnetic) |
+| Shared domain | `GET /meshing/meshes/shared-domain/topology` | Shared FEM domain for multi-object |
+
+### Which topology to use for rendering?
+
+**Primary:** Full solver domain topology (`/data/domain/topology`) for field visualization. This is the mesh on which field values are defined.
+
+**Secondary:** Per-object topologies for:
+- Object identity during picking (which face belongs to which object)
+- Per-object base color (material color)
+- Per-object visibility toggle
+- Airbox separation (airbox has its own object/part)
+
+**Strategy:**
+1. Fetch the full domain topology + field data for rendering.
+2. Use `elementMarkers` and `boundaryMarkers` from the topology to map faces to objects.
+3. Scene objects from `GET /model/objects` provide the object IDs, names, and materials.
+4. Object-to-marker mapping links faces to objects for picking and coloring.
+
+## 4. SpatialDomainAdapter Interface
+
+```typescript
+// src/domain/adapters/SpatialDomainAdapter.ts
+export interface SpatialDomainAdapter {
+  readonly discretization: "fdm" | "fem";
+  readonly generationId: number;
+
+  /** Build the cell/face geometry for 3D rendering. */
+  buildCellGeometry(): CellGeometryResult;
+
+  /** Universe bounds (SI, meters). */
+  getBounds(): Bounds3;
+
+  /** Number of cells (FDM) or elements (FEM). */
+  getCellCount(): number;
+
+  /** Map element marker → object ID. */
+  getObjectMapping(): Map<number, string>;
+
+  /** Airbox region markers (if any). */
+  getAirboxMarkers(): Set<number>;
+}
+```
+
+## 5. FDM Adapter
+
+```typescript
+// src/domain/adapters/FdmDomainAdapter.ts
+export class FdmDomainAdapter implements SpatialDomainAdapter {
+  readonly discretization = "fdm";
+
+  constructor(
+    private meta: DomainMeta,
+    private objects: SceneObject[],
+  ) {}
+
+  get generationId() { return this.meta.generation_id; }
+
+  buildCellGeometry(): CellGeometryResult {
+    const grid = this.meta.grid!;
+    return buildCuboidGeometry(grid, /* elementMarkers from meta if available */);
+  }
+
+  getBounds(): Bounds3 {
+    return this.meta.bounds;
+  }
+
+  getCellCount(): number {
+    const [nx, ny, nz] = this.meta.grid!.shape;
+    return nx * ny * nz;
+  }
+
+  getObjectMapping(): Map<number, string> {
+    // FDM: typically single object, marker 0 → object ID
+    const map = new Map<number, string>();
+    this.objects.forEach((obj, i) => map.set(i, obj.id));
+    return map;
+  }
+
+  getAirboxMarkers(): Set<number> {
+    return new Set(); // FDM typically has no airbox (PBC instead)
+  }
+}
+```
+
+## 6. FEM Adapter
+
+```typescript
+// src/domain/adapters/FemDomainAdapter.ts
+export class FemDomainAdapter implements SpatialDomainAdapter {
+  readonly discretization = "fem";
+
+  constructor(
+    private meta: DomainMeta,
+    private topology: DecodedTopology,
+    private objects: SceneObject[],
+  ) {}
+
+  get generationId() { return this.meta.generation_id; }
+
+  buildCellGeometry(): CellGeometryResult {
+    return buildTetBoundaryGeometry(this.topology);
+  }
+
+  getBounds(): Bounds3 {
+    return this.meta.bounds;
+  }
+
+  getCellCount(): number {
+    return this.topology.elementCount;
+  }
+
+  getObjectMapping(): Map<number, string> {
+    // FEM: element markers → object ID mapping
+    const map = new Map<number, string>();
+    const uniqueMarkers = new Set(this.topology.elementMarkers);
+    // Backend markers correspond to object indices in scene order
+    for (const marker of uniqueMarkers) {
+      if (marker < this.objects.length) {
+        map.set(marker, this.objects[marker].id);
+      }
+    }
+    return map;
+  }
+
+  getAirboxMarkers(): Set<number> {
+    // Identify airbox markers: objects with role "air" or without material
+    const airMarkers = new Set<number>();
+    this.objects.forEach((obj, i) => {
+      if (obj.isAirbox) airMarkers.add(i);
+    });
+    return airMarkers;
+  }
+}
+```
+
+## 7. Factory
+
+```typescript
+// src/domain/adapters/createDomainAdapter.ts
+export function createDomainAdapter(
+  meta: DomainMeta,
+  topology: DecodedTopology | null,
+  objects: SceneObject[],
+): SpatialDomainAdapter {
+  if (meta.discretization === "fdm") {
+    return new FdmDomainAdapter(meta, objects);
+  }
+  if (meta.discretization === "fem") {
+    if (!topology) throw new Error("FEM adapter requires decoded topology");
+    return new FemDomainAdapter(meta, topology, objects);
+  }
+  throw new Error(`Unknown discretization: ${meta.discretization}`);
+}
+```
+
+## 8. Render Model Builder
+
+Pure function: adapter + field + viz state → `Viewport3DRenderModel`.
+
+```typescript
+// viewport-3d/model/buildViewport3DRenderModel.ts
+export function buildViewport3DRenderModel(
+  adapter: SpatialDomainAdapter | null,
+  fieldData: DecodedFieldVector | null,
+  vizState: VisualizationStateResource | null,
+  selectionState: SelectionState,
+  sceneObjects: SceneObject[],
+): Viewport3DRenderModel {
+  if (!adapter) return EMPTY_RENDER_MODEL;
+
+  const cellGeometry = adapter.buildCellGeometry();
+  const objectMapping = adapter.getObjectMapping();
+  const airboxMarkers = adapter.getAirboxMarkers();
+
+  // Build per-object render data
+  const objects: ObjectRenderData[] = sceneObjects
+    .filter(obj => !obj.isAirbox)
+    .map(obj => ({
+      objectId: obj.id,
+      objectName: obj.name,
+      geometry: cellGeometry,  // shared geometry, filtered by markers during rendering
+      elementMarkers: cellGeometry.elementMarkers,
+      baseColor: obj.materialColor ?? DEFAULT_OBJECT_COLOR,
+      hasFieldData: true,
+    }));
+
+  // Build airbox render data (if exists)
+  const airbox = airboxMarkers.size > 0
+    ? buildAirboxRenderData(cellGeometry, airboxMarkers, adapter.getBounds())
+    : null;
+
+  // Build scalar field
+  const scalarField = fieldData && vizState
+    ? mapScalarField(fieldData, vizState)
+    : null;
+
+  // Build vector field with density from backend
+  const vectorField = fieldData && vizState?.vector_glyphs
+    ? mapVectorField(fieldData, vizState)
+    : null;
+
+  return {
+    objects,
+    airbox,
+    universeBounds: adapter.getBounds(),
+    scalarField,
+    vectorField,
+    layers: vizState?.layers ?? DEFAULT_LAYERS,
+    selection: mapSelection(selectionState),
+    clip: vizState?.clip ?? null,
+    status: "ready",
+    sampling: vizState?.sampling ?? DEFAULT_SAMPLING,
+    quantity: vizState ? mapQuantityConfig(vizState) : DEFAULT_QUANTITY,
+  };
+}
+```
+
+## 9. Resource Hooks
+
+### useViewport3DResources (aggregator)
+
+```typescript
+export function useViewport3DResources(kernel: KernelApi) {
+  const { data: sessionStatus } = useSessionStatus();
+  const revisions = sessionStatus?.resources;
+
+  const domainMeta = useDomainMeta(revisions?.domain_generation_id);
+  const meshTopology = useMeshTopology(revisions?.topology_revision);
+  const sceneObjects = useSceneObjects(revisions?.scene_revision);
+  const vizState = useVisualizationState(revisions?.visualization_state_revision);
+  const activeQuantity = vizState?.data?.active_quantity_id ?? null;
+  const fieldData = useFieldData(activeQuantity, revisions?.field_revision);
+
+  const adapter = useMemo(() => {
+    if (!domainMeta?.data) return null;
+    return createDomainAdapter(
+      domainMeta.data,
+      meshTopology?.data ?? null,
+      sceneObjects?.data ?? [],
+    );
+  }, [domainMeta?.data, meshTopology?.data, sceneObjects?.data]);
+
+  return { adapter, fieldData: fieldData?.data, vizState: vizState?.data, sceneObjects: sceneObjects?.data };
+}
+```
+
+### useMeshTopology (binary resource)
+
+```typescript
+export function useMeshTopology(topologyRevision: number | undefined) {
+  const { api } = useKernel();
+  const load = useCallback(async ({ signal }: { signal: AbortSignal }) => {
+    const response = await api.fetchBinary("/v2/sessions/current/data/domain/topology", { signal });
+    return decodeTopology(response);
+  }, [api]);
+
+  return useResource({
+    load,
+    resourceKey: "data:domain:topology",
+    resolveRevision: () => topologyRevision ?? null,
+  });
+}
+```
+
+### useFieldData (binary resource)
+
+```typescript
+export function useFieldData(quantityId: string | null, fieldRevision: number | undefined) {
+  const { api } = useKernel();
+  const load = useCallback(async ({ signal }: { signal: AbortSignal }) => {
+    if (!quantityId) throw new Error("No quantity selected");
+    const response = await api.fetchBinary(
+      `/v2/sessions/current/data/fields/${quantityId}/samples/vector`,
+      { signal },
+    );
+    return decodeFieldVector(response);
+  }, [api, quantityId]);
+
+  return useResource({
+    load,
+    resourceKey: `data:fields:${quantityId}:vector`,
+    resolveRevision: () => fieldRevision ?? null,
+  });
+}
+```
+
+## 10. Face → Object Resolution
+
+For picking, we need to map a clicked face back to an object.
+
+### FEM
+
+`boundaryMarkers[faceIndex]` → marker value → `objectMapping.get(marker)` → objectId.
+
+### FDM
+
+`instanceId` (from R3F intersection) → cell index → marker (from grid layout, typically marker = object region at that cell center).
+
+The render model builder pre-computes a lookup array:
+
+```typescript
+export function buildFaceToObjectMap(
+  cellGeometry: CellGeometryResult,
+  objectMapping: Map<number, string>,
+): string[] {
+  // Returns objectId per face/cell
+  const markers = cellGeometry.elementMarkers;
+  return Array.from(markers, (marker) => objectMapping.get(marker) ?? "unknown");
+}
+```
+
+## 11. File Locations
+
+```
+src/domain/
+  adapters/
+    SpatialDomainAdapter.ts            # Interface
+    FdmDomainAdapter.ts                # Structured grid → cuboid geometry
+    FemDomainAdapter.ts                # FMMT topology → tet boundary geometry
+    createDomainAdapter.ts             # Factory
+  render-models/
+    topologyRenderModel.ts             # CellGeometryResult type
+    fieldRenderModel.ts                # ScalarFieldRenderData, VectorFieldRenderData
+    sceneObjectModel.ts                # SceneObject, ObjectRenderData
+  __tests__/
+    FdmDomainAdapter.test.ts
+    FemDomainAdapter.test.ts
+    createDomainAdapter.test.ts
+```

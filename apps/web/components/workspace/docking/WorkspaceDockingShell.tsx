@@ -122,7 +122,7 @@ function BottomDockPanel() {
   }, [solverPlan?.adaptive?.atol, solverSettings.maxError]);
 
   return (
-    <div className="flex h-full divide-x divide-border/20 overflow-hidden">
+    <div className="flex h-full min-h-0 divide-x divide-border/20 overflow-hidden">
       <div className="flex-1 min-w-0 overflow-hidden">
         <BottomUtilityDock
           activity={cmd.activity}
@@ -145,7 +145,7 @@ function BottomDockPanel() {
           solverFixedDt={fixedDt}
         />
       </div>
-      <div className="w-52 shrink-0 overflow-hidden">
+      <div className="w-40 md:w-44 lg:w-48 shrink-0 overflow-hidden">
         <ChartsDock />
       </div>
     </div>
