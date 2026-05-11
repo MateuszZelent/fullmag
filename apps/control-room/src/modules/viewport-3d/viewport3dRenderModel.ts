@@ -6,6 +6,11 @@ import type {
   DecodedTopology,
 } from "@/kernel/api/codecs";
 
+import {
+  buildVertexScalarColors,
+  type ScalarColorBuffer,
+} from "./viewport3dFieldMapping";
+
 export interface Viewport3DNodeSelection {
   nodeCount?: number;
   node_count?: number;
@@ -22,14 +27,106 @@ export interface Viewport3DSurfacePart extends Viewport3DNodeSelection {
   surface_faces?: readonly (readonly number[])[];
 }
 
+export interface Viewport3DRenderablePart extends Viewport3DSurfacePart {
+  id: string;
+}
+
 export interface Viewport3DBounds {
   center: [number, number, number];
   radius: number;
   size: [number, number, number];
 }
 
+export interface Viewport3DTopologyPartRenderModel<
+  TPart extends Viewport3DRenderablePart = Viewport3DRenderablePart,
+> {
+  part: TPart;
+  surfaceIndices: Uint32Array | null;
+}
+
+export interface Viewport3DTopologyRenderModel<
+  TPart extends Viewport3DRenderablePart = Viewport3DRenderablePart,
+> {
+  fallbackSurfaceIndices: Uint32Array;
+  magneticParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
+  airboxParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
+  nodeCount: number;
+  positions: Float32Array;
+}
+
+export interface Viewport3DFieldRenderModel {
+  fullVectorSegments: Float32Array | null;
+  partVectorSegments: Map<string, Float32Array | null>;
+  scalarColors: ScalarColorBuffer | null;
+}
+
+interface Viewport3DPositionSource {
+  nodeCount: number;
+  positions: ArrayLike<number>;
+}
+
 export function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   return Float32Array.from(topology.positions);
+}
+
+export function buildViewport3DTopologyRenderModel<
+  TPart extends Viewport3DRenderablePart,
+>(
+  topology: DecodedTopology | null | undefined,
+  magneticParts: readonly TPart[],
+  airboxParts: readonly TPart[],
+): Viewport3DTopologyRenderModel<TPart> | null {
+  if (!topology) return null;
+
+  return {
+    airboxParts: airboxParts.map((part) => ({
+      part,
+      surfaceIndices: buildPartSurfaceIndices(part, topology),
+    })),
+    fallbackSurfaceIndices: buildTetraSurfaceIndices(topology.indices),
+    magneticParts: magneticParts.map((part) => ({
+      part,
+      surfaceIndices: buildPartSurfaceIndices(part, topology),
+    })),
+    nodeCount: topology.nodeCount,
+    positions: buildTopologyPositions(topology),
+  };
+}
+
+export function buildViewport3DFieldRenderModel(
+  topology:
+    | Viewport3DTopologyRenderModel<Viewport3DRenderablePart>
+    | null
+    | undefined,
+  fieldVector: DecodedFieldVector | null | undefined,
+  scale: number,
+): Viewport3DFieldRenderModel | null {
+  if (!topology) return null;
+
+  const scalarColors = buildVertexScalarColors(fieldVector, topology.nodeCount);
+  const partVectorSegments = new Map<string, Float32Array | null>();
+
+  for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
+    partVectorSegments.set(
+      partModel.part.id,
+      buildVectorLineSegmentsForNodeSelectionFromPositions(
+        topology,
+        fieldVector,
+        partModel.part,
+        scale,
+      ),
+    );
+  }
+
+  return {
+    fullVectorSegments: buildVectorLineSegmentsFromPositions(
+      topology,
+      fieldVector,
+      scale,
+    ),
+    partVectorSegments,
+    scalarColors,
+  };
 }
 
 export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
@@ -122,8 +219,22 @@ export function buildVectorLineSegments(
   scale: number,
   maxVectors = 2048,
 ): Float32Array | null {
+  if (!topology) return null;
+  return buildVectorLineSegmentsFromPositions(
+    topology,
+    fieldVector,
+    scale,
+    maxVectors,
+  );
+}
+
+export function buildVectorLineSegmentsFromPositions(
+  topology: Viewport3DPositionSource,
+  fieldVector: DecodedFieldVector | null | undefined,
+  scale: number,
+  maxVectors = 2048,
+): Float32Array | null {
   if (
-    !topology ||
     !fieldVector ||
     fieldVector.nComp < 3 ||
     fieldVector.pointCount === 0 ||
@@ -174,8 +285,24 @@ export function buildVectorLineSegmentsForNodeSelection(
   scale: number,
   maxVectors = 2048,
 ): Float32Array | null {
+  if (!topology) return null;
+  return buildVectorLineSegmentsForNodeSelectionFromPositions(
+    topology,
+    fieldVector,
+    nodeSelection,
+    scale,
+    maxVectors,
+  );
+}
+
+export function buildVectorLineSegmentsForNodeSelectionFromPositions(
+  topology: Viewport3DPositionSource,
+  fieldVector: DecodedFieldVector | null | undefined,
+  nodeSelection: Viewport3DNodeSelection | null | undefined,
+  scale: number,
+  maxVectors = 2048,
+): Float32Array | null {
   if (
-    !topology ||
     !fieldVector ||
     fieldVector.nComp < 3 ||
     fieldVector.pointCount === 0 ||
@@ -304,7 +431,7 @@ function surfaceIndicesFromBoundaryFaceRange(
 
 function resolveNodeSelectionCount(
   selection: Viewport3DNodeSelection | null | undefined,
-  topology: DecodedTopology,
+  topology: Pick<Viewport3DPositionSource, "nodeCount">,
 ): number {
   if (selection?.nodeIndices?.length) {
     return selection.nodeIndices.length;

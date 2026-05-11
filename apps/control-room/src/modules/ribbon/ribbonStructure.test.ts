@@ -1,12 +1,21 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
 import { buildRibbonTabContent } from "./ribbonContributions";
 import { resolveRibbonIconColor } from "./RibbonGroupsRow";
 import { RIBBON_TABS } from "./ribbonTypes";
-import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import type {
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
+import {
+  AIRBOX_VISUALIZATION_TARGET,
+  ObjectVisualizationController,
+} from "@/kernel/visualization/ObjectVisualizationController";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 
 describe("ribbon structure", () => {
   it("defines visible content and dropdown structure for every ribbon tab", () => {
@@ -96,4 +105,321 @@ describe("ribbon structure", () => {
       disabled: false,
     });
   });
+
+  it("wires the global Airbox ribbon menu to the airbox visualization target", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const visibleNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:visible",
+    );
+    const vectorsNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:vectors",
+    );
+
+    expect(airboxAction?.disabled).toBe(false);
+    expect(visibleNode).toMatchObject({
+      checked: true,
+      disabled: false,
+    });
+    expect(vectorsNode).toMatchObject({
+      checked: false,
+      disabled: false,
+    });
+
+    if (visibleNode?.type !== "checkbox" || vectorsNode?.type !== "checkbox") {
+      throw new Error("Expected airbox checkbox controls");
+    }
+
+    visibleNode.onCheckedChange?.(false);
+    vectorsNode.onCheckedChange?.(true);
+
+    expect(visualization.getSettings(AIRBOX_VISUALIZATION_TARGET)).toMatchObject({
+      vectorsVisible: true,
+      visible: false,
+    });
+  });
+
+  it("patches canonical visualization state from global Quantity controls", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        active_quantity_id: "m",
+        layers: {
+          quantity_overlay: { visible: true },
+        },
+        quantity: {
+          active_quantity_id: "m",
+          auto_contrast: true,
+          colormap: "viridis",
+          field_component: "magnitude",
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", context);
+    const quantityAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-quantity");
+    const sourceNode = quantityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "quantity:source",
+    );
+    const overlayNode = quantityAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "quantity:overlay-visible",
+    );
+
+    expect(sourceNode).toMatchObject({ value: "m" });
+    expect(overlayNode).toMatchObject({ checked: true });
+    if (sourceNode?.type !== "radio-group" || overlayNode?.type !== "checkbox") {
+      throw new Error("Expected quantity source and overlay controls");
+    }
+
+    sourceNode.onValueChange?.("H_demag");
+    overlayNode.onCheckedChange?.(false);
+
+    expect(patches).toEqual([
+      {
+        active_quantity_id: "H_demag",
+        quantity: { active_quantity_id: "H_demag" },
+      },
+      {
+        layers: { quantity_overlay: { visible: false } },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([
+        [VISUALIZATION_STATE_PATH, 41],
+        [VISUALIZATION_STATE_PATH, 42],
+      ]),
+    );
+  });
+
+  it("patches canonical visualization state from global Vectors controls", () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      field_component: "magnitude",
+      layers: {
+        vectors: {
+          density: 1200,
+          domain: "auto",
+          visible: false,
+        },
+      },
+      vector_style: {
+        alpha: 0.9,
+        color_mode: "orientation",
+        length_scale: 1,
+        thickness: 1,
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const vectorsAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-vectors");
+    const visibleNode = vectorsAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "vectors:visible",
+    );
+    const densityNode = vectorsAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "vectors:density",
+    );
+
+    expect(visibleNode).toMatchObject({ checked: false });
+    expect(densityNode).toMatchObject({ value: 1200 });
+    if (visibleNode?.type !== "checkbox" || densityNode?.type !== "slider") {
+      throw new Error("Expected vector visibility and density controls");
+    }
+
+    visibleNode.onCheckedChange?.(true);
+    densityNode.onValueChange?.(2048);
+
+    expect(patches).toEqual([
+      {
+        layers: { vectors: { visible: true } },
+        vector_glyphs: true,
+      },
+      {
+        layers: { vectors: { density: 2048 } },
+        sampling: { max_glyphs: 2048 },
+        vector_density: 2048,
+      },
+    ]);
+  });
+
+  it("patches canonical visualization state from global Mesh View controls", () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      layers: {
+        points: { opacity: 1, visible: false },
+        surface: { opacity: 1, visible: true },
+        wireframe: { opacity: 1, visible: false },
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const meshAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-render-layers");
+    const renderModeNode = meshAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "layers:mesh-mode",
+    );
+    const opacityNode = meshAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "layers:opacity",
+    );
+
+    expect(renderModeNode).toMatchObject({ value: "surface" });
+    expect(opacityNode).toMatchObject({ value: 100 });
+    if (renderModeNode?.type !== "radio-group" || opacityNode?.type !== "slider") {
+      throw new Error("Expected mesh render-mode and opacity controls");
+    }
+
+    renderModeNode.onValueChange?.("points");
+    opacityNode.onValueChange?.(45);
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          points: { visible: true },
+          surface: { visible: false },
+          wireframe: { visible: false },
+        },
+      },
+      {
+        layers: {
+          points: { opacity: 0.45 },
+          surface: { opacity: 0.45 },
+          wireframe: { opacity: 0.45 },
+        },
+      },
+    ]);
+  });
+
+  it("wires View orientation controls to command ids", () => {
+    const commands = new CommandRegistry();
+    commands.register({
+      id: "viewport-3d.toggle-viewcube",
+      title: "Toggle 3D Box",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => true,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.hsl-reference-auto",
+      title: "HSL Reference Auto",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => true,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.hsl-reference-on",
+      title: "HSL Reference On",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.hsl-reference-off",
+      title: "HSL Reference Off",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+
+    const content = buildRibbonTabContent("view", {
+      commands,
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const orientationAction = content?.groups
+      .find((group) => group.id === "view-display")
+      ?.actions.find((action) => action.id === "view-orientation");
+    const viewCubeNode = orientationAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "orientation:viewcube",
+    );
+    const hslNode = orientationAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "orientation:hsl-reference",
+    );
+
+    expect(viewCubeNode).toMatchObject({
+      checked: true,
+      commandId: "viewport-3d.toggle-viewcube",
+    });
+    expect(viewCubeNode).not.toHaveProperty("onCheckedChange");
+    expect(hslNode).toMatchObject({
+      value: "auto",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.hsl-reference-auto",
+          value: "auto",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.hsl-reference-on",
+          value: "on",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.hsl-reference-off",
+          value: "off",
+        }),
+      ],
+    });
+    expect(hslNode).not.toHaveProperty("onValueChange");
+  });
 });
+
+function createVisualizationRibbonContext(
+  visualizationState: Partial<VisualizationStateResource>,
+) {
+  const patches: VisualizationStatePatch[] = [];
+  const invalidations: Array<[string, number | string]> = [];
+
+  return {
+    context: {
+      api: {
+        visualization: {
+          patch: async (patch: VisualizationStatePatch) => {
+            patches.push(patch);
+            return {
+              ...visualizationState,
+              revision: 40 + patches.length,
+            } as VisualizationStateResource;
+          },
+        },
+      },
+      resources: {
+        invalidate: (resourceKey: string, revision: number | string) => {
+          invalidations.push([resourceKey, revision]);
+        },
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+      visualizationState: visualizationState as VisualizationStateResource,
+    },
+    invalidations,
+    patches,
+  };
+}

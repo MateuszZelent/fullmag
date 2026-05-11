@@ -35,8 +35,22 @@ export function CameraController({
   const { camera, invalidate } = useThree();
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
+  // Store cameraState in a ref so the fit/reset effect doesn't re-fire
+  // when OrbitControls updates the store (which it does on every drag-end).
+  const cameraStateRef = useRef(cameraState);
 
   useEffect(() => {
+    cameraStateRef.current = cameraState;
+  }, [cameraState]);
+
+  // Only runs when bounds change or a fit/reset command is issued.
+  // Does NOT depend on cameraState to avoid the store write → re-render loop.
+  useEffect(() => {
+    const shouldFit =
+      handledFitRevisionRef.current !== fitRevision ||
+      handledResetCameraRevisionRef.current !== resetCameraRevision;
+    if (!shouldFit) return;
+
     const activeBounds = bounds ?? {
       center: [0, 0, 0] as [number, number, number],
       radius: 1,
@@ -44,39 +58,37 @@ export function CameraController({
     };
     const [x, y, z] = activeBounds.center;
     const distance = activeBounds.radius * 2.8;
-    const shouldFit =
-      handledFitRevisionRef.current !== fitRevision ||
-      handledResetCameraRevisionRef.current !== resetCameraRevision;
-    const nextPosition: [number, number, number] = shouldFit
-      ? [x + distance, y + distance * 0.72, z + distance]
-      : cameraState.position;
-    const nextTarget: [number, number, number] = shouldFit
-      ? activeBounds.center
-      : cameraState.target;
+    const nextPosition: [number, number, number] = [
+      x + distance,
+      y + distance * 0.72,
+      z + distance,
+    ];
+    const nextTarget: [number, number, number] = activeBounds.center;
 
     camera.position.set(...nextPosition);
     camera.lookAt(...nextTarget);
     camera.updateProjectionMatrix();
-    if (shouldFit) {
-      handledFitRevisionRef.current = fitRevision;
-      handledResetCameraRevisionRef.current = resetCameraRevision;
-      viewport3dStore.setCamera({
-        position: nextPosition,
-        target: nextTarget,
-      });
-    }
+    handledFitRevisionRef.current = fitRevision;
+    handledResetCameraRevisionRef.current = resetCameraRevision;
+    viewport3dStore.setCamera({
+      position: nextPosition,
+      target: nextTarget,
+    });
     invalidate();
-    tracker.recordDirtyFrame("camera");
-  }, [
-    bounds,
-    camera,
-    cameraState.position,
-    cameraState.target,
-    fitRevision,
-    invalidate,
-    resetCameraRevision,
-    tracker,
-  ]);
+    tracker.recordDirtyFrame("camera-fit");
+  }, [bounds, camera, fitRevision, invalidate, resetCameraRevision, tracker]);
+
+  // Initial camera placement (once, on mount)
+  useEffect(() => {
+    const state = cameraStateRef.current;
+    camera.position.set(...state.position);
+    camera.lookAt(...state.target);
+    camera.updateProjectionMatrix();
+    invalidate();
+    tracker.recordDirtyFrame("camera-init");
+    // Intentionally runs only on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return null;
 }

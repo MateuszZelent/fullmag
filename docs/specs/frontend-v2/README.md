@@ -30,6 +30,7 @@ This is not a second Fullmag product and not an FDM/FEM fork. It is one browser 
 18. `21-cutover-acceptance.md` - acceptance criteria before disabling legacy.
 19. `22-implementation-plan.md` - phased build plan.
 20. `23-per-object-visualization-control.md` - per-object and airbox visualization registry shared by ribbon, explorer, inspector, 3D viewport, and future 2D views.
+21. `24-geometry-object-authoring-lifecycle.md` - end-to-end plan for adding scene objects, primitive display fallback, mesh rebuild synchronization, and explorer/ribbon/inspector/viewport integration.
 
 ## Authority
 

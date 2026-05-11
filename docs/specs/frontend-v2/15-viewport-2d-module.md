@@ -65,6 +65,8 @@ It does not read 3D renderer buffers. Shared decoded field resources may be reus
 
 The renderer is chosen inside the module. The shell only sees a mounted module.
 
+Before a new Geometry object has current mesh/field resources, 2D object-scoped slice/profile/probe commands are disabled with a primitive-only or mesh-stale explanation. The 2D module must not render blank panels or invent client-side field data from primitive fallback geometry.
+
 ## 6. Interaction
 
 Interactions:
@@ -105,3 +107,4 @@ Required tests:
 - unsupported capability shows direct explanation;
 - unmount disposes chart/canvas resources and observers.
 - 2D layer controls use the same target ids as 3D object/airbox visualization instead of inventing a parallel 2D-only store.
+- primitive-only or mesh-stale objects expose a clear disabled/stale 2D state until mesh and field resources exist.

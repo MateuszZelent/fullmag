@@ -52,8 +52,8 @@ The main menu renders command registry entries. It must not contain custom callb
 | `Edit` | undo/redo transaction, duplicate, delete, rename, copy values |
 | `View` | 3D, 2D, split view, reset layout, overlays, diagnostics |
 | `Definitions` | add material, add parameter, add named field |
-| `Geometry` | add primitive, boolean operation, transform, validate geometry |
-| `Mesh` | build selected, build all, show quality, show shared-domain report |
+| `Geometry` | add primitive, edit primitive parameters, transform, validate geometry, focus primitive display |
+| `Mesh` | build selected object, build all, build shared-domain mesh, show quality, show shared-domain report |
 | `Study` | add stage, run, pause, stop, resolve backend, show provenance |
 | `Results` | open artifact, add chart series, export data |
 | `Window` | toggle explorer, inspector, bottom dock, command palette |
@@ -66,6 +66,8 @@ Menu items display capability state:
 - unavailable because runtime capability is missing;
 - degraded with explanation;
 - active/running.
+
+Geometry menu actions that create or edit objects open inspector drafts and commit through model transactions. Mesh menu actions that build topology submit backend mesh-build commands. The shell must not collapse both flows into one local callback path.
 
 ## 4. Navigation State
 

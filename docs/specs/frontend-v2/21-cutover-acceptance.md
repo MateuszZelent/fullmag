@@ -18,6 +18,7 @@ Required workflows:
 - navigate model/resource/results trees;
 - select object/resource from explorer and viewport;
 - inspect and edit supported geometry/material/physics/mesh/study properties;
+- add a new geometry primitive object, edit dimensions/position/rotation, see immediate primitive display and fallback wireframe, then build mesh and see current object topology;
 - build mesh where supported;
 - run supported stage;
 - show command completion and stage stop reason;

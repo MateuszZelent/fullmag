@@ -74,6 +74,8 @@ Status ticks, scalar chart updates, logs, tree expansion, and unrelated inspecto
 
 Per-object visualization edits are a valid dirty reason only for the affected render target. Toggling one ferromagnet's shader, vectors, wireframe, points, opacity, or airbox display must not rebuild unrelated topology or refetch unrelated fields. The same target registry is consumed by the View ribbon, explorer visualization nodes, inspector panels, and viewport render-model builders.
 
+Geometry authoring adds one more dirty reason: primitive realization change for the edited object. This rebuilds only the affected primitive/fallback wireframe geometry. It must not be treated as a solver topology revision until meshing resources publish a current mesh for that scene revision.
+
 ## 6. Teardown Budget
 
 Unmounting a viewport module must release:
@@ -97,5 +99,6 @@ The diagnostics module must expose resource counts in development mode.
 - 3D viewport internals: `14-viewport-3d-module.md`
 - 2D viewport internals: `15-viewport-2d-module.md`
 - per-object visualization control: `23-per-object-visualization-control.md`
+- geometry object authoring lifecycle: `24-geometry-object-authoring-lifecycle.md`
 - Charts and analysis: `16-charts-analysis-module.md`
 - Performance and profiling: `17-performance-memory-profiler.md`

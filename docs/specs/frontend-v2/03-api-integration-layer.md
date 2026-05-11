@@ -103,6 +103,19 @@ No module uses `useEffect(() => fetch(...))`. No module constructs endpoint URLs
 
 Status carries pointers, revisions, capabilities, summaries, and diagnostics. Heavy payloads remain separate resources.
 
+## 5.1 Geometry Object Authoring Resources
+
+Geometry object creation uses the `model` family, not workspace or visualization resources:
+
+- read the canonical scene through `GET /v2/sessions/current/model/scene`;
+- commit create/patch/delete/rename/transform authoring changes through `POST /v2/sessions/current/model/transactions` or the object-specific model routes exposed by OpenAPI v2;
+- read geometry capabilities, validation, diagnostics, and realization snapshots from `/v2/sessions/current/model/geometry/*`;
+- treat mesh-affecting model changes as mesh-stale until meshing resources prove a current build;
+- submit mesh rebuilds through `POST /v2/sessions/current/simulation/commands` with `kind: "mesh_build"`;
+- read progress and provenance from `meshing/builds/current`, `meshing/builds/latest-successful`, object topology, reports, quality, and shared-domain manifest resources.
+
+The frontend facade must expose handwritten methods/resource hooks for those routes before modules use them. A module must not call generated transport directly or build endpoint strings for object creation.
+
 ## 6. Command Flow
 
 Commands move through one registry and one API path:

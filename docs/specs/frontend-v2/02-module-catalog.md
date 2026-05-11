@@ -34,7 +34,7 @@ The explorer is the default left-panel module. Results navigator is a tab in the
 | Module | Slot | Responsibility | Notes |
 |---|---|---|---|
 | `definitions` | `panel-left`, `panel-right` | Materials, quantities, named functions, parameter definitions. | Must round-trip to Python DSL. |
-| `geometry-authoring` | `viewport-main`, `ribbon`, `panel-right` | Geometry editing in the unified 3D viewport. | Geometry mode is a viewport preset, not a separate builder app. |
+| `geometry-authoring` | `viewport-main`, `ribbon`, `panel-right` | Geometry object creation, primitive editing, transforms, validation, and backend scene transactions in the unified 3D viewport. | Geometry mode is a viewport preset, not a separate builder app. New objects start in primitive display until a mesh build materializes solver topology. |
 | `materials` | `panel-right` | Material assignment, tensor/scalar editing, validation. | Uses inspector transaction model. |
 | `physics` | `panel-right` | Interactions, boundary conditions, external fields. | Must use canonical Python/IR vocabulary. |
 | `mesh-authoring` | `panel-right`, `panel-bottom` | Universe/object/shared-domain mesh controls and reports. | Must preserve FEM three-layer mesh semantics. |
@@ -42,6 +42,8 @@ The explorer is the default left-panel module. Results navigator is a tab in the
 | `python-export` | `panel-bottom`, `overlay` | Canonical Python DSL preview/export and sync diagnostics. | Read-only preview unless transaction support exists. |
 
 Authoring modules never mutate local-only physics state. They submit semantic transactions to the API/resource layer.
+
+`geometry-authoring` follows the lifecycle in `24-geometry-object-authoring-lifecycle.md`: inspector drafts create or patch canonical `SceneDocument` objects through v2 model transactions; primitive/fallback wireframe display is authoring visualization only; solver mesh topology appears only after a successful backend mesh build.
 
 ## 4. Visualization Modules
 

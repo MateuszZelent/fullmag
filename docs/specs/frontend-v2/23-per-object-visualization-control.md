@@ -1,6 +1,6 @@
 # Frontend v2 - Per-Object Visualization Control
 
-**Status:** Implementation target
+**Status:** Frontend implementation slice complete; backend persistence and live browser smoke still pending
 **Date:** 2026-05-11
 
 ## 1. Goal
@@ -25,6 +25,8 @@ Canonical target ids:
 | Future 2D mode-specific override | `<target_id>:2d:<mode>` if required by the 2D backend |
 
 Object ids come from scene/model resources and mesh manifests. Airbox is never treated as a scene object.
+
+When a new object is committed but no current mesh exists yet, the target id still exists as `object:<object_id>`. Its default display uses primitive surface plus simplified wireframe fallback in Geometry context. Target visualization state must not imply that solver topology or field data exists.
 
 ## 3. State Ownership
 

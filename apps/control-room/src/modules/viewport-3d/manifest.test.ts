@@ -8,6 +8,14 @@ import { viewport3dStore } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 
 describe("viewport3dManifest", () => {
+  function registerViewportCommands() {
+    const registry = new CommandRegistry();
+    for (const command of viewport3dManifest.contributes?.commands ?? []) {
+      registry.register(command);
+    }
+    return registry;
+  }
+
   it("registers the 3D viewport as the viewport-main module", () => {
     expect(ALL_MODULES.find((manifest) => manifest.id === "viewport-3d"))
       .toBe(viewport3dManifest);
@@ -17,10 +25,8 @@ describe("viewport3dManifest", () => {
   });
 
   it("contributes executable viewport camera commands", async () => {
-    const registry = new CommandRegistry();
-    for (const command of viewport3dManifest.contributes?.commands ?? []) {
-      registry.register(command);
-    }
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
     const before = viewport3dStore.getSnapshot();
 
     await expect(
@@ -36,6 +42,31 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().resetCameraRevision).toBe(
       before.resetCameraRevision + 1,
     );
+  });
+
+  it("contributes orientation widget commands for ribbon and palette", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    expect(registry.get("viewport-3d.toggle-viewcube")).toBeDefined();
+    expect(registry.get("viewport-3d.hsl-reference-auto")).toBeDefined();
+    expect(registry.get("viewport-3d.hsl-reference-on")).toBeDefined();
+    expect(registry.get("viewport-3d.hsl-reference-off")).toBeDefined();
+
+    await registry.execute("viewport-3d.toggle-viewcube", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.viewCubeVisible).toBe(false);
+    expect(registry.isActive("viewport-3d.toggle-viewcube", { source: "test" }))
+      .toBe(false);
+
+    await registry.execute("viewport-3d.hsl-reference-on", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("on");
+    expect(registry.isActive("viewport-3d.hsl-reference-on", { source: "test" }))
+      .toBe(true);
+
+    await registry.execute("viewport-3d.hsl-reference-off", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("off");
+    expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
+      .toBe(true);
   });
 
   it("uses demand rendering instead of an always-on R3F loop", () => {

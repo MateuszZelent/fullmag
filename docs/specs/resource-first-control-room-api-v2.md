@@ -1,7 +1,7 @@
 # Resource-first Control Room API v2
 
 - Status: canonical control-room API contract
-- Last updated: 2026-04-25
+- Last updated: 2026-05-12
 - Compatibility reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -44,6 +44,7 @@ The default frontend base path is `/v2/sessions/current`.
 - `GET /v2/sessions/current/status` stays thin: summary, capabilities, and revision pointers only.
 - Heavy numerical payloads stay on resource data-plane routes, never in `status`.
 - All simulation-control operations go through `POST /v2/sessions/current/simulation/commands`.
+- Authoring operations that mutate the canonical scene go through the `model` family, not simulation commands.
 - `completion_status` is command outcome, not queue state; public command states are `queued`, `accepted`, `dispatched`, `running`, `completed`, `rejected`, and `failed`.
 - `data/quantities` describes supported quantities and preview capability.
 - `data/fields` describes materialized field resources; an empty field catalog does not make a quantity unsupported.
@@ -60,6 +61,10 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | Resource | Owns |
 |---|---|
 | `sessions/current/status` | session/run/solver/display/domain summaries, current-session UI capabilities, resource revisions |
+| `model/scene` | canonical authoring `SceneDocument` snapshot |
+| `model/transactions` | explicit semantic authoring mutations and committed scene revision |
+| `model/objects/*` | object create/patch/delete mutation routes; current object state is read back through `model/scene` |
+| `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
 | `simulation/stages/execution` | full stage tree and stage state |
 | `simulation/solver/status` | live solver state: runtime state, step, dt, torque, convergence, warnings |
@@ -82,6 +87,55 @@ Capability resources have distinct scopes:
 - `platform/capabilities`: process/runtime/server-level capability matrix.
 - `sessions/current/status.capabilities`: the only UI gating source for the active session.
 - `meshing/capabilities`: meshing policy/build feature matrix only; it must not drive global UI gating.
+
+## 3.3 Model authoring and Geometry object lifecycle
+
+The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
+
+Current object-authoring routes:
+
+| Route | Method | Meaning |
+|---|---|---|
+| `/v2/sessions/current/model/scene` | `GET` | Read current canonical `SceneDocument`. |
+| `/v2/sessions/current/model/scene` | `PUT` | Replace current canonical `SceneDocument`. |
+| `/v2/sessions/current/model/scene` | `PATCH` | Apply scene merge patch. |
+| `/v2/sessions/current/model/objects` | `POST` | Create a scene object and return the committed scene. |
+| `/v2/sessions/current/model/objects/{object_id}` | `PATCH` | Patch object identity, visibility, material/region/magnetization refs, geometry, or transform and return the committed scene. |
+| `/v2/sessions/current/model/objects/{object_id}` | `DELETE` | Delete object and return the committed scene. |
+| `/v2/sessions/current/model/objects/{object_id}/geometry` | `PATCH` | Patch object geometry and optional transform. |
+| `/v2/sessions/current/model/transactions` | `POST` | Commit an explicit semantic authoring transaction. |
+| `/v2/sessions/current/model/geometry/capabilities` | `GET` | Read backend-owned primitive/CSG capability matrix. |
+| `/v2/sessions/current/model/geometry/validation` | `GET` | Read validation diagnostics for the current scene. |
+| `/v2/sessions/current/model/geometry/realizations` | `POST` | Create a derived geometry realization snapshot for a requested backend target. |
+| `/v2/sessions/current/model/geometry/realizations/current` | `GET` | Read the current derived geometry realization snapshot. |
+| `/v2/sessions/current/model/geometry/diagnostics` | `GET` | Read geometry diagnostics for the current scene. |
+
+`POST /model/transactions` supports these authoring transaction kinds:
+
+- `replace_scene`;
+- `merge_patch`;
+- `patch_object_geometry`;
+- `create_object`;
+- `delete_object`;
+- `rename_object`;
+- `commit_object_transform`;
+- `patch_universe`.
+
+The response includes `transaction_kind`, `scene_revision`, and `committed_scene`. Direct object mutation routes also return the committed scene. There is currently no `GET /v2/sessions/current/model/objects/{object_id}` read route; browser consumers refresh object state from `model/scene` and derive object panels from that snapshot.
+
+Mesh-affecting model changes mark affected objects or the scene as mesh-stale. A frontend may show primitive authoring geometry immediately after a create/edit commit, but solver topology remains owned by `meshing` resources and is current only after mesh-build provenance matches the committed scene revision.
+
+Mesh rebuild uses the existing command path:
+
+```json
+{
+  "kind": "mesh_build",
+  "mesh_target": { "kind": "object_mesh", "object_id": "object-id" },
+  "mesh_reason": "geometry_object_edited"
+}
+```
+
+This request is submitted to `POST /v2/sessions/current/simulation/commands`. Do not document or implement `/v2/sessions/current/meshing/builds/commands` unless the backend adds that route.
 
 ## 4. Scoped data access
 
@@ -109,6 +163,8 @@ Required field sample scopes:
 Scope resolution is a backend contract. The frontend may request a selected scope, but it must not
 download full-domain data just to filter large FEM payloads client-side.
 
+Primitive geometry displayed before a mesh build is not scoped mesh topology. Object topology routes may return no content or not found until a mesh exists for the requested object. The frontend must distinguish primitive authoring display, stale previous topology, and current solver topology.
+
 ## 5. Frontend client policy
 
 OpenAPI v2 and generated TypeScript types are the transport contract.
@@ -123,6 +179,8 @@ The frontend should use:
 
 React components must not call `fetch()` directly and must not hand-roll `/v1` or `/v2` endpoint
 strings outside the central API client/facade layer.
+
+For Geometry object authoring, the frontend facade must provide typed handwritten adapters around the current loose `Value` payloads. Generated OpenAPI transport owns path/request/response plumbing only; object forms should use narrow domain models and validators before sending model transactions.
 
 ## 6. Compatibility
 

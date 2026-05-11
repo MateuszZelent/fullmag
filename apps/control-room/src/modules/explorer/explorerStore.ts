@@ -3,6 +3,10 @@
 import { useSyncExternalStore } from "react";
 
 import type { ExplorerTabId } from "./explorerTypes";
+import {
+  buildExplorerTree,
+  collectExplorerNodeIds,
+} from "./builders/buildModelTree";
 
 type ExpandedIdsByTab = Record<ExplorerTabId, ReadonlySet<string>>;
 
@@ -15,19 +19,19 @@ export interface ExplorerStoreState {
 
 type ExplorerStoreListener = () => void;
 
-function emptyExpandedIds(): ExpandedIdsByTab {
-  return {
-    diagnostics: new Set<string>(),
-    jobs: new Set<string>(),
-    model: new Set<string>(),
-    resources: new Set<string>(),
-    results: new Set<string>(),
-  };
+/** Returns a set with every node ID in that tab's tree — fully expanded by default. */
+function defaultExpandedIds(): ExpandedIdsByTab {
+  const tabs: ExplorerTabId[] = ["model", "resources", "results", "jobs", "diagnostics"];
+  const result = {} as ExpandedIdsByTab;
+  for (const tab of tabs) {
+    result[tab] = new Set(collectExplorerNodeIds(buildExplorerTree(tab)));
+  }
+  return result;
 }
 
 const INITIAL_STATE: ExplorerStoreState = {
   activeTab: "model",
-  expandedIds: emptyExpandedIds(),
+  expandedIds: defaultExpandedIds(),
   filterText: "",
   keyboardRow: null,
 };
@@ -51,7 +55,7 @@ class ExplorerStore {
   reset(): void {
     this.state = {
       ...INITIAL_STATE,
-      expandedIds: emptyExpandedIds(),
+      expandedIds: defaultExpandedIds(),
     };
     this.notify();
   }

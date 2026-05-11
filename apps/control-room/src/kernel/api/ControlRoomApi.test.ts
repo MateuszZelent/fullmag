@@ -209,6 +209,48 @@ describe("ControlRoomApi", () => {
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
   });
 
+  it("binds the default browser fetch to globalThis", async () => {
+    const originalFetch = globalThis.fetch;
+    let observedThis: unknown = null;
+
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: function receiverSensitiveFetch(
+        this: typeof globalThis,
+        url: RequestInfo | URL,
+        init?: RequestInit,
+      ) {
+        void url;
+        void init;
+        if (this !== globalThis) {
+          observedThis = null;
+          throw new TypeError("Illegal invocation");
+        }
+        observedThis = globalThis;
+        return Promise.resolve(jsonResponse(liveStatusFixture()));
+      } satisfies typeof fetch,
+      writable: true,
+    });
+
+    try {
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        requestIdFactory: () => "req-browser-fetch",
+      });
+
+      await expect(api.sessions.current.status()).resolves.toMatchObject({
+        api_contract_version: "1.0.0",
+      });
+      expect(observedThis).toBe(globalThis);
+    } finally {
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        value: originalFetch,
+        writable: true,
+      });
+    }
+  });
+
   it("rejects mismatched API contract response versions", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>

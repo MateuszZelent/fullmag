@@ -1,19 +1,15 @@
 "use client";
 
-import type {
-  DecodedFieldVector,
-  DecodedTopology,
-} from "@/kernel/api/codecs";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ColorRepresentation } from "three";
 
-import {
-  resolveMeshPartBounds,
-  resolveMeshPartNodeSelection,
-  type FemManifestRenderDomain,
-} from "../viewport3dDomainAdapter";
+import { resolveMeshPartBounds, type Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import type { Viewport3DBounds } from "../viewport3dRenderModel";
+import type {
+  Viewport3DBounds,
+  Viewport3DFieldRenderModel,
+  Viewport3DTopologyRenderModel,
+} from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 
@@ -116,30 +112,26 @@ export function DomainBoxLayer({
 
 export function AirboxLayer({
   colors,
-  fieldVector,
-  femDomain,
+  fieldModel,
   settings,
-  topology,
+  topologyModel,
   tracker,
-  vectorScale,
 }: {
   colors: Viewport3DColors;
-  fieldVector: DecodedFieldVector | null;
-  femDomain: FemManifestRenderDomain;
+  fieldModel: Viewport3DFieldRenderModel | null;
   settings: VisualizationTargetSettings;
-  topology: DecodedTopology | null;
+  topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   tracker: Viewport3DResourceTracker;
-  vectorScale: number;
 }) {
   if (!settings.visible) return null;
 
   return (
     <>
-      {femDomain.airboxParts.map((part) => (
-        <group key={part.id}>
+      {topologyModel?.airboxParts.map((partModel) => (
+        <group key={partModel.part.id}>
           {settings.shaderVisible ? (
             <BoundsBox
-              bounds={resolveMeshPartBounds(part)}
+              bounds={resolveMeshPartBounds(partModel.part)}
               color={colors.accent}
               opacity={opacityFromSettings(settings)}
               wireframe={false}
@@ -147,14 +139,14 @@ export function AirboxLayer({
           ) : null}
           {settings.wireframeVisible ? (
             <BoundsBox
-              bounds={resolveMeshPartBounds(part)}
+              bounds={resolveMeshPartBounds(partModel.part)}
               color={colors.wire}
               opacity={opacityFromSettings(settings)}
             />
           ) : null}
           {settings.pointsVisible ? (
             <BoundsPoints
-              bounds={resolveMeshPartBounds(part)}
+              bounds={resolveMeshPartBounds(partModel.part)}
               color={colors.wire}
               opacity={opacityFromSettings(settings)}
             />
@@ -162,11 +154,10 @@ export function AirboxLayer({
           {settings.vectorsVisible ? (
             <VectorFieldLayer
               colors={colors}
-              fieldVector={fieldVector}
-              nodeSelection={resolveMeshPartNodeSelection(part)}
               opacity={opacityFromSettings(settings)}
-              scale={vectorScale}
-              topology={topology}
+              segments={
+                fieldModel?.partVectorSegments.get(partModel.part.id) ?? null
+              }
               tracker={tracker}
             />
           ) : null}

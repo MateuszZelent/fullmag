@@ -125,3 +125,21 @@ Every scene object node has a `Visualization` child. The child selects the per-o
 - future 2D slice target: the same object or airbox id plus a 2D mode suffix when the 2D backend needs mode-specific state.
 
 The explorer does not own visibility or display style. It only exposes the node that lets the inspector focus the target-specific controls.
+
+## 10. Geometry Object Nodes
+
+Scene objects come from the `model/scene` resource. The explorer must render object subtrees that can focus authoring, mesh, and visualization panels without creating another scene store:
+
+```text
+Objects
+  <object name>
+    Geometry
+    Material
+    Physics
+    Mesh
+    Visualization
+```
+
+The Geometry child focuses primitive dimensions and transform. The Mesh child focuses object mesh settings, build state, reports, and quality. Newly created objects should be selected immediately after the backend commits the create transaction, then shown as primitive-only or mesh-stale until meshing resources publish current topology.
+
+Object rows expose mesh/geometry badges derived from resources: primitive-only, mesh stale, mesh building, mesh ready, mesh failed, validation blocked. Deleting an object clears selection if the deleted object or one of its children was selected.

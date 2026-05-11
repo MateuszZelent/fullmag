@@ -163,6 +163,10 @@ Geometry mode uses the same viewport module with authoring overlays when that fe
 
 Draft commits go through inspector/command transaction paths. The viewport may display draft overlays, but it does not define a second physical model.
 
+Newly committed objects render in primitive display immediately after `model/scene` refreshes. They must not wait for solver topology. If wireframe is enabled before a mesh exists, the layer renders a simplified procedural wireframe derived from primitive parameters and transform, and marks it as primitive/fallback. Mesh edges are used only when object topology is current for the scene revision.
+
+Field, scalar, and vector layers never attach to primitive fallback geometry. They attach only to current solver topology and published field resources.
+
 ## 10. Tests and Profiling
 
 Required verification:
@@ -177,3 +181,4 @@ Required verification:
 - memory stress switches 3D/2D and quantities repeatedly with bounded growth;
 - API hygiene proves no module-level fetch or raw `/v2/...` strings.
 - per-object visualization changes update only affected layer style/field buffers and do not rebuild topology for unaffected objects.
+- new object creation displays primitive geometry and fallback wireframe without object topology, then switches to current mesh topology after a successful mesh build.

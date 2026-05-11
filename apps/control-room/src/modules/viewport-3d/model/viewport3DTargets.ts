@@ -1,7 +1,12 @@
-import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
+import type {
+  FieldVectorQuery,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
+  DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
+  type VisualizationRenderMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -20,6 +25,68 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
 
 export const FALLBACK_OBJECT_VISUALIZATION: VisualizationTargetSettings =
   DEFAULT_OBJECT_VISUALIZATION;
+
+export function resolveGlobalObjectVisualizationSettings(
+  state: VisualizationStateResource | null | undefined,
+): VisualizationTargetSettings {
+  const surfaceVisible =
+    state?.layers?.surface?.visible ?? DEFAULT_OBJECT_VISUALIZATION.shaderVisible;
+  const wireframeVisible =
+    state?.layers?.wireframe?.visible ??
+    DEFAULT_OBJECT_VISUALIZATION.wireframeVisible;
+  const pointsVisible =
+    state?.layers?.points?.visible ?? DEFAULT_OBJECT_VISUALIZATION.pointsVisible;
+
+  return {
+    ...DEFAULT_OBJECT_VISUALIZATION,
+    opacityPercent: layerOpacityToPercent(
+      state?.layers?.surface?.opacity ??
+        DEFAULT_OBJECT_VISUALIZATION.opacityPercent / 100,
+    ),
+    pointsVisible,
+    renderMode: resolveRenderMode({
+      pointsVisible,
+      shaderVisible: surfaceVisible,
+      wireframeVisible,
+    }),
+    shaderVisible: surfaceVisible,
+    vectorsVisible:
+      state?.layers?.vectors?.visible ??
+      state?.vector_glyphs ??
+      DEFAULT_OBJECT_VISUALIZATION.vectorsVisible,
+    wireframeVisible,
+  };
+}
+
+export function resolveAirboxBaseVisualizationSettings(
+  state: VisualizationStateResource | null | undefined,
+): VisualizationTargetSettings {
+  const airbox = state?.layers?.airbox;
+  const surfaceVisible =
+    airbox?.surface?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.shaderVisible;
+  const wireframeVisible =
+    airbox?.wireframe?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible;
+  const pointsVisible =
+    airbox?.points?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.pointsVisible;
+
+  return {
+    ...DEFAULT_AIRBOX_VISUALIZATION,
+    opacityPercent: layerOpacityToPercent(
+      airbox?.opacity ?? DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
+    ),
+    pointsVisible,
+    renderMode: resolveRenderMode({
+      pointsVisible,
+      shaderVisible: surfaceVisible,
+      wireframeVisible,
+    }),
+    shaderVisible: surfaceVisible,
+    vectorsVisible:
+      airbox?.vectors?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
+    visible: airbox?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.visible,
+    wireframeVisible,
+  };
+}
 
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
@@ -114,4 +181,23 @@ function combineBounds(
     radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
     size,
   };
+}
+
+function resolveRenderMode({
+  pointsVisible,
+  shaderVisible,
+  wireframeVisible,
+}: {
+  pointsVisible: boolean;
+  shaderVisible: boolean;
+  wireframeVisible: boolean;
+}): VisualizationRenderMode {
+  if (pointsVisible && !shaderVisible && !wireframeVisible) return "points";
+  if (!shaderVisible && wireframeVisible) return "wireframe";
+  if (shaderVisible && wireframeVisible) return "surface+edges";
+  return "surface";
+}
+
+function layerOpacityToPercent(opacity: number): number {
+  return Math.round(Math.max(0, Math.min(1, opacity)) * 100);
 }

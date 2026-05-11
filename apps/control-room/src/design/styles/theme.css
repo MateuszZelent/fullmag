@@ -30,6 +30,9 @@
   --fm-stale: #cba6f7;
   --fm-degraded: #fab387;
 
+  --fm-syntax-string: #a6e3a1;
+  --fm-surface-3: #313244;
+
   --fm-shadow-panel: 0 12px 34px rgb(0 0 0 / 40%);
 }
 
@@ -63,6 +66,9 @@
   --fm-danger: #d20f39;
   --fm-stale: #8839ef;
   --fm-degraded: #fe640b;
+
+  --fm-syntax-string: #40a02b;
+  --fm-surface-3: #e6e9ef;
 
   --fm-shadow-panel: 0 14px 40px rgb(76 79 105 / 10%);
 }

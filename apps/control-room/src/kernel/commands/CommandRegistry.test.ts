@@ -79,6 +79,31 @@ describe("CommandRegistry", () => {
     expect(registry.isEnabled("cmd", { source: "palette" })).toBe(false);
   });
 
+  it("isActive delegates to command predicate", () => {
+    const registry = new CommandRegistry();
+    registry.register(
+      command("cmd", {
+        isActive: (ctx) => ctx.source === "ribbon",
+      }),
+    );
+
+    expect(registry.isActive("cmd", { source: "ribbon" })).toBe(true);
+    expect(registry.isActive("cmd", { source: "palette" })).toBe(false);
+    expect(registry.isActive("missing", { source: "ribbon" })).toBe(false);
+  });
+
+  it("notifies subscribers after command execution so active state can refresh", async () => {
+    const registry = new CommandRegistry();
+    const listener = vi.fn();
+    registry.subscribe(listener);
+    registry.register(command("cmd"));
+    listener.mockClear();
+
+    await registry.execute("cmd", { source: "test" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("execute runs command and emits events", async () => {
     const { bus, registry } = setupWithBus();
     const submitted = vi.fn();

@@ -64,6 +64,15 @@ Forbidden examples:
 - store actions that call `fetch`;
 - module stores that become cross-module API surfaces.
 
+Geometry object authoring uses this split:
+
+- new-object and edit forms are inspector draft state;
+- committed objects are server resource snapshots from `model/scene`;
+- primitive display preference is visualization state;
+- solver topology and mesh reports are meshing resources;
+- selected object id is kernel selection state;
+- Three.js primitive and wireframe objects are viewport resources, not React/Zustand state.
+
 ## 6. Draft Editing
 
 Inspector edits use explicit draft transactions:

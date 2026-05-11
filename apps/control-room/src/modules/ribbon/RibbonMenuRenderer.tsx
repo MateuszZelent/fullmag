@@ -22,11 +22,20 @@ import {
 
 import type { RibbonMenuNode } from "./ribbonTypes";
 
-export function RibbonMenuRenderer({ nodes }: { nodes: RibbonMenuNode[] }) {
-  return <>{nodes.map((node) => renderNode(node))}</>;
+export function RibbonMenuRenderer({
+  nodes,
+  onCommand,
+}: {
+  nodes: RibbonMenuNode[];
+  onCommand?: (commandId: string) => void;
+}) {
+  return <>{nodes.map((node) => renderNode(node, onCommand))}</>;
 }
 
-function renderNode(node: RibbonMenuNode): ReactNode {
+function renderNode(
+  node: RibbonMenuNode,
+  onCommand?: (commandId: string) => void,
+): ReactNode {
   switch (node.type) {
     case "label":
       return (
@@ -46,7 +55,13 @@ function renderNode(node: RibbonMenuNode): ReactNode {
         <DropdownMenuItem
           key={node.id}
           disabled={node.disabled}
-          onSelect={node.onSelect}
+          onSelect={() => {
+            if (node.commandId) {
+              onCommand?.(node.commandId);
+            } else {
+              node.onSelect?.();
+            }
+          }}
         >
           {node.icon}
           <span>{node.label}</span>
@@ -62,7 +77,13 @@ function renderNode(node: RibbonMenuNode): ReactNode {
           key={node.id}
           checked={node.checked}
           disabled={node.disabled}
-          onCheckedChange={(checked) => node.onCheckedChange?.(Boolean(checked))}
+          onCheckedChange={(checked) => {
+            if (node.commandId) {
+              onCommand?.(node.commandId);
+            } else {
+              node.onCheckedChange?.(Boolean(checked));
+            }
+          }}
           onSelect={(event) => event.preventDefault()}
         >
           {node.label}
@@ -75,7 +96,14 @@ function renderNode(node: RibbonMenuNode): ReactNode {
           {node.label ? <DropdownMenuLabel>{node.label}</DropdownMenuLabel> : null}
           <DropdownMenuRadioGroup
             value={node.value}
-            onValueChange={(value) => node.onValueChange?.(value)}
+            onValueChange={(value) => {
+              const item = node.items.find((entry) => entry.value === value);
+              if (item?.commandId) {
+                onCommand?.(item.commandId);
+              } else {
+                node.onValueChange?.(value);
+              }
+            }}
           >
             {node.items.map((item) => (
               <DropdownMenuRadioItem
@@ -109,7 +137,7 @@ function renderNode(node: RibbonMenuNode): ReactNode {
             {node.label}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
-            <RibbonMenuRenderer nodes={node.nodes} />
+            <RibbonMenuRenderer nodes={node.nodes} onCommand={onCommand} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       );

@@ -64,6 +64,13 @@ export class CommandRegistry {
     return cmd.isEnabled(context);
   }
 
+  /** Check if a command is currently active/toggled in the given context. */
+  isActive(id: CommandId, context: CommandContext): boolean {
+    const cmd = this.commands.get(id);
+    if (!cmd?.isActive) return false;
+    return cmd.isActive(context);
+  }
+
   /** Execute a command by id. Emits command:submitted and command:completed events. */
   async execute(
     id: CommandId,
@@ -82,6 +89,7 @@ export class CommandRegistry {
         commandId: id,
         status: result.status,
       });
+      this.notify();
       return result;
     } catch (error) {
       const message =
@@ -90,6 +98,7 @@ export class CommandRegistry {
         commandId: id,
         status: "failed",
       });
+      this.notify();
       return { status: "failed", message };
     }
   }

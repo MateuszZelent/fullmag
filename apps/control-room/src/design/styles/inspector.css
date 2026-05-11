@@ -12,6 +12,7 @@
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-chrome);
   padding: var(--fm-space-2) var(--fm-space-3);
 }
 
@@ -19,6 +20,7 @@
   margin: 0;
   color: var(--fm-text-primary);
   font-size: var(--fm-font-size-md);
+  font-weight: 600;
 }
 
 .fm-inspector__header span {
@@ -34,6 +36,7 @@
 
 .fm-inspector__empty {
   display: flex;
+  height: 100%;
   align-items: center;
   justify-content: center;
   color: var(--fm-text-muted);
@@ -45,10 +48,11 @@
   gap: var(--fm-space-2);
 }
 
+/* ── Sections: raised surface for visual depth ── */
 .fm-inspector-section {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-panel);
+  background: var(--fm-bg-panel-raised);
   overflow: hidden;
 }
 
@@ -65,6 +69,8 @@
   margin: 0;
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .fm-inspector-section__body {
@@ -73,6 +79,7 @@
   padding: var(--fm-space-1);
 }
 
+/* ── Field rows ── */
 .fm-inspector-field-row {
   display: grid;
   grid-template-columns: minmax(88px, 0.8fr) minmax(0, 1fr);
@@ -81,10 +88,11 @@
   gap: var(--fm-space-2);
   border-radius: var(--fm-radius-sm);
   padding: 0 var(--fm-space-2);
+  transition: background-color var(--fm-transition-fast);
 }
 
 .fm-inspector-field-row:hover {
-  background: var(--fm-bg-panel-raised);
+  background: color-mix(in srgb, var(--fm-accent) 8%, transparent);
 }
 
 .fm-inspector-field-row__label {
@@ -100,7 +108,7 @@
   min-width: 0;
   justify-content: flex-end;
   gap: var(--fm-space-1);
-  color: var(--fm-text-secondary);
+  color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
 }
@@ -110,10 +118,12 @@
   font-family: var(--fm-font-ui);
 }
 
+/* ── Visualization toggles and controls ── */
 .fm-visualization-toggle-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--fm-space-1);
+  padding: var(--fm-space-1);
 }
 
 .fm-visualization-toggle {
@@ -121,13 +131,14 @@
 }
 
 .fm-visualization-toggle[data-active="true"] {
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--fm-text-inverse), transparent 28%);
+  box-shadow: inset 0 -2px 0 var(--fm-accent);
 }
 
 .fm-visualization-segments {
   display: flex;
   flex-wrap: wrap;
   gap: var(--fm-space-1);
+  padding: var(--fm-space-1);
 }
 
 .fm-visualization-range {

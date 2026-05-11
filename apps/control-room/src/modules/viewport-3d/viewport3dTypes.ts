@@ -2,6 +2,7 @@ import type { ColorRepresentation } from "three";
 
 export interface Viewport3DColors {
   accent: ColorRepresentation;
+  background: ColorRepresentation;
   field: ColorRepresentation;
   mesh: ColorRepresentation;
   wire: ColorRepresentation;

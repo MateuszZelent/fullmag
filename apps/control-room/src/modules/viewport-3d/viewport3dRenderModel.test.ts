@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 
 import {
+  buildViewport3DFieldRenderModel,
+  buildViewport3DTopologyRenderModel,
   buildPartSurfaceIndices,
   buildTetraSurfaceIndices,
   buildVectorLineSegments,
@@ -116,5 +118,49 @@ describe("viewport3dRenderModel", () => {
       1, 0, 0, 1, 0.5, 0,
       0, 1, 0, 0, 1, 0.5,
     ]);
+  });
+
+  it("keeps topology render buffers separate from field render buffers", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+        },
+      ],
+      [],
+    );
+    const firstFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+    );
+    const positions = topologyModel?.positions;
+    const surfaceIndices = topologyModel?.magneticParts[0]?.surfaceIndices;
+    const secondFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      {
+        ...fieldVectorFixture(),
+        values: new Float64Array([
+          0, 1, 0,
+          1, 0, 0,
+          0, 0, 1,
+          0, -1, 0,
+        ]),
+      },
+      0.5,
+    );
+
+    expect(topologyModel?.positions).toBe(positions);
+    expect(topologyModel?.magneticParts[0]?.surfaceIndices).toBe(
+      surfaceIndices,
+    );
+    expect(firstFieldModel?.scalarColors).not.toBe(secondFieldModel?.scalarColors);
+    expect(firstFieldModel?.fullVectorSegments).not.toBe(
+      secondFieldModel?.fullVectorSegments,
+    );
   });
 });

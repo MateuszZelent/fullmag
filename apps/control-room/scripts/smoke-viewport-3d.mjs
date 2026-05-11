@@ -36,7 +36,7 @@ page.on("pageerror", (error) => {
 });
 
 try {
-  await page.goto(url, { waitUntil: "networkidle" });
+  await page.goto(url, { waitUntil: "domcontentloaded" });
   const canvas = page.locator(".fm-viewport-3d canvas");
   await canvas.waitFor({ state: "visible", timeout: 15_000 });
 

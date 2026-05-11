@@ -23,11 +23,12 @@ function readViewport3DColors(clientReady: boolean): Viewport3DColors | null {
     const styles = getComputedStyle(document.documentElement);
     const read = (name: string) => styles.getPropertyValue(name).trim();
     const accent = read("--fm-accent");
+    const background = read("--fm-bg-viewport");
     const field = read("--fm-syntax-string") || read("--fm-accent");
     const mesh = read("--fm-surface-3") || read("--fm-bg-panel");
     const wire = read("--fm-text-muted") || read("--fm-text-secondary");
-    if (accent && field && mesh && wire) {
-      return { accent, field, mesh, wire };
+    if (accent && background && field && mesh && wire) {
+      return { accent, background, field, mesh, wire };
     }
   } catch {
     return null;

@@ -4,6 +4,7 @@ import {
   AIRBOX_VISUALIZATION_TARGET,
   ObjectVisualizationController,
   renderModePatch,
+  resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationTargetKey,
 } from "./ObjectVisualizationController";
@@ -103,6 +104,34 @@ describe("ObjectVisualizationController", () => {
       pointsVisible: true,
       shaderVisible: false,
       wireframeVisible: false,
+    });
+  });
+
+  it("merges per-target overrides over a caller-provided global base", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+
+    controller.patchTarget(target, {
+      opacityPercent: 35,
+      wireframeVisible: true,
+    });
+
+    expect(
+      resolveVisualizationSettings(controller.getSnapshot(), target, {
+        opacityPercent: 80,
+        pointsVisible: true,
+        renderMode: "points",
+        shaderVisible: false,
+        vectorsVisible: true,
+        visible: true,
+        wireframeVisible: false,
+      }),
+    ).toMatchObject({
+      opacityPercent: 35,
+      pointsVisible: true,
+      shaderVisible: false,
+      vectorsVisible: true,
+      wireframeVisible: true,
     });
   });
 });

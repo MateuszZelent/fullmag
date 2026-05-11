@@ -69,8 +69,15 @@ textarea {
 
 .fm-button--primary {
   border-color: var(--fm-accent);
-  background: var(--fm-accent);
-  color: var(--fm-text-inverse);
+  background: var(--fm-accent-soft);
+  color: var(--fm-accent);
+  font-weight: 600;
+}
+
+.fm-button--primary:hover {
+  background: color-mix(in srgb, var(--fm-accent) 20%, transparent);
+  border-color: var(--fm-accent-strong);
+  color: var(--fm-accent-strong);
 }
 
 .fm-button--secondary {
@@ -85,8 +92,13 @@ textarea {
 
 .fm-button--danger {
   border-color: var(--fm-danger);
-  background: var(--fm-danger);
-  color: var(--fm-text-inverse);
+  background: color-mix(in srgb, var(--fm-danger) 14%, transparent);
+  color: var(--fm-danger);
+  font-weight: 600;
+}
+
+.fm-button--danger:hover {
+  background: color-mix(in srgb, var(--fm-danger) 24%, transparent);
 }
 
 .fm-button--sm {

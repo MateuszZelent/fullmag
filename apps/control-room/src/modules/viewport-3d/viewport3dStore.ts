@@ -11,19 +11,32 @@ export interface Viewport3DCommandState {
   camera: Viewport3DCameraState;
   fitRevision: number;
   resetCameraRevision: number;
+  widgets: Viewport3DWidgetState;
 }
 
 type Viewport3DListener = () => void;
+export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
+
+export interface Viewport3DWidgetState {
+  hslReferenceMode: Viewport3DHslReferenceMode;
+  viewCubeVisible: boolean;
+}
+
+const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
+  camera: {
+    position: [2, 1.4, 2],
+    target: [0, 0, 0],
+  },
+  fitRevision: 0,
+  resetCameraRevision: 0,
+  widgets: {
+    hslReferenceMode: "auto",
+    viewCubeVisible: true,
+  },
+};
 
 class Viewport3DStore {
-  private snapshot: Viewport3DCommandState = {
-    camera: {
-      position: [2, 1.4, 2],
-      target: [0, 0, 0],
-    },
-    fitRevision: 0,
-    resetCameraRevision: 0,
-  };
+  private snapshot: Viewport3DCommandState = DEFAULT_VIEWPORT_3D_STATE;
   private readonly listeners = new Set<Viewport3DListener>();
 
   getSnapshot(): Viewport3DCommandState {
@@ -41,11 +54,25 @@ class Viewport3DStore {
   resetCamera(): void {
     this.snapshot = {
       ...this.snapshot,
-      camera: {
-        position: [2, 1.4, 2],
-        target: [0, 0, 0],
-      },
+      camera: DEFAULT_VIEWPORT_3D_STATE.camera,
       resetCameraRevision: this.snapshot.resetCameraRevision + 1,
+    };
+    this.notify();
+  }
+
+  resetForTest(): void {
+    this.snapshot = DEFAULT_VIEWPORT_3D_STATE;
+    this.notify();
+  }
+
+  setHslReferenceMode(mode: Viewport3DHslReferenceMode): void {
+    if (this.snapshot.widgets.hslReferenceMode === mode) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        hslReferenceMode: mode,
+      },
     };
     this.notify();
   }
@@ -70,6 +97,17 @@ class Viewport3DStore {
     return () => this.listeners.delete(listener);
   }
 
+  toggleViewCube(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        viewCubeVisible: !this.snapshot.widgets.viewCubeVisible,
+      },
+    };
+    this.notify();
+  }
+
   private notify(): void {
     for (const listener of this.listeners) {
       listener();
@@ -92,4 +130,13 @@ function sameVector(
   right: [number, number, number],
 ): boolean {
   return left.every((value, index) => value === right[index]);
+}
+
+export function resolveHslReferenceVisible(
+  mode: Viewport3DHslReferenceMode,
+  vectorColorMode: string,
+): boolean {
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return vectorColorMode === "orientation";
 }

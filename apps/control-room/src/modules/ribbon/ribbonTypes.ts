@@ -55,6 +55,7 @@ export type RibbonMenuNode =
       icon?: ReactNode;
       shortcut?: string;
       disabled?: boolean;
+      commandId?: string;
       onSelect?: () => void;
     }
   | {
@@ -63,6 +64,7 @@ export type RibbonMenuNode =
       label: string;
       checked: boolean;
       disabled?: boolean;
+      commandId?: string;
       onCheckedChange?: (checked: boolean) => void;
     }
   | {
@@ -74,6 +76,7 @@ export type RibbonMenuNode =
         value: string;
         label: string;
         disabled?: boolean;
+        commandId?: string;
       }>;
       disabled?: boolean;
       onValueChange?: (value: string) => void;

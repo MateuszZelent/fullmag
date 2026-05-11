@@ -110,6 +110,19 @@ The View tab includes a `Per selected object` group. Those controls are enabled 
 
 Changing a selected-target control updates the same visualization registry used by the inspector and viewport. The ribbon is therefore not a second display-state store. When selection changes, the ribbon re-reads the active target and updates checked states, render mode, opacity, and badges from the registry.
 
+## 8.1 Geometry Object Commands
+
+Geometry commands are command-registry entries, not callbacks inside the Geometry module:
+
+- `geometry.add-box`, `geometry.add-cylinder`, `geometry.add-sphere`, and other supported primitives open an inspector draft without mutating the server;
+- `geometry.commit-object-draft` submits a model transaction and keeps the draft visible on rejection;
+- `geometry.delete-object` submits a delete transaction and clears object selection after the scene revision refreshes;
+- `geometry.focus-primitive` switches the selected object to primitive display in the viewport without requesting a mesh build;
+- `mesh.build-selected` submits a backend mesh build command for the selected object when object-targeted build is supported;
+- `mesh.build-shared-domain` submits the shared-domain build required by conforming FEM solver meshes.
+
+Buttons must distinguish draft pending, transaction rejected, primitive-only, mesh-stale, mesh-building, mesh-ready, and validation-blocked states.
+
 ## 9. Tests
 
 Required tests:
@@ -120,3 +133,4 @@ Required tests:
 - disabled command exposes a reason;
 - runtime command path handles accepted, rejected, completed, failed.
 - selected-target ribbon controls reflect the same object/airbox visualization target as the inspector.
+- geometry add/edit/build commands expose the correct disabled reason for draft state, capability, selection, validation, mesh staleness, and running command state.

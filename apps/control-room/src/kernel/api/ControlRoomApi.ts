@@ -186,13 +186,13 @@ export class ControlRoomApi {
   constructor({
     baseUrl,
     diagnostics,
-    fetchImpl = fetch,
+    fetchImpl,
     maxGetRetries = 1,
     requestIdFactory = () => crypto.randomUUID(),
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
     this.diagnostics = diagnostics ?? null;
-    this.fetchImpl = fetchImpl;
+    this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
     this.maxGetRetries = maxGetRetries;
     this.requestIdFactory = requestIdFactory;
     this.transport = createOpenApiV2Transport({
@@ -357,7 +357,8 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const response = await this.fetchImpl(url, {
+        const fetchImpl = this.fetchImpl;
+        const response = await fetchImpl(url, {
           ...init,
           cache: init.cache ?? "no-store",
           headers,
@@ -427,6 +428,14 @@ function resolveBaseUrl(baseUrl: string | undefined): string {
   }
 
   return "http://localhost";
+}
+
+function resolveDefaultFetch(): FetchLike {
+  if (typeof globalThis.fetch !== "function") {
+    throw new ControlRoomApiError("Fetch API is not available", 0);
+  }
+
+  return globalThis.fetch.bind(globalThis);
 }
 
 async function normalizeFetchInput(

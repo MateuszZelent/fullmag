@@ -1,9 +1,5 @@
 "use client";
 
-import type {
-  DecodedFieldVector,
-  DecodedTopology,
-} from "@/kernel/api/codecs";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type {
@@ -12,9 +8,14 @@ import type {
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import type { Viewport3DBounds } from "../viewport3dRenderModel";
+import type {
+  Viewport3DBounds,
+  Viewport3DFieldRenderModel,
+  Viewport3DTopologyRenderModel,
+} from "../viewport3dRenderModel";
 import type { Viewport3DCameraState } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
   CameraController,
   OrbitCameraControls,
@@ -33,7 +34,7 @@ interface Viewport3DSceneProps {
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
-  fieldVector: DecodedFieldVector | null;
+  fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   onSelectDomain: () => void;
@@ -42,8 +43,9 @@ interface Viewport3DSceneProps {
   resetCameraRevision: number;
   selectionBounds: Viewport3DBounds | null;
   tracker: Viewport3DResourceTracker;
-  topology: DecodedTopology | null;
-  vectorScale: number;
+  topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  hslReferenceVisible: boolean;
+  viewCubeVisible: boolean;
 }
 
 export function Viewport3DScene({
@@ -52,7 +54,7 @@ export function Viewport3DScene({
   colors,
   airboxSettings,
   femDomain,
-  fieldVector,
+  fieldModel,
   fitRevision,
   fallbackSettings,
   getPartSettings,
@@ -61,11 +63,13 @@ export function Viewport3DScene({
   resetCameraRevision,
   selectionBounds,
   tracker,
-  topology,
-  vectorScale,
+  topologyModel,
+  hslReferenceVisible,
+  viewCubeVisible,
 }: Viewport3DSceneProps) {
   return (
     <>
+      <color attach="background" args={[colors.background]} />
       <ambientLight intensity={0.72} />
       <directionalLight intensity={0.9} position={[2, 3, 4]} />
       <CanvasLifecycleProbe tracker={tracker} />
@@ -83,29 +87,31 @@ export function Viewport3DScene({
       />
       <AirboxLayer
         colors={colors}
-        femDomain={femDomain}
-        fieldVector={fieldVector}
+        fieldModel={fieldModel}
         settings={airboxSettings}
-        topology={topology}
+        topologyModel={topologyModel}
         tracker={tracker}
-        vectorScale={vectorScale}
       />
       <TopologyMeshLayer
         colors={colors}
         fallbackSettings={fallbackSettings}
         femDomain={femDomain}
-        fieldVector={fieldVector}
+        fieldModel={fieldModel}
         getPartSettings={getPartSettings}
         onSelectDomain={onSelectDomain}
         onSelectPart={onSelectPart}
         tracker={tracker}
-        topology={topology}
-        vectorScale={vectorScale}
+        topologyModel={topologyModel}
       />
       <SelectionHighlightLayer bounds={selectionBounds} colors={colors} />
       <gridHelper args={[2, 16, colors.wire, colors.wire]} />
       <axesHelper args={[1]} />
       <OrbitCameraControls tracker={tracker} />
+      <OrientationHudLayer
+        colors={colors}
+        hslReferenceVisible={hslReferenceVisible}
+        viewCubeVisible={viewCubeVisible}
+      />
     </>
   );
 }

@@ -52,8 +52,18 @@ import {
 } from "lucide-react";
 import { createElement } from "react";
 
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import type {
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
+import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
+import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
+  AIRBOX_VISUALIZATION_TARGET,
   displayLabelForVisualizationTarget,
   renderModePatch,
   resolveVisualizationTargetFromSelection,
@@ -223,6 +233,16 @@ const AIRBOX_EXTENT_ITEMS = [
   { value: "surface", label: "Surface" },
   { value: "full",    label: "Full" },
 ];
+
+type FieldComponentPatch = NonNullable<VisualizationStatePatch["field_component"]>;
+type VectorColorModePatch = NonNullable<
+  NonNullable<VisualizationStatePatch["vector_style"]>["color_mode"]
+>;
+type VectorLayerDomainPatch = NonNullable<
+  NonNullable<
+    NonNullable<VisualizationStatePatch["layers"]>["vectors"]
+  >["domain"]
+>;
 
 export const viewTab: RibbonTabContent = {
   tabId: "view",
@@ -1305,9 +1325,16 @@ export const automationTab: RibbonTabContent = {
 };
 
 export interface RibbonBuildContext {
+  api?: {
+    visualization: Pick<ControlRoomApi["visualization"], "patch">;
+  };
+  commandContext?: CommandContext;
+  commands?: CommandRegistry;
+  resources?: Pick<ResourceInvalidationController, "invalidate">;
   selection: Selection;
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
+  visualizationState?: VisualizationStateResource | null;
 }
 
 /** All tab content, indexed by tabId for O(1) lookup. */
@@ -1335,10 +1362,662 @@ export function buildRibbonTabContent(
   return {
     ...content,
     groups: content.groups.map((group) =>
-      group.id === "view-selected-display"
-        ? buildSelectedVisualizationGroup(context)
-        : group,
+      group.id === "view-global-display"
+        ? buildViewGlobalDisplayGroup(group, context)
+        : group.id === "view-selected-display"
+          ? buildSelectedVisualizationGroup(context)
+          : group.id === "view-display"
+            ? buildViewDisplayGroup(group, context)
+            : group,
     ),
+  };
+}
+
+function buildViewGlobalDisplayGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: group.actions.map((action) => {
+      if (action.id === "view-quantity") return buildQuantityAction(context);
+      if (action.id === "view-vectors") return buildVectorsAction(context);
+      if (action.id === "view-airbox") return buildAirboxAction(context);
+      if (action.id === "view-render-layers") return buildMeshViewAction(context);
+      return action;
+    }),
+  };
+}
+
+function buildViewDisplayGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: [
+      ...group.actions.filter((action) => action.id !== "view-orientation"),
+      buildOrientationAction(context),
+    ],
+  };
+}
+
+function buildOrientationAction({
+  commandContext = { source: "ribbon" },
+  commands,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const hslReferenceValue =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.hsl-reference-auto", "auto"],
+      ["viewport-3d.hsl-reference-on", "on"],
+      ["viewport-3d.hsl-reference-off", "off"],
+    ]) ?? "auto";
+
+  return {
+    id: "view-orientation",
+    icon: icon(Target),
+    label: "Orientation",
+    iconColor: "text-sky-300",
+    menu: [
+      {
+        type: "checkbox",
+        id: "orientation:viewcube",
+        label: "View cube",
+        checked:
+          commands?.isActive("viewport-3d.toggle-viewcube", commandContext) ??
+          true,
+        commandId: "viewport-3d.toggle-viewcube",
+      },
+      {
+        type: "radio-group",
+        id: "orientation:hsl-reference",
+        label: "HSL reference",
+        value: hslReferenceValue,
+        items: [
+          {
+            commandId: "viewport-3d.hsl-reference-auto",
+            label: "Auto",
+            value: "auto",
+          },
+          {
+            commandId: "viewport-3d.hsl-reference-on",
+            label: "On",
+            value: "on",
+          },
+          {
+            commandId: "viewport-3d.hsl-reference-off",
+            label: "Off",
+            value: "off",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function activeCommandValue(
+  commands: CommandRegistry | undefined,
+  commandContext: CommandContext,
+  candidates: Array<[commandId: string, value: string]>,
+): string | null {
+  return candidates.find(([commandId]) =>
+    commands?.isActive(commandId, commandContext),
+  )?.[1] ?? null;
+}
+
+function patchVisualizationState(
+  context: RibbonBuildContext,
+  patch: VisualizationStatePatch,
+): void {
+  const request = context.api?.visualization.patch(patch);
+  if (!request) return;
+
+  void request
+    .then((state) => {
+      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
+    })
+    .catch(() => {
+      // The viewport HUD/resource hooks surface the failed state fetch. The ribbon
+      // must not throw from menu callbacks because Radix closes the menu eagerly.
+    });
+}
+
+function quantityLabel(quantityId: string): string {
+  return (
+    QUANTITY_ITEMS.find((item) => item.value === quantityId)?.label ??
+    quantityId
+  );
+}
+
+function buildQuantityAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const state = context.visualizationState;
+  const activeQuantityId =
+    state?.quantity?.active_quantity_id ?? state?.active_quantity_id ?? "m";
+  const overlayVisible = state?.layers?.quantity_overlay?.visible ?? true;
+  const autoContrast = state?.quantity?.auto_contrast ?? state?.auto_contrast ?? true;
+  const colormap = state?.quantity?.colormap ?? state?.colormap ?? "viridis";
+  const vectorColorMode =
+    state?.vector_style?.color_mode ?? "orientation";
+  const patch = (patchValue: VisualizationStatePatch) =>
+    patchVisualizationState(context, patchValue);
+
+  return {
+    id: "view-quantity",
+    icon: icon(Sigma),
+    label: "Quantity",
+    iconColor: "text-sky-300",
+    disabled: !context.api,
+    menu: [
+      { type: "label", id: "quantity:header", label: "Active quantity" },
+      {
+        type: "status",
+        id: "quantity:current",
+        label: "Current",
+        value: quantityLabel(activeQuantityId),
+      },
+      {
+        type: "checkbox",
+        id: "quantity:overlay-visible",
+        label: "Quantity overlay on/off",
+        checked: overlayVisible,
+        disabled: !context.api,
+        onCheckedChange: (checked) =>
+          patch({ layers: { quantity_overlay: { visible: checked } } }),
+      },
+      { type: "separator", id: "quantity:s0" },
+      {
+        type: "radio-group",
+        id: "quantity:source",
+        label: "Quantity source",
+        value: activeQuantityId,
+        items: QUANTITY_ITEMS,
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch({
+            active_quantity_id: value,
+            quantity: { active_quantity_id: value },
+          }),
+      },
+      { type: "separator", id: "quantity:s1" },
+      {
+        type: "submenu",
+        id: "quantity:colormap",
+        label: "Colormap",
+        disabled: !context.api,
+        nodes: [
+          {
+            type: "radio-group",
+            id: "quantity:shader",
+            label: "Shader coloring",
+            value: colormap,
+            items: [
+              { value: "viridis", label: "Viridis" },
+              { value: "inferno", label: "Inferno" },
+              { value: "magma", label: "Magma" },
+              { value: "coolwarm", label: "Coolwarm" },
+              { value: "jet", label: "Jet" },
+            ],
+            onValueChange: (value) =>
+              patch({ colormap: value, quantity: { colormap: value } }),
+          },
+          {
+            type: "checkbox",
+            id: "quantity:auto-scale",
+            label: "Auto-scale range",
+            checked: autoContrast,
+            onCheckedChange: (checked) =>
+              patch({
+                auto_contrast: checked,
+                quantity: { auto_contrast: checked },
+              }),
+          },
+          { type: "separator", id: "quantity:colormap:s0" },
+          {
+            type: "radio-group",
+            id: "quantity:vector-coloring",
+            label: "Vector coloring",
+            value: vectorColorMode,
+            items: VECTOR_COLOR_ITEMS,
+            onValueChange: (value) =>
+              patch({
+                vector_style: { color_mode: value as VectorColorModePatch },
+              }),
+          },
+          {
+            type: "color",
+            id: "quantity:vector-mono-color",
+            label: "Monochrome vector color",
+            value: state?.vector_style?.mono_color ?? "var(--fm-accent)",
+            disabled: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function buildVectorsAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const state = context.visualizationState;
+  const vectorLayer = state?.layers?.vectors;
+  const vectorStyle = state?.vector_style;
+  const visible = vectorLayer?.visible ?? state?.vector_glyphs ?? false;
+  const density = vectorLayer?.density ?? state?.vector_density ?? 1200;
+  const component = state?.field_component ?? state?.quantity?.field_component ?? "3D";
+  const patch = (patchValue: VisualizationStatePatch) =>
+    patchVisualizationState(context, patchValue);
+
+  return {
+    id: "view-vectors",
+    icon: icon(Zap),
+    label: "Vectors",
+    iconColor: "text-cyan-300",
+    disabled: !context.api,
+    menu: [
+      {
+        type: "label",
+        id: "vectors:header",
+        label: "Field arrows",
+        badge: visible ? "on" : "off",
+      },
+      {
+        type: "checkbox",
+        id: "vectors:visible",
+        label: "Show vectors / field arrows",
+        checked: visible,
+        disabled: !context.api,
+        onCheckedChange: (checked) =>
+          patch({
+            layers: { vectors: { visible: checked } },
+            vector_glyphs: checked,
+          }),
+      },
+      {
+        type: "slider",
+        id: "vectors:density",
+        label: "Vector glyph budget",
+        value: density,
+        min: 8,
+        max: 4096,
+        step: 8,
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch({
+            layers: { vectors: { density: value } },
+            sampling: { max_glyphs: value },
+            vector_density: value,
+          }),
+      },
+      {
+        type: "radio-group",
+        id: "vectors:component",
+        label: "Vector component",
+        value: component,
+        items: VECTOR_COMPONENT_ITEMS,
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch(
+            value === "3D"
+              ? {
+                  field_component: null,
+                  quantity: { field_component: null },
+                }
+              : {
+                  field_component: value as FieldComponentPatch,
+                  quantity: { field_component: value as FieldComponentPatch },
+                },
+          ),
+      },
+      {
+        type: "submenu",
+        id: "vectors:size",
+        label: "Arrow size",
+        disabled: !context.api,
+        nodes: [
+          {
+            type: "slider",
+            id: "vectors:length",
+            label: "Length scale",
+            value: vectorStyle?.length_scale ?? 1,
+            min: 0.2,
+            max: 4,
+            step: 0.1,
+            onValueChange: (value) =>
+              patch({ vector_style: { length_scale: value } }),
+          },
+          {
+            type: "slider",
+            id: "vectors:thickness",
+            label: "Thickness",
+            value: vectorStyle?.thickness ?? 1,
+            min: 0.2,
+            max: 4,
+            step: 0.1,
+            onValueChange: (value) =>
+              patch({ vector_style: { thickness: value } }),
+          },
+          {
+            type: "slider",
+            id: "vectors:alpha",
+            label: "Alpha",
+            value: vectorStyle?.alpha ?? 0.9,
+            min: 0,
+            max: 1,
+            step: 0.05,
+            onValueChange: (value) =>
+              patch({ vector_style: { alpha: value } }),
+          },
+        ],
+      },
+      {
+        type: "radio-group",
+        id: "vectors:domain",
+        label: "Vector domain",
+        value: vectorLayer?.domain ?? "auto",
+        items: [
+          { value: "auto", label: "Auto" },
+          { value: "magnetic_only", label: "Magnetic objects only" },
+          { value: "full_domain", label: "Full domain" },
+          { value: "airbox_only", label: "Airbox only" },
+        ],
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch({
+            layers: { vectors: { domain: value as VectorLayerDomainPatch } },
+          }),
+      },
+      {
+        type: "radio-group",
+        id: "vectors:colors",
+        label: "Vector colors",
+        value: vectorStyle?.color_mode ?? "orientation",
+        items: VECTOR_COLOR_ITEMS,
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch({ vector_style: { color_mode: value as VectorColorModePatch } }),
+      },
+      {
+        type: "color",
+        id: "vectors:mono-color",
+        label: "Monochrome vector color",
+        value: vectorStyle?.mono_color ?? "var(--fm-accent)",
+        disabled: true,
+      },
+    ],
+  };
+}
+
+function buildMeshViewAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const layers = context.visualizationState?.layers;
+  const meshMode = resolveMeshRenderMode({
+    pointsVisible: layers?.points?.visible ?? false,
+    shaderVisible: layers?.surface?.visible ?? true,
+    wireframeVisible: layers?.wireframe?.visible ?? false,
+  });
+  const opacityPercent = layerOpacityPercent(
+    layers?.surface?.opacity ??
+      layers?.wireframe?.opacity ??
+      layers?.points?.opacity ??
+      1,
+  );
+  const patch = (patchValue: VisualizationStatePatch) =>
+    patchVisualizationState(context, patchValue);
+
+  return {
+    id: "view-render-layers",
+    icon: icon(Layers3),
+    label: "Mesh View",
+    iconColor: "text-emerald-300",
+    disabled: !context.api,
+    menu: [
+      {
+        type: "radio-group",
+        id: "layers:mesh-mode",
+        label: "Mesh render mode",
+        value: meshMode,
+        items: MESH_RENDER_ITEMS,
+        disabled: !context.api,
+        onValueChange: (value) =>
+          patch(meshRenderModeVisualizationPatch(value as VisualizationRenderMode)),
+      },
+      {
+        type: "slider",
+        id: "layers:opacity",
+        label: "Mesh opacity",
+        value: opacityPercent,
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+        disabled: !context.api,
+        onValueChange: (value) => {
+          const opacity = percentToLayerOpacity(value);
+          patch({
+            layers: {
+              points: { opacity },
+              surface: { opacity },
+              wireframe: { opacity },
+            },
+          });
+        },
+      },
+      {
+        type: "submenu",
+        id: "layers:trim",
+        label: "3D trim",
+        nodes: [
+          { type: "checkbox", id: "trim:enabled", label: "TRIM enabled", checked: false },
+          { type: "separator", id: "trim:s0" },
+          { type: "label", id: "trim:x:label", label: "X axis", badge: "off" },
+          { type: "checkbox", id: "trim:x:enabled", label: "X trim", checked: false },
+          { type: "slider", id: "trim:x:min", label: "X min", value: 0, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "slider", id: "trim:x:max", label: "X max", value: 100, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "item", id: "trim:x:reset", label: "Reset X" },
+          { type: "separator", id: "trim:x:sep" },
+          { type: "label", id: "trim:y:label", label: "Y axis", badge: "off" },
+          { type: "checkbox", id: "trim:y:enabled", label: "Y trim", checked: false },
+          { type: "slider", id: "trim:y:min", label: "Y min", value: 0, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "slider", id: "trim:y:max", label: "Y max", value: 100, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "item", id: "trim:y:reset", label: "Reset Y" },
+          { type: "separator", id: "trim:y:sep" },
+          { type: "label", id: "trim:z:label", label: "Z axis", badge: "off" },
+          { type: "checkbox", id: "trim:z:enabled", label: "Z trim", checked: false },
+          { type: "slider", id: "trim:z:min", label: "Z min", value: 0, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "slider", id: "trim:z:max", label: "Z max", value: 100, min: 0, max: 100, step: 1, unit: "%", disabled: true },
+          { type: "item", id: "trim:z:reset", label: "Reset Z" },
+          { type: "separator", id: "trim:s1" },
+          { type: "item", id: "trim:reset-all", label: "Reset all" },
+        ],
+      },
+    ],
+  };
+}
+
+function meshRenderModeVisualizationPatch(
+  renderMode: VisualizationRenderMode,
+): VisualizationStatePatch {
+  const patch = renderModePatch(renderMode);
+  return {
+    layers: {
+      points: { visible: patch.pointsVisible ?? false },
+      surface: { visible: patch.shaderVisible ?? false },
+      wireframe: { visible: patch.wireframeVisible ?? false },
+    },
+  };
+}
+
+function resolveMeshRenderMode({
+  pointsVisible,
+  shaderVisible,
+  wireframeVisible,
+}: {
+  pointsVisible: boolean;
+  shaderVisible: boolean;
+  wireframeVisible: boolean;
+}): VisualizationRenderMode {
+  if (pointsVisible && !shaderVisible && !wireframeVisible) return "points";
+  if (!shaderVisible && wireframeVisible) return "wireframe";
+  if (shaderVisible && wireframeVisible) return "surface+edges";
+  return "surface";
+}
+
+function layerOpacityPercent(opacity: number): number {
+  return Math.round(percentToLayerOpacity(opacity * 100) * 100);
+}
+
+function percentToLayerOpacity(percent: number): number {
+  return Math.max(0, Math.min(1, percent / 100));
+}
+
+function buildAirboxAction({
+  visualization,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const settings = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
+  const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
+    visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, patchValue);
+  };
+
+  return {
+    id: "view-airbox",
+    icon: icon(Box),
+    label: "Airbox",
+    iconColor: "text-blue-300",
+    disabled: false,
+    menu: [
+      {
+        type: "label",
+        id: "airbox:header",
+        label: "Airbox display",
+        badge: settings.visible ? "visible" : "hidden",
+      },
+      {
+        type: "checkbox",
+        id: "airbox:visible",
+        label: "Airbox on/off",
+        checked: settings.visible,
+        disabled: false,
+        onCheckedChange: (checked) => patch({ visible: checked }),
+      },
+      { type: "separator", id: "airbox:s-primitive" },
+      {
+        type: "label",
+        id: "airbox:primitive-section",
+        label: "Primitive",
+        badge: settings.shaderVisible ? "on" : "off",
+      },
+      {
+        type: "checkbox",
+        id: "airbox:shaded",
+        label: "Shaded on/off",
+        checked: settings.shaderVisible,
+        disabled: false,
+        onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+      },
+      {
+        type: "checkbox",
+        id: "airbox:wireframe",
+        label: "Wireframe on/off",
+        checked: settings.wireframeVisible,
+        disabled: false,
+        onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+      },
+      {
+        type: "radio-group",
+        id: "airbox:wireframe-scope",
+        label: "Wireframe extent",
+        value: "surface",
+        items: AIRBOX_EXTENT_ITEMS,
+      },
+      { type: "separator", id: "airbox:s-points" },
+      {
+        type: "label",
+        id: "airbox:points-section",
+        label: "Points",
+        badge: settings.pointsVisible ? "on" : "off",
+      },
+      {
+        type: "checkbox",
+        id: "airbox:points",
+        label: "Points on/off",
+        checked: settings.pointsVisible,
+        disabled: false,
+        onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+      },
+      {
+        type: "radio-group",
+        id: "airbox:points-scope",
+        label: "Points extent",
+        value: "surface",
+        items: AIRBOX_EXTENT_ITEMS,
+      },
+      { type: "separator", id: "airbox:s-vectors" },
+      {
+        type: "label",
+        id: "airbox:vectors-section",
+        label: "Vectors",
+        badge: settings.vectorsVisible ? "on" : "off",
+      },
+      {
+        type: "checkbox",
+        id: "airbox:vectors",
+        label: "Vectors on/off",
+        checked: settings.vectorsVisible,
+        disabled: false,
+        onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
+      },
+      {
+        type: "radio-group",
+        id: "airbox:vectors-scope",
+        label: "Vectors extent",
+        value: "surface",
+        items: AIRBOX_EXTENT_ITEMS,
+      },
+      {
+        type: "submenu",
+        id: "airbox:vectors-submenu",
+        label: "Airbox vectors",
+        nodes: [
+          { type: "slider", id: "airbox:vectors-density", label: "Density / Every N", value: 4, min: 1, max: 64, step: 1 },
+          { type: "slider", id: "airbox:vectors-length", label: "Length scale", value: 1, min: 0.2, max: 4, step: 0.1 },
+          { type: "slider", id: "airbox:vectors-thickness", label: "Thickness", value: 1, min: 0.2, max: 4, step: 0.1 },
+          { type: "slider", id: "airbox:vectors-alpha", label: "Alpha", value: 0.9, min: 0, max: 1, step: 0.05 },
+        ],
+      },
+      {
+        type: "submenu",
+        id: "airbox:vector-colors",
+        label: "Airbox vector colors",
+        nodes: [
+          { type: "radio-group", id: "airbox:vector-coloring", label: "Vector colors", value: "orientation", items: VECTOR_COLOR_ITEMS },
+          { type: "color", id: "airbox:vector-mono-color", label: "Monochrome vector color", value: "var(--fm-accent)", disabled: true },
+        ],
+      },
+      { type: "separator", id: "airbox:s-visible" },
+      {
+        type: "slider",
+        id: "airbox:opacity",
+        label: "Opacity",
+        value: settings.opacityPercent,
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+        onValueChange: (value) => patch({ opacityPercent: value }),
+      },
+      { type: "separator", id: "airbox:s0" },
+      { type: "item", id: "airbox:focus", label: "Focus airbox", disabled: true },
+      {
+        type: "item",
+        id: "airbox:reset",
+        label: "Reset airbox display",
+        onSelect: () => visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET),
+      },
+    ],
   };
 }
 

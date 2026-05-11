@@ -28,5 +28,7 @@ export interface CommandContribution {
   shortcut?: string;
   /** When absent the command is always enabled. */
   isEnabled?: (context: CommandContext) => boolean;
+  /** When absent the command is rendered inactive. */
+  isActive?: (context: CommandContext) => boolean;
   run: (context: CommandContext) => CommandResult | Promise<CommandResult>;
 }

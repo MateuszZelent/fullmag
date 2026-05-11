@@ -67,8 +67,9 @@ Phase 2 local gate status on 2026-05-11:
 - [ ] Implement explorer module and tree node model builders.
 - [ ] Implement kernel selection store and selection events.
 - [ ] Implement inspector module and panel registry.
-- [ ] Add per-object and airbox `Visualization` explorer nodes plus inspector panels backed by the visualization target registry.
+- [x] Add per-object and airbox `Visualization` explorer nodes plus inspector panels backed by the visualization target registry.
 - [ ] Implement draft transaction flow for the first safe property edits.
+- [ ] Implement Geometry object creation lifecycle from `24-geometry-object-authoring-lifecycle.md`: new primitive draft, backend create transaction, post-commit object selection, primitive-only display state, stale mesh badges, and selected-object mesh build command.
 - [ ] Implement authoring modules alongside inspector panels:
   - [ ] `definitions` — parameters, named quantities.
   - [ ] `materials` — material assignment, tensor/scalar editing.
@@ -84,7 +85,8 @@ Phase 2 local gate status on 2026-05-11:
 - [ ] Implement `viewport-3d` module shell and store.
 - [ ] Build domain-neutral render model adapters.
 - [ ] Implement scene controller and layer renderers.
-- [ ] Apply target visualization overrides independently for each scene object, mesh part, and airbox target.
+- [x] Apply target visualization overrides independently for each scene object, mesh part, and airbox target.
+- [ ] Render newly created/unmeshed Geometry objects through primitive surfaces and simplified fallback wireframe before solver topology exists.
 - [ ] Implement dirty render loop and resource tracker.
 - [ ] Add mesh/topology/field resource hooks.
 - [ ] Verify quantity switches do not rebuild topology and idle frames stop.
@@ -93,6 +95,7 @@ Phase 2 local gate status on 2026-05-11:
 
 - [ ] Implement `viewport-2d` slice/profile module.
 - [ ] Reuse the object/airbox visualization target registry for 2D slice layers before adding 2D-specific override fields.
+- [ ] Gate 2D object-scoped slice/profile commands for primitive-only or mesh-stale Geometry objects with explicit disabled/stale explanations.
 - [ ] Implement charts module and scalar series model.
 - [ ] Implement engine console from log resources.
 - [ ] Implement results navigator from artifact/analysis resources.

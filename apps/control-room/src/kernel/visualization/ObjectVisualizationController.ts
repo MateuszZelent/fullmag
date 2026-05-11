@@ -178,9 +178,10 @@ export function renderModePatch(
 export function resolveVisualizationSettings(
   snapshot: ObjectVisualizationSnapshot,
   target: VisualizationTargetRef,
+  baseSettings?: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   return normalizeVisualizationSettings({
-    ...defaultVisualizationSettings(target.kind),
+    ...(baseSettings ?? defaultVisualizationSettings(target.kind)),
     ...(snapshot.overrides[visualizationTargetKey(target)] ?? {}),
   });
 }

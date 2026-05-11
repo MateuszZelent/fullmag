@@ -270,6 +270,7 @@ Deliverables:
 5. Add resource tracker/diagnostics for Three.js/R3F resources.
 6. Add idle render audit for zero frames after settling.
 7. Apply target visualization overrides independently for scene objects, part fallbacks, and airbox without rebuilding topology for style-only changes.
+8. Render primitive-only or mesh-stale Geometry objects from authoring primitive data with a simplified fallback wireframe when solver topology is missing or stale.
 
 Gate: all Phase 5a commands plus R3F layer tests and idle audit.
 
@@ -309,6 +310,8 @@ These are not blockers because they are out of scope:
 5. Backend recomputation from viewport display controls.
 
 If any non-goal becomes required later, it needs a new plan section or ADR before implementation.
+
+The transform-gizmo non-goal does not defer inspector-driven size, position, or rotation edits. Those edits belong to the Geometry object lifecycle plan and must still render through primitive/fallback geometry before mesh topology exists.
 
 ## 10. Completion Criteria
 

@@ -124,7 +124,7 @@ function RibbonActionButton({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="fm-ribbon-menu">
-        <RibbonMenuRenderer nodes={actionMenu ?? []} />
+        <RibbonMenuRenderer nodes={actionMenu ?? []} onCommand={onAction} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

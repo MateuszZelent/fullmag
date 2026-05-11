@@ -32,6 +32,57 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      {
+        id: "viewport-3d.toggle-viewcube",
+        title: "Toggle ViewCube",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => viewport3dStore.getSnapshot().widgets.viewCubeVisible,
+        run: () => {
+          viewport3dStore.toggleViewCube();
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.hsl-reference-auto",
+        title: "HSL Reference Auto",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.hslReferenceMode === "auto",
+        run: () => {
+          viewport3dStore.setHslReferenceMode("auto");
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.hsl-reference-on",
+        title: "Show HSL Reference",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.hslReferenceMode === "on",
+        run: () => {
+          viewport3dStore.setHslReferenceMode("on");
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.hsl-reference-off",
+        title: "Hide HSL Reference",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.hslReferenceMode === "off",
+        run: () => {
+          viewport3dStore.setHslReferenceMode("off");
+          return { status: "completed" };
+        },
+      },
     ],
   },
   emits: ["workspace:selection-changed"],

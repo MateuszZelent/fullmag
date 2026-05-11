@@ -47,10 +47,14 @@
 
   /* Geometry */
   --fm-menu-height: 38px;
-  --fm-ribbon-height: 96px;
+  --fm-ribbon-height: 110px;
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 32px;
+
+  /* Syntax/3D-viewport helper tokens */
+  --fm-syntax-string: #a6e3a1;
+  --fm-surface-3: #313244;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;

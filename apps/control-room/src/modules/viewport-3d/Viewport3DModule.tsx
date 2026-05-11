@@ -7,19 +7,22 @@ import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
   AIRBOX_VISUALIZATION_TARGET,
-  DEFAULT_OBJECT_VISUALIZATION,
   resolveVisualizationSettings,
-  type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import {
+  FULL_FIELD_QUERY,
+  resolveAirboxBaseVisualizationSettings,
+  resolveGlobalObjectVisualizationSettings,
+  resolveViewport3DSelectionBounds,
+  targetForMeshPart,
+} from "./model/viewport3DTargets";
+import {
   adaptFdmDomainMeta,
   adaptFemSharedDomainManifest,
-  resolveMeshPartBounds,
-  type FemManifestRenderDomain,
   type Viewport3DMeshPart,
   type Viewport3DPartSelection,
 } from "./viewport3dDomainAdapter";
@@ -29,9 +32,10 @@ import {
   useViewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
 import {
+  buildViewport3DFieldRenderModel,
+  buildViewport3DTopologyRenderModel,
   resolveDomainBounds,
   resolveTopologyBounds,
-  type Viewport3DBounds,
 } from "./viewport3dRenderModel";
 import {
   getViewport3DCacheStats,
@@ -41,13 +45,11 @@ import {
   useViewport3DSharedDomainManifest,
   useViewport3DVisualizationState,
 } from "./viewport3dResources";
-import { useViewport3DCommandState } from "./viewport3dStore";
+import {
+  resolveHslReferenceVisible,
+  useViewport3DCommandState,
+} from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
-
-const FULL_FIELD_QUERY = {
-  component: "full",
-  scope_kind: "full",
-} as const;
 
 export default function Viewport3DModule({
   kernel,
@@ -56,12 +58,15 @@ export default function Viewport3DModule({
 }: ModuleProps) {
   const { clientReady, colors } = useViewport3DColors();
   const { selection, select, clear } = useSelection(moduleId);
-  const { visualization } = useObjectVisualizationRegistry();
+  const { snapshot: objectVisualizationSnapshot } =
+    useObjectVisualizationRegistry();
   const tracker = useViewport3DResourceTracker();
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const visualizationState = useViewport3DVisualizationState();
   const quantityId = visualizationState.data?.active_quantity_id ?? "m";
+  const vectorColorMode =
+    visualizationState.data?.vector_style.color_mode ?? "orientation";
   const domainMeta = useViewport3DDomainMeta();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const topology = useViewport3DDomainTopology();
@@ -76,30 +81,56 @@ export default function Viewport3DModule({
   );
   const bounds =
     resolveTopologyBounds(topology.data) ?? resolveDomainBounds(domainMeta.data);
-  const selectedPartBounds = resolveMeshPartBounds(
-    selection.nodeId ? femDomain.partsById.get(selection.nodeId) : null,
-  );
-  const selectedObjectBounds = resolveObjectBounds(femDomain, selection.objectId);
-  const airboxBounds = resolveAirboxBounds(femDomain);
-  const selectionBounds = selection.kind
-    ? selectedPartBounds ??
-      selectedObjectBounds ??
-      (selection.kind === "airbox.visualization" ||
-      selection.kind === "mesh-part-airbox"
-        ? airboxBounds
-        : bounds)
-    : null;
   const vectorScale = Math.max((bounds?.radius ?? 1) * 0.06, 1e-9);
-  const fallbackSettings = DEFAULT_OBJECT_VISUALIZATION;
-  const airboxSettings = resolveVisualizationSettings(
-    objectVisualizationSnapshot,
-    AIRBOX_VISUALIZATION_TARGET,
+  const topologyRenderModel = useMemo(
+    () =>
+      buildViewport3DTopologyRenderModel(
+        topology.data,
+        femDomain.magneticParts,
+        femDomain.airboxParts,
+      ),
+    [femDomain.airboxParts, femDomain.magneticParts, topology.data],
   );
-  const getPartSettings = (part: Viewport3DMeshPart) =>
-    resolveVisualizationSettings(
-      objectVisualizationSnapshot,
-      targetForMeshPart(part),
-    );
+  const fieldRenderModel = useMemo(
+    () =>
+      buildViewport3DFieldRenderModel(
+        topologyRenderModel,
+        fieldVector.data,
+        vectorScale,
+      ),
+    [fieldVector.data, topologyRenderModel, vectorScale],
+  );
+  const selectionBounds = resolveViewport3DSelectionBounds(
+    selection,
+    femDomain,
+    bounds,
+  );
+  const fallbackSettings = useMemo(
+    () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
+    [visualizationState.data],
+  );
+  const airboxBaseSettings = useMemo(
+    () => resolveAirboxBaseVisualizationSettings(visualizationState.data),
+    [visualizationState.data],
+  );
+  const airboxSettings = useMemo(
+    () =>
+      resolveVisualizationSettings(
+        objectVisualizationSnapshot,
+        AIRBOX_VISUALIZATION_TARGET,
+        airboxBaseSettings,
+      ),
+    [airboxBaseSettings, objectVisualizationSnapshot],
+  );
+  const getPartSettings = useCallback(
+    (part: Viewport3DMeshPart) =>
+      resolveVisualizationSettings(
+        objectVisualizationSnapshot,
+        targetForMeshPart(part),
+        fallbackSettings,
+      ),
+    [fallbackSettings, objectVisualizationSnapshot],
+  );
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
@@ -120,6 +151,10 @@ export default function Viewport3DModule({
     topologyRevision: topology.revision,
     tracker: resourceCounts,
   });
+  const hslReferenceVisible = resolveHslReferenceVisible(
+    commandState.widgets.hslReferenceMode,
+    vectorColorMode,
+  );
 
   const onSelectDomain = useCallback(() => {
     select({
@@ -159,7 +194,11 @@ export default function Viewport3DModule({
           camera={{ fov: 42, position: [2, 1.4, 2] }}
           className="fm-viewport-3d__canvas"
           frameloop={VIEWPORT_3D_FRAMELOOP}
-          gl={{ antialias: true, powerPreference: "high-performance" }}
+          gl={{
+            alpha: false,
+            antialias: true,
+            powerPreference: "high-performance",
+          }}
           onPointerMissed={() => clear()}
         >
           <Viewport3DScene
@@ -169,16 +208,17 @@ export default function Viewport3DModule({
             colors={colors}
             fallbackSettings={fallbackSettings}
             femDomain={femDomain}
-            fieldVector={fieldVector.data}
+            fieldModel={fieldRenderModel}
             fitRevision={commandState.fitRevision}
             getPartSettings={getPartSettings}
+            hslReferenceVisible={hslReferenceVisible}
             onSelectDomain={onSelectDomain}
             onSelectPart={onSelectPart}
             resetCameraRevision={commandState.resetCameraRevision}
             selectionBounds={selectionBounds}
-            topology={topology.data}
+            topologyModel={topologyRenderModel}
             tracker={tracker}
-            vectorScale={vectorScale}
+            viewCubeVisible={commandState.widgets.viewCubeVisible}
           />
         </Canvas>
       ) : (
@@ -186,78 +226,4 @@ export default function Viewport3DModule({
       )}
     </section>
   );
-}
-
-function targetForMeshPart(part: Viewport3DMeshPart): VisualizationTargetRef {
-  if (part.object_id) {
-    return {
-      id: part.object_id,
-      kind: "object",
-      label: part.label,
-    };
-  }
-
-  return {
-    id: part.id,
-    kind: "part",
-    label: part.label,
-  };
-}
-
-function resolveAirboxBounds(
-  domain: FemManifestRenderDomain,
-): Viewport3DBounds | null {
-  return combineBounds(domain.airboxParts.map(resolveMeshPartBounds));
-}
-
-function resolveObjectBounds(
-  domain: FemManifestRenderDomain,
-  objectId: string | null,
-): Viewport3DBounds | null {
-  if (!objectId) return null;
-  const partIds = domain.objectPartIds.get(objectId) ?? [];
-  return combineBounds(
-    partIds.map((partId) => resolveMeshPartBounds(domain.partsById.get(partId))),
-  );
-}
-
-function combineBounds(
-  boundsList: Array<Viewport3DBounds | null>,
-): Viewport3DBounds | null {
-  const validBounds = boundsList.filter(
-    (entry): entry is Viewport3DBounds => Boolean(entry),
-  );
-  if (!validBounds.length) return null;
-
-  const min = validBounds.reduce<[number, number, number]>(
-    (current, bounds) => [
-      Math.min(current[0], bounds.center[0] - bounds.size[0] / 2),
-      Math.min(current[1], bounds.center[1] - bounds.size[1] / 2),
-      Math.min(current[2], bounds.center[2] - bounds.size[2] / 2),
-    ],
-    [Infinity, Infinity, Infinity],
-  );
-  const max = validBounds.reduce<[number, number, number]>(
-    (current, bounds) => [
-      Math.max(current[0], bounds.center[0] + bounds.size[0] / 2),
-      Math.max(current[1], bounds.center[1] + bounds.size[1] / 2),
-      Math.max(current[2], bounds.center[2] + bounds.size[2] / 2),
-    ],
-    [-Infinity, -Infinity, -Infinity],
-  );
-  const size: [number, number, number] = [
-    Math.max(max[0] - min[0], 0),
-    Math.max(max[1] - min[1], 0),
-    Math.max(max[2] - min[2], 0),
-  ];
-
-  return {
-    center: [
-      min[0] + size[0] / 2,
-      min[1] + size[1] / 2,
-      min[2] + size[2] / 2,
-    ],
-    radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
-    size,
-  };
 }

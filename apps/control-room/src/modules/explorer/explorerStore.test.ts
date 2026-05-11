@@ -29,6 +29,6 @@ describe("explorerStore", () => {
     expect(state.expandedIds.resources.has("resources:mesh")).toBe(false);
 
     collapseExplorerNodes("resources", ["resources:fields"]);
-    expect(explorerStore.getSnapshot().expandedIds.resources.size).toBe(0);
+    expect(explorerStore.getSnapshot().expandedIds.resources.has("resources:fields")).toBe(false);
   });
 });

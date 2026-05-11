@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
@@ -23,6 +23,9 @@ interface UseResourceOptions<TData> {
   resourceKey: ResourceKey;
 }
 
+/** Minimum delay before retrying after a network/fetch error (ms). */
+const ERROR_RETRY_DELAY_MS = 1_000;
+
 function abortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -33,13 +36,23 @@ export function useResource<TData>({
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
   const { resources } = useKernel();
+
+  // Stabilize the subscribe callback so useSyncExternalStore doesn't
+  // unsubscribe/resubscribe on every render.
+  const subscribeStable = useCallback(
+    (onStoreChange: () => void) =>
+      resources.subscribe(resourceKey, onStoreChange),
+    [resources, resourceKey],
+  );
+  const getSnapshot = useCallback(
+    () => resources.getRevision(resourceKey),
+    [resources, resourceKey],
+  );
+
   const externalRevision = useSyncExternalStore(
-    (onStoreChange) =>
-      resources.subscribe(resourceKey, () => {
-        onStoreChange();
-      }),
-    () => resources.getRevision(resourceKey),
-    () => resources.getRevision(resourceKey),
+    subscribeStable,
+    getSnapshot,
+    getSnapshot,
   );
   const [refreshToken, setRefreshToken] = useState(0);
   const [state, setState] = useState<ResourceState<TData>>({
@@ -49,36 +62,50 @@ export function useResource<TData>({
     status: "loading",
   });
 
+  // Track consecutive errors to apply backoff before retrying.
+  const errorCountRef = useRef(0);
+
   useEffect(() => {
     const controller = new AbortController();
 
-    load({ signal: controller.signal })
-      .then((data) => {
-        if (controller.signal.aborted) return;
+    // If the last attempt failed, wait before retrying to avoid
+    // a hot render loop when the backend is unreachable.
+    const delay = errorCountRef.current > 0 ? ERROR_RETRY_DELAY_MS : 0;
+    const timeoutId = setTimeout(() => {
+      load({ signal: controller.signal })
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          errorCountRef.current = 0;
 
-        setState((current) =>
-          markResourceReady(
-            current,
-            data,
-            resolveRevision?.(data) ?? externalRevision,
-          ),
-        );
-      })
-      .catch((error: unknown) => {
-        if (abortError(error) || controller.signal.aborted) return;
+          setState((current) =>
+            markResourceReady(
+              current,
+              data,
+              resolveRevision?.(data) ?? externalRevision,
+            ),
+          );
+        })
+        .catch((error: unknown) => {
+          if (abortError(error) || controller.signal.aborted) return;
+          errorCountRef.current += 1;
 
-        setState((current) =>
-          markResourceError(
-            current,
-            error instanceof Error ? error : new Error(String(error)),
-          ),
-        );
-      });
+          setState((current) =>
+            markResourceError(
+              current,
+              error instanceof Error ? error : new Error(String(error)),
+            ),
+          );
+        });
+    }, delay);
 
-    return () => controller.abort();
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [externalRevision, load, refreshToken, resolveRevision, resourceKey]);
 
   const refetch = useCallback(() => {
+    errorCountRef.current = 0;
     setRefreshToken((current) => current + 1);
   }, []);
 

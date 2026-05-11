@@ -59,6 +59,8 @@ Auto-apply is allowed only for safe display preferences. Physics, mesh, material
 
 Per-object visualization edits are safe display preferences. They may auto-apply to the visualization registry because they do not mutate physics, mesh, material, geometry, study, or field resources. The panel must still show whether a value is inherited, overridden, or reset to default.
 
+Geometry object edits are not safe display preferences. Creating an object, changing primitive dimensions, changing transform, deleting an object, changing mesh-affecting material/region data, and changing universe bounds use explicit transactions against the model API. The inspector keeps a local draft, validates SI units and primitive constraints, submits the transaction with the current scene revision, and refreshes from `model/scene` after commit.
+
 ## 4. Validation
 
 Validation layers:
@@ -120,6 +122,20 @@ The first v2 implementation supports:
 
 Undo/redo requires a canonical transaction log. Do not fake undo by keeping hidden local copies of server resources.
 
+## 7.1 Geometry Object Panel Requirements
+
+`GeometryObjectPanel` covers:
+
+- identity, name, and region name;
+- primitive type and type-specific dimensions in SI units;
+- position, rotation, and scale where supported;
+- material and magnetization references;
+- mesh status and stale/building/failed diagnostics;
+- links to object mesh settings, report, and quality resources;
+- scene revision and last successful mesh-build source scene revision when available.
+
+For a new object, Apply commits the create transaction, selects the committed object, and lets the viewport render it in primitive mode before mesh topology exists. Failed commits keep the draft and show the backend error near the responsible field or section.
+
 ## 8. Tests
 
 Required tests:
@@ -131,3 +147,4 @@ Required tests:
 - failed commit keeps draft and displays server error;
 - successful commit refreshes from resource revision.
 - visualization panel edits update the same target registry observed by the View ribbon and viewport.
+- new-object create flow keeps draft state isolated before commit, selects the committed object after refresh, and marks the object primitive-only or mesh-stale until mesh resources catch up.

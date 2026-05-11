@@ -26,6 +26,7 @@
 | state store | store unit test and cross-module import check |
 | inspector edit | draft/validate/commit/failure tests |
 | viewport renderer | lifecycle test, dirty-loop test, resource cleanup test |
+| geometry object lifecycle | scene transaction hook test, explorer badge test, inspector draft/commit/rejection test, command gate test, primitive/fallback wireframe viewport test, mesh-build invalidation test |
 | CSS/layout | design contract test, screenshot or visual check once implementation exists |
 | interactive chrome | shadcn/ui-style primitive usage test and accessibility check |
 | migration/cutover | legacy import/route scan and acceptance checklist |
@@ -67,6 +68,8 @@ UI changes require visual verification once the v2 app exists:
 - narrow screen check for shell/drawer behavior.
 
 Visual verification is not a substitute for API/state/render lifecycle tests.
+
+Geometry object lifecycle visual verification must cover: add primitive, edit dimensions/position/rotation, confirm immediate primitive display, enable fallback wireframe before mesh exists, run mesh build, and confirm current topology replaces primitive mesh mode without losing selection.
 
 ## 6. Performance Verification
 
