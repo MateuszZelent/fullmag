@@ -1,0 +1,117 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: var(--fm-bg-app);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-ui);
+}
+
+body {
+  overflow: hidden;
+  font-size: var(--fm-font-size-md);
+  font-variant-numeric: tabular-nums;
+  text-rendering: geometricPrecision;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  border-radius: var(--fm-radius-sm);
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fm-space-2);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  font-size: var(--fm-font-size-sm);
+  font-weight: 520;
+  line-height: 1;
+  text-decoration: none;
+  transition:
+    background-color var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    color var(--fm-transition-fast),
+    transform var(--fm-transition-fast);
+  user-select: none;
+}
+
+.fm-button:hover {
+  border-color: var(--fm-border-strong);
+  transform: translateY(-1px);
+}
+
+.fm-button:disabled,
+.fm-button[data-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
+.fm-button--primary {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent);
+  color: var(--fm-text-inverse);
+}
+
+.fm-button--secondary {
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fm-text-secondary);
+}
+
+.fm-button--danger {
+  border-color: var(--fm-danger);
+  background: var(--fm-danger);
+  color: var(--fm-text-inverse);
+}
+
+.fm-button--sm {
+  min-height: 24px;
+  padding: 0 var(--fm-space-2);
+}
+
+.fm-button--md {
+  min-height: 28px;
+  padding: 0 var(--fm-space-3);
+}
+
+.fm-button--icon {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

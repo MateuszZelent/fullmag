@@ -13,6 +13,11 @@
     "web:build": "pnpm --dir apps/web build",
     "web:lint": "pnpm --dir apps/web lint",
     "web:test:quantity-api-gates": "pnpm --dir apps/web test:quantity-api-gates",
+    "control-room:dev": "pnpm --dir apps/control-room dev",
+    "control-room:build": "pnpm --dir apps/control-room build",
+    "control-room:lint": "pnpm --dir apps/control-room lint",
+    "control-room:test": "pnpm --dir apps/control-room test",
+    "control-room:typecheck": "pnpm --dir apps/control-room typecheck",
     "fullmag:check-api-clean": "bash ./scripts/ci-resource-first-gates.sh --strict"
   }
 }

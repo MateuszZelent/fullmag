@@ -1,0 +1,18 @@
+.fm-workspace-shell {
+  display: grid;
+  grid-template-rows: var(--fm-menu-height) var(--fm-ribbon-height) 1fr var(--fm-status-height);
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--fm-bg-app);
+  color: var(--fm-text-primary);
+  isolation: isolate;
+}
+
+.fm-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(260px, 360px);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 180px);
+  min-height: 0;
+  overflow: hidden;
+}

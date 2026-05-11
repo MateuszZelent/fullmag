@@ -191,7 +191,11 @@ Prefer single-file or single-test runs during iteration. Full suites are for the
 
 When the user corrects your approach, append a one-line rule here before ending the session. Write it concretely ("Always use X for Y"), never abstractly ("be careful with Y"). If an existing line already covers the correction, tighten it instead of adding a new one. Remove lines when the underlying issue goes away (model upgrades, refactors, process changes).
 
-- (empty)
+- Always use `fm-` prefix for all CSS class names in `apps/control-room`, including shell-level layout classes. No unprefixed classes.
+- The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
+- Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
+- Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
+- Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Do not introduce custom colors outside the Catppuccin palette.
 
 ---
 
@@ -516,6 +520,21 @@ During the frontend v2 migration:
 - no v2 change may reintroduce direct component `fetch()`, bootstrap/poll normalization, preview-control quantity switching for already-published data, mutable singleton diagnostics, or always-on viewport rendering.
 
 Agents touching frontend v2 must load the relevant `.agents/skills/frontend-v2-*` skill before editing.
+
+### 9.4 Zero-tolerance quality gate
+
+Every change to `apps/control-room` must leave the codebase in a shippable state. There is no "fix later" for:
+
+- TypeScript errors (`pnpm --dir apps/control-room typecheck` must pass),
+- ESLint warnings (`pnpm --dir apps/control-room lint` must pass with `--max-warnings=0`),
+- test failures (`pnpm --dir apps/control-room test` must pass),
+- CSS class/token naming inconsistencies with `docs/specs/frontend-v2/09-css-design-system.md`,
+- dead imports, unused variables, commented-out code created by the change,
+- spec drift (implementation must match the spec; if the spec is wrong, update the spec first).
+
+If a change introduces any of the above, the change is not done. Fix it before reporting completion.
+
+This rule applies equally to agents and human contributors.
 
 ---
 

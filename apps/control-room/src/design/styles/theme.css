@@ -1,0 +1,68 @@
+/* ===== Catppuccin Mocha (dark) ===== */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --fm-bg-app: #1e1e2e;
+  --fm-bg-chrome: #181825;
+  --fm-bg-panel: #1e1e2e;
+  --fm-bg-panel-raised: #313244;
+  --fm-bg-viewport: #11111b;
+  --fm-bg-overlay: #313244;
+  --fm-bg-selected: #264069;
+
+  --fm-border-subtle: #313244;
+  --fm-border-default: #45475a;
+  --fm-border-strong: #585b70;
+
+  --fm-text-primary: #cdd6f4;
+  --fm-text-secondary: #bac2de;
+  --fm-text-muted: #6c7086;
+  --fm-text-inverse: #11111b;
+
+  --fm-accent: #89b4fa;
+  --fm-accent-strong: #b4befe;
+  --fm-accent-soft: #2a2d52;
+
+  --fm-success: #a6e3a1;
+  --fm-warning: #f9e2af;
+  --fm-danger: #f38ba8;
+  --fm-stale: #cba6f7;
+  --fm-degraded: #fab387;
+
+  --fm-shadow-panel: 0 12px 34px rgb(0 0 0 / 40%);
+}
+
+/* ===== Catppuccin Latte (light) ===== */
+[data-theme="light"] {
+  color-scheme: light;
+
+  --fm-bg-app: #eff1f5;
+  --fm-bg-chrome: #e6e9ef;
+  --fm-bg-panel: #eff1f5;
+  --fm-bg-panel-raised: #e6e9ef;
+  --fm-bg-viewport: #dce0e8;
+  --fm-bg-overlay: #e6e9ef;
+  --fm-bg-selected: #c4d7f5;
+
+  --fm-border-subtle: #ccd0da;
+  --fm-border-default: #bcc0cc;
+  --fm-border-strong: #acb0be;
+
+  --fm-text-primary: #4c4f69;
+  --fm-text-secondary: #5c5f77;
+  --fm-text-muted: #9ca0b0;
+  --fm-text-inverse: #eff1f5;
+
+  --fm-accent: #1e66f5;
+  --fm-accent-strong: #7287fd;
+  --fm-accent-soft: #d3e5fd;
+
+  --fm-success: #40a02b;
+  --fm-warning: #df8e1d;
+  --fm-danger: #d20f39;
+  --fm-stale: #8839ef;
+  --fm-degraded: #fe640b;
+
+  --fm-shadow-panel: 0 14px 40px rgb(76 79 105 / 10%);
+}

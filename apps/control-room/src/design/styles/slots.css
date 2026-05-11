@@ -1,0 +1,32 @@
+.fm-slot {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+}
+
+.fm-slot[data-slot-id="app-menu"],
+.fm-slot[data-slot-id="ribbon"],
+.fm-slot[data-slot-id="status-bar"] {
+  background: var(--fm-bg-chrome);
+}
+
+.fm-slot[data-slot-id="viewport-main"] {
+  background: var(--fm-bg-viewport);
+}
+
+.fm-slot[data-slot-id="panel-bottom"] {
+  grid-column: 1 / -1;
+}
+
+.fm-slot__empty,
+.fm-slot__module {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
+  letter-spacing: 0.01em;
+}
