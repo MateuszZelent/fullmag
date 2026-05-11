@@ -8,6 +8,7 @@
 
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
 import { incrementCounter } from "@/features/diagnostics/events/counters";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 
 // ── Event vocabulary ──────────────────────────────────────────
 
@@ -106,7 +107,7 @@ export function traceInteraction(
   incrementCounter(`interaction:${event}`);
 
   if (process.env.NODE_ENV === "development") {
-    console.debug(`[interaction] ${event}`, payload);
+    writeFrontendDiagnosticConsole("debug", `[interaction] ${event}`, payload);
   }
 }
 

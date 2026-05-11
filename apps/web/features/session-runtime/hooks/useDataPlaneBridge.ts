@@ -28,6 +28,7 @@ import { getLiveSessionClient } from "@/src/api/client/LiveSessionClient";
 import { LiveApiError } from "@/src/api/client/errors/LiveApiError";
 import { decodeFieldVectorOffThread, decodeTopologyOffThread } from "@/src/api/codecs/decodeOffThread";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { normalizeMeshWorkspace } from "@/lib/session/normalize";
 import type {
   LatestFieldFrame,
@@ -606,7 +607,8 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info(
+          writeFrontendDiagnosticConsole(
+            "info",
             "[fullmag-debug][data-plane] field vector fetched",
             {
               quantityId: envelope.quantityId,
@@ -714,7 +716,8 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info(
+          writeFrontendDiagnosticConsole(
+            "info",
             "[fullmag-debug][data-plane] scalars fetched",
             { revision, rows: window.rows.length },
           );
@@ -856,7 +859,8 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info(
+          writeFrontendDiagnosticConsole(
+            "info",
             "[fullmag-debug][data-plane] domain meta fetched",
             {
               genId,
@@ -1073,7 +1077,7 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info("[fullmag-debug][data-plane] mesh topology fetched", {
+          writeFrontendDiagnosticConsole("info", "[fullmag-debug][data-plane] mesh topology fetched", {
             revision,
             generationId: resourceFemMesh.generation_id,
             nodeCount: resourceFemMesh.node_count,
@@ -1230,7 +1234,7 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info("[fullmag-debug][data-plane] quantity catalogs fetched", {
+          writeFrontendDiagnosticConsole("info", "[fullmag-debug][data-plane] quantity catalogs fetched", {
             cacheKey,
             quantities: quantityCatalog.quantities.length,
             fields: fieldCatalog.quantities.length,
@@ -1312,7 +1316,7 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info("[fullmag-debug][data-plane] artifacts fetched", {
+          writeFrontendDiagnosticConsole("info", "[fullmag-debug][data-plane] artifacts fetched", {
             cacheKey,
             artifacts: artifacts.length,
           });
@@ -1393,7 +1397,7 @@ export function useDataPlaneBridge(
         });
 
         if (ENABLE_DEBUG) {
-          console.info("[fullmag-debug][data-plane] engine log fetched", {
+          writeFrontendDiagnosticConsole("info", "[fullmag-debug][data-plane] engine log fetched", {
             cacheKey,
             total: engineLog.total,
             revision: engineLog.revision,

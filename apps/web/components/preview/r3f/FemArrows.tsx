@@ -7,6 +7,7 @@ import type {
   ArrowSamplingMode,
 } from "../fem/femMeshTypes";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { maskKind } from "../fem/femNodeMask";
 import { RENDER_POLICIES_V2 } from "../shared/renderPolicyV2";
 import { useBatchedInvalidate } from "./useBatchedInvalidate";
@@ -281,7 +282,7 @@ export function FemArrows({
       FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
       FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
     ) {
-      console.debug("[FemArrows] zero sampled nodes", {
+      writeFrontendDiagnosticConsole("debug", "[FemArrows] zero sampled nodes", {
         boundaryCandidateCount: boundaryCandidateNodes.length,
         filteredCandidateCount: filteredCandidateNodes.length,
         hasFieldData: Boolean(meshData.fieldData),

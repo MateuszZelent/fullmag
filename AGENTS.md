@@ -496,6 +496,27 @@ Workspace UI doctrine:
 - When touching frontend workspace code, agents must actively remove remaining `Build`/`Study`/`Analyze`
   stage assumptions unless they are explicitly marked as temporary compatibility shims.
 
+### 9.3 Frontend v2 rewrite doctrine
+
+The target browser frontend is documented in:
+
+- `docs/adr/0013-frontend-v2-module-kernel.md`
+- `docs/specs/frontend-v2/README.md`
+
+During the frontend v2 migration:
+
+- `apps/control-room` is the clean v2 target app root,
+- `apps/web` is legacy reference unless the user explicitly asks to modify it,
+- v2 code must not import from `apps/web`,
+- legacy code may be read for behavior, math, fixtures, and visual comparison, but not copied wholesale,
+- every v2 module must have a manifest and must communicate through the kernel API, event bus, command registry, resource hooks, or shared primitives,
+- menu, ribbon, toolbar, shortcuts, context menus, and command palette must render one command registry,
+- module enable/disable is done through manifest registration and capability gates, not hidden shell forks,
+- feature flags must have owners and removal criteria,
+- no v2 change may reintroduce direct component `fetch()`, bootstrap/poll normalization, preview-control quantity switching for already-published data, mutable singleton diagnostics, or always-on viewport rendering.
+
+Agents touching frontend v2 must load the relevant `.agents/skills/frontend-v2-*` skill before editing.
+
 ---
 
 ## 10. Execution-selection doctrine
@@ -899,7 +920,8 @@ When a file grows past that threshold, split it.
 | `crates/fullmag-runner` | runner and stage execution |
 | `crates/fullmag-engine` | trusted CPU/reference solvers |
 | `crates/fullmag-py-core` | private Python/Rust bridge |
-| `apps/web` | control room / browser UX |
+| `apps/control-room` | target modular frontend v2 control room |
+| `apps/web` | legacy frontend reference during v2 migration |
 | `native/` | production native backends |
 | `docs/` | specs, ADRs, physics notes |
 | `.agents/` | agent workflows / skills |

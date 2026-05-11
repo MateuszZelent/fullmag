@@ -15,23 +15,24 @@ When you need to understand Fullmag quickly, read in this order:
 
 1. `docs/specs/fullmag-application-architecture-v2.md`
 2. `docs/specs/resource-first-control-room-api-v2.md`
-3. `docs/specs/session-run-api-v1.md`
-4. `docs/specs/resource-first-control-room-api-v1.md`
-5. `docs/specs/control-room-api-endpoint-reference-v1.md`
-6. `docs/specs/control-room-api-tree-v1.md`
-7. `docs/specs/command-lifecycle-v1.md`
-8. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
-9. `docs/specs/hpc-cluster-execution-v1.md`
-10. `docs/1_project_scope.md`
-11. `docs/2_repo_blueprint.md`
-12. `docs/specs/problem-ir-compatibility-v1.md`
-13. `docs/specs/problem-ir-v0.md`
-14. `docs/specs/capability-matrix-v0.md`
-15. `docs/specs/mesh-roundtrip-semantics-v1.md`
-16. `docs/specs/frequency-domain-artifacts-v2.md`
-17. `docs/specs/viewport3d-contract-v1.md`
-18. the relevant `docs/physics/` notes
-19. the relevant `docs/plans/active/` plan
+3. `docs/specs/frontend-v2/README.md`
+4. `docs/specs/session-run-api-v1.md`
+5. `docs/specs/resource-first-control-room-api-v1.md`
+6. `docs/specs/control-room-api-endpoint-reference-v1.md`
+7. `docs/specs/control-room-api-tree-v1.md`
+8. `docs/specs/command-lifecycle-v1.md`
+9. `docs/specs/runtime-distribution-and-managed-backends-v1.md`
+10. `docs/specs/hpc-cluster-execution-v1.md`
+11. `docs/1_project_scope.md`
+12. `docs/2_repo_blueprint.md`
+13. `docs/specs/problem-ir-compatibility-v1.md`
+14. `docs/specs/problem-ir-v0.md`
+15. `docs/specs/capability-matrix-v0.md`
+16. `docs/specs/mesh-roundtrip-semantics-v1.md`
+17. `docs/specs/frequency-domain-artifacts-v2.md`
+18. `docs/specs/viewport3d-contract-v1.md`
+19. the relevant `docs/physics/` notes
+20. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -39,6 +40,7 @@ When you need to understand Fullmag quickly, read in this order:
 
 - `docs/specs/fullmag-application-architecture-v2.md`
 - `docs/specs/resource-first-control-room-api-v2.md`
+- `docs/specs/frontend-v2/README.md`
 - `docs/specs/resource-first-control-room-api-v1.md`
 - `docs/specs/control-room-api-endpoint-reference-v1.md`
 - `docs/specs/control-room-api-tree-v1.md`
@@ -57,6 +59,10 @@ It defines:
 - implementation priorities.
 
 If the core concept of the application changes, these files must be updated.
+
+The frontend v2 specs define the target modular control-room frontend, the
+temporary `apps/web` legacy-reference policy, module-kernel boundaries, and
+cutover acceptance. They do not override the resource-first API contract.
 
 ### 2. Solver architecture
 
@@ -164,3 +170,11 @@ mapping change, also update:
 Whenever the route-family split or resource hierarchy changes, also update:
 
 - `docs/specs/resource-first-control-room-api-v2.md`
+
+Whenever the module kernel, browser shell, command registry, viewport lifecycle,
+frontend cutover, or legacy `apps/web` status changes, also update:
+
+- `docs/specs/frontend-v2/README.md`
+- `docs/adr/0013-frontend-v2-module-kernel.md`
+- `AGENTS.md`
+- the relevant `.agents/skills/frontend-v2-*` skill when agent behavior must change

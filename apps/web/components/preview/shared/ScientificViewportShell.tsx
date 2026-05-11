@@ -26,6 +26,7 @@ import {
   setFrontendAuditCounter,
 } from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { recordFrontendRender } from "@/lib/debug/frontendPerfDebug";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import {
@@ -449,7 +450,7 @@ export default function ScientificViewportShell({
         FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
         FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
       ) {
-        console.info("[viewport-webgl] context restored", {
+        writeFrontendDiagnosticConsole("info", "[viewport-webgl] context restored", {
           telemetryLabel,
           generation: canvasContextGeneration,
         });
@@ -504,7 +505,7 @@ export default function ScientificViewportShell({
           FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryRenderLogging &&
           FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace
         ) {
-          console.info("[viewport-webgl] canvas created", {
+          writeFrontendDiagnosticConsole("info", "[viewport-webgl] canvas created", {
             telemetryLabel,
             generation: canvasContextGeneration,
             drawingBuffer: {

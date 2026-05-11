@@ -8,6 +8,7 @@ import {
   shouldUseVertexColorWorker,
 } from "./femVertexColors";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
 import { applyLiveBufferTransition } from "./liveBufferAnimation";
@@ -22,6 +23,24 @@ function flattenBoundaryFaces(customBoundaryFaces: readonly [number, number, num
     offset += 3;
   }
   return flat;
+}
+
+function browserHeapSnapshot(): { used: number | null; total: number | null; limit: number | null } {
+  if (typeof performance === "undefined") {
+    return { used: null, total: null, limit: null };
+  }
+  const memory = (performance as Performance & {
+    memory?: {
+      usedJSHeapSize?: number;
+      totalJSHeapSize?: number;
+      jsHeapSizeLimit?: number;
+    };
+  }).memory;
+  return {
+    used: memory?.usedJSHeapSize ?? null,
+    total: memory?.totalJSHeapSize ?? null,
+    limit: memory?.jsHeapSizeLimit ?? null,
+  };
 }
 
 export function useFemVertexColorResource({
@@ -156,6 +175,7 @@ export function useFemVertexColorResource({
       const meshApplyStart = perfEnabled ? performance.now() : 0;
       const colorAttr = geometry.getAttribute("color") as THREE.BufferAttribute;
       const meshColorTarget = new Float32Array(colorAttr.array.length);
+      let pointsColorTargetBytes = 0;
       if (vertexMap) {
         for (let i = 0; i < vertexMap.length; i += 1) {
           const orig = vertexMap[i];
@@ -190,6 +210,7 @@ export function useFemVertexColorResource({
           return;
         }
         const pointsColorTarget = new Float32Array(pointsColorAttr.array.length);
+        pointsColorTargetBytes = pointsColorTarget.byteLength;
         if (pointsVertexMap) {
           for (let i = 0; i < pointsVertexMap.length; i += 1) {
             const orig = pointsVertexMap[i];
@@ -217,6 +238,32 @@ export function useFemVertexColorResource({
           }),
         );
         mark("colorPointsApply", pointsApplyStart, { mapped: Boolean(pointsVertexMap) });
+      }
+      if (FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DMemoryDiagnostics) {
+        writeFrontendDiagnosticConsole("info", "[fem-geometry-color-resource:memory]", {
+          viewportTelemetryLabel,
+          field,
+          fieldRevision:
+            fieldRevision == null
+              ? null
+              : typeof fieldRevision === "string"
+                ? fieldRevision
+                : String(fieldRevision),
+          nNodes,
+          nElements,
+          geometryPositionCount: geometry.getAttribute("position")?.count ?? null,
+          pointsPositionCount: pointsGeometry?.getAttribute("position")?.count ?? null,
+          mapped: Boolean(vertexMap),
+          pointsMapped: Boolean(pointsVertexMap),
+          worker: Boolean(workerColors),
+          sharedBase: Boolean(sharedBaseVertexColors),
+          bytes: {
+            baseColors: baseColors.byteLength,
+            meshColorTarget: meshColorTarget.byteLength,
+            pointsColorTarget: pointsColorTargetBytes,
+          },
+          browserHeap: browserHeapSnapshot(),
+        });
       }
       colorTransitionCleanupRef.current = () => {
         for (const cleanup of transitionCleanups) {

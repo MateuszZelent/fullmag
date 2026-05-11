@@ -3,6 +3,7 @@ import * as THREE from "three";
 import type { FemMeshData, FemColorField, MeshDisplayScope, RenderMode } from "../fem/femMeshTypes";
 import { computeFaceAspectRatios } from "./colorUtils";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
 import { recordViewportLifecycleEventForLabel } from "@/lib/debug/viewportTelemetry";
 import { resolveFemGeometryRenderPasses } from "./femGeometryRenderPasses";
@@ -753,7 +754,7 @@ export const FemGeometry = memo(function FemGeometry({
     }
     const positionAttribute = geometry?.getAttribute("position") as THREE.BufferAttribute | undefined;
     const colorAttribute = geometry?.getAttribute("color") as THREE.BufferAttribute | undefined;
-    console.debug("[fem-geometry]", JSON.stringify({
+    writeFrontendDiagnosticConsole("debug", "[fem-geometry]", JSON.stringify({
       renderMode,
       edgeScope,
       pointsScope,

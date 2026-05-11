@@ -1,4 +1,5 @@
 "use client";
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "./frontendDiagnosticFlags";
 
 export type FrontendAuditCounter =
   | "viewportBridgeMounted"
@@ -242,12 +243,14 @@ export function incrementFrontendAuditCounter(
   name: FrontendAuditCounter,
   delta = 1,
 ): void {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) return;
   const audit = ensureFrontendAudit();
   if (!audit) return;
   audit.counters[name] = (audit.counters[name] ?? 0) + delta;
 }
 
 export function incrementFrontendAuditResourceFetch(resource: string, delta = 1): void {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) return;
   const audit = ensureFrontendAudit();
   if (!audit) return;
   audit.counters.dataPlaneFetches = (audit.counters.dataPlaneFetches ?? 0) + delta;
@@ -255,12 +258,14 @@ export function incrementFrontendAuditResourceFetch(resource: string, delta = 1)
 }
 
 export function setFrontendAuditCounter(name: FrontendAuditCounter, value: number): void {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) return;
   const audit = ensureFrontendAudit();
   if (!audit) return;
   audit.counters[name] = Number.isFinite(value) ? value : 0;
 }
 
 export function markFrontendAudit(name: string): void {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) return;
   const audit = ensureFrontendAudit();
   if (!audit) return;
   audit.marks.push({ name, at: nowMs() });
@@ -270,6 +275,9 @@ export function markFrontendAudit(name: string): void {
 }
 
 export function measureFrontendAudit<T>(name: string, fn: () => T): T {
+  if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) {
+    return fn();
+  }
   const start = nowMs();
   try {
     return fn();

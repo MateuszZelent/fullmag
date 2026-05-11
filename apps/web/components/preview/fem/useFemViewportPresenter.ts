@@ -166,8 +166,18 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
   }, [activeTransformScope, textureGizmoDragging, setTextureGizmoDragging]);
 
   const faceAspectRatios = useMemo(
-    () => computeFaceAspectRatios(args.meshData.nodes, args.meshData.boundaryFaces),
-    [args.meshData.nodes, args.meshData.boundaryFaces],
+    () => {
+      if (!args.wrapperFlags.enableHoverTooltip || !args.hoveredFace) {
+        return null;
+      }
+      return computeFaceAspectRatios(args.meshData.nodes, args.meshData.boundaryFaces);
+    },
+    [
+      args.hoveredFace,
+      args.meshData.nodes,
+      args.meshData.boundaryFaces,
+      args.wrapperFlags.enableHoverTooltip,
+    ],
   );
 
   const hoveredFaceInfo = useMemo(() => {
@@ -176,7 +186,7 @@ export function useFemViewportPresenter(args: UseFemViewportPresenterArgs): {
     }
     if (!args.hoveredFace) return null;
     const idx = args.hoveredFace.idx;
-    const ar = faceAspectRatios[idx] ?? 0;
+    const ar = faceAspectRatios?.[idx] ?? 0;
     return { faceIdx: idx, ar, sicn: args.qualityPerFace?.[idx] };
   }, [args.hoveredFace, args.qualityPerFace, args.wrapperFlags.enableHoverTooltip, faceAspectRatios]);
 

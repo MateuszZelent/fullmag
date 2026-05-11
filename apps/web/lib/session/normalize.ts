@@ -28,6 +28,7 @@ import type {
   ThermalNoiseState,
 } from "./types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "../debug/frontendConsoleDebug";
 import { createModelBuilderGraphV2 } from "./modelBuilderGraph";
 import {
   buildSceneDocumentFromScriptBuilder,
@@ -2202,7 +2203,8 @@ export function normalizeSessionState(
   if (ENABLE_LIVE_DEBUG_LOGS) {
     const rawScalarRows = raw.scalar_rows;
     const rawDeltaRows = Array.isArray(rawScalarRows) ? rawScalarRows.length : "?";
-    console.debug(
+    writeFrontendDiagnosticConsole(
+      "debug",
       `[normalize] scalar_rows=${rawScalarRowsForMerge.length}` +
       ` raw_delta=${rawDeltaRows}` +
       ` v2_step=${rawScalarsFromStep?.step ?? "-"}` +

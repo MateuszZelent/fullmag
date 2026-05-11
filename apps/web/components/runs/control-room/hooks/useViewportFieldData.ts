@@ -8,6 +8,7 @@ import type {
   SpatialPreviewState,
 } from "@/lib/session/types";
 import { getFrontendPerfSamples, recordFrontendPerfSample } from "@/lib/debug/frontendPerfDebug";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { updateFrontendResourceBucket } from "@/lib/debug/frontendResourceManager";
 import { buildAuthoredMagnetizationPreview } from "../authoredMagnetizationPreview";
 import {
@@ -668,7 +669,7 @@ export function useViewportFieldData({
     if (!fieldDataRevision || !selectedVectors?.length) {
       return;
     }
-    console.info("[fullmag-debug][viewport-data] vector payload selected", {
+    writeFrontendDiagnosticConsole("info", "[fullmag-debug][viewport-data] vector payload selected", {
       source: selectedVectorSource.source,
       quantity: activeQuantityId,
       effectiveStep,

@@ -464,7 +464,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         ),
       });
     }
-    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube) {
+    if (FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showViewCube && FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enable3DBox) {
       items.push({
         id: "gizmo-stack",
         anchor: "top-right",
@@ -489,7 +489,7 @@ export function useFemOverlayItems(args: UseFemOverlayItemsArgs): ViewportOverla
         legendOpen: args.legendOpen,
         colorLegendField: args.colorLegendField,
         fieldLegendEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showFieldLegend,
-        orientationReferenceEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere,
+        orientationReferenceEnabled: FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showOrientationSphere && FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableHslSphere,
         requestedOrientationReference: args.effectiveShowOrientationLegend,
         surfaceColorField: args.legendField,
         arrowColorMode: args.arrowColorMode,

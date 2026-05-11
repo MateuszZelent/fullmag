@@ -7,6 +7,7 @@
  */
 
 import type { FieldFrameEnvelope } from "./types";
+import { writeFrontendDiagnosticConsole } from "../debug/frontendConsoleDebug";
 
 /**
  * Determine whether a new frame should replace the currently applied frame.
@@ -96,5 +97,5 @@ export function logFrameDecision(
     ? `prev(rev=${prev.fieldRevision}, step=${prev.sourceStep}, q=${prev.quantityId})`
     : "prev(none)";
   const nextInfo = `next(rev=${next.fieldRevision}, step=${next.sourceStep}, q=${next.quantityId}, mesh=${next.meshGenerationId ?? "n/a"})`;
-  console.debug(`[FieldFrame] ${tag}: ${prevInfo} → ${nextInfo}`);
+  writeFrontendDiagnosticConsole("debug", `[FieldFrame] ${tag}: ${prevInfo} → ${nextInfo}`);
 }

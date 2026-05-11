@@ -7,6 +7,7 @@ import { useThree } from "@react-three/fiber";
 import { fitCameraToBounds } from "../camera/cameraHelpers";
 import type { ClipAxis } from "./femMeshTypes";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 
 const FEM_R3F_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
@@ -118,7 +119,7 @@ export function CameraAutoFit({
         onFitApplied?.();
       }
       if (FEM_R3F_DEBUG_LOGS) {
-        console.info("[viewport3d:fem] camera auto-fit applied", {
+        writeFrontendDiagnosticConsole("info", "[viewport3d:fem] camera auto-fit applied", {
           generation,
           maxDim,
           targetCenter: targetCenter

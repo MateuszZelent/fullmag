@@ -13,6 +13,7 @@ import type {
   ScriptBuilderState,
 } from "./types";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "../debug/frontendConsoleDebug";
 import {
   getFemBoundaryFaceCount,
   getFemElementCount,
@@ -490,7 +491,8 @@ export function mergeSessionState(prev: SessionState | null, next: SessionState)
 
   if (ENABLE_LIVE_DEBUG_LOGS) {
     const v2Step = next.step_update_v2?.scalars?.step ?? null;
-    console.debug(
+    writeFrontendDiagnosticConsole(
+      "debug",
       `[merge] prev=${prev.scalar_rows.length} next_raw=${next.scalar_rows.length}` +
       ` total=${next.scalar_rows_total ?? "?"}` +
       ` v2_step=${v2Step ?? "-"}` +

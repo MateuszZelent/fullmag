@@ -7,9 +7,10 @@ import { FemGeometry } from "../r3f/FemGeometry";
 import type { FemGeometryPassState } from "../r3f/femGeometryRenderPasses";
 import { FemArrows } from "../r3f/FemArrows";
 import { FemHighlightView } from "../r3f/FemHighlightView";
-import { getSharedVertexColors } from "../r3f/femVertexColors";
+import { getSharedVertexColorCacheStats, getSharedVertexColors } from "../r3f/femVertexColors";
 import SceneAxes3D from "../r3f/SceneAxes3D";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "../../../lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "../../../lib/debug/frontendConsoleDebug";
 import type { AntennaOverlay, BuilderObjectOverlay } from "../../runs/control-room/shared";
 import type {
   ArrowSamplingMode,
@@ -71,6 +72,28 @@ export function collectFemViewportSharedColorFields({
     fields.add(magneticVisibilityMode === "ghost" ? "none" : magneticColorField);
   }
   return Array.from(fields);
+}
+
+function browserHeapSnapshot(): { used: number | null; total: number | null; limit: number | null } {
+  if (typeof performance === "undefined") {
+    return { used: null, total: null, limit: null };
+  }
+  const memory = (performance as Performance & {
+    memory?: {
+      usedJSHeapSize?: number;
+      totalJSHeapSize?: number;
+      jsHeapSizeLimit?: number;
+    };
+  }).memory;
+  return {
+    used: memory?.usedJSHeapSize ?? null,
+    total: memory?.totalJSHeapSize ?? null,
+    limit: memory?.jsHeapSizeLimit ?? null,
+  };
+}
+
+function estimatePerNodeColorBytes(meshData: FemMeshData, fieldCount: number): number {
+  return meshData.nNodes * 3 * Float32Array.BYTES_PER_ELEMENT * fieldCount;
 }
 
 function antennaOverlayColors(role: AntennaOverlay["conductors"][number]["role"], selected: boolean) {
@@ -337,6 +360,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   enableGeometryPointerInteractions = true,
   enableGeometryHoverInteractions = true,
   showSelectionHighlight = true,
+  showObjectOverlays = true,
   showAntennaOverlays = true,
   showSceneAxes = true,
   onArrowSampledCount,
@@ -414,6 +438,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
   enableGeometryPointerInteractions?: boolean;
   enableGeometryHoverInteractions?: boolean;
   showSelectionHighlight?: boolean;
+  showObjectOverlays?: boolean;
   showAntennaOverlays?: boolean;
   showSceneAxes?: boolean;
   onArrowSampledCount?: (count: number | undefined) => void;
@@ -426,7 +451,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
     ) {
       return;
     }
-    console.debug("[fem-viewport-scene]", JSON.stringify({
+    writeFrontendDiagnosticConsole("debug", "[fem-viewport-scene]", JSON.stringify({
       renderMode,
       field,
       hasMeshParts,
@@ -489,18 +514,29 @@ export const FemViewportScene = React.memo(function FemViewportScene({
     () => femViewportLayerColorFieldsKey(visibleLayers),
     [visibleLayers],
   );
+  const collectSharedColorFieldsEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DSharedColorFieldCollection;
+  const precomputeSharedVertexColorsEnabled =
+    FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DSharedVertexColorPrecompute &&
+    showSceneGeometry &&
+    enableGeometryVertexColors;
   const sharedColorFields = React.useMemo(
-    () =>
-      collectFemViewportSharedColorFields({
+    () => {
+      if (!collectSharedColorFieldsEnabled) {
+        return [];
+      }
+      return collectFemViewportSharedColorFields({
         hasMeshParts,
         visibleLayers,
         airColorField,
         magneticColorField,
         magneticVisibilityMode,
         quantityDomain: meshData.quantityDomain,
-      }),
+      });
+    },
     [
       airColorField,
+      collectSharedColorFieldsEnabled,
       hasMeshParts,
       magneticColorField,
       magneticVisibilityMode,
@@ -511,6 +547,9 @@ export const FemViewportScene = React.memo(function FemViewportScene({
 
   const sharedVertexColorsByField = React.useMemo(() => {
     const next = new Map<FemColorField, Float32Array>();
+    if (!precomputeSharedVertexColorsEnabled) {
+      return next;
+    }
     for (const colorField of sharedColorFields) {
       next.set(
         colorField,
@@ -530,7 +569,48 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       );
     }
     return next;
-  }, [meshData, qualityPerFace, sharedColorFields]);
+  }, [meshData, precomputeSharedVertexColorsEnabled, qualityPerFace, sharedColorFields]);
+
+  React.useEffect(() => {
+    if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DMemoryDiagnostics) {
+      return;
+    }
+    const cacheStats = getSharedVertexColorCacheStats(meshData);
+    writeFrontendDiagnosticConsole("info", "[fem-viewport-scene:memory]", {
+      telemetryLabel,
+      mesh: {
+        nNodes: meshData.nNodes,
+        nElements: meshData.nElements,
+        boundaryFaces: Math.floor(meshData.boundaryFaces.length / 3),
+        fieldRevision: meshData.fieldRevision ?? null,
+        quantityDomain: meshData.quantityDomain ?? null,
+      },
+      gates: {
+        showSceneGeometry,
+        enableGeometryVertexColors,
+        collectSharedColorFieldsEnabled,
+        precomputeSharedVertexColorsEnabled,
+      },
+      sharedColorFields,
+      estimatedSharedVertexColorBytes: estimatePerNodeColorBytes(meshData, sharedColorFields.length),
+      sharedVertexColorCache: cacheStats,
+      browserHeap: browserHeapSnapshot(),
+    });
+  }, [
+    collectSharedColorFieldsEnabled,
+    enableGeometryVertexColors,
+    meshData,
+    precomputeSharedVertexColorsEnabled,
+    sharedColorFields,
+    showSceneGeometry,
+    telemetryLabel,
+  ]);
+
+  React.useEffect(() => {
+    if (!effectiveShowArrows) {
+      onArrowSampledCount?.(undefined);
+    }
+  }, [effectiveShowArrows, onArrowSampledCount]);
 
   const magneticGeometryPasses = React.useMemo<FemGeometryPassState | undefined>(() => {
     if (!renderPasses) return undefined;
@@ -716,28 +796,30 @@ export const FemViewportScene = React.memo(function FemViewportScene({
       {/* Arrow visibility is controlled entirely via effectiveShowArrows
           (which already incorporates the diagnostic showArrowLayer flag
            through ArrowRenderState). No separate showArrowLayer gate needed. */}
-      <FemArrows
-        meshData={meshData}
-        field={arrowField}
-        arrowDensity={arrowDensity}
-        colorMode={arrowColorMode}
-        monoColor={arrowMonoColor}
-        alpha={arrowAlpha}
-        lengthScale={arrowLengthScale}
-        thickness={arrowThickness}
-        samplingMode={arrowSamplingMode}
-        center={dynamicGeomCenter}
-        maxDim={dynamicMaxDim}
-        visible={effectiveShowArrows}
-        activeNodeMask={arrowActiveNodeMask}
-        boundaryFaceIndices={arrowBoundaryFaceIndices}
-        onSampledCount={onArrowSampledCount}
-      />
+      {effectiveShowArrows ? (
+        <FemArrows
+          meshData={meshData}
+          field={arrowField}
+          arrowDensity={arrowDensity}
+          colorMode={arrowColorMode}
+          monoColor={arrowMonoColor}
+          alpha={arrowAlpha}
+          lengthScale={arrowLengthScale}
+          thickness={arrowThickness}
+          samplingMode={arrowSamplingMode}
+          center={dynamicGeomCenter}
+          maxDim={dynamicMaxDim}
+          visible={effectiveShowArrows}
+          activeNodeMask={arrowActiveNodeMask}
+          boundaryFaceIndices={arrowBoundaryFaceIndices}
+          onSampledCount={onArrowSampledCount}
+        />
+      ) : null}
       {showSelectionHighlight ? (
         <FemHighlightView meshData={meshData} selectedFaces={selectedFaces} center={dynamicGeomCenter} />
       ) : null}
 
-      {showSceneGeometry ? (
+      {showSceneGeometry && showObjectOverlays ? (
         <ObjectOverlayMeshes
           overlays={objectOverlays}
           geomCenter={dynamicGeomCenter}
@@ -761,7 +843,7 @@ export const FemViewportScene = React.memo(function FemViewportScene({
         <SceneAxes3D worldExtent={axesWorldExtent} center={axesCenter} sceneScale={[1, 1, 1]} />
       ) : null}
 
-      {universeWireframeVisible && universeWireframeExtent ? (
+      {showSceneAxes && universeWireframeVisible && universeWireframeExtent ? (
         <mesh position={universeWireframeCenter ?? [0, 0, 0]} renderOrder={18}>
           <boxGeometry args={universeWireframeExtent} />
           <meshBasicMaterial

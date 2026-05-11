@@ -26,6 +26,7 @@ import { parseOptionalFiniteNumberText } from "../controlRoomUtils";
 import type { ControlRoomApi } from "../controlRoomApi";
 import type { useBuilderAutoSync } from "./useBuilderAutoSync";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { enqueueRuntimeCommand } from "@/features/command/actions/commandActions";
 
 type BuilderAutoSync = ReturnType<typeof useBuilderAutoSync>;
@@ -260,7 +261,7 @@ export function useMeshCommandPipeline({
     } else if (level === "warn") {
       console.warn(`[control-room] ${message}`);
     } else if (ENABLE_INFO_CONSOLE_TRACE) {
-      console.info(`[control-room] ${message}`);
+      writeFrontendDiagnosticConsole("info", `[control-room] ${message}`);
     }
     setFrontendTraceLog((prev) => {
       const next = [
@@ -443,7 +444,7 @@ export function useMeshCommandPipeline({
       typeof process !== "undefined" &&
       process.env.NODE_ENV === "development"
     ) {
-      console.trace(`[fullmag-diag] updatePreview path=${path}`, payload);
+      writeFrontendDiagnosticConsole("trace", `[fullmag-diag] updatePreview path=${path}`, payload);
     }
     const nextSelection: DisplaySelection = { ...requestedDisplaySelection };
     let displayPatch: DisplayPatchRequest | null = null;

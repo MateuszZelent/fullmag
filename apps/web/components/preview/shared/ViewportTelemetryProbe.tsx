@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { incrementFrontendAuditCounter } from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 
 const ENABLE_VIEWPORT_DEBUG_LOGS =
   typeof process !== "undefined" &&
@@ -96,7 +97,7 @@ export default function ViewportTelemetryProbe({
       wallClockNow - (lastViewportDebugLogAtByLabel.get(label) ?? 0) >= 1000
     ) {
       lastViewportDebugLogAtByLabel.set(label, wallClockNow);
-      console.info("[fullmag-debug][viewport] frame rendered", {
+      writeFrontendDiagnosticConsole("info", "[fullmag-debug][viewport] frame rendered", {
         label,
         drawCalls: gl.info.render.calls,
         triangles: gl.info.render.triangles,

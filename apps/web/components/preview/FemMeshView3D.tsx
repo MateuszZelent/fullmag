@@ -802,6 +802,28 @@ function FemMeshView3DInner({
       leakIsolationFlags.enableFemMeshView3DArrowRender ||
       leakIsolationFlags.enableFemMeshView3DOverlayRender
     );
+  const shouldMountFemViewportScene =
+    leakIsolationFlags.enableFemMeshView3DSceneRender &&
+    (
+      expectedCanvasVisualContent ||
+      leakIsolationFlags.enableFemMeshView3DSceneMountWithoutVisualContent
+    );
+  const r3fOverlayRenderEnabled = leakIsolationFlags.enableFemMeshView3DOverlayRender;
+  const presenterWrapperFlags = useMemo(
+    () => ({
+      ...wrapperFlags,
+      enableOverlayItemsModel:
+        wrapperFlags.enableOverlayItemsModel &&
+        r3fOverlayRenderEnabled,
+      enableOverlayManager:
+        wrapperFlags.enableOverlayManager &&
+        r3fOverlayRenderEnabled,
+      enableHoverTooltip:
+        wrapperFlags.enableHoverTooltip &&
+        r3fOverlayRenderEnabled,
+    }),
+    [r3fOverlayRenderEnabled, wrapperFlags],
+  );
   const blankViewportRecoveryEnabled =
     leakIsolationFlags.enableFemMeshView3DAutoFit &&
     leakIsolationFlags.enableFemMeshView3DBlankViewportRecovery;
@@ -1047,7 +1069,7 @@ function FemMeshView3DInner({
     handleContextToggleClip,
     handleContextClearSelection,
   } = useFemViewportPresenter({
-    wrapperFlags,
+    wrapperFlags: presenterWrapperFlags,
     qualityProfileRef,
     qualityProfile,
     interactionActive,
@@ -1221,7 +1243,7 @@ function FemMeshView3DInner({
             {FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showClipPlanesHelper ? (
               <FemClipPlanes enabled={clipEnabled} axis={clipAxis} posPercentage={clipPos} flip={clipFlip} geomSize={dynamicGeomSize} />
             ) : null}
-            {FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DSceneRender ? (
+            {shouldMountFemViewportScene ? (
               <FemViewportScene
             meshData={meshData}
             hasMeshParts={hasMeshParts}
@@ -1301,19 +1323,23 @@ function FemMeshView3DInner({
             showPointsPass={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showPointsPass}
             enableGeometryCompaction={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryCompaction}
             enableGeometryNormals={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryNormals}
-            enableGeometryVertexColors={FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryVertexColors}
+            enableGeometryVertexColors={
+              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DGeometryColorUpload &&
+              FRONTEND_DIAGNOSTIC_FLAGS.femViewport.enableGeometryVertexColors
+            }
             enableGeometryPointerInteractions={geometryPointerInteractionsEnabled}
             enableGeometryHoverInteractions={geometryHoverInteractionsEnabled}
             showSelectionHighlight={
-              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              r3fOverlayRenderEnabled &&
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSelectionHighlight
             }
+            showObjectOverlays={r3fOverlayRenderEnabled}
             showAntennaOverlays={
-              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              r3fOverlayRenderEnabled &&
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showAntennaOverlays
             }
             showSceneAxes={
-              FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enableFemMeshView3DOverlayRender &&
+              r3fOverlayRenderEnabled &&
               FRONTEND_DIAGNOSTIC_FLAGS.femViewport.showSceneAxes
             }
             onArrowSampledCount={setSampledArrowCount}
@@ -1342,7 +1368,7 @@ function FemMeshView3DInner({
           />
         ) : null}
       </ScientificViewportShell>
-      {!captureOverlayHidden && wrapperFlags.enableOverlayManager ? <ViewportOverlayManager items={overlayItems} /> : null}
+      {!captureOverlayHidden && wrapperFlags.enableOverlayManager && r3fOverlayRenderEnabled ? <ViewportOverlayManager items={overlayItems} /> : null}
 
       {!captureOverlayHidden &&
       geometryHoverInteractionsEnabled &&

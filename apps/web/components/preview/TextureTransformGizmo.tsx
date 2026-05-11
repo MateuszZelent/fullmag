@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { PivotControls } from "@react-three/drei";
 import type { TextureTransform3D } from "@/lib/textureTransform";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import {
   composePivotedTextureTransformMatrix,
   textureTransformFromPivotMatrix,
@@ -289,13 +290,14 @@ export default function TextureTransformGizmo({
       return;
     }
     lastSnapshotLogRef.current = signature;
-    console.groupCollapsed(
+    writeFrontendDiagnosticConsole(
+      "groupCollapsed",
       `[GizmoSync] TextureTransformGizmo mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
     );
-    console.log("physical transform input", summarizeTransform(transform));
-    console.log("scene pivot frame", pivotFrame);
-    console.log("scene transform passed to PivotControls", summarizeSceneMatrix(matrix));
-    console.groupEnd();
+    writeFrontendDiagnosticConsole("log", "physical transform input", summarizeTransform(transform));
+    writeFrontendDiagnosticConsole("log", "scene pivot frame", pivotFrame);
+    writeFrontendDiagnosticConsole("log", "scene transform passed to PivotControls", summarizeSceneMatrix(matrix));
+    writeFrontendDiagnosticConsole("groupEnd");
   }, [matrix, mode, pivotFrame, swapYZ, transform, visible]);
 
   if (!visible) {
@@ -321,12 +323,13 @@ export default function TextureTransformGizmo({
         if (!gizmoDebugEnabled()) {
           return;
         }
-        console.groupCollapsed(
+        writeFrontendDiagnosticConsole(
+          "groupCollapsed",
           `[GizmoSync] drag-start mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
         );
-        console.log("scene pivot frame", pivotFrame);
-        console.log("scene matrix", summarizeSceneMatrix(matrix));
-        console.groupEnd();
+        writeFrontendDiagnosticConsole("log", "scene pivot frame", pivotFrame);
+        writeFrontendDiagnosticConsole("log", "scene matrix", summarizeSceneMatrix(matrix));
+        writeFrontendDiagnosticConsole("groupEnd");
       }}
       onDrag={(localMatrix) => {
         matrix.copy(localMatrix);
@@ -352,12 +355,13 @@ export default function TextureTransformGizmo({
           swapYZ,
         );
         if (gizmoDebugEnabled()) {
-          console.groupCollapsed(
+          writeFrontendDiagnosticConsole(
+            "groupCollapsed",
             `[GizmoSync] drag-end mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
           );
-          console.log("scene matrix", summarizeSceneMatrix(matrix));
-          console.log("committed physical transform", summarizeTransform(committed));
-          console.groupEnd();
+          writeFrontendDiagnosticConsole("log", "scene matrix", summarizeSceneMatrix(matrix));
+          writeFrontendDiagnosticConsole("log", "committed physical transform", summarizeTransform(committed));
+          writeFrontendDiagnosticConsole("groupEnd");
         }
         onCommit?.(committed);
       }}

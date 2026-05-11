@@ -419,6 +419,9 @@ export function useFemArrowSamplingResource({
   visible: boolean;
 }): FemArrowSamplingState {
   const effectiveNodeMask = useMemo(() => {
+    if (!visible) {
+      return null;
+    }
     if (activeNodeMask && activeNodeMask.length === meshData.nNodes) {
       return activeNodeMask;
     }
@@ -430,9 +433,12 @@ export function useFemArrowSamplingResource({
       return meshData.activeMask;
     }
     return null;
-  }, [activeNodeMask, meshData.activeMask, meshData.nNodes, meshData.quantityDomain]);
+  }, [activeNodeMask, meshData.activeMask, meshData.nNodes, meshData.quantityDomain, visible]);
 
   const boundaryCandidateNodes = useMemo(() => {
+    if (!visible) {
+      return [] as number[];
+    }
     const unique = new Set<number>();
     if (boundaryFaceIndices && boundaryFaceIndices.length > 0) {
       for (const faceIndex of boundaryFaceIndices) {
@@ -448,15 +454,18 @@ export function useFemArrowSamplingResource({
       }
     }
     return Array.from(unique);
-  }, [boundaryFaceIndices, meshData.boundaryFaces]);
+  }, [boundaryFaceIndices, meshData.boundaryFaces, visible]);
 
   const volumeCandidateNodes = useMemo(() => {
+    if (!visible) {
+      return [] as number[];
+    }
     const allNodes = new Array<number>(meshData.nNodes);
     for (let nodeIndex = 0; nodeIndex < meshData.nNodes; nodeIndex += 1) {
       allNodes[nodeIndex] = nodeIndex;
     }
     return allNodes;
-  }, [meshData.nNodes]);
+  }, [meshData.nNodes, visible]);
 
   const useVolumeCandidates =
     samplingMode === "volume"

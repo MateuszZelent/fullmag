@@ -1,6 +1,7 @@
 "use client";
 
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 
 export interface FrontendDebugEvent {
   ts: number;
@@ -112,9 +113,9 @@ export function recordFrontendDebugEvent(
     process.env.NODE_ENV !== "production" &&
     FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging
   ) {
-    console.info(`[fullmag-debug][${scope}] ${event}`, entry.detail ?? {});
+    writeFrontendDiagnosticConsole("info", `[fullmag-debug][${scope}] ${event}`, entry.detail ?? {});
     if (entry.stack) {
-      console.info(entry.stack);
+      writeFrontendDiagnosticConsole("info", entry.stack);
     }
   }
 }

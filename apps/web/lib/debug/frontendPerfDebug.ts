@@ -1,3 +1,5 @@
+import { FRONTEND_DIAGNOSTIC_FLAGS } from "./frontendDiagnosticFlags";
+
 export type PerfSample = {
   scope: string;
   phase: string;
@@ -75,7 +77,7 @@ function getCanonicalPerfSamples(): PerfSample[] {
 }
 
 export function recordFrontendPerfSample(sample: PerfSample): void {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || !FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) {
     return;
   }
 

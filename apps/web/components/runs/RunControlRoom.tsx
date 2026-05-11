@@ -310,7 +310,68 @@ export function ControlRoomShell({ initialWorkspaceMode }: { initialWorkspaceMod
     };
     update();
     window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+
+    if (!FRONTEND_DIAGNOSTIC_FLAGS.leakIsolation.enablePerformanceAudits) {
+      return () => {
+        window.removeEventListener("resize", update);
+      };
+    }
+
+    const memoryInterval = setInterval(() => {
+      const memory = (performance as any).memory;
+      const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(2) + " MB";
+      console.groupCollapsed("[Memory Diagnostics]");
+      if (memory) {
+        console.table({
+          "JS Heap Size Limit": mb(memory.jsHeapSizeLimit),
+          "Total JS Heap Size": mb(memory.totalJSHeapSize),
+          "Used JS Heap Size": mb(memory.usedJSHeapSize),
+        });
+      } else {
+        console.log("performance.memory not available in this browser");
+      }
+      
+      Promise.all([
+        import("./control-room/binaryFieldCache"),
+        import("@/src/api/client/LiveSessionClient"),
+        import("@/src/api/codecs/decodeOffThread"),
+        import("@/features/session-runtime/store/useSessionRuntimeStore")
+      ]).then(([cache, clientModule, decodeModule, storeModule]) => {
+        const binStats = cache.getGlobalBinaryFieldCacheStats();
+        const scopedStats = cache.getGlobalScopedBinaryFieldCacheStats();
+        
+        const runtimeStore = storeModule.useSessionRuntimeStore.getState();
+
+        let clientCacheStats = { totalBytes: 0, entryCount: 0 };
+        try {
+          clientCacheStats = clientModule.getLiveSessionClient().getCache().getCacheStats();
+        } catch { /* ignore if not initialized */ }
+
+        const workerStats = decodeModule.getDecodeWorkerStats();
+
+        console.table({
+          "Store Scalar Rows": runtimeStore.scalarRows.length,
+          "Store Engine Logs": runtimeStore.engineLog.length,
+          "Store Field Frames": Object.keys(runtimeStore.latestFieldFrames).length,
+          "Binary Field Cache (Bytes)": mb(binStats.estimatedBytes),
+          "Binary Field Cache (Entries)": binStats.entries,
+          "Scoped Field Cache (Bytes)": mb(scopedStats.estimatedBytes),
+          "Scoped Field Cache (Entries)": scopedStats.entries,
+          "LiveSessionClient Cache (Bytes)": mb(clientCacheStats.totalBytes),
+          "LiveSessionClient Cache (Entries)": clientCacheStats.entryCount,
+          "Worker Transferred Bytes": mb(workerStats.totalTransferredBytes),
+          "Worker Pending Tasks": workerStats.pendingCount,
+        });
+        console.groupEnd();
+      }).catch(() => {
+        console.groupEnd();
+      });
+    }, 10000);
+
+    return () => {
+      window.removeEventListener("resize", update);
+      clearInterval(memoryInterval);
+    };
   }, []);
 
   const compactHorizontalLayout = viewportSize.width < 1360;

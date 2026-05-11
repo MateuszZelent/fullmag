@@ -9,6 +9,7 @@ import {
   setFrontendAuditCounter,
 } from "@/lib/debug/frontendAudit";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { useBuilderKeyboardShortcuts } from "@/features/geometry-builder";
 import { useGeometryBuilderStore } from "@/features/geometry-builder/store/useGeometryBuilderStore";
 import { resolveFemDiscretization } from "@/src/domain/capabilities";
@@ -127,10 +128,10 @@ function logViewportBridgeDebug(event: string, payload?: Record<string, unknown>
     return;
   }
   if (payload) {
-    console.info(`[viewport3d:bridge] ${event}`, payload);
+    writeFrontendDiagnosticConsole("info", `[viewport3d:bridge] ${event}`, payload);
     return;
   }
-  console.info(`[viewport3d:bridge] ${event}`);
+  writeFrontendDiagnosticConsole("info", `[viewport3d:bridge] ${event}`);
 }
 
 /* ── Pure utility functions ───────────────────────────────────────── */
@@ -804,21 +805,22 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
     });
     if (signature === gizmoDiagnosticSignatureRef.current) return;
     gizmoDiagnosticSignatureRef.current = signature;
-    console.groupCollapsed(
+    writeFrontendDiagnosticConsole(
+      "groupCollapsed",
       `[GizmoSync] viewport object=${selectedSceneObject.name || selectedSceneObject.id} scope=${ctx.activeTransformScope ?? "none"}`,
     );
-    console.log("scene object transform", summarizeTransform(selectedObjectTransform));
-    if (selectedObjectOverlay) console.log("selected overlay anchor", selectedObjectOverlay);
-    else console.log("selected overlay anchor", null);
+    writeFrontendDiagnosticConsole("log", "scene object transform", summarizeTransform(selectedObjectTransform));
+    if (selectedObjectOverlay) writeFrontendDiagnosticConsole("log", "selected overlay anchor", selectedObjectOverlay);
+    else writeFrontendDiagnosticConsole("log", "selected overlay anchor", null);
     if (localTextureTransform) {
-      console.log("texture transform in authoring space", {
+      writeFrontendDiagnosticConsole("log", "texture transform in authoring space", {
         mapping_space: activeTextureMappingSpace,
         ...summarizeTransform(localTextureTransform),
         pivot: localTextureTransform.pivot,
       });
     }
     if (activeTextureTransform) {
-      console.log("texture transform resolved for gizmo/world space", {
+      writeFrontendDiagnosticConsole("log", "texture transform resolved for gizmo/world space", {
         ...summarizeTransform(activeTextureTransform),
         pivot: activeTextureTransform.pivot,
       });
@@ -828,7 +830,7 @@ export function useViewportDataBridge(options: UseViewportDataBridgeOptions = {}
         "[GizmoSync] selected object has non-identity rotation_quat, but current viewport overlays are bounds-driven and axis-aligned.",
       );
     }
-    console.groupEnd();
+    writeFrontendDiagnosticConsole("groupEnd");
   }, [
     activeTextureMappingSpace,
     activeTextureTransform,

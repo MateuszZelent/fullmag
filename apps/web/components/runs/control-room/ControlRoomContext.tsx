@@ -17,6 +17,7 @@ import { useStageExecution } from "@/src/hooks/resources/useStageExecution";
 import { useMeshWorkspaceResourceState } from "@/src/hooks/resources/useMeshResources";
 import { useWorkspaceSelection } from "@/src/hooks/resources/useWorkspaceSelection";
 import { useVisualizationStateResource } from "@/src/hooks/resources/useVisualizationStateResource";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { useSessionRuntimeBridgeRouter } from "../../../features/session-runtime/hooks/useSessionRuntimeBridgeRouter";
 import { useSessionRuntimeStore } from "../../../features/session-runtime/store/useSessionRuntimeStore";
 import { resolveWorkspaceRuntimeIdentity } from "../../../features/workspace-runtime-lifecycle";
@@ -829,7 +830,7 @@ export function ControlRoomProvider({ children }: { children: ReactNode }) {
     }
     if (decision.kind === "reject-stale-pending") {
       if (ENABLE_VIEWPORT_DATA_DEBUG_LOGS) {
-        console.debug("[ControlRoomContext] Ignoring stale workspace selection hydration", {
+        writeFrontendDiagnosticConsole("debug", "[ControlRoomContext] Ignoring stale workspace selection hydration", {
           currentIdentity,
           pendingIdentity: pendingWorkspaceSelectionIdentityRef.current,
           remoteIdentity: nextIdentity,

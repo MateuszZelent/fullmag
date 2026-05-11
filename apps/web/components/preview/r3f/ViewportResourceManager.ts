@@ -18,6 +18,7 @@
  */
 
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -230,7 +231,7 @@ export class ViewportResourceManager {
     for (const [key, entry] of this.entries) {
       if (this.frame - entry.lastUsedFrame >= staleFrames) {
         if (reason && VIEWPORT_RESOURCE_DEBUG_LOGS) {
-          console.debug(`[ViewportResourceManager] disposeStale(${reason}): ${key}`);
+          writeFrontendDiagnosticConsole("debug", `[ViewportResourceManager] disposeStale(${reason}): ${key}`);
         }
         entry.handle.dispose();
         this.entries.delete(key);
@@ -243,7 +244,7 @@ export class ViewportResourceManager {
   /** Dispose all tracked resources immediately. */
   disposeAll(reason?: string): void {
     if (reason && VIEWPORT_RESOURCE_DEBUG_LOGS) {
-      console.debug(`[ViewportResourceManager] disposeAll(${reason}): ${this.entries.size} resources`);
+      writeFrontendDiagnosticConsole("debug", `[ViewportResourceManager] disposeAll(${reason}): ${this.entries.size} resources`);
     }
     for (const entry of this.entries.values()) {
       entry.handle.dispose();

@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { fetchRuntimeCapabilities } from "@/src/hooks/resources/useRuntimeCapabilities";
 
 export interface RuntimeFeatureFlags {
@@ -51,7 +52,7 @@ export function useRuntimeFeatureFlags(): RuntimeFeatureFlags | null {
           .filter(([, v]) => v === true)
           .map(([k]) => k);
         if (active.length > 0) {
-          console.log("[feature-flags] active:", active.join(", "));
+          writeFrontendDiagnosticConsole("log", "[feature-flags] active:", active.join(", "));
         }
       })
       .catch((err) => {

@@ -66,6 +66,7 @@ import {
   applyCameraStepLock,
 } from "@/components/preview/camera/cameraProfiles";
 import { FRONTEND_DIAGNOSTIC_FLAGS } from "@/lib/debug/frontendDiagnosticFlags";
+import { writeFrontendDiagnosticConsole } from "@/lib/debug/frontendConsoleDebug";
 import { useViewportTelemetryEntry } from "@/lib/debug/viewportTelemetry";
 import { TransformGizmoLayer } from "@/components/preview/transform/TransformGizmoLayer";
 import { axisLabelsForConvention } from "@/components/preview/transform/axisConvention";
@@ -194,10 +195,10 @@ function logVectorSurfaceDebug(event: string, payload?: Record<string, unknown>)
     return;
   }
   if (payload) {
-    console.info(`[viewport3d:vector-surface] ${event}`, payload);
+    writeFrontendDiagnosticConsole("info", `[viewport3d:vector-surface] ${event}`, payload);
     return;
   }
-  console.info(`[viewport3d:vector-surface] ${event}`);
+  writeFrontendDiagnosticConsole("info", `[viewport3d:vector-surface] ${event}`);
 }
 
 // ─── Types ──────────────────────────────────────────────────────────
