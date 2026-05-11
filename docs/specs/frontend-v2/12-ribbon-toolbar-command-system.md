@@ -7,6 +7,8 @@
 
 Menu items, ribbon buttons, viewport toolbar controls, context menus, shortcuts, and command palette entries are renderers of one command registry. A command exists once.
 
+Ribbon, toolbar, menu, context-menu, tab, tooltip, and command-palette renderers are built from shared shadcn/ui-style primitives. Module contributions describe commands and groups; they do not define bespoke button systems.
+
 ## 2. Command Contract
 
 ```typescript
@@ -42,6 +44,8 @@ Command ids use domain names: `mesh.build-selected`, `study.run-active`, `viewpo
 | `Automation` | scripts, batch, managed runtimes, schedules |
 
 Modules contribute groups declaratively. The ribbon chooses visible groups from active context, selection, and capability state.
+
+The ribbon visual layer consumes Catppuccin-backed `--fm-*` tokens only. Raw colors, module-local button styles, and duplicate command widgets are not allowed.
 
 ## 4. Button States
 

@@ -18,6 +18,7 @@ Design for a micromagnetics workstation, not a presentation site. Every visual o
 5. Prefer compact, stable tools over decorative cards.
 6. Prefer canonical Python/IR vocabulary over frontend-only naming.
 7. Prefer data already published by the runtime over recomputation through preview commands.
+8. Prefer Catppuccin Mocha/Latte tokens and shadcn/ui-style primitives over bespoke colors or widgets.
 
 ## Layout Direction
 
@@ -27,6 +28,7 @@ Design for a micromagnetics workstation, not a presentation site. Every visual o
 - Right inspectors for properties, capability, provenance, and diagnostics.
 - Bottom docks for logs, jobs, charts, live fields, and problems.
 - Center tabs are acceptable for primary work modes, but they should share the same workspace model.
+- Menus, ribbons, tabs, dropdowns, command palette, dialogs, context menus, switches, segmented controls, and tooltips should be shadcn/ui-style shared primitives skinned by `--fm-*` Catppuccin tokens.
 
 ## Motion Direction
 
@@ -55,3 +57,5 @@ Avoid scroll choreography, perpetual animation, parallax, hover trails, magnetic
 - Are FDM/FEM differences handled by capability/adapters rather than separate product UX?
 - Is the user told when data is stale, unsupported, degraded, or estimated?
 - Did the change reduce old/new architecture mixing?
+- Did it preserve Catppuccin Mocha/Latte and avoid custom one-off colors?
+- Did it reuse shared shadcn/ui-style primitives for accessibility-sensitive controls?

@@ -1,4 +1,5 @@
 import type { ModuleId, SlotId } from "../types";
+import type { LayoutState } from "../layout/layoutTypes";
 
 export interface KernelEventMap {
   "session:status-changed": {
@@ -12,11 +13,21 @@ export interface KernelEventMap {
     selectionId: string | null;
     source: ModuleId;
   };
+  "workspace:layout-changed": {
+    state: LayoutState;
+  };
+  "workspace:focus-changed": {
+    state: LayoutState;
+  };
   "command:submitted": {
     commandId: string;
   };
   "command:completed": {
     commandId: string;
     status: "completed" | "failed" | "cancelled";
+  };
+  "resource:invalidated": {
+    resourceKey: string;
+    revision: string | number;
   };
 }

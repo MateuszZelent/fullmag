@@ -80,6 +80,9 @@ resource-first-gates mode="strict":
 control-room session="":
     if [ -n "{{session}}" ]; then ./scripts/dev-control-room.sh "{{session}}"; else ./scripts/dev-control-room.sh; fi
 
+control-room-v2:
+    ./scripts/dev-control-room-v2.sh
+
 control-room-stop:
     ./scripts/stop-control-room.sh
 

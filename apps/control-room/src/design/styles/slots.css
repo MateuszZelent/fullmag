@@ -17,7 +17,7 @@
 }
 
 .fm-slot[data-slot-id="panel-bottom"] {
-  grid-column: 1 / -1;
+  height: 100%;
 }
 
 .fm-slot__empty,

@@ -24,8 +24,8 @@
 - [ ] Keep the app on Next.js 16 unless an explicit version-change decision is made.
 - [ ] Configure Vitest, TypeScript, ESLint, and build scripts as zero-tolerance gates from the first commit.
 - [ ] Create import-only `app/globals.css` and central `src/design/styles/*` token/theme/layout files.
-- [ ] Implement dark/light theme foundation through `data-theme` and token swapping.
-- [ ] Add shadcn-compatible shared UI foundation (`components.json`, `cn`, first shared button primitive).
+- [ ] Implement Catppuccin Mocha/Latte dark/light theme foundation through `data-theme` and token swapping.
+- [ ] Add shadcn-compatible shared UI foundation (`components.json`, `cn`, first shared button primitive) and use it for interactive chrome instead of bespoke widgets.
 - [ ] Add platform runtime target detection for `web`, `tauri`, and `electron` without direct module-level native imports.
 - [ ] Create `KernelProvider`, `KernelApi`, `ModuleRegistry`, `EventBus`, `CommandRegistry`.
 - [ ] Create `WorkspaceShell`, slot hosts, module boundary, status placeholder.
@@ -45,7 +45,7 @@
 
 ## Phase 3 - Shell, Menu, Ribbon, Status, Visual Foundation
 
-- [ ] Expand shadcn/ui component coverage with command, dialog, dropdown, context menu, tabs, tooltip, and resizable panel primitives.
+- [ ] Expand shadcn/ui component coverage with menu, ribbon controls, command, dialog, dropdown, context menu, tabs, tooltip, switch, segmented control, and resizable panel primitives.
 - [ ] Implement user-facing theme switcher using the Phase 1 `ThemeProvider`.
 - [ ] Implement main menu as command registry renderer using shadcn/ui components.
 - [ ] Implement ribbon as context command-group renderer.
@@ -96,7 +96,7 @@
 - [ ] Add viewport memory stress test.
 - [ ] Add module boundary and direct transport CI checks.
 - [ ] Run side-by-side workflow comparison against legacy.
-- [ ] Visual polish review: dark/light themes, transitions, typography, shadcn consistency.
+- [ ] Visual polish review: Catppuccin Mocha/Latte themes, transitions, typography, shadcn consistency.
 - [ ] Switch default dev/deploy scripts to v2 only after acceptance passes.
 - [ ] Freeze `apps/web`, then remove it after the release-cycle criteria pass.
 

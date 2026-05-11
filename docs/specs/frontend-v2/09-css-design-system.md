@@ -9,9 +9,9 @@ Frontend v2 must feel like a **premium professional application** — beautiful,
 
 ### Three-layer CSS strategy
 
-1. **Tokens (`--fm-*` custom properties)** — the source of truth for all visual decisions: colors, spacing, typography, geometry. Dark and light themes swap token values.
+1. **Tokens (`--fm-*` custom properties)** — the source of truth for all visual decisions: colors, spacing, typography, geometry. Dark and light themes swap Catppuccin Mocha/Latte token values.
 2. **Tailwind CSS** — utility layer for layout, spacing, and responsive behavior. Tailwind utilities consume tokens where possible (`bg-[var(--fm-bg-panel)]`).
-3. **shadcn/ui** — accessible pre-built components (command palette, dialogs, dropdowns, context menus, tabs, resizable panels, tooltips). shadcn components are styled through tokens and Tailwind, not through custom CSS overrides.
+3. **shadcn/ui** — accessible pre-built components and patterns (menu, ribbon controls, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, tooltips). shadcn components are styled through tokens and Tailwind, not through custom CSS overrides.
 
 Custom `fm-*` classes are used for layout geometry and domain-specific component contracts that don't map to shadcn or Tailwind utilities.
 
@@ -26,6 +26,7 @@ Custom `fm-*` classes are used for layout geometry and domain-specific component
 @import "../src/design/styles/base.css";
 @import "../src/design/styles/layout.css";
 @import "../src/design/styles/slots.css";
+@import "../src/design/styles/header.css";
 ```
 
 No real token, layout, component, or theme rules belong directly in `globals.css`. If a style is shared, it lives in `src/design/styles/*`; if it is module-specific, it lives beside the module and still consumes `--fm-*` tokens.
@@ -36,13 +37,13 @@ Dark and light themes are implemented through a `data-theme` attribute on `<html
 
 ```css
 :root, [data-theme="dark"] {
-  --fm-bg-app: #0e1117;
-  /* ... dark tokens ... */
+  --fm-bg-app: #1e1e2e; /* Catppuccin Mocha Base */
+  /* ... Mocha tokens ... */
 }
 
 [data-theme="light"] {
-  --fm-bg-app: #f8f9fb;
-  /* ... light tokens ... */
+  --fm-bg-app: #eff1f5; /* Catppuccin Latte Base */
+  /* ... Latte tokens ... */
 }
 ```
 
@@ -66,7 +67,9 @@ These states must be visible without relying on color alone.
 
 ## 3. Token Families
 
-The color palette is **Catppuccin Mocha** (dark) and **Catppuccin Latte** (light).
+The color palette is **Catppuccin Mocha** (dark) and **Catppuccin Latte** (light), using the official Catppuccin palette as source of truth: <https://catppuccin.com/palette/>.
+
+Raw Catppuccin hex values belong only in `src/design/styles/tokens.css` and `src/design/styles/theme.css`. Component CSS and React components use semantic `--fm-*` tokens.
 
 ```css
 :root {
@@ -152,6 +155,8 @@ Panel dimensions are bounded. State changes must not cause major layout jumps.
 | `.fm-inspector-section` | collapsible section with label, validation marker, stable controls |
 | `.fm-status-pill` | compact semantic status with label and optional revision |
 | `.fm-viewport-overlay` | pointer-safe overlay with bounded size |
+
+Interactive primitives such as menus, ribbon buttons, tabs, dropdowns, dialogs, command palette, context menus, switches, segmented controls, and tooltips are implemented through shadcn/ui-style shared components under `src/shared/ui`. Custom `fm-*` classes define Fullmag geometry and scientific state, not replacement accessibility primitives.
 
 ## 6. Motion and Micro-Animations
 

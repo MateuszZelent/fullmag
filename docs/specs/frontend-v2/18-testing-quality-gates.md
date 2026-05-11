@@ -14,6 +14,7 @@
 | Viewport | renderer lifecycle, resource tracker, dirty loop, picking |
 | Integration | explorer-selection-inspector, command-ribbon-runtime, 3D/2D/charts resource flow |
 | Visual/perf | screenshots, idle audit, memory stress |
+| Design | Catppuccin Mocha/Latte token mapping, import-only globals, shadcn/ui-style primitive usage |
 
 ## 2. Required Gates Per Change
 
@@ -25,7 +26,8 @@
 | state store | store unit test and cross-module import check |
 | inspector edit | draft/validate/commit/failure tests |
 | viewport renderer | lifecycle test, dirty-loop test, resource cleanup test |
-| CSS/layout | screenshot or visual check once implementation exists |
+| CSS/layout | design contract test, screenshot or visual check once implementation exists |
+| interactive chrome | shadcn/ui-style primitive usage test and accessibility check |
 | migration/cutover | legacy import/route scan and acceptance checklist |
 
 ## 3. Static Checks

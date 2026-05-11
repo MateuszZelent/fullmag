@@ -1,9 +1,15 @@
 import type { ComponentType } from "react";
 
+import type { ControlRoomApi } from "./api/ControlRoomApi";
+import type { CommandContribution } from "./commands/commandTypes";
 import type { CommandRegistry } from "./commands/CommandRegistry";
 import type { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
+import type { LayoutController } from "./layout/LayoutController";
 import type { ModuleRegistry } from "./module/ModuleRegistry";
+import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
+import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import type { SelectionController } from "./selection/SelectionController";
 
 export type SlotId =
   | "app-menu"
@@ -35,12 +41,21 @@ export interface ModuleManifest {
   slots: SlotId[];
   capabilityGate?: CapabilityKey[];
   component: () => Promise<{ default: ComponentType<ModuleProps> }>;
+  /** Declarative contributions — auto-registered by the kernel on module load. */
+  contributes?: {
+    commands?: CommandContribution[];
+  };
   emits?: Array<keyof KernelEventMap>;
   listens?: Array<keyof KernelEventMap>;
 }
 
 export interface KernelApi {
+  readonly api: ControlRoomApi;
   readonly bus: EventBus<KernelEventMap>;
   readonly commands: CommandRegistry;
   readonly modules: ModuleRegistry;
+  readonly realtime: RealtimeInvalidationBridge;
+  readonly resources: ResourceInvalidationController;
+  readonly selection: SelectionController;
+  readonly layout: LayoutController;
 }

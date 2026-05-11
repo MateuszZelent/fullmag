@@ -23,11 +23,13 @@ Fullmag's control room must look and feel like a **premium professional applicat
 
 Design principles:
 
-- **Polished, modern aesthetic** — refined typography (Inter/JetBrains Mono), deliberate spacing, smooth micro-animations, curated dark and light themes.
-- **shadcn/ui as the component foundation** — command palette, dialogs, dropdowns, context menus, tabs, resizable panels, and tooltips use shadcn/ui for accessibility and visual consistency.
+- **Polished, modern aesthetic** — refined typography (Inter/JetBrains Mono), deliberate spacing, smooth micro-animations, Catppuccin Mocha dark theme, and Catppuccin Latte light theme.
+- **shadcn/ui as the component foundation** — menu, ribbon, command palette, dialogs, dropdowns, context menus, tabs, resizable panels, switches, segmented controls, and tooltips use shadcn/ui-style shared primitives for accessibility and visual consistency.
 - **Tailwind CSS as utility layer** — rapid layout composition and responsive behavior, consuming `--fm-*` design tokens.
 - **Dense but beautiful** — high information density appropriate for scientific work, but with premium polish: smooth transitions, clear visual hierarchy, elegant status indicators.
 - **Functional beauty** — every visual element serves a scientific or UX purpose. No gratuitous decoration, but no plain HTML either. The interface should invite sustained use.
+
+Raw Catppuccin hex values are allowed only in central token/theme files. Components and module CSS consume semantic `--fm-*` tokens.
 
 ## 1.2. Deployment Targets
 
@@ -125,5 +127,5 @@ Frontend v2 is allowed to replace legacy only when:
 - all modules can be disabled by manifest registration without breaking the shell;
 - `apps/web` has no active import path into `apps/control-room`;
 - legacy remains only as a documented reference until removal;
-- the interface looks and feels premium — dark and light themes work, transitions are smooth, typography is polished, shadcn/ui components are consistent;
+- the interface looks and feels premium — Catppuccin Mocha/Latte themes work, transitions are smooth, typography is polished, shadcn/ui-style components are consistent;
 - the app runs in both browser and Tauri desktop modes without code forks.

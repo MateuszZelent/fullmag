@@ -1,0 +1,104 @@
+import type { ReactNode } from "react";
+
+import type { RibbonTabId } from "@/kernel/layout/layoutTypes";
+
+// Re-export kernel-canonical type so module-local files can import from here.
+export type { RibbonTabId };
+
+export interface RibbonTabDef {
+  id: RibbonTabId;
+  label: string;
+}
+
+export interface RibbonAction {
+  id: string;
+  icon: ReactNode;
+  label: string;
+  tooltip?: string;
+  shortcut?: string;
+  disabled?: boolean;
+  active?: boolean;
+  accent?: boolean;
+  menu?: RibbonMenuNode[];
+  /** CSS color applied to the icon only (not label). Ignored when button is active. */
+  iconColor?: string;
+}
+
+export interface RibbonGroup {
+  id: string;
+  title: string;
+  subtitle?: string;
+  tone?: "authoring" | "compose" | "compute" | "selection" | "sync" | "neutral";
+  actions: RibbonAction[];
+}
+
+export interface RibbonTabContent {
+  tabId: RibbonTabId;
+  groups: RibbonGroup[];
+}
+
+export type RibbonMenuNode =
+  | {
+      type: "label";
+      id: string;
+      label: string;
+      badge?: string;
+    }
+  | {
+      type: "separator";
+      id: string;
+    }
+  | {
+      type: "item";
+      id: string;
+      label: string;
+      icon?: ReactNode;
+      shortcut?: string;
+      disabled?: boolean;
+    }
+  | {
+      type: "checkbox";
+      id: string;
+      label: string;
+      checked: boolean;
+      disabled?: boolean;
+    }
+  | {
+      type: "radio-group";
+      id: string;
+      label?: string;
+      value: string;
+      items: Array<{
+        value: string;
+        label: string;
+        disabled?: boolean;
+      }>;
+      disabled?: boolean;
+    }
+  | {
+      type: "status";
+      id: string;
+      label: string;
+      value: string;
+      tone?: "success" | "warning" | "danger" | "neutral";
+    }
+  | {
+      type: "submenu";
+      id: string;
+      label: string;
+      disabled?: boolean;
+      nodes: RibbonMenuNode[];
+    };
+
+export const RIBBON_TABS: RibbonTabDef[] = [
+  { id: "home", label: "Home" },
+  { id: "view", label: "View" },
+  { id: "definitions", label: "Definitions" },
+  { id: "geometry", label: "Geometry" },
+  { id: "materials", label: "Materials" },
+  { id: "physics", label: "Physics" },
+  { id: "mesh", label: "Mesh" },
+  { id: "study", label: "Study" },
+  { id: "results", label: "Results" },
+  { id: "automation", label: "Automation" },
+];

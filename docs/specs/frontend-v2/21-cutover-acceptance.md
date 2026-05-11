@@ -60,8 +60,8 @@ Required:
 
 Required:
 
-- dark and light themes are functional and visually consistent;
-- shadcn/ui components are used for dialogs, command palette, context menus, dropdowns, tabs, and tooltips;
+- Catppuccin Mocha dark theme and Catppuccin Latte light theme are functional and visually consistent;
+- shadcn/ui-style shared components are used for menu, ribbon controls, dialogs, command palette, context menus, dropdowns, tabs, switches, segmented controls, and tooltips;
 - micro-animations are present for hover, selection, overlay open/close, and status transitions;
 - typography uses Inter for UI and JetBrains Mono for code/data;
 - the interface looks premium in side-by-side comparison with reference applications (COMSOL, Blender, Figma);

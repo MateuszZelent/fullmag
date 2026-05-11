@@ -24,6 +24,8 @@ The shell is fixed and module-driven:
 
 The shell does not know which scientific workflow is active. It hosts slots and renders command/menu/ribbon contributions.
 
+Shell chrome must use the shared shadcn/ui-style primitives for menu buttons, dropdowns, tabs, command palette, tooltips, and overflow behavior. The shell may add `fm-*` classes for Fullmag geometry, but must not hand-roll accessible menu, tab, or dialog primitives.
+
 ## 2. Workspace Contexts
 
 Top-level contexts are:

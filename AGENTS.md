@@ -195,7 +195,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
 - Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
 - Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
-- Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Do not introduce custom colors outside the Catppuccin palette.
+- Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Raw Catppuccin hex values belong only in central token/theme files; components consume `--fm-*` tokens.
+- Build menus, ribbons, tabs, dropdowns, dialogs, command palette, context menus, tooltips, switches, and segmented controls from shadcn/ui-style shared primitives. Bespoke widgets need a documented exception.
 
 ---
 
@@ -479,6 +480,9 @@ The control room must use:
 - one domain-adapter layer,
 - one unified UI tree,
 - one workspace shell whose active module changes the interface context.
+- one Catppuccin token system: Mocha for dark mode, Latte for light mode.
+- one shadcn/ui-based primitive layer for interactive chrome such as menu, ribbon, tabs,
+  command palette, dialogs, dropdowns, context menus, switches, and tooltips.
 
 The control room must not:
 
@@ -487,6 +491,8 @@ The control room must not:
 - reintroduce stage-switched workspace shells such as `Build`, `Study`, and `Analyze`,
 - use legacy workspace stage state as the source of truth for ribbon, inspector, viewport, or docking behavior,
 - treat old `bootstrap` / `poll` / `preview/*` flows as canonical architecture.
+- hardcode one-off colors in components or module CSS outside `src/design/styles/*`.
+- hand-roll accessibility-sensitive primitives that shadcn/ui already covers unless the exception is documented in the module manifest or spec.
 
 Workspace UI doctrine:
 

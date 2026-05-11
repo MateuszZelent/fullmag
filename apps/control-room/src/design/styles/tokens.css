@@ -46,8 +46,9 @@
   --fm-space-5: 20px;
 
   /* Geometry */
-  --fm-menu-height: 30px;
-  --fm-ribbon-height: 56px;
+  --fm-menu-height: 38px;
+  --fm-ribbon-height: 96px;
+  --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 32px;
 

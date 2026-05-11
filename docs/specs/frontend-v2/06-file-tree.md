@@ -45,6 +45,7 @@ src/design/
     base.css
     layout.css
     slots.css
+    header.css
   theme/
     themePreference.ts
     ThemeProvider.tsx
@@ -58,7 +59,7 @@ src/platform/
     nativeWindow.ts
 ```
 
-The design layer owns `--fm-*` tokens, dark/light theme switching, shadcn-compatible shared component styling, and global layout contracts. The platform layer owns web/Tauri/Electron detection and any native bridge. Modules must not directly import Tauri, Electron, `window.process`, or native file APIs.
+The design layer owns `--fm-*` tokens, Catppuccin Mocha/Latte theme switching, shadcn-compatible shared component styling, and global layout contracts. The platform layer owns web/Tauri/Electron detection and any native bridge. Modules must not directly import Tauri, Electron, `window.process`, or native file APIs.
 
 ## 3. Kernel
 
