@@ -8714,6 +8714,20 @@
     "/v2/sessions/current/data/domain/topology": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_topology",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous domain topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10701,6 +10715,18 @@
             }
           },
           {
+            "description": "Strong ETag from a previous field-vector response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
             "in": "query",
             "name": "component",
@@ -11215,6 +11241,18 @@
         "operationId": "meshing_get_sessions_current_meshing_meshes_objects_object_id_topology",
         "parameters": [
           {
+            "description": "Strong ETag from a previous object-topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Canonical scene object id",
             "in": "path",
             "name": "object_id",
@@ -11250,6 +11288,18 @@
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_parts_part_id_topology",
         "parameters": [
+          {
+            "description": "Strong ETag from a previous part-topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           {
             "description": "Stable FEM mesh part id, for example an airbox part",
             "in": "path",
@@ -11406,6 +11456,20 @@
     "/v2/sessions/current/meshing/meshes/shared-domain/topology": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_topology",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous shared-domain topology response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

@@ -4365,7 +4365,10 @@ export interface operations {
     data_get_sessions_current_data_domain_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous domain topology response */
+                "If-None-Match"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5251,7 +5254,10 @@ export interface operations {
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
             };
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous field-vector response */
+                "If-None-Match"?: string | null;
+            };
             path: {
                 /** @description Quantity identifier */
                 quantity_id: string;
@@ -5751,7 +5757,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_objects_object_id_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous object-topology response */
+                "If-None-Match"?: string | null;
+            };
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
@@ -5795,7 +5804,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_parts_part_id_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous part-topology response */
+                "If-None-Match"?: string | null;
+            };
             path: {
                 /** @description Stable FEM mesh part id, for example an airbox part */
                 part_id: string;
@@ -5988,7 +6000,10 @@ export interface operations {
     meshing_get_sessions_current_meshing_meshes_shared_domain_topology: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Strong ETag from a previous shared-domain topology response */
+                "If-None-Match"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

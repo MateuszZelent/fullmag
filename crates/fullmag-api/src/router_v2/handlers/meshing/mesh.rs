@@ -797,6 +797,9 @@ pub async fn get_mesh_shared_domain_manifest(
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous shared-domain topology response")
+    ),
     responses(
         (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
@@ -1034,6 +1037,7 @@ pub async fn get_mesh_object_size_field(
     get,
     path = "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
     params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous object-topology response"),
         ("object_id" = String, Path, description = "Canonical scene object id")
     ),
     responses(
@@ -1075,6 +1079,7 @@ pub async fn get_mesh_object_topology(
     get,
     path = "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
     params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous part-topology response"),
         ("part_id" = String, Path, description = "Stable FEM mesh part id, for example an airbox part")
     ),
     responses(

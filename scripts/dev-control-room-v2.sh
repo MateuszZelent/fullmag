@@ -117,6 +117,18 @@ fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
+# Kill any stale Next.js dev server running from this project directory, then
+# remove the .next/dev state so Next.js 16's multi-instance guard doesn't
+# reject the new process.
+CONTROL_ROOM_DIR="${REPO_ROOT}/apps/control-room"
+stale_pid="$(pgrep -f "next.*dev.*${CONTROL_ROOM_DIR}" 2>/dev/null | head -n1 || true)"
+if [[ -n "$stale_pid" ]]; then
+  echo "Stopping stale Next.js dev server (PID ${stale_pid}) ..." >&2
+  kill "$stale_pid" 2>/dev/null || true
+  sleep 0.5
+fi
+rm -rf "${CONTROL_ROOM_DIR}/.next/dev"
+
 echo "Starting frontend v2 dev server on ${WEB_URL_BASE} ..."
 echo "API base: ${API_URL}"
 echo "API health: ${API_URL}/healthz"

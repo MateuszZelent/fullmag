@@ -71,6 +71,7 @@ Common toolbar groups:
 - view mode: 3D, 2D, split, chart;
 - quantity: active field/scalar quantity;
 - layers: mesh, vectors, scalar surface, airbox, axes, selection;
+- selected target display: shader, vectors, wireframe, points, opacity, and clear overrides for the selected object or airbox;
 - camera: fit all, fit selected, orthographic/perspective, saved views;
 - selection tools: pick, box select, isolate, clear;
 - diagnostics: render stats, resource counts, capture snapshot.
@@ -100,7 +101,16 @@ Command execution must preserve user intent and resolved reality:
 
 Commands that mutate server state must return or lead to command completion resources. Local-only commands such as panel toggles may return immediately.
 
-## 8. Tests
+## 8. Per Selected Object Controls
+
+The View tab includes a `Per selected object` group. Those controls are enabled when the kernel selection resolves to a visualization target:
+
+- `object:<object_id>` for a scene object or its `Visualization` child;
+- `airbox` for the airbox visualization node or airbox mesh part selection.
+
+Changing a selected-target control updates the same visualization registry used by the inspector and viewport. The ribbon is therefore not a second display-state store. When selection changes, the ribbon re-reads the active target and updates checked states, render mode, opacity, and badges from the registry.
+
+## 9. Tests
 
 Required tests:
 
@@ -109,3 +119,4 @@ Required tests:
 - same command can run from menu, ribbon, shortcut, and palette;
 - disabled command exposes a reason;
 - runtime command path handles accepted, rejected, completed, failed.
+- selected-target ribbon controls reflect the same object/airbox visualization target as the inspector.

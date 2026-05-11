@@ -18,6 +18,15 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves object and airbox visualization selections to the visualization panel", () => {
+    expect(resolveInspectorPanel({ kind: "object.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+  });
+
   it("returns null when there is no selection kind", () => {
     expect(resolveInspectorPanel({ kind: null })).toBeNull();
   });

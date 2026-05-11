@@ -71,6 +71,7 @@ export interface Viewport3DRenderModel {
   status: ResourceStatus;
   sampling: SamplingConfig;
   quantity: QuantityDisplayConfig;
+  targetVisualization: VisualizationTargetDisplayState[];
 }
 ```
 
@@ -130,15 +131,17 @@ Disposal rules:
 
 | Layer | Update trigger |
 |---|---|
-| object mesh | topology revision, displayed object/part set, display style |
+| object mesh | topology revision, displayed object/part set, per-object display style |
 | scalar field | field revision, quantity/component, color range, compatible topology |
-| vector glyphs | vector field revision, density, vector scope, glyph style |
-| wireframe | topology revision or wireframe visibility |
+| vector glyphs | vector field revision, density, vector scope, per-object glyph visibility/style |
+| wireframe | topology revision or per-object wireframe visibility |
 | airbox | mesh/manifest revision or airbox visualization state |
 | axes/grid/bounds | camera/domain setting |
 | selection | kernel selection change |
 
 Layers may share render-model inputs, but one layer cannot own another layer's disposal.
+
+Object and airbox layers resolve display settings through the target visualization registry. A target can independently enable/disable shader surface, wireframe, points, vector glyphs, visibility, and opacity. The renderer applies those settings per manifest object/part where the backend supplies object/part mapping; otherwise it falls back to the domain-level target and marks the display as degraded.
 
 ## 8. Picking
 
@@ -173,4 +176,4 @@ Required verification:
 - context loss recovery rebuilds without stale resource ownership;
 - memory stress switches 3D/2D and quantities repeatedly with bounded growth;
 - API hygiene proves no module-level fetch or raw `/v2/...` strings.
-
+- per-object visualization changes update only affected layer style/field buffers and do not rebuild topology for unaffected objects.

@@ -1209,6 +1209,70 @@ async fn domain_meta_returns_json_with_session() {
 }
 
 #[tokio::test]
+async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 3, 2],
+                "cell_size": [2.0e-9, 3.0e-9, 4.0e-9]
+            }
+        }));
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [4, 3, 2],
+                fem_mesh: None,
+                magnetization: None,
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["discretization"], "fdm");
+    assert_eq!(json["grid"]["shape"], serde_json::json!([4, 3, 2]));
+    assert_eq!(
+        json["grid"]["spacing"],
+        serde_json::json!([2.0e-9, 3.0e-9, 4.0e-9])
+    );
+    assert_eq!(
+        json["bounds"]["max"],
+        serde_json::json!([8.0e-9, 9.0e-9, 8.0e-9])
+    );
+}
+
+#[tokio::test]
 async fn domain_topology_returns_204_for_fdm() {
     // With no FEM mesh, the FDM path returns 204 No Content.
     let app = test_router_with_session().await;

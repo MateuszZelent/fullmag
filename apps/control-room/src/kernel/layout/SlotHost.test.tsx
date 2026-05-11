@@ -13,6 +13,8 @@ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBrid
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
+import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
 
 import { SlotHost } from "./SlotHost";
 
@@ -33,6 +35,7 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     layout: new LayoutController(bus),
+    visualization: new ObjectVisualizationController(),
   };
 }
 
@@ -66,6 +69,21 @@ describe("SlotHost", () => {
     );
 
     expect(html).toContain("data-slot-id=\"panel-left\"");
+    expect(html).toContain("Loading");
+    expect(html).not.toContain("No module mounted");
+  });
+
+  it("auto-discovers the registered 3D viewport module for viewport-main", () => {
+    const kernel = makeKernel();
+    kernel.modules.register(viewport3dManifest);
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SlotHost slotId="viewport-main" />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("data-slot-id=\"viewport-main\"");
     expect(html).toContain("Loading");
     expect(html).not.toContain("No module mounted");
   });

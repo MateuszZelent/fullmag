@@ -1,0 +1,95 @@
+"use client";
+
+import { useSyncExternalStore } from "react";
+
+export interface Viewport3DCameraState {
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
+export interface Viewport3DCommandState {
+  camera: Viewport3DCameraState;
+  fitRevision: number;
+  resetCameraRevision: number;
+}
+
+type Viewport3DListener = () => void;
+
+class Viewport3DStore {
+  private snapshot: Viewport3DCommandState = {
+    camera: {
+      position: [2, 1.4, 2],
+      target: [0, 0, 0],
+    },
+    fitRevision: 0,
+    resetCameraRevision: 0,
+  };
+  private readonly listeners = new Set<Viewport3DListener>();
+
+  getSnapshot(): Viewport3DCommandState {
+    return this.snapshot;
+  }
+
+  requestFit(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      fitRevision: this.snapshot.fitRevision + 1,
+    };
+    this.notify();
+  }
+
+  resetCamera(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      camera: {
+        position: [2, 1.4, 2],
+        target: [0, 0, 0],
+      },
+      resetCameraRevision: this.snapshot.resetCameraRevision + 1,
+    };
+    this.notify();
+  }
+
+  setCamera(camera: Viewport3DCameraState): void {
+    if (
+      sameVector(this.snapshot.camera.position, camera.position) &&
+      sameVector(this.snapshot.camera.target, camera.target)
+    ) {
+      return;
+    }
+
+    this.snapshot = {
+      ...this.snapshot,
+      camera,
+    };
+    this.notify();
+  }
+
+  subscribe(listener: Viewport3DListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+}
+
+export const viewport3dStore = new Viewport3DStore();
+
+export function useViewport3DCommandState(): Viewport3DCommandState {
+  return useSyncExternalStore(
+    (onStoreChange) => viewport3dStore.subscribe(onStoreChange),
+    () => viewport3dStore.getSnapshot(),
+    () => viewport3dStore.getSnapshot(),
+  );
+}
+
+function sameVector(
+  left: [number, number, number],
+  right: [number, number, number],
+): boolean {
+  return left.every((value, index) => value === right[index]);
+}

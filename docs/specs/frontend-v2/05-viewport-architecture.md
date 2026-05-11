@@ -54,6 +54,7 @@ The renderer receives render models, not API payloads.
 | pointer hover | viewport module store or local ref |
 | selected object | kernel selection store |
 | layer visibility | visualization resource for canonical state, local store for transient panels |
+| per-object display overrides | visualization resource/controller keyed by canonical object or airbox target |
 | perf counters | diagnostics controller |
 
 ## 5. Rendering Budget
@@ -70,6 +71,8 @@ Idle means no continuous rendering. Frames are allowed for:
 - context-loss recovery.
 
 Status ticks, scalar chart updates, logs, tree expansion, and unrelated inspector drafts must not mark the 3D viewport dirty.
+
+Per-object visualization edits are a valid dirty reason only for the affected render target. Toggling one ferromagnet's shader, vectors, wireframe, points, opacity, or airbox display must not rebuild unrelated topology or refetch unrelated fields. The same target registry is consumed by the View ribbon, explorer visualization nodes, inspector panels, and viewport render-model builders.
 
 ## 6. Teardown Budget
 
@@ -93,5 +96,6 @@ The diagnostics module must expose resource counts in development mode.
 
 - 3D viewport internals: `14-viewport-3d-module.md`
 - 2D viewport internals: `15-viewport-2d-module.md`
+- per-object visualization control: `23-per-object-visualization-control.md`
 - Charts and analysis: `16-charts-analysis-module.md`
 - Performance and profiling: `17-performance-memory-profiler.md`

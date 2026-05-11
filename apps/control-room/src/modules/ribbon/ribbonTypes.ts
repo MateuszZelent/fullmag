@@ -55,6 +55,7 @@ export type RibbonMenuNode =
       icon?: ReactNode;
       shortcut?: string;
       disabled?: boolean;
+      onSelect?: () => void;
     }
   | {
       type: "checkbox";
@@ -62,6 +63,7 @@ export type RibbonMenuNode =
       label: string;
       checked: boolean;
       disabled?: boolean;
+      onCheckedChange?: (checked: boolean) => void;
     }
   | {
       type: "radio-group";
@@ -74,6 +76,7 @@ export type RibbonMenuNode =
         disabled?: boolean;
       }>;
       disabled?: boolean;
+      onValueChange?: (value: string) => void;
     }
   | {
       type: "status";
@@ -99,6 +102,7 @@ export type RibbonMenuNode =
       step: number;
       unit?: string;
       disabled?: boolean;
+      onValueChange?: (value: number) => void;
     }
   | {
       type: "color";

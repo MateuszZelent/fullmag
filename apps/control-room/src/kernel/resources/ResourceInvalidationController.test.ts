@@ -24,4 +24,20 @@ describe("ResourceInvalidationController", () => {
       revision: 3,
     });
   });
+
+  it("invalidates subscribed child resources by prefix", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const controller = new ResourceInvalidationController(bus);
+    const fieldListener = vi.fn();
+    const scalarListener = vi.fn();
+
+    controller.subscribe("data:fields:m:full", fieldListener);
+    controller.subscribe("data:scalars", scalarListener);
+
+    controller.invalidatePrefix("data:fields", 7);
+
+    expect(fieldListener).toHaveBeenCalledWith(7);
+    expect(scalarListener).not.toHaveBeenCalled();
+    expect(controller.getRevision("data:fields:m:full")).toBe(7);
+  });
 });

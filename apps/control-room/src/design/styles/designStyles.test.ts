@@ -28,6 +28,7 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/ribbon.css";',
         '@import "../src/design/styles/explorer.css";',
         '@import "../src/design/styles/inspector.css";',
+        '@import "../src/design/styles/viewport-3d.css";',
         '@import "../src/design/styles/command-palette.css";',
       ].join("\n"),
     );

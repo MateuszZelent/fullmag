@@ -607,6 +607,7 @@ fn live_magnetization_values(
     path = "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
     params(
         ("quantity_id" = String, Path, description = "Quantity identifier"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous field-vector response"),
         FieldVectorQuery,
     ),
     responses(

@@ -11,6 +11,7 @@ import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
+import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 
 export type SlotId =
   | "app-menu"
@@ -59,5 +60,6 @@ export interface KernelApi {
   readonly realtime: RealtimeInvalidationBridge;
   readonly resources: ResourceInvalidationController;
   readonly selection: SelectionController;
+  readonly visualization: ObjectVisualizationController;
   readonly layout: LayoutController;
 }

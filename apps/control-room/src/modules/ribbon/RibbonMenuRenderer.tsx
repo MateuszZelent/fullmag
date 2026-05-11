@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import {
   DropdownMenuCheckboxItem,
@@ -37,7 +43,11 @@ function renderNode(node: RibbonMenuNode): ReactNode {
 
     case "item":
       return (
-        <DropdownMenuItem key={node.id} disabled={node.disabled}>
+        <DropdownMenuItem
+          key={node.id}
+          disabled={node.disabled}
+          onSelect={node.onSelect}
+        >
           {node.icon}
           <span>{node.label}</span>
           {node.shortcut ? (
@@ -52,7 +62,7 @@ function renderNode(node: RibbonMenuNode): ReactNode {
           key={node.id}
           checked={node.checked}
           disabled={node.disabled}
-          onCheckedChange={() => undefined}
+          onCheckedChange={(checked) => node.onCheckedChange?.(Boolean(checked))}
           onSelect={(event) => event.preventDefault()}
         >
           {node.label}
@@ -65,7 +75,7 @@ function renderNode(node: RibbonMenuNode): ReactNode {
           {node.label ? <DropdownMenuLabel>{node.label}</DropdownMenuLabel> : null}
           <DropdownMenuRadioGroup
             value={node.value}
-            onValueChange={() => undefined}
+            onValueChange={(value) => node.onValueChange?.(value)}
           >
             {node.items.map((item) => (
               <DropdownMenuRadioItem
@@ -105,7 +115,7 @@ function renderNode(node: RibbonMenuNode): ReactNode {
       );
 
     case "slider":
-      return <SliderMenuItem key={node.id} node={node} />;
+      return <SliderMenuItem key={`${node.id}:${node.value}`} node={node} />;
 
     case "color":
       return <ColorMenuItem key={node.id} node={node} />;
@@ -140,7 +150,11 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
         value={val}
         disabled={node.disabled}
         style={{ "--pct": `${pct}%` } as CSSProperties}
-        onChange={(e) => setVal(Number(e.target.value))}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          setVal(next);
+          node.onValueChange?.(next);
+        }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       />

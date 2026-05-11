@@ -11,6 +11,7 @@ import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidati
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 
 import { selectExplorerNode } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
@@ -31,6 +32,7 @@ function makeKernel(): KernelApi {
     realtime: new RealtimeInvalidationBridge(resources),
     resources,
     selection: new SelectionController(bus),
+    visualization: new ObjectVisualizationController(),
   };
 }
 

@@ -52,6 +52,16 @@ import {
 } from "lucide-react";
 import { createElement } from "react";
 
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  displayLabelForVisualizationTarget,
+  renderModePatch,
+  resolveVisualizationTargetFromSelection,
+  type ObjectVisualizationController,
+  type ObjectVisualizationSnapshot,
+  type VisualizationRenderMode,
+} from "@/kernel/visualization/ObjectVisualizationController";
+
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
 
 const I = 20; // icon size
@@ -197,6 +207,16 @@ const MESH_RENDER_ITEMS = [
   { value: "surface+edges",  label: "Shaded + wireframe" },
   { value: "wireframe",      label: "Wireframe" },
   { value: "points",         label: "Points (nodes)" },
+];
+
+const SELECTED_RENDER_ITEMS: Array<{
+  label: string;
+  value: VisualizationRenderMode;
+}> = [
+  { value: "surface",       label: "Shaded" },
+  { value: "surface+edges", label: "Shaded + wireframe" },
+  { value: "wireframe",     label: "Wireframe" },
+  { value: "points",        label: "Points" },
 ];
 
 const AIRBOX_EXTENT_ITEMS = [
@@ -1284,6 +1304,12 @@ export const automationTab: RibbonTabContent = {
   ],
 };
 
+export interface RibbonBuildContext {
+  selection: Selection;
+  visualization: ObjectVisualizationController;
+  visualizationSnapshot: ObjectVisualizationSnapshot;
+}
+
 /** All tab content, indexed by tabId for O(1) lookup. */
 export const ALL_TAB_CONTENT: Record<string, RibbonTabContent> = {
   home: homeTab,
@@ -1297,3 +1323,211 @@ export const ALL_TAB_CONTENT: Record<string, RibbonTabContent> = {
   results: resultsTab,
   automation: automationTab,
 };
+
+export function buildRibbonTabContent(
+  tabId: string,
+  context?: RibbonBuildContext,
+): RibbonTabContent | undefined {
+  const content = ALL_TAB_CONTENT[tabId];
+  if (!content) return undefined;
+  if (tabId !== "view" || !context) return content;
+
+  return {
+    ...content,
+    groups: content.groups.map((group) =>
+      group.id === "view-selected-display"
+        ? buildSelectedVisualizationGroup(context)
+        : group,
+    ),
+  };
+}
+
+function buildSelectedVisualizationGroup({
+  selection,
+  visualization,
+  visualizationSnapshot,
+}: RibbonBuildContext): RibbonTabContent["groups"][number] {
+  const target = resolveVisualizationTargetFromSelection(selection);
+  const settings = target ? visualization.getSettings(target) : null;
+  const enabled = Boolean(target && settings);
+  const targetLabel = target
+    ? displayLabelForVisualizationTarget(target)
+    : "No selection";
+  const targetBadge = target?.kind ?? "none";
+  const revision = visualizationSnapshot.version;
+  const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
+    if (!target) return;
+    visualization.patchTarget(target, patchValue);
+  };
+
+  return {
+    id: "view-selected-display",
+    title: "Selected Display",
+    subtitle: "Per object",
+    tone: "selection",
+    actions: [
+      {
+        id: "view-selected-texture",
+        icon: icon(Sparkles),
+        label: "Texture",
+        iconColor: "text-teal-300",
+        disabled: !enabled,
+        menu: [
+          {
+            type: "label",
+            id: "selected-texture:header",
+            label: "Selected texture",
+            badge: targetBadge,
+          },
+          {
+            type: "status",
+            id: "selected-texture:state",
+            label: "Target",
+            value: targetLabel,
+          },
+          {
+            type: "checkbox",
+            id: "selected-texture:visible",
+            label: "Shader on/off",
+            checked: settings?.shaderVisible ?? false,
+            disabled: !enabled,
+            onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+          },
+          {
+            type: "checkbox",
+            id: "selected-texture:vectors",
+            label: "Vectors on/off",
+            checked: settings?.vectorsVisible ?? false,
+            disabled: !enabled,
+            onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
+          },
+        ],
+      },
+      {
+        id: "view-selected-render",
+        icon: icon(BoxSelect),
+        label: "Render",
+        iconColor: "text-amber-300",
+        disabled: !enabled,
+        menu: [
+          {
+            type: "label",
+            id: "selected:header",
+            label: "Selected object",
+            badge: targetBadge,
+          },
+          {
+            type: "status",
+            id: "selected:state",
+            label: "Target",
+            value: `${targetLabel} r${revision}`,
+            tone: enabled ? "success" : "warning",
+          },
+          {
+            type: "checkbox",
+            id: "selected:visible",
+            label: "Target visible",
+            checked: settings?.visible ?? false,
+            disabled: !enabled,
+            onCheckedChange: (checked) => patch({ visible: checked }),
+          },
+          {
+            type: "radio-group",
+            id: "selected:render-mode",
+            label: "Render mode",
+            value: settings?.renderMode ?? "surface",
+            disabled: !enabled,
+            items: SELECTED_RENDER_ITEMS,
+            onValueChange: (value) =>
+              patch(renderModePatch(value as VisualizationRenderMode)),
+          },
+          {
+            type: "checkbox",
+            id: "selected:wireframe",
+            label: "Wireframe on/off",
+            checked: settings?.wireframeVisible ?? false,
+            disabled: !enabled,
+            onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+          },
+          {
+            type: "checkbox",
+            id: "selected:points",
+            label: "Points on/off",
+            checked: settings?.pointsVisible ?? false,
+            disabled: !enabled,
+            onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+          },
+          {
+            type: "item",
+            id: "selected:clear",
+            label: "Clear per-object overrides",
+            disabled: !enabled,
+            onSelect: () => {
+              if (target) visualization.clearTarget(target);
+            },
+          },
+        ],
+      },
+      {
+        id: "view-selected-clip",
+        icon: icon(Scissors),
+        label: "Clip",
+        iconColor: "text-orange-300",
+        disabled: true,
+        menu: [
+          { type: "label",  id: "selected-clip:header",  label: "Selected clip", badge: "planned" },
+          { type: "status", id: "selected-clip:runtime", label: "Runtime",       value: "Runtime supports one active clip axis", tone: "warning" },
+        ],
+      },
+      {
+        id: "view-selected-opacity",
+        icon: icon(Blend),
+        label: "Opacity",
+        iconColor: "text-lime-300",
+        disabled: !enabled,
+        menu: [
+          {
+            type: "slider",
+            id: "selected-opacity:slider",
+            label: "Opacity",
+            value: settings?.opacityPercent ?? 100,
+            min: 0,
+            max: 100,
+            step: 1,
+            unit: "%",
+            disabled: !enabled,
+            onValueChange: (value) => patch({ opacityPercent: value }),
+          },
+          {
+            type: "item",
+            id: "selected-opacity:100",
+            label: "100%",
+            disabled: !enabled,
+            onSelect: () => patch({ opacityPercent: 100 }),
+          },
+          {
+            type: "item",
+            id: "selected-opacity:70",
+            label: "70%",
+            disabled: !enabled,
+            onSelect: () => patch({ opacityPercent: 70 }),
+          },
+          {
+            type: "item",
+            id: "selected-opacity:35",
+            label: "35%",
+            disabled: !enabled,
+            onSelect: () => patch({ opacityPercent: 35 }),
+          },
+          {
+            type: "item",
+            id: "selected-opacity:15",
+            label: "Ghost 15%",
+            disabled: !enabled,
+            onSelect: () => patch({ opacityPercent: 15 }),
+          },
+        ],
+      },
+    ],
+  };
+}

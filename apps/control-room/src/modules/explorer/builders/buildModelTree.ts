@@ -69,6 +69,17 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         status: object.meshStatus ?? "ready",
       },
       {
+        id: `${parentId}:visualization`,
+        kind: "object.visualization",
+        label: "Visualization",
+        parentId,
+        badge: "display",
+        icon: "sparkles",
+        objectId,
+        status: "ready",
+        contextCommands: ["workspace.focus-selection"],
+      },
+      {
         id: `${parentId}:initial-state`,
         kind: "object.initial_state",
         label: "Initial State",
@@ -126,6 +137,18 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
           badge: formatSize(universe.size),
           icon: "shield",
           status: "ready",
+          children: [
+            {
+              id: "model:airbox:visualization",
+              kind: "airbox.visualization",
+              label: "Airbox Visualization",
+              parentId: "model:universe",
+              badge: "display",
+              icon: "sparkles",
+              status: "ready",
+              contextCommands: ["workspace.focus-selection"],
+            },
+          ],
         },
         {
           id: "model:objects",

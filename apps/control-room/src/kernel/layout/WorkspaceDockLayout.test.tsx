@@ -12,6 +12,7 @@ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBrid
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
+import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 
 import { LayoutController } from "./LayoutController";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
@@ -29,6 +30,7 @@ function makeKernel(): KernelApi {
     realtime: new RealtimeInvalidationBridge(resources),
     resources,
     selection: new SelectionController(bus),
+    visualization: new ObjectVisualizationController(),
   };
 }
 

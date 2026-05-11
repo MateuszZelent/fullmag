@@ -48,6 +48,7 @@ The 2D module consumes slice/profile resources:
 - axis or plane definition;
 - sample resolution/budget;
 - scope: full domain, selected object, mesh part, region;
+- target visualization overrides for object and airbox display in the current 2D mode;
 - revision pointers;
 - value range and units.
 
@@ -103,3 +104,4 @@ Required tests:
 - probe emits canonical selection/probe event;
 - unsupported capability shows direct explanation;
 - unmount disposes chart/canvas resources and observers.
+- 2D layer controls use the same target ids as 3D object/airbox visualization instead of inventing a parallel 2D-only store.

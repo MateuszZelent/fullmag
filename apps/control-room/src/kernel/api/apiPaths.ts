@@ -15,6 +15,46 @@ export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );
 
+export const DATA_DOMAIN_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/domain/meta",
+);
+
+export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/domain/topology",
+);
+
+export const DATA_FIELD_VECTOR_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
+);
+
+export const MESHING_SHARED_DOMAIN_MANIFEST_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+);
+
+export const MESHING_SHARED_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+);
+
+export const MESHING_OBJECT_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
+);
+
+export const MESHING_PART_TOPOLOGY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
+);
+
+export const MODEL_UNIVERSE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/universe",
+);
+
+export const MODEL_SCENE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/scene",
+);
+
+export const VISUALIZATION_STATE_PATH = openApiV2Path(
+  "/v2/sessions/current/visualization/state",
+);
+
 export const SIMULATION_COMMANDS_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands",
 );

@@ -19,6 +19,7 @@ This plan is the implementation authority for Phase 5. The earlier split/multi-p
 8. Topology revisions and field revisions are separate. A field or quantity change updates field/color/glyph buffers only; it does not rebuild geometry.
 9. FDM and FEM use one render model, but their adapters are allowed to differ for topology, field location, object/part/airbox mapping, units, scope, and LOD.
 10. Field-value probe readout is deferred until a backend probe/hit-test contract exists. Phase 5 picking emits object/part/face hit metadata and kernel selection.
+11. Per-object visualization is not a separate viewport mode. Object, mesh-part fallback, and airbox display overrides use the frontend-v2 target visualization registry and must be visible from the View ribbon, explorer `Visualization` nodes, inspector panels, and 3D render layers.
 
 ## 2. Architecture Target
 
@@ -154,6 +155,16 @@ Element and boundary markers may be used as topology attributes, but not as the 
 
 Airbox is not a `SceneObject`. It is represented by mesh parts with `role="air"`, visualization airbox layer state, `scope_kind=airbox`, and universe config. The render model must keep magnetic objects and airbox render data separate.
 
+### Per-object display overrides
+
+Every renderable object target resolves display settings from the target visualization registry:
+
+- scene objects use `object:<object_id>`;
+- airbox uses `airbox`;
+- mesh parts without an object id may use `part:<part_id>` as a degraded fallback.
+
+The settings cover visibility, shader surface, wireframe, points, vectors, opacity percent, and render-mode summary. The registry is a temporary frontend controller until `/v2/sessions/current/visualization/state` exposes per-target fields; it stores only display preferences and never topology, fields, scene documents, or runtime resources.
+
 ### Picking
 
 Phase 5 picking resolves:
@@ -258,6 +269,7 @@ Deliverables:
 4. Implement camera controls and fit/reset commands through the command registry.
 5. Add resource tracker/diagnostics for Three.js/R3F resources.
 6. Add idle render audit for zero frames after settling.
+7. Apply target visualization overrides independently for scene objects, part fallbacks, and airbox without rebuilding topology for style-only changes.
 
 Gate: all Phase 5a commands plus R3F layer tests and idle audit.
 
@@ -312,3 +324,4 @@ Phase 5 is complete only when:
 8. Idle viewport renders zero frames after settling.
 9. Repeated quantity and 3D/2D switches have bounded resource growth.
 10. All `apps/control-room` gates pass.
+11. Explorer, inspector, View ribbon, and 3D viewport use the same per-object/airbox visualization target registry.

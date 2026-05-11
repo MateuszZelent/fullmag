@@ -1,18 +1,44 @@
 import {
   API_CONTRACT_VERSION_HEADER,
+  DATA_DOMAIN_META_PATH,
+  DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
+  MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PART_TOPOLOGY_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
+  MODEL_SCENE_PATH,
+  MODEL_UNIVERSE_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
+  VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
 import type {
+  BinaryRequestOptions,
+  BinaryResourceResult,
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
+  DomainMetaResource,
+  FieldVectorQuery,
   LiveStatusResource,
+  MeshSharedDomainManifestResource,
   RequestOptions,
+  SceneResource,
   StructuredCommandRequest,
+  UniversePatchRequest,
+  UniverseResource,
+  VisualizationStatePatch,
+  VisualizationStateResource,
 } from "./apiTypes";
+import {
+  decodeFieldVector,
+  decodeTopology,
+  type DecodedFieldVector,
+  type DecodedTopology,
+} from "./codecs";
 import {
   createOpenApiV2Transport,
   type OpenApiV2Transport,
@@ -21,6 +47,8 @@ import type { OpenApiV2Path } from "./generated/openapi-v2-paths";
 import type { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
 type FetchLike = typeof fetch;
+type PathParams = Record<string, string | number>;
+type QueryParams = Record<string, unknown>;
 
 interface ControlRoomApiOptions {
   baseUrl?: string;
@@ -75,6 +103,86 @@ export class ControlRoomApi {
       ),
   };
 
+  readonly data = {
+    domain: {
+      meta: (options?: RequestOptions) =>
+        this.requestJson<DomainMetaResource>(DATA_DOMAIN_META_PATH, options),
+      topology: (options?: BinaryRequestOptions) =>
+        this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),
+    },
+    fields: {
+      vector: (
+        quantityId: string,
+        query: FieldVectorQuery = {},
+        options?: BinaryRequestOptions,
+      ) =>
+        this.requestFieldVector(
+          DATA_FIELD_VECTOR_PATH,
+          { quantity_id: quantityId },
+          query,
+          options,
+        ),
+    },
+  };
+
+  readonly meshing = {
+    objectTopology: (objectId: string, options?: BinaryRequestOptions) =>
+      this.requestTopology(
+        MESHING_OBJECT_TOPOLOGY_PATH,
+        options,
+        { object_id: objectId },
+      ),
+    partTopology: (partId: string, options?: BinaryRequestOptions) =>
+      this.requestTopology(
+        MESHING_PART_TOPOLOGY_PATH,
+        options,
+        { part_id: partId },
+      ),
+    sharedDomain: {
+      manifest: (options?: RequestOptions) =>
+        this.requestOptionalJson<MeshSharedDomainManifestResource>(
+          MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+          options,
+        ),
+      topology: (options?: BinaryRequestOptions) =>
+        this.requestTopology(MESHING_SHARED_DOMAIN_TOPOLOGY_PATH, options),
+    },
+    sharedDomainManifest: (options?: RequestOptions) =>
+      this.requestOptionalJson<MeshSharedDomainManifestResource>(
+        MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+        options,
+      ),
+    sharedDomainTopology: (options?: BinaryRequestOptions) =>
+      this.requestTopology(MESHING_SHARED_DOMAIN_TOPOLOGY_PATH, options),
+  };
+
+  readonly model = {
+    scene: (options?: RequestOptions) =>
+      this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    universe: (options?: RequestOptions) =>
+      this.requestJson<UniverseResource>(MODEL_UNIVERSE_PATH, options),
+    updateUniverse: (patch: UniversePatchRequest, options?: RequestOptions) =>
+      this.patchJson<UniverseResource, UniversePatchRequest>(
+        MODEL_UNIVERSE_PATH,
+        patch,
+        options,
+      ),
+  };
+
+  readonly visualization = {
+    patch: (patch: VisualizationStatePatch, options?: RequestOptions) =>
+      this.patchJson<VisualizationStateResource, VisualizationStatePatch>(
+        VISUALIZATION_STATE_PATH,
+        patch,
+        options,
+      ),
+    state: (options?: RequestOptions) =>
+      this.requestJson<VisualizationStateResource>(
+        VISUALIZATION_STATE_PATH,
+        options,
+      ),
+  };
+
   constructor({
     baseUrl,
     diagnostics,
@@ -110,6 +218,24 @@ export class ControlRoomApi {
     return readOpenApiResult<T>(result);
   }
 
+  private async requestOptionalJson<T>(
+    path: OpenApiV2Path,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<T | null> {
+    const result = await this.transport.GET(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+
+    if (result.response?.status === 204) {
+      return null;
+    }
+
+    return readOpenApiResult<T>(result);
+  }
+
   private async postJson<TResponse, TBody>(
     path: OpenApiV2Path,
     body: TBody,
@@ -121,6 +247,89 @@ export class ControlRoomApi {
       signal: options.signal,
     } as never);
     return readOpenApiResult<TResponse>(result);
+  }
+
+  private async patchJson<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+  ): Promise<TResponse> {
+    const result = await this.transport.PATCH(path as never, {
+      body,
+      cache: "no-store",
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private requestTopology(
+    path: OpenApiV2Path,
+    options: BinaryRequestOptions = {},
+    pathParams?: PathParams,
+  ): Promise<BinaryResourceResult<DecodedTopology>> {
+    return this.requestBinaryResource(path, decodeTopology, options, pathParams);
+  }
+
+  private requestFieldVector(
+    path: OpenApiV2Path,
+    pathParams: PathParams,
+    query: FieldVectorQuery,
+    options: BinaryRequestOptions = {},
+  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+    return this.requestBinaryResource(
+      path,
+      decodeFieldVector,
+      options,
+      pathParams,
+      query,
+    );
+  }
+
+  private async requestBinaryResource<TData>(
+    path: OpenApiV2Path,
+    decode: (buffer: ArrayBuffer) => TData,
+    options: BinaryRequestOptions = {},
+    pathParams?: PathParams,
+    query?: QueryParams,
+  ): Promise<BinaryResourceResult<TData>> {
+    const headers = new Headers();
+    if (options.etag) {
+      headers.set("if-none-match", options.etag);
+    }
+
+    const response = await this.executeFetchRequest(
+      buildApiUrl(this.baseUrl, path, pathParams, query),
+      "GET",
+      {
+        headers,
+        signal: options.signal,
+      },
+      new Set([204, 304]),
+    );
+    const etag = response.headers.get("etag");
+
+    if (response.status === 304) {
+      return { etag, status: "not-modified" };
+    }
+
+    if (response.status === 204) {
+      return { etag, status: "not-applicable" };
+    }
+
+    if (!response.ok) {
+      throw new ControlRoomApiError(
+        await formatResponseError(response),
+        response.status,
+      );
+    }
+
+    const buffer = await response.arrayBuffer();
+    return {
+      byteLength: buffer.byteLength,
+      data: decode(buffer),
+      etag,
+      status: "ready",
+    };
   }
 
   private async executeOpenApiFetch(
@@ -135,6 +344,7 @@ export class ControlRoomApi {
     url: string,
     method: string,
     init: RequestInit,
+    acceptedStatuses = new Set<number>(),
   ): Promise<Response> {
     const headers = new Headers(init.headers);
     const requestId = this.requestIdFactory();
@@ -159,10 +369,13 @@ export class ControlRoomApi {
         }
 
         const contractVersionError = resolveContractVersionError(response);
+        const accepted =
+          (response.ok || acceptedStatuses.has(response.status)) &&
+          !contractVersionError;
         this.diagnostics?.record({
           durationMs: Date.now() - started,
           method,
-          outcome: response.ok && !contractVersionError ? "ok" : "error",
+          outcome: accepted ? "ok" : "error",
           path,
           requestId,
           status: response.status,
@@ -261,6 +474,36 @@ function pathFromUrl(url: string): string {
   }
 }
 
+function buildApiUrl(
+  baseUrl: string,
+  path: OpenApiV2Path,
+  pathParams: PathParams = {},
+  query: QueryParams = {},
+): string {
+  let resolvedPath = path as string;
+  for (const [name, value] of Object.entries(pathParams)) {
+    resolvedPath = resolvedPath.replace(
+      `{${name}}`,
+      encodeURIComponent(String(value)),
+    );
+  }
+
+  if (resolvedPath.includes("{")) {
+    throw new ControlRoomApiError(
+      `Missing path parameter for ${resolvedPath}`,
+      0,
+    );
+  }
+
+  const url = new URL(resolvedPath, `${baseUrl}/`);
+  for (const [name, value] of Object.entries(query)) {
+    if (value === null || value === undefined) continue;
+    url.searchParams.set(name, String(value));
+  }
+
+  return url.toString();
+}
+
 function resolveContractVersionError(response: Response): ControlRoomApiError | null {
   const actual = response.headers.get(API_CONTRACT_VERSION_HEADER);
   if (actual === EXPECTED_API_CONTRACT_VERSION) {
@@ -314,4 +557,17 @@ function formatOpenApiError(error: unknown): string {
   }
 
   return "Request failed";
+}
+
+async function formatResponseError(response: Response): Promise<string> {
+  const text = await response.text();
+  if (!text) {
+    return "Request failed";
+  }
+
+  try {
+    return formatOpenApiError(JSON.parse(text));
+  } catch {
+    return text;
+  }
 }

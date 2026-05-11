@@ -3,8 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
+import { buildRibbonTabContent } from "./ribbonContributions";
 import { resolveRibbonIconColor } from "./RibbonGroupsRow";
 import { RIBBON_TABS } from "./ribbonTypes";
+import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
 
 describe("ribbon structure", () => {
   it("defines visible content and dropdown structure for every ribbon tab", () => {
@@ -63,5 +65,35 @@ describe("ribbon structure", () => {
     expect(source).toContain("-webkit-line-clamp: 2");
     expect(source).toContain("overflow-wrap: anywhere");
     expect(source).toContain(".fm-ribbon-group::before");
+  });
+
+  it("enables selected display controls from the object visualization registry", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: "object.visualization",
+        label: "Free layer",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const renderAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-render",
+    );
+    const visibilityNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:visible",
+    );
+
+    expect(renderAction?.disabled).toBe(false);
+    expect(visibilityNode).toMatchObject({
+      checked: true,
+      disabled: false,
+    });
   });
 });

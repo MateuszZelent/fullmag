@@ -105,6 +105,7 @@ export class RealtimeInvalidationBridge {
         this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, change.revision);
         if (change.recommended_fetch) {
           this.resources.invalidate(change.recommended_fetch, change.revision);
+          this.resources.invalidatePrefix(change.recommended_fetch, change.revision);
         }
         handled = true;
       }

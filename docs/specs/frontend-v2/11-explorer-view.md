@@ -76,6 +76,8 @@ Context menus render command registry entries whose `scope` and `selection` gate
 Examples:
 
 - object: rename, duplicate, assign material, isolate, focus in viewport, mesh settings;
+- object visualization: focus visualization inspector, clear per-object display overrides, copy/paste display style;
+- airbox visualization: focus airbox display inspector, reset airbox display, apply current view defaults;
 - material: edit, duplicate, assign to selection, show references;
 - mesh build: open report, rebuild, export mesh;
 - field: set as viewport quantity, add chart if scalar-compatible, export;
@@ -113,3 +115,13 @@ The explorer must not rebuild the full tree on every status tick. It rebuilds wh
 - diagnostics tree from diagnostics/debug revisions.
 
 Tree model builders are pure functions with tests.
+
+## 9. Visualization Nodes
+
+Every scene object node has a `Visualization` child. The child selects the per-object visualization inspector and uses the same canonical target id as the View ribbon and viewport render model:
+
+- scene object target: `object:<object_id>`;
+- airbox target: `airbox`;
+- future 2D slice target: the same object or airbox id plus a 2D mode suffix when the 2D backend needs mode-specific state.
+
+The explorer does not own visibility or display style. It only exposes the node that lets the inspector focus the target-specific controls.

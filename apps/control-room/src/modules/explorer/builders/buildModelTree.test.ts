@@ -32,6 +32,8 @@ describe("buildModelTree", () => {
         "model:object:free-layer:geometry",
         "model:object:free-layer:material",
         "model:object:free-layer:mesh",
+        "model:object:free-layer:visualization",
+        "model:airbox:visualization",
       ]),
     );
     expect(

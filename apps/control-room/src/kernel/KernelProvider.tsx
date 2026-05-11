@@ -21,6 +21,7 @@ import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridg
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
+import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import { ALL_MODULES } from "@/modules";
 
 interface KernelProviderProps {
@@ -42,6 +43,7 @@ function createKernel(): KernelApi {
   const realtime = new RealtimeInvalidationBridge(resources);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+  const visualization = new ObjectVisualizationController();
 
   for (const cmd of SHELL_COMMANDS) {
     commands.register(cmd);
@@ -67,6 +69,7 @@ function createKernel(): KernelApi {
     realtime,
     resources,
     selection,
+    visualization,
   };
 }
 

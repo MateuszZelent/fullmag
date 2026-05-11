@@ -24,6 +24,8 @@ export interface InspectorPanelContribution {
 Examples:
 
 - `geometry-object-panel`;
+- `object-visualization-panel`;
+- `airbox-visualization-panel`;
 - `material-panel`;
 - `physics-interaction-panel`;
 - `universe-mesh-panel`;
@@ -54,6 +56,8 @@ sequenceDiagram
 ```
 
 Auto-apply is allowed only for safe display preferences. Physics, mesh, material, geometry, and study edits need explicit transaction semantics.
+
+Per-object visualization edits are safe display preferences. They may auto-apply to the visualization registry because they do not mutate physics, mesh, material, geometry, study, or field resources. The panel must still show whether a value is inherited, overridden, or reset to default.
 
 ## 4. Validation
 
@@ -91,6 +95,7 @@ inspector/
   registry.ts
   panels/
     GeometryObjectPanel.tsx
+    ObjectVisualizationPanel.tsx
     MaterialPanel.tsx
     PhysicsInteractionPanel.tsx
     ObjectMeshPanel.tsx
@@ -125,3 +130,4 @@ Required tests:
 - commit dispatches one semantic transaction;
 - failed commit keeps draft and displays server error;
 - successful commit refreshes from resource revision.
+- visualization panel edits update the same target registry observed by the View ribbon and viewport.

@@ -28,8 +28,23 @@ export class ResourceInvalidationController {
     }
   }
 
+  invalidatePrefix(
+    resourcePrefix: ResourceKey,
+    revision: ResourceRevision,
+  ): void {
+    for (const resourceKey of this.listeners.keys()) {
+      if (
+        resourceKey !== resourcePrefix &&
+        resourceKey.startsWith(resourcePrefix)
+      ) {
+        this.invalidate(resourceKey, revision);
+      }
+    }
+  }
+
   subscribe(resourceKey: ResourceKey, listener: ResourceListener): () => void {
-    const listeners = this.listeners.get(resourceKey) ?? new Set<ResourceListener>();
+    const listeners =
+      this.listeners.get(resourceKey) ?? new Set<ResourceListener>();
     listeners.add(listener);
     this.listeners.set(resourceKey, listeners);
 
