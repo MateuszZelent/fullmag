@@ -35,13 +35,18 @@
 
 ## Phase 2 - API Spine
 
-- [ ] Add OpenAPI v2 generation pipeline.
-- [ ] Port generated transport and API facade pattern.
-- [ ] Port request-id, retry, version, diagnostics interceptors.
-- [ ] Port binary codecs with tests.
-- [ ] Build base `useResource` hook and session status hook.
-- [ ] Build realtime invalidation bridge.
-- [ ] Verify no module direct fetch and no v1/live references.
+- [x] Add OpenAPI v2 generation pipeline.
+- [x] Port generated transport and API facade pattern.
+- [x] Port request-id, retry, version, diagnostics interceptors.
+- [x] Port binary codecs with tests.
+- [x] Build base `useResource` hook and session status hook.
+- [x] Build realtime invalidation bridge.
+- [x] Verify no module direct fetch and no v1/live references.
+
+Phase 2 local gate status on 2026-05-11:
+
+- `pnpm --dir apps/control-room generate:api`, `typecheck`, `lint`, `test`, and `check:api-hygiene` pass.
+- `pnpm --dir apps/control-room build` passes when run outside the restricted sandbox. Inside the sandbox, Turbopack/PostCSS still cannot create its helper process and fails with `Operation not permitted (os error 1)`.
 
 ## Phase 3 - Shell, Menu, Ribbon, Status, Visual Foundation
 

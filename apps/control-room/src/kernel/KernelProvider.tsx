@@ -1,14 +1,22 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
+import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
 import { ControlRoomApi } from "./api/ControlRoomApi";
+import {
+  resolveControlRoomApiBase,
+  resolveControlRoomWebSocketUrl,
+} from "./api/apiRuntimeTarget";
+import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import { CommandRegistry } from "./commands/CommandRegistry";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
 import { KernelContext } from "./KernelContext";
 import { LayoutController } from "./layout/LayoutController";
+import { SHELL_COMMANDS } from "./layout/shellCommands";
 import { ModuleRegistry } from "./module/ModuleRegistry";
+import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import { SelectionController } from "./selection/SelectionController";
@@ -21,7 +29,11 @@ interface KernelProviderProps {
 
 function createKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
-  const api = new ControlRoomApi();
+  const diagnostics = new RequestDiagnosticsController();
+  const api = new ControlRoomApi({
+    baseUrl: resolveControlRoomApiBase(),
+    diagnostics,
+  });
   const commands = new CommandRegistry();
   commands.attach(bus);
 
@@ -30,6 +42,10 @@ function createKernel(): KernelApi {
   const realtime = new RealtimeInvalidationBridge(resources);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
+
+  for (const cmd of SHELL_COMMANDS) {
+    commands.register(cmd);
+  }
 
   // Register modules and auto-register their contributed commands.
   for (const manifest of ALL_MODULES) {
@@ -41,13 +57,52 @@ function createKernel(): KernelApi {
     }
   }
 
-  return { api, bus, commands, modules, realtime, resources, selection, layout };
+  return {
+    api,
+    bus,
+    commands,
+    diagnostics,
+    layout,
+    modules,
+    realtime,
+    resources,
+    selection,
+  };
+}
+
+function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    if (typeof WebSocket === "undefined") {
+      return;
+    }
+
+    const url = resolveControlRoomWebSocketUrl(
+      kernel.api.getBaseUrl(),
+      SESSION_EVENTS_WS_PATH,
+      window.location.origin,
+    );
+    if (!url) {
+      return;
+    }
+
+    const client = new RealtimeClient({
+      bridge: kernel.realtime,
+      url,
+    });
+    client.connect();
+    return () => client.close();
+  }, [kernel]);
+
+  return null;
 }
 
 export function KernelProvider({ children }: KernelProviderProps) {
   const kernel = useMemo(() => createKernel(), []);
 
   return (
-    <KernelContext.Provider value={kernel}>{children}</KernelContext.Provider>
+    <KernelContext.Provider value={kernel}>
+      <RealtimeConnector kernel={kernel} />
+      {children}
+    </KernelContext.Provider>
   );
 }

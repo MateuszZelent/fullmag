@@ -1,16 +1,121 @@
 import type { ResourceRevision } from "../api/apiTypes";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
+const SESSION_STATUS_RESOURCE_KEY = "session:status";
+
 interface RealtimeResourceEvent {
   resource_key?: string;
   revision?: ResourceRevision;
   type: string;
 }
 
+interface RealtimeBatchChange {
+  recommended_fetch?: string;
+  revision: ResourceRevision;
+}
+
+interface RealtimeBatchChangedEvent {
+  payload?: {
+    changes?: unknown[];
+  };
+  type: string;
+}
+
+interface RealtimeResyncRequiredEvent {
+  payload?: {
+    replay_available_after_seq?: unknown;
+  };
+  type: string;
+}
+
+function isRealtimeResourceEvent(event: unknown): event is RealtimeResourceEvent {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+
+  const record = event as Record<string, unknown>;
+  return typeof record.type === "string";
+}
+
+function isRealtimeBatchChangedEvent(
+  event: unknown,
+): event is RealtimeBatchChangedEvent {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+
+  const record = event as Record<string, unknown>;
+  return record.type === "resource.batch_changed";
+}
+
+function isRealtimeResyncRequiredEvent(
+  event: unknown,
+): event is RealtimeResyncRequiredEvent {
+  if (!event || typeof event !== "object") {
+    return false;
+  }
+
+  const record = event as Record<string, unknown>;
+  return record.type === "resync.required";
+}
+
+function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
+  if (!change || typeof change !== "object") {
+    return null;
+  }
+
+  const record = change as Record<string, unknown>;
+  const revision = record.revision;
+  if (typeof revision !== "number" && typeof revision !== "string") {
+    return null;
+  }
+
+  return {
+    recommended_fetch:
+      typeof record.recommended_fetch === "string"
+        ? record.recommended_fetch
+        : undefined,
+    revision,
+  };
+}
+
 export class RealtimeInvalidationBridge {
   constructor(private readonly resources: ResourceInvalidationController) {}
 
-  handleEvent(event: RealtimeResourceEvent): boolean {
+  handleEvent(event: unknown): boolean {
+    if (isRealtimeResyncRequiredEvent(event)) {
+      const replayAfter = event.payload?.replay_available_after_seq;
+      this.resources.invalidate(
+        SESSION_STATUS_RESOURCE_KEY,
+        typeof replayAfter === "number" ? replayAfter : Date.now(),
+      );
+      return true;
+    }
+
+    if (isRealtimeBatchChangedEvent(event)) {
+      const changes = event.payload?.changes ?? [];
+      let handled = false;
+
+      for (const rawChange of changes) {
+        const change = realtimeBatchChange(rawChange);
+        if (!change) {
+          continue;
+        }
+
+        this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, change.revision);
+        if (change.recommended_fetch) {
+          this.resources.invalidate(change.recommended_fetch, change.revision);
+        }
+        handled = true;
+      }
+
+      return handled;
+    }
+
+    if (!isRealtimeResourceEvent(event)) {
+      return false;
+    }
+
     if (event.type !== "resource.updated") {
       return false;
     }

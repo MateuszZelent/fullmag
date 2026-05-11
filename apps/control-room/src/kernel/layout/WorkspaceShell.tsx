@@ -9,6 +9,9 @@ export function WorkspaceShell() {
       <SlotHost slotId="ribbon" />
       <WorkspaceDockLayout />
       <SlotHost slotId="status-bar" />
+      <div className="fm-workspace-overlay-host">
+        <SlotHost slotId="overlay" />
+      </div>
     </main>
   );
 }

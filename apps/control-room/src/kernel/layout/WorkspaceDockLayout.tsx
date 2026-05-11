@@ -2,7 +2,6 @@
 
 import { Fragment, useEffect, useState } from "react";
 
-import type { ModuleManifest } from "../types";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   moveWorkspaceColumn,
@@ -12,6 +11,7 @@ import {
   type WorkspaceColumnLayout,
 } from "./layoutModel";
 import { SlotHost } from "./SlotHost";
+import { useLayout } from "./useLayout";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -21,12 +21,10 @@ import { SortableItem, SortableList } from "@/shared/ui/Sortable";
 
 interface SortableWorkspaceColumnProps {
   column: WorkspaceColumnLayout;
-  moduleManifest: ModuleManifest | null;
 }
 
 function SortableWorkspaceColumn({
   column,
-  moduleManifest,
 }: SortableWorkspaceColumnProps) {
   return (
     <SortableItem id={column.slotId}>
@@ -41,7 +39,7 @@ function SortableWorkspaceColumn({
             <span>{column.label}</span>
             <span aria-hidden="true">::</span>
           </div>
-          <SlotHost slotId={column.slotId} moduleManifest={moduleManifest} />
+          <SlotHost slotId={column.slotId} />
         </div>
       )}
     </SortableItem>
@@ -49,6 +47,7 @@ function SortableWorkspaceColumn({
 }
 
 export function WorkspaceDockLayout() {
+  const { layout: kernelLayout } = useLayout();
   const [layout, setLayout] = useState(DEFAULT_WORKSPACE_LAYOUT);
   const [hasRestoredLayout, setHasRestoredLayout] = useState(false);
 
@@ -85,6 +84,45 @@ export function WorkspaceDockLayout() {
     );
   }
 
+  const visibleColumns = layout.columns.filter((column) => {
+    if (column.slotId === "panel-left") return kernelLayout.panelVisible.left;
+    if (column.slotId === "panel-right") return kernelLayout.panelVisible.right;
+    return true;
+  });
+
+  if (!hasRestoredLayout) {
+    return (
+      <div className="fm-workspace-body" data-dock-hydration-pending="true">
+        {kernelLayout.panelVisible.left ? (
+          <div className="fm-dock-column">
+            <div className="fm-dock-column__handle">
+              <span>Explorer</span>
+              <span aria-hidden="true">::</span>
+            </div>
+            <SlotHost slotId="panel-left" />
+          </div>
+        ) : null}
+        <div className="fm-dock-column">
+          <div className="fm-dock-column__handle">
+            <span>Viewport</span>
+            <span aria-hidden="true">::</span>
+          </div>
+          <SlotHost slotId="viewport-main" />
+        </div>
+        {kernelLayout.panelVisible.right ? (
+          <div className="fm-dock-column">
+            <div className="fm-dock-column__handle">
+              <span>Inspector</span>
+              <span aria-hidden="true">::</span>
+            </div>
+            <SlotHost slotId="panel-right" />
+          </div>
+        ) : null}
+        {kernelLayout.panelVisible.bottom ? <SlotHost slotId="panel-bottom" /> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="fm-workspace-body">
       <ResizablePanelGroup
@@ -94,14 +132,14 @@ export function WorkspaceDockLayout() {
         <ResizablePanel defaultSize={78} id="workspace-main" minSize={42}>
           <SortableList
             id="workspace-dock-columns"
-            items={layout.columns.map((column) => column.slotId)}
+            items={visibleColumns.map((column) => column.slotId)}
             onMove={handleMoveColumn}
           >
             <ResizablePanelGroup
               autoSaveId="fullmag-workspace-columns"
               direction="horizontal"
             >
-              {layout.columns.map((column, index) => (
+              {visibleColumns.map((column, index) => (
                 <Fragment key={column.slotId}>
                   <ResizablePanel
                     key={column.slotId}
@@ -111,10 +149,9 @@ export function WorkspaceDockLayout() {
                   >
                     <SortableWorkspaceColumn
                       column={column}
-                      moduleManifest={null}
                     />
                   </ResizablePanel>
-                  {index < layout.columns.length - 1 ? (
+                  {index < visibleColumns.length - 1 ? (
                     <ResizableHandle className="fm-resize-handle--vertical" />
                   ) : null}
                 </Fragment>
@@ -122,14 +159,18 @@ export function WorkspaceDockLayout() {
             </ResizablePanelGroup>
           </SortableList>
         </ResizablePanel>
-        <ResizableHandle className="fm-resize-handle--horizontal" />
-        <ResizablePanel
-          defaultSize={layout.bottomDockDefaultSize}
-          id="panel-bottom"
-          minSize={layout.bottomDockMinSize}
-        >
-          <SlotHost slotId="panel-bottom" moduleManifest={null} />
-        </ResizablePanel>
+        {kernelLayout.panelVisible.bottom ? (
+          <>
+            <ResizableHandle className="fm-resize-handle--horizontal" />
+            <ResizablePanel
+              defaultSize={layout.bottomDockDefaultSize}
+              id="panel-bottom"
+              minSize={layout.bottomDockMinSize}
+            >
+              <SlotHost slotId="panel-bottom" />
+            </ResizablePanel>
+          </>
+        ) : null}
       </ResizablePanelGroup>
     </div>
   );

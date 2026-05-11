@@ -21,8 +21,14 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/layout.css";',
         '@import "../src/design/styles/slots.css";',
         '@import "../src/design/styles/dropdown.css";',
+        '@import "../src/design/styles/context-menu.css";',
+        '@import "../src/design/styles/tabs.css";',
+        '@import "../src/design/styles/command.css";',
         '@import "../src/design/styles/header.css";',
         '@import "../src/design/styles/ribbon.css";',
+        '@import "../src/design/styles/explorer.css";',
+        '@import "../src/design/styles/inspector.css";',
+        '@import "../src/design/styles/command-palette.css";',
       ].join("\n"),
     );
   });

@@ -1,5 +1,6 @@
 .fm-workspace-shell {
   display: grid;
+  position: relative;
   grid-template-rows: var(--fm-menu-height) var(--fm-ribbon-height) 1fr var(--fm-status-height);
   width: 100vw;
   height: 100vh;
@@ -7,6 +8,17 @@
   background: var(--fm-bg-app);
   color: var(--fm-text-primary);
   isolation: isolate;
+}
+
+.fm-workspace-overlay-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fm-workspace-overlay-host > .fm-slot {
+  width: 100%;
+  height: 100%;
 }
 
 .fm-workspace-body {

@@ -1,6 +1,6 @@
 # Frontend v2 - API Integration Layer
 
-**Status:** Proposed architecture
+**Status:** Phase 2 API spine implemented, still before module/data-plane rollout
 **Date:** 2026-05-11
 
 ## 1. Contract
@@ -11,6 +11,21 @@ Frontend v2 is an OpenAPI v2 client. The browser contract is the session-scoped 
 - `docs/adr/0011-resource-first-api.md`
 
 All JSON transport moves through generated v2 types and generated v2 path/client code. Product semantics live above that in a handwritten facade, resource hooks, command adapters, binary codecs, and domain adapters.
+
+Current `apps/control-room` implementation:
+
+- `pnpm --dir apps/control-room generate:api` prints backend OpenAPI v2 from `fullmag-api`, generates TypeScript with `openapi-typescript`, and regenerates the `openapi-fetch` transport/path wrapper;
+- generated coverage comes from the backend v2 resource tree, including platform, session, model, meshing, simulation, data, visualization, workspace, analysis, persistence, and diagnostics paths;
+- runtime API target resolution is centralized: local development defaults to `http://localhost:8081`, while `NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL`, `NEXT_PUBLIC_RUNTIME_HTTP_BASE`, `NEXT_PUBLIC_API_URL`, or `window.__FULLMAG_CONFIG__` may override it;
+- `ControlRoomApi` sends `x-request-id`, validates backend `x-api-contract-version: 1.0.0`, retries idempotent GET failures, and records request diagnostics;
+- `ControlRoomApi.sessions.current.status()` is the first facade method on top of the generated transport;
+- `ControlRoomApi.commands.list()`, `.submit()`, and `.detail()` cover the v2 simulation command queue, accepted/rejected submission response, and per-command completion detail;
+- `useSessionStatus()` is the first revision-aware resource hook;
+- `RequestDiagnosticsController` records bounded request outcomes for the facade layer;
+- `RealtimeClient` connects to `/v2/sessions/current/events/ws` with subprotocol `fullmag.live.v1`, maps backend `resource.batch_changed` events into resource invalidation, maps `resync.required` into status invalidation, and ignores lifecycle events as state sources;
+- FMVP field-vector and FMMT topology codecs exist as the first binary data-plane foundation.
+
+The app is still before Explorer/Inspector/Viewport module rollout. New modules may consume only facade methods, resource hooks, command adapters, or codecs; they must not call transport directly.
 
 ## 2. Layer Stack
 
@@ -28,7 +43,9 @@ flowchart TD
   Invalidation --> Resources
 ```
 
-HTTP resources are the source of truth. WebSocket events notify lifecycle and invalidation; they do not carry full state, fields, topology, mesh payloads, scalar histories, or artifacts.
+HTTP resources are the source of truth. WebSocket events notify lifecycle and invalidation; they do not carry full state, fields, topology, mesh payloads, scalar histories, or artifacts. The frontend consumes `resource.batch_changed.payload.changes[]`, invalidates the status resource, and invalidates each `recommended_fetch` resource key for future data hooks. When the backend sends `resync.required`, the frontend invalidates status so HTTP v2 can recover the canonical snapshot.
+
+The HTTP base URL and websocket URL are resolved from the same API target. A browser served from one port must not silently assume the backend lives on that same origin when a local control-room API is configured or when development mode is using the default `localhost:8081` backend.
 
 ## 3. Porting Policy From Legacy
 
@@ -126,11 +143,14 @@ Binary decoders must support abort, malformed payload errors, and resource dispo
 
 Any change to API integration must run the relevant subset:
 
-- `pnpm --dir apps/control-room generate:api` once the v2 app exists;
+- `pnpm --dir apps/control-room generate:api`;
 - `pnpm --dir apps/control-room typecheck`;
+- `pnpm --dir apps/control-room lint`;
+- `pnpm --dir apps/control-room test`;
+- `pnpm --dir apps/control-room check:api-hygiene`;
 - resource-hook unit tests;
 - codec malformed-payload tests;
 - command accepted/rejected/completed tests;
 - `rg "fetch\\(" apps/control-room/src`;
 - `rg "/v2/" apps/control-room/src --glob '!src/kernel/api/**' --glob '!src/kernel/api/generated/**'`;
-- `rg "/v1/live/current|bootstrap|poll|preview" apps/control-room/src`.
+- `rg "/v1/live/current|bootstrap|poll|preview" apps/control-room/src --glob '!src/kernel/api/generated/**'`.

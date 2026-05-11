@@ -8,7 +8,8 @@ function readString(value: unknown, fallback: string): string {
 
 export default function StatusBarModule() {
   const status = useSessionStatus();
-  const sessionState = readString(status.data?.session.state, status.status);
+  const sessionState = readString(status.data?.solver.state, status.status);
+  const sessionName = readString(status.data?.session.name, "session unavailable");
   const runtimeVersion = readString(
     status.data?.runtime_bundle_version,
     "runtime unavailable",
@@ -17,6 +18,8 @@ export default function StatusBarModule() {
   return (
     <div className="fm-slot__module" data-resource-status={status.status}>
       <span>{sessionState}</span>
+      <span aria-hidden="true">&nbsp;|&nbsp;</span>
+      <span>{sessionName}</span>
       <span aria-hidden="true">&nbsp;|&nbsp;</span>
       <span>{runtimeVersion}</span>
     </div>

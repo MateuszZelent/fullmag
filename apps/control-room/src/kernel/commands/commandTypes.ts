@@ -1,11 +1,16 @@
 import type { ReactNode } from "react";
 
+import type { LayoutController } from "../layout/LayoutController";
+import type { SelectionController } from "../selection/SelectionController";
+
 export type CommandId = string;
 export type CommandGroupId = string;
 export type CommandCategory = string;
 
 export interface CommandContext {
   source: "menu" | "ribbon" | "shortcut" | "palette" | "test";
+  layout?: LayoutController;
+  selection?: SelectionController;
 }
 
 export interface CommandResult {

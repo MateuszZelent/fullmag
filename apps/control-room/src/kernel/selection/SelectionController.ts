@@ -30,6 +30,8 @@ export class SelectionController {
 
     // Skip if nothing actually changed.
     if (
+      prev.kind === this.state.kind &&
+      prev.label === this.state.label &&
       prev.objectId === this.state.objectId &&
       prev.nodeId === this.state.nodeId
     ) {
@@ -47,7 +49,7 @@ export class SelectionController {
   }
 
   clear(source: ModuleId): void {
-    this.set({ objectId: null, nodeId: null }, source);
+    this.set({ kind: null, label: null, objectId: null, nodeId: null }, source);
   }
 
   subscribe(listener: SelectionListener): () => void {

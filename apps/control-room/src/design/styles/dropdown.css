@@ -97,3 +97,155 @@
   padding: 1px var(--fm-space-1);
   text-transform: uppercase;
 }
+
+/* ── Slider row ───────────────────────────────────────────── */
+.fm-dropdown-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: var(--fm-space-2);
+  padding-bottom: 10px;
+}
+
+.fm-dropdown-slider--disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.fm-dropdown-slider__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fm-dropdown-slider__label {
+  font-size: var(--fm-font-size-sm);
+  color: var(--fm-text-secondary);
+  user-select: none;
+}
+
+.fm-dropdown-slider__value {
+  font-size: var(--fm-font-size-xs);
+  font-family: var(--fm-font-mono);
+  color: var(--fm-accent);
+  min-width: 3ch;
+  text-align: right;
+  user-select: none;
+}
+
+.fm-dropdown-slider__track {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  /* filled portion set via --pct CSS var from React inline style */
+  background: linear-gradient(
+    to right,
+    var(--fm-accent) 0%,
+    var(--fm-accent) var(--pct, 50%),
+    var(--fm-border-default) var(--pct, 50%),
+    var(--fm-border-default) 100%
+  );
+  transition: background var(--fm-transition-fast);
+}
+
+.fm-dropdown-slider__track::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-overlay),
+    0 1px 3px rgb(0 0 0 / 50%);
+  transition: transform var(--fm-transition-fast), background var(--fm-transition-fast);
+}
+
+.fm-dropdown-slider__track::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  background: var(--fm-accent-strong);
+}
+
+.fm-dropdown-slider__track::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: var(--fm-accent);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 2px var(--fm-bg-overlay),
+    0 1px 3px rgb(0 0 0 / 50%);
+}
+
+.fm-dropdown-slider__track:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--fm-accent);
+  border-radius: 2px;
+}
+
+/* ── Color picker row ─────────────────────────────────────── */
+.fm-dropdown-color {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  min-height: 28px;
+  padding: var(--fm-space-2);
+  border-radius: var(--fm-radius-sm);
+  transition: background var(--fm-transition-fast);
+}
+
+.fm-dropdown-color:not(.fm-dropdown-color--disabled):hover {
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-dropdown-color--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.fm-dropdown-color__label {
+  flex: 1;
+  font-size: var(--fm-font-size-sm);
+  color: var(--fm-text-secondary);
+  user-select: none;
+}
+
+.fm-dropdown-color__swatch {
+  position: relative;
+  display: block;
+  width: 32px;
+  height: 16px;
+  border-radius: var(--fm-radius-xs);
+  border: 1px solid var(--fm-border-strong);
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 30%);
+  transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
+}
+
+.fm-dropdown-color__swatch:hover {
+  border-color: var(--fm-accent);
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 30%),
+    0 0 0 1px var(--fm-accent);
+}
+
+/* The actual <input type="color"> is invisible — swatch background shows the color */
+.fm-dropdown-color__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}

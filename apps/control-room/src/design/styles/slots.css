@@ -20,6 +20,17 @@
   height: 100%;
 }
 
+.fm-slot[data-slot-id="overlay"] {
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fm-slot[data-slot-id="overlay"] > * {
+  pointer-events: auto;
+}
+
 .fm-slot__empty,
 .fm-slot__module {
   display: flex;

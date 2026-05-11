@@ -11,6 +11,7 @@ import type { KernelEventMap } from "../events/eventTypes";
 
 export class CommandRegistry {
   private readonly commands = new Map<CommandId, CommandContribution>();
+  private readonly listeners = new Set<() => void>();
   private bus: EventBus<KernelEventMap> | null = null;
 
   /** Attach bus for event emission. Called once during kernel init. */
@@ -23,10 +24,13 @@ export class CommandRegistry {
       throw new Error(`Command "${command.id}" is already registered.`);
     }
     this.commands.set(command.id, command);
+    this.notify();
   }
 
   unregister(id: CommandId): void {
-    this.commands.delete(id);
+    if (this.commands.delete(id)) {
+      this.notify();
+    }
   }
 
   get(id: CommandId): CommandContribution | undefined {
@@ -40,6 +44,11 @@ export class CommandRegistry {
   /** Return all commands matching a category. */
   byCategory(category: CommandCategory): CommandContribution[] {
     return this.all().filter((cmd) => cmd.category === category);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /** Check if a command is enabled in the given context. */
@@ -77,6 +86,12 @@ export class CommandRegistry {
         status: "failed",
       });
       return { status: "failed", message };
+    }
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      listener();
     }
   }
 }

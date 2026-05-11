@@ -88,6 +88,24 @@ export type RibbonMenuNode =
       label: string;
       disabled?: boolean;
       nodes: RibbonMenuNode[];
+    }
+  | {
+      type: "slider";
+      id: string;
+      label: string;
+      value: number;
+      min: number;
+      max: number;
+      step: number;
+      unit?: string;
+      disabled?: boolean;
+    }
+  | {
+      type: "color";
+      id: string;
+      label: string;
+      value: string;
+      disabled?: boolean;
     };
 
 export const RIBBON_TABS: RibbonTabDef[] = [

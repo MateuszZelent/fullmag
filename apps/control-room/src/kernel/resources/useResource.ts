@@ -5,7 +5,13 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ResourceRevision } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
-import type { ResourceKey, ResourceResult, ResourceStatus } from "./resourceTypes";
+import type { ResourceKey, ResourceResult } from "./resourceTypes";
+import {
+  markResourceError,
+  markResourceLoading,
+  markResourceReady,
+  type ResourceState,
+} from "./resourceState";
 
 interface LoadContext {
   signal: AbortSignal;
@@ -15,13 +21,6 @@ interface UseResourceOptions<TData> {
   load: (context: LoadContext) => Promise<TData>;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
-}
-
-interface ResourceState<TData> {
-  data: TData | null;
-  error: Error | null;
-  revision: ResourceRevision | null;
-  status: ResourceStatus;
 }
 
 function abortError(error: unknown): boolean {
@@ -57,21 +56,23 @@ export function useResource<TData>({
       .then((data) => {
         if (controller.signal.aborted) return;
 
-        setState({
-          data,
-          error: null,
-          revision: resolveRevision?.(data) ?? externalRevision,
-          status: "ready",
-        });
+        setState((current) =>
+          markResourceReady(
+            current,
+            data,
+            resolveRevision?.(data) ?? externalRevision,
+          ),
+        );
       })
       .catch((error: unknown) => {
         if (abortError(error) || controller.signal.aborted) return;
 
-        setState((current) => ({
-          ...current,
-          error: error instanceof Error ? error : new Error(String(error)),
-          status: "error",
-        }));
+        setState((current) =>
+          markResourceError(
+            current,
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+        );
       });
 
     return () => controller.abort();
@@ -81,5 +82,10 @@ export function useResource<TData>({
     setRefreshToken((current) => current + 1);
   }, []);
 
-  return { ...state, refetch };
+  const visibleState =
+    externalRevision !== state.revision
+      ? markResourceLoading(state, externalRevision)
+      : state;
+
+  return { ...visibleState, refetch };
 }

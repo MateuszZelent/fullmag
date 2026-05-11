@@ -9,6 +9,16 @@ import { useResource } from "./useResource";
 
 export const SESSION_STATUS_RESOURCE_KEY = "session:status";
 
+export function resolveSessionStatusRevision(
+  status: LiveStatusResource,
+): number | null {
+  const revisions = Object.values(status.resources).filter(
+    (revision): revision is number => typeof revision === "number",
+  );
+
+  return revisions.length > 0 ? Math.max(...revisions) : null;
+}
+
 export function useSessionStatus() {
   const { api } = useKernel();
   const load = useCallback(
@@ -16,13 +26,10 @@ export function useSessionStatus() {
       api.sessions.current.status({ signal }),
     [api],
   );
-  const resolveRevision = useCallback((status: LiveStatusResource) => {
-    return status.resources.session ?? status.resources.status ?? null;
-  }, []);
 
   return useResource({
     load,
-    resolveRevision,
+    resolveRevision: resolveSessionStatusRevision,
     resourceKey: SESSION_STATUS_RESOURCE_KEY,
   });
 }

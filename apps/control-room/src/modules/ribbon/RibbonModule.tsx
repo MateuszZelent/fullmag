@@ -1,6 +1,7 @@
 "use client";
 
 import type { ModuleProps } from "@/kernel/types";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useLayout } from "@/kernel/layout/useLayout";
 
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
@@ -16,7 +17,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
   const groups = tabContent?.groups ?? [];
 
   function handleAction(actionId: string): void {
-    void kernel.commands.execute(actionId, { source: "ribbon" });
+    void kernel.commands.execute(actionId, createCommandContext("ribbon", kernel));
   }
 
   return (

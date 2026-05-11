@@ -109,7 +109,7 @@ export const MAIN_MENUS: AppMenuNode[] = [
     children: [
       { id: "diagnostics", label: "Diagnostics", icon: <Gauge size={14} /> },
       { id: "api-console", label: "API Console", icon: <TerminalSquare size={14} /> },
-      { id: "script-preview", label: "Script Preview", icon: <Braces size={14} /> },
+      { id: "script-view", label: "Script View", icon: <Braces size={14} /> },
     ],
   },
   {

@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 
 import type { ControlRoomApi } from "./api/ControlRoomApi";
+import type { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
 import type { CommandContribution } from "./commands/commandTypes";
 import type { CommandRegistry } from "./commands/CommandRegistry";
 import type { EventBus } from "./events/EventBus";
@@ -53,6 +54,7 @@ export interface KernelApi {
   readonly api: ControlRoomApi;
   readonly bus: EventBus<KernelEventMap>;
   readonly commands: CommandRegistry;
+  readonly diagnostics: RequestDiagnosticsController;
   readonly modules: ModuleRegistry;
   readonly realtime: RealtimeInvalidationBridge;
   readonly resources: ResourceInvalidationController;

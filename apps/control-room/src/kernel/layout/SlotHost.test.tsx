@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "../api/ControlRoomApi";
+import { RequestDiagnosticsController } from "../api/RequestDiagnosticsController";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -15,6 +16,10 @@ import type { KernelApi } from "../types";
 
 import { SlotHost } from "./SlotHost";
 
+function TestModule() {
+  return <div>Auto-discovered module</div>;
+}
+
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
@@ -22,6 +27,7 @@ function makeKernel(): KernelApi {
     api: new ControlRoomApi({ fetchImpl: async () => new Response("{}") }),
     bus,
     commands: new CommandRegistry(),
+    diagnostics: new RequestDiagnosticsController(),
     modules: new ModuleRegistry(),
     realtime: new RealtimeInvalidationBridge(resources),
     resources,
@@ -41,5 +47,26 @@ describe("SlotHost", () => {
 
     expect(html).toContain("data-slot-id=\"panel-left\"");
     expect(html).toContain("No module mounted");
+  });
+
+  it("auto-discovers the first module registered for a slot", () => {
+    const kernel = makeKernel();
+    kernel.modules.register({
+      id: "auto-test",
+      title: "Auto Test",
+      version: "0.1.0",
+      slots: ["panel-left"],
+      component: async () => ({ default: TestModule }),
+    });
+
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SlotHost slotId="panel-left" />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("data-slot-id=\"panel-left\"");
+    expect(html).toContain("Loading");
+    expect(html).not.toContain("No module mounted");
   });
 });

@@ -13,6 +13,7 @@ import {
   resolveThemePreference,
   type ThemeMode,
 } from "./themePreference";
+import { THEME_TOGGLE_EVENT } from "./themeEvents";
 
 const THEME_STORAGE_KEY = "fullmag.control-room.theme";
 
@@ -60,6 +61,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    function handleThemeToggle() {
+      setThemeState((currentTheme) => {
+        const nextTheme = currentTheme === "dark" ? "light" : "dark";
+        applyTheme(nextTheme);
+        persistTheme(nextTheme);
+        return nextTheme;
+      });
+    }
+
+    window.addEventListener(THEME_TOGGLE_EVENT, handleThemeToggle);
+    return () => {
+      window.removeEventListener(THEME_TOGGLE_EVENT, handleThemeToggle);
+    };
+  }, []);
 
   function setTheme(nextTheme: ThemeMode): void {
     setThemeState(nextTheme);
