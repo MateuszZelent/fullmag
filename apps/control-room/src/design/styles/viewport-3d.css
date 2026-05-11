@@ -48,3 +48,16 @@
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
 }
+
+.fm-viewport-3d__primitive-label {
+  display: inline-flex;
+  max-width: 9rem;
+  align-items: center;
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-chrome);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  pointer-events: none;
+  white-space: nowrap;
+}

@@ -226,38 +226,38 @@ Rules:
 
 ### Phase A - Contract And Resource Hooks
 
-- [ ] Add missing `ControlRoomApi.model` facade methods for `model/transactions`, object patch/delete, geometry capabilities, validation, diagnostics, and realization resources.
-- [ ] Add revision-aware hooks for scene, geometry diagnostics, mesh build current/latest, object topology/report/quality, and visualization state.
-- [ ] Add command adapter helpers for `create_object`, `patch_object_geometry`, `commit_object_transform`, `delete_object`, and `mesh_build`.
-- [ ] Add tests proving modules do not construct `/v2/...` strings and do not call `fetch()`.
+- [x] Add missing `ControlRoomApi.model` facade methods for `model/transactions`, object patch/delete, geometry capabilities, validation, diagnostics, and realization resources.
+- [x] Add revision-aware hooks for scene, geometry validation/diagnostics, mesh build current/latest, object topology/report/quality, and visualization state.
+- [x] Add command adapter helpers for `create_object`, `patch_object_geometry`, `commit_object_transform`, `delete_object`, and `mesh_build`.
+- [x] Add tests proving modules do not construct `/v2/...` strings and do not call `fetch()`.
 
 ### Phase B - Selection, Explorer, And Inspector
 
-- [ ] Add pure explorer tree builders for object subtrees, Geometry/Mesh/Visualization child nodes, and mesh status badges.
-- [ ] Add kernel selection refs for object, object geometry, object mesh, and object visualization nodes.
-- [ ] Implement Geometry object inspector draft flow for create, patch geometry, commit transform, delete, and failed commit retention.
-- [ ] Add inspector tests for draft isolation, base revision conflict, backend validation error display, and successful resource refresh.
+- [x] Add pure explorer tree builders for object subtrees, Geometry/Mesh/Visualization child nodes, and mesh status badges.
+- [x] Add kernel selection refs for object, object geometry, object mesh, and object visualization nodes.
+- [x] Implement Geometry object inspector draft flow for create, patch geometry, commit transform, delete, and failed commit retention. Current coverage includes primitive draft selection, committed-object draft initialization, local SI validation, create-object Apply Draft, patch geometry, commit transform, delete object, resource invalidation, committed object selection, and failed transaction retention.
+- [ ] Add inspector tests for draft isolation, base revision conflict, backend validation error display, and successful resource refresh. Current pure coverage includes draft isolation, committed draft initialization, base revision capture, local validation, transaction payload building, and backend validation message extraction; render-level failed commit display remains open because the app currently has no React Testing Library dependency.
 
 ### Phase C - Ribbon Commands
 
-- [ ] Register Geometry primitive commands and Mesh build commands in the command registry.
-- [ ] Render the commands through ribbon, menu/context menu, shortcut, and command palette surfaces without module-local callbacks.
-- [ ] Add command-state tests for missing capability, missing selection, validation blocker, running mesh build, accepted command, rejected command, and failed command.
+- [x] Register Geometry primitive commands and Mesh build commands in the command registry.
+- [x] Render the commands through ribbon, menu/context menu, shortcut, and command palette surfaces without module-local callbacks.
+- [x] Add command-state tests for missing capability, missing selection, validation blocker, running mesh build, accepted command, rejected command, and failed command. Current coverage includes missing capability disabled state, missing selection disabled state, validation blocker disabled state, running object mesh build disabled state, accepted selected mesh build, rejected mesh build result, create draft success/failure retention, delete transaction success, disabled command execution guard, ribbon disabled-state projection, shortcut scope resolution, and command-palette toggle dispatch.
 
 ### Phase D - 3D Primitive And Mesh Visualization
 
-- [ ] Extend the 3D render model with authoring primitive realization entries separate from solver topology entries.
-- [ ] Implement primitive shaded and simplified wireframe layers.
-- [ ] Add fallback labels for primitive-only and mesh-stale states.
-- [ ] Keep topology rebuilds tied to topology revisions only; primitive parameter changes rebuild only the affected primitive geometry.
-- [ ] Add viewport tests for new object primitive display, fallback wireframe without topology, mesh-ready switch, stale previous mesh labeling, selection highlight, and layer disposal.
+- [x] Extend the 3D render model with authoring primitive realization entries separate from solver topology entries.
+- [x] Implement primitive shaded and simplified wireframe layers.
+- [x] Add fallback labels for primitive-only and mesh-stale states.
+- [x] Keep topology rebuilds tied to topology revisions only; primitive parameter changes rebuild only the affected primitive geometry. Current coverage includes topology render memo isolation from scene changes plus stable per-object primitive geometry keys across unrelated scene revisions.
+- [ ] Add viewport tests for new object primitive display, fallback wireframe without topology, mesh-ready switch, stale previous mesh labeling, selection highlight, and layer disposal. Current coverage includes primitive-only display, stale previous mesh labeling, mesh-ready fallback suppression, primitive selection bounds, and selection highlight rendering; layer disposal remains open for primitive/fallback layers.
 
 ### Phase E - Mesh Build Integration
 
-- [ ] Submit selected-object mesh build via `simulation/commands`.
-- [ ] Track `meshing/builds/current`, command completion, mesh revision, and mesh build revision through resource invalidation.
-- [ ] Re-read `model/scene`, mesh manifest, object topology/report/quality, and visualization state after build completion.
-- [ ] Prove successful mesh build clears the stale badge only when build provenance matches the current scene revision.
+- [x] Submit selected-object mesh build via `simulation/commands`.
+- [ ] Track `meshing/builds/current`, command completion, mesh revision, and mesh build revision through resource invalidation. Accepted selected-object build now invalidates `meshing/builds/current` and object topology/report/quality resources using the accepted `command_id`; successful-build realtime invalidation now refreshes dependent read models, but command-detail/provenance reconciliation remains open until the backend exposes a command-completion resource/event for this flow.
+- [x] Re-read `model/scene`, mesh manifest, object topology/report/quality, and visualization state after build completion. `RealtimeInvalidationBridge` now treats `meshing/builds/latest-successful` as the successful-build completion signal and invalidates scene, shared-domain manifest, visualization state, and subscribed object topology/report/quality/size-field resources.
+- [x] Prove successful mesh build clears the stale badge only when build provenance matches the current scene revision. Current primitive render-model tests cover stale previous mesh labeling when `source_scene_revision` lags and fallback suppression only when it matches the current scene revision.
 
 ### Phase F - 2D Readiness
 

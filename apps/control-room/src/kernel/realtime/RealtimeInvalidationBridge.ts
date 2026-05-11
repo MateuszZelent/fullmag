@@ -1,4 +1,14 @@
 import type { ResourceRevision } from "../api/apiTypes";
+import {
+  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_OBJECT_QUALITY_PATH,
+  MESHING_OBJECT_REPORT_PATH,
+  MESHING_OBJECT_SIZE_FIELD_PATH,
+  MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_SCENE_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -79,6 +89,10 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
   };
 }
 
+function resourceFamilyPrefix(pathWithObjectId: string): string {
+  return pathWithObjectId.slice(0, pathWithObjectId.indexOf("{object_id}"));
+}
+
 export class RealtimeInvalidationBridge {
   constructor(private readonly resources: ResourceInvalidationController) {}
 
@@ -106,6 +120,10 @@ export class RealtimeInvalidationBridge {
         if (change.recommended_fetch) {
           this.resources.invalidate(change.recommended_fetch, change.revision);
           this.resources.invalidatePrefix(change.recommended_fetch, change.revision);
+          this.invalidateMeshBuildCompletionDependents(
+            change.recommended_fetch,
+            change.revision,
+          );
         }
         handled = true;
       }
@@ -127,5 +145,32 @@ export class RealtimeInvalidationBridge {
 
     this.resources.invalidate(event.resource_key, event.revision);
     return true;
+  }
+
+  private invalidateMeshBuildCompletionDependents(
+    recommendedFetch: string,
+    revision: ResourceRevision,
+  ): void {
+    if (recommendedFetch !== MESHING_BUILDS_LATEST_SUCCESSFUL_PATH) return;
+
+    this.resources.invalidate(MODEL_SCENE_PATH, revision);
+    this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+    this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_TOPOLOGY_PATH),
+      revision,
+    );
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_REPORT_PATH),
+      revision,
+    );
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_QUALITY_PATH),
+      revision,
+    );
+    this.resources.invalidatePrefix(
+      resourceFamilyPrefix(MESHING_OBJECT_SIZE_FIELD_PATH),
+      revision,
+    );
   }
 }

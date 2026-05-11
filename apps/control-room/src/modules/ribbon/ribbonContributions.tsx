@@ -913,9 +913,9 @@ export const geometryTab: RibbonTabContent = {
       subtitle: "Parametric primitives",
       tone: "authoring",
       actions: [
-        { id: "builder-add-box",           icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
-        { id: "builder-add-cylinder",      icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
-        { id: "builder-add-sphere",        icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
+        { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
+        { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
+        { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      iconColor: "text-purple-300" },
         { id: "builder-add-disk",          icon: icon(Disc),     label: "Disk",           iconColor: "text-sky-400" },
         { id: "builder-add-thin_film",     icon: icon(Box),      label: "Thin Film",      iconColor: "text-lime-300" },
@@ -974,7 +974,8 @@ export const geometryTab: RibbonTabContent = {
       tone: "neutral",
       actions: [
         { id: "builder-build-geometry", icon: icon(Hammer),      label: "Geometry Synced", disabled: true, iconColor: "text-emerald-400" },
-        { id: "builder-build-mesh",     icon: icon(Grid3X3),     label: "Build FEM Mesh",               iconColor: "text-amber-400" },
+        { id: "geometry.commit-object-draft", icon: icon(Save),  label: "Apply Draft",                  iconColor: "text-emerald-400" },
+        { id: "mesh.build-selected",    icon: icon(Grid3X3),     label: "Build FEM Mesh",               iconColor: "text-amber-400" },
         { id: "builder-validate",       icon: icon(CheckCircle), label: "Validate",                     iconColor: "text-emerald-400" },
       ],
     },
@@ -985,7 +986,7 @@ export const geometryTab: RibbonTabContent = {
       subtitle: "Camera commands",
       tone: "neutral",
       actions: [
-        { id: "builder-focus-selected", icon: icon(Focus),   label: "Focus Selected", shortcut: "F",       iconColor: "text-slate-300" },
+        { id: "geometry.focus-primitive", icon: icon(Focus), label: "Focus Selected", shortcut: "F",       iconColor: "text-slate-300" },
         { id: "builder-frame-all",      icon: icon(Maximize),label: "Frame All",      shortcut: "Shift+F", iconColor: "text-slate-300" },
         { id: "builder-show-universe",  icon: icon(Eye),     label: "Show Universe",                       iconColor: "text-cyan-400" },
       ],
@@ -1124,8 +1125,8 @@ export const meshTab: RibbonTabContent = {
       subtitle: "mesh",
       tone: "compute",
       actions: [
-        { id: "build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
-        { id: "build-all",      icon: icon(Zap),        label: "Build All",                iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
+        { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
+        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",                iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
       ],
     },
@@ -1357,20 +1358,108 @@ export function buildRibbonTabContent(
 ): RibbonTabContent | undefined {
   const content = ALL_TAB_CONTENT[tabId];
   if (!content) return undefined;
-  if (tabId !== "view" || !context) return content;
+  let resolvedContent = content;
+
+  if (tabId === "view" && context) {
+    resolvedContent = {
+      ...content,
+      groups: content.groups.map((group) =>
+        group.id === "view-global-display"
+          ? buildViewGlobalDisplayGroup(group, context)
+          : group.id === "view-selected-display"
+            ? buildSelectedVisualizationGroup(context)
+            : group.id === "view-display"
+              ? buildViewDisplayGroup(group, context)
+              : group,
+      ),
+    };
+  }
+
+  return context?.commands
+    ? applyCommandState(resolvedContent, context)
+    : resolvedContent;
+}
+
+function applyCommandState(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const commandContext = context.commandContext ?? { source: "ribbon" };
 
   return {
     ...content,
-    groups: content.groups.map((group) =>
-      group.id === "view-global-display"
-        ? buildViewGlobalDisplayGroup(group, context)
-        : group.id === "view-selected-display"
-          ? buildSelectedVisualizationGroup(context)
-          : group.id === "view-display"
-            ? buildViewDisplayGroup(group, context)
-            : group,
-    ),
+    groups: content.groups.map((group) => ({
+      ...group,
+      actions: group.actions.map((action) => {
+        const command = context.commands?.get(action.id);
+        const disabledByCommand = command
+          ? !context.commands?.isEnabled(action.id, commandContext)
+          : false;
+        const disabledReason = disabledByCommand
+          ? command?.disabledReason?.(commandContext) ?? `Command unavailable: ${action.label}`
+          : null;
+
+        return {
+          ...action,
+          active:
+            action.active ??
+            (command ? context.commands?.isActive(action.id, commandContext) : false),
+          disabled: action.disabled || disabledByCommand,
+          menu: action.menu?.map((node) =>
+            applyCommandStateToMenuNode(node, context, commandContext),
+          ),
+          tooltip: disabledReason ?? action.tooltip,
+        };
+      }),
+    })),
   };
+}
+
+function isCommandDisabled(
+  commandId: string | undefined,
+  context: RibbonBuildContext,
+  commandContext: CommandContext,
+): boolean {
+  if (!commandId || !context.commands?.get(commandId)) return false;
+  return !context.commands.isEnabled(commandId, commandContext);
+}
+
+function applyCommandStateToMenuNode(
+  node: RibbonMenuNode,
+  context: RibbonBuildContext,
+  commandContext: CommandContext,
+): RibbonMenuNode {
+  if (node.type === "item" || node.type === "checkbox") {
+    return {
+      ...node,
+      disabled:
+        node.disabled ||
+        isCommandDisabled(node.commandId, context, commandContext),
+    };
+  }
+
+  if (node.type === "radio-group") {
+    return {
+      ...node,
+      items: node.items.map((item) => ({
+        ...item,
+        disabled:
+          item.disabled ||
+          isCommandDisabled(item.commandId, context, commandContext),
+      })),
+    };
+  }
+
+  if (node.type === "submenu") {
+    return {
+      ...node,
+      nodes: node.nodes.map((child) =>
+        applyCommandStateToMenuNode(child, context, commandContext),
+      ),
+    };
+  }
+
+  return node;
 }
 
 function buildViewGlobalDisplayGroup(
@@ -1875,11 +1964,23 @@ function percentToLayerOpacity(percent: number): number {
 }
 
 function buildAirboxAction({
+  commandContext,
   visualization,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
   const settings = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
   const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
     visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, patchValue);
+  };
+  const selectAirbox = () => {
+    commandContext?.selection?.set(
+      {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+      },
+      commandContext.source,
+    );
   };
 
   return {
@@ -2010,7 +2111,13 @@ function buildAirboxAction({
         onValueChange: (value) => patch({ opacityPercent: value }),
       },
       { type: "separator", id: "airbox:s0" },
-      { type: "item", id: "airbox:focus", label: "Focus airbox", disabled: true },
+      {
+        type: "item",
+        id: "airbox:focus",
+        label: "Focus airbox",
+        disabled: !commandContext?.selection,
+        onSelect: selectAirbox,
+      },
       {
         type: "item",
         id: "airbox:reset",

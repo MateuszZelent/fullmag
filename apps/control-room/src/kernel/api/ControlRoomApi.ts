@@ -4,11 +4,27 @@ import {
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
+  MESHING_BUILDS_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_OBJECT_QUALITY_PATH,
+  MESHING_OBJECT_REPORT_PATH,
+  MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_PART_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
+  MODEL_GEOMETRY_CAPABILITIES_PATH,
+  MODEL_GEOMETRY_DIAGNOSTIC_PATH,
+  MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+  MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+  MODEL_GEOMETRY_REALIZATIONS_PATH,
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_OBJECT_GEOMETRY_PATH,
+  MODEL_OBJECT_PATH,
+  MODEL_OBJECTS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_TRANSACTIONS_PATH,
   MODEL_UNIVERSE_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
@@ -18,13 +34,29 @@ import {
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
+  AuthoringTransactionRequest,
+  AuthoringTransactionResponse,
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
   DomainMetaResource,
   FieldVectorQuery,
+  GeometryCapabilitiesResource,
+  GeometryDiagnosticsResource,
+  GeometryRealizationRequest,
+  GeometryRealizationResource,
+  GeometryValidationResource,
   LiveStatusResource,
+  MeshActiveBuildResource,
+  MeshBuildHistoryResource,
+  MeshLastSuccessfulBuildResource,
+  MeshObjectQualityResource,
+  MeshObjectReportResource,
+  MeshObjectSizeFieldResource,
   MeshSharedDomainManifestResource,
+  ObjectCreateRequest,
+  ObjectGeometryPatchRequest,
+  ObjectPatchRequest,
   RequestOptions,
   SceneResource,
   StructuredCommandRequest,
@@ -126,6 +158,44 @@ export class ControlRoomApi {
   };
 
   readonly meshing = {
+    builds: {
+      history: (options?: RequestOptions) =>
+        this.requestJson<MeshBuildHistoryResource>(MESHING_BUILDS_PATH, options),
+      current: (options?: RequestOptions) =>
+        this.requestJson<MeshActiveBuildResource>(
+          MESHING_BUILDS_CURRENT_PATH,
+          options,
+        ),
+      latestSuccessful: (options?: RequestOptions) =>
+        this.requestJson<MeshLastSuccessfulBuildResource>(
+          MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+          options,
+        ),
+    },
+    objectQuality: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<MeshObjectQualityResource>(
+        MESHING_OBJECT_QUALITY_PATH,
+        options,
+        {
+          path: { object_id: objectId },
+        },
+      ),
+    objectReport: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<MeshObjectReportResource>(
+        MESHING_OBJECT_REPORT_PATH,
+        options,
+        {
+          path: { object_id: objectId },
+        },
+      ),
+    objectSizeField: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<MeshObjectSizeFieldResource>(
+        MESHING_OBJECT_SIZE_FIELD_PATH,
+        options,
+        {
+          path: { object_id: objectId },
+        },
+      ),
     objectTopology: (objectId: string, options?: BinaryRequestOptions) =>
       this.requestTopology(
         MESHING_OBJECT_TOPOLOGY_PATH,
@@ -157,6 +227,81 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    commitTransaction: (
+      transaction: AuthoringTransactionRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, AuthoringTransactionRequest>(
+        MODEL_TRANSACTIONS_PATH,
+        transaction,
+        options,
+      ),
+    createObject: (request: ObjectCreateRequest, options?: RequestOptions) =>
+      this.postJson<SceneResource, ObjectCreateRequest>(
+        MODEL_OBJECTS_PATH,
+        request,
+        options,
+      ),
+    deleteObject: (objectId: string, options?: RequestOptions) =>
+      this.deleteJson<SceneResource>(MODEL_OBJECT_PATH, options, {
+        path: { object_id: objectId },
+      }),
+    geometry: {
+      capabilities: (options?: RequestOptions) =>
+        this.requestJson<GeometryCapabilitiesResource>(
+          MODEL_GEOMETRY_CAPABILITIES_PATH,
+          options,
+        ),
+      diagnostic: (diagnosticId: string, options?: RequestOptions) =>
+        this.requestJson<GeometryDiagnosticsResource>(
+          MODEL_GEOMETRY_DIAGNOSTIC_PATH,
+          options,
+          { path: { diagnostic_id: diagnosticId } },
+        ),
+      diagnostics: (options?: RequestOptions) =>
+        this.requestJson<GeometryDiagnosticsResource>(
+          MODEL_GEOMETRY_DIAGNOSTICS_PATH,
+          options,
+        ),
+      realization: (options?: RequestOptions) =>
+        this.requestJson<GeometryRealizationResource>(
+          MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+          options,
+        ),
+      realize: (request: GeometryRealizationRequest, options?: RequestOptions) =>
+        this.postJson<GeometryRealizationResource, GeometryRealizationRequest>(
+          MODEL_GEOMETRY_REALIZATIONS_PATH,
+          request,
+          options,
+        ),
+      validation: (options?: RequestOptions) =>
+        this.requestJson<GeometryValidationResource>(
+          MODEL_GEOMETRY_VALIDATION_PATH,
+          options,
+        ),
+    },
+    patchObject: (
+      objectId: string,
+      patch: ObjectPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<SceneResource, ObjectPatchRequest>(
+        MODEL_OBJECT_PATH,
+        patch,
+        options,
+        { path: { object_id: objectId } },
+      ),
+    patchObjectGeometry: (
+      objectId: string,
+      patch: ObjectGeometryPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<SceneResource, ObjectGeometryPatchRequest>(
+        MODEL_OBJECT_GEOMETRY_PATH,
+        patch,
+        options,
+        { path: { object_id: objectId } },
+      ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
     universe: (options?: RequestOptions) =>
@@ -240,10 +385,12 @@ export class ControlRoomApi {
     path: OpenApiV2Path,
     body: TBody,
     options: RequestOptions = {},
+    params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.POST(path as never, {
       body,
       cache: "no-store",
+      params,
       signal: options.signal,
     } as never);
     return readOpenApiResult<TResponse>(result);
@@ -253,10 +400,25 @@ export class ControlRoomApi {
     path: OpenApiV2Path,
     body: TBody,
     options: RequestOptions = {},
+    params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.PATCH(path as never, {
       body,
       cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private async deleteJson<TResponse>(
+    path: OpenApiV2Path,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const result = await this.transport.DELETE(path as never, {
+      cache: "no-store",
+      params,
       signal: options.signal,
     } as never);
     return readOpenApiResult<TResponse>(result);

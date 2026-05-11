@@ -1,23 +1,37 @@
 "use client";
 
-import { GizmoHelper, GizmoViewcube } from "@react-three/drei";
-import { useThree, type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo } from "react";
+import {
+  GizmoViewcube,
+  Line,
+  Text,
+} from "@react-three/drei";
+import {
+  useFrame,
+  useThree,
+  type ThreeEvent,
+} from "@react-three/fiber";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   BufferAttribute,
   SphereGeometry,
   Vector3,
   type BufferGeometry,
+  type Camera,
+  type Group,
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 
-import { magnetizationHslRgb } from "./magnetizationColor";
 import {
   snapCameraToDirection,
   type Direction3,
 } from "./cameraOrientation";
+import { resolveOrientationHudAnchors } from "./hudLayout";
+import {
+  HSL_REFERENCE_AXES,
+  magnetizationHslRgb,
+} from "./magnetizationColor";
 
 interface OrientationHudLayerProps {
   colors: Viewport3DColors;
@@ -29,6 +43,17 @@ type OrbitControlsHandle = {
   target?: Vector3;
   update?: (delta?: number) => void;
 };
+
+interface AnchorVectors {
+  center: Vector3;
+  forward: Vector3;
+  position: Vector3;
+  right: Vector3;
+  up: Vector3;
+}
+
+const WIDGET_CAMERA_DISTANCE = 2;
+const WIDGET_RENDER_ORDER = 10_000;
 
 export function OrientationHudLayer({
   colors,
@@ -44,14 +69,6 @@ export function OrientationHudLayer({
     () => controls?.target?.clone() ?? new Vector3(0, 0, 0),
     [controls],
   );
-  const handleCameraUpdate = useCallback(() => {
-    const target = getTarget();
-    viewport3dStore.setCamera({
-      position: camera.position.toArray() as [number, number, number],
-      target: target.toArray() as [number, number, number],
-    });
-    invalidate();
-  }, [camera, getTarget, invalidate]);
   const snapToDirection = useCallback(
     (direction: Direction3) => {
       const target = getTarget();
@@ -81,27 +98,71 @@ export function OrientationHudLayer({
   return (
     <>
       {viewCubeVisible ? (
-        <GizmoHelper
-          alignment="top-right"
-          margin={[86, 86]}
-          onTarget={getTarget}
-          onUpdate={handleCameraUpdate}
-          renderPriority={2}
-        >
+        <ScreenAnchoredGroup anchor="viewCube" pixelScale={1.15}>
           <ViewCube3DBox colors={colors} onSnap={snapToDirection} />
-        </GizmoHelper>
+        </ScreenAnchoredGroup>
       ) : null}
       {hslReferenceVisible ? (
-        <GizmoHelper
-          alignment="top-right"
-          margin={[86, viewCubeVisible ? 182 : 86]}
-          onTarget={getTarget}
-          renderPriority={3}
-        >
+        <ScreenAnchoredGroup anchor="hslReference" pixelScale={1}>
           <HslReferenceSphere colors={colors} />
-        </GizmoHelper>
+        </ScreenAnchoredGroup>
       ) : null}
     </>
+  );
+}
+
+function ScreenAnchoredGroup({
+  anchor,
+  children,
+  pixelScale,
+}: {
+  anchor: keyof ReturnType<typeof resolveOrientationHudAnchors>;
+  children: ReactNode;
+  pixelScale: number;
+}) {
+  const ref = useRef<Group>(null);
+  const camera = useThree((state) => state.camera);
+  const invalidate = useThree((state) => state.invalidate);
+  const size = useThree((state) => state.size);
+  const vectors = useMemo<AnchorVectors>(
+    () => ({
+      center: new Vector3(),
+      forward: new Vector3(),
+      position: new Vector3(),
+      right: new Vector3(),
+      up: new Vector3(),
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    invalidate();
+  }, [invalidate]);
+
+  useFrame(() => {
+    const group = ref.current;
+    if (!group) return;
+    const anchors = resolveOrientationHudAnchors(size);
+    const worldPerPixel = updateScreenAnchor(
+      group,
+      camera,
+      size,
+      anchors[anchor],
+      vectors,
+    );
+    group.scale.setScalar(worldPerPixel * pixelScale);
+    group.visible = true;
+  });
+
+  return (
+    <group
+      ref={ref}
+      renderOrder={WIDGET_RENDER_ORDER}
+      scale={[0, 0, 0]}
+      visible={false}
+    >
+      {children}
+    </group>
   );
 }
 
@@ -168,18 +229,86 @@ export function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
 
   return (
     <group scale={[38, 38, 38]}>
-      <mesh geometry={geometry}>
-        <meshBasicMaterial toneMapped={false} vertexColors />
+      <mesh geometry={geometry} renderOrder={WIDGET_RENDER_ORDER}>
+        <meshBasicMaterial
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+          vertexColors
+        />
       </mesh>
-      <mesh>
+      <HslReferenceAxes colors={colors} />
+      <mesh renderOrder={WIDGET_RENDER_ORDER + 1}>
         <sphereGeometry args={[1.012, 20, 12]} />
         <meshBasicMaterial
           color={colors.wire}
+          depthTest={false}
+          depthWrite={false}
           opacity={0.24}
           transparent
           wireframe
         />
       </mesh>
+    </group>
+  );
+}
+
+function HslReferenceAxes({ colors }: { colors: Viewport3DColors }) {
+  return (
+    <group>
+      {HSL_REFERENCE_AXES.map((axis) => {
+        const axisColor = rgbCss(axis.color);
+        const end = scaleDirection(axis.direction, 1.42);
+        const tip = scaleDirection(axis.direction, 1.52);
+        const label = scaleDirection(axis.direction, 1.78);
+
+        return (
+          <group key={axis.id}>
+            <Line
+              color={String(colors.wire)}
+              depthTest={false}
+              lineWidth={4}
+              opacity={0.45}
+              points={[[0, 0, 0], end]}
+              renderOrder={WIDGET_RENDER_ORDER + 2}
+              transparent
+            />
+            <Line
+              color={axisColor}
+              depthTest={false}
+              lineWidth={2}
+              points={[[0, 0, 0], end]}
+              renderOrder={WIDGET_RENDER_ORDER + 3}
+            />
+            <mesh
+              position={tip}
+              renderOrder={WIDGET_RENDER_ORDER + 4}
+              rotation={axisTipRotation(axis.id)}
+            >
+              <coneGeometry args={[0.06, 0.16, 16]} />
+              <meshBasicMaterial
+                color={axisColor}
+                depthTest={false}
+                depthWrite={false}
+                toneMapped={false}
+              />
+            </mesh>
+            <Text
+              anchorX="center"
+              anchorY="middle"
+              color={axisColor}
+              depthOffset={-10}
+              fontSize={0.18}
+              outlineColor={String(colors.wire)}
+              outlineWidth={0.012}
+              position={label}
+              renderOrder={WIDGET_RENDER_ORDER + 5}
+            >
+              {axis.label}
+            </Text>
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -190,17 +319,87 @@ function buildHslSphereGeometry(): BufferGeometry {
   const colors = new Float32Array(position.count * 3);
 
   for (let index = 0; index < position.count; index += 1) {
-    const [r, g, b] = magnetizationHslRgb(
+    const [red, green, blue] = magnetizationHslRgb(
       position.getX(index),
       position.getY(index),
       position.getZ(index),
     );
     const offset = index * 3;
-    colors[offset] = r;
-    colors[offset + 1] = g;
-    colors[offset + 2] = b;
+    colors[offset] = red;
+    colors[offset + 1] = green;
+    colors[offset + 2] = blue;
   }
 
   geometry.setAttribute("color", new BufferAttribute(colors, 3));
   return geometry;
+}
+
+function updateScreenAnchor(
+  group: Group,
+  camera: Camera,
+  size: { height: number; width: number },
+  anchor: readonly [number, number, number],
+  vectors: AnchorVectors,
+): number {
+  const distance = Math.max(WIDGET_CAMERA_DISTANCE, cameraNear(camera) + 0.1);
+  const worldHeight = visibleWorldHeight(camera, distance);
+  const worldWidth = worldHeight * (size.width / Math.max(size.height, 1));
+  const worldPerPixel = worldHeight / Math.max(size.height, 1);
+
+  vectors.right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  vectors.up.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  vectors.forward.setFromMatrixColumn(camera.matrixWorld, 2).normalize().negate();
+  vectors.center.copy(camera.position).addScaledVector(vectors.forward, distance);
+  vectors.position
+    .copy(vectors.center)
+    .addScaledVector(vectors.right, (anchor[0] / Math.max(size.width, 1)) * worldWidth)
+    .addScaledVector(vectors.up, (anchor[1] / Math.max(size.height, 1)) * worldHeight);
+
+  group.position.copy(vectors.position);
+  return worldPerPixel;
+}
+
+function cameraNear(camera: Camera): number {
+  const near = (camera as { near?: unknown }).near;
+  return typeof near === "number" ? near : 0.1;
+}
+
+function visibleWorldHeight(camera: Camera, distance: number): number {
+  if ("isOrthographicCamera" in camera && camera.isOrthographicCamera) {
+    const orthographicCamera = camera as {
+      bottom?: unknown;
+      top?: unknown;
+      zoom?: unknown;
+    };
+    const top = Number(orthographicCamera.top ?? 1);
+    const bottom = Number(orthographicCamera.bottom ?? -1);
+    const zoom = Number(orthographicCamera.zoom ?? 1) || 1;
+    return Math.abs(top - bottom) / zoom;
+  }
+
+  const fov = Number((camera as { fov?: unknown }).fov ?? 42);
+  return 2 * Math.tan((fov * Math.PI) / 360) * distance;
+}
+
+function scaleDirection(
+  direction: readonly [number, number, number],
+  scale: number,
+): [number, number, number] {
+  return [
+    direction[0] * scale,
+    direction[1] * scale,
+    direction[2] * scale,
+  ];
+}
+
+function rgbCss([red, green, blue]: readonly [number, number, number]): string {
+  return `rgb(${Math.round(red * 255)} ${Math.round(green * 255)} ${Math.round(
+    blue * 255,
+  )})`;
+}
+
+function axisTipRotation(axisId: string): [number, number, number] {
+  if (axisId === "x") return [0, 0, -Math.PI / 2];
+  if (axisId === "z") return [Math.PI / 2, 0, 0];
+  return [0, 0, 0];
 }

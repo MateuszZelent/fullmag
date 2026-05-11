@@ -116,17 +116,21 @@ export function resolveFemPartSelectionByBoundaryFace(
 
   for (const part of domain.partsById.values()) {
     if (partIncludesBoundaryFace(part, faceIndex)) {
-      return {
-        kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
-        label: part.label,
-        nodeId: part.id,
-        objectId: part.object_id ?? null,
-        part,
-      };
+      return selectionForMeshPart(part);
     }
   }
 
   return null;
+}
+
+export function selectionForMeshPart(part: MeshPart): Viewport3DPartSelection {
+  return {
+    kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
+    label: part.label,
+    nodeId: part.id,
+    objectId: part.object_id ?? null,
+    part,
+  };
 }
 
 export function resolveMeshPartBounds(

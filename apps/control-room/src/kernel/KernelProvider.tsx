@@ -4,12 +4,17 @@ import { useEffect, useMemo, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
 import { ControlRoomApi } from "./api/ControlRoomApi";
+import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
 import {
   resolveControlRoomApiBase,
   resolveControlRoomWebSocketUrl,
 } from "./api/apiRuntimeTarget";
 import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
+import { createCommandContext } from "./commands/commandContext";
 import { CommandRegistry } from "./commands/CommandRegistry";
+import {
+  dispatchShortcutCommand,
+} from "./commands/commandShortcuts";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
 import { KernelContext } from "./KernelContext";
@@ -46,6 +51,9 @@ function createKernel(): KernelApi {
   const visualization = new ObjectVisualizationController();
 
   for (const cmd of SHELL_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of GEOMETRY_LIFECYCLE_COMMANDS) {
     commands.register(cmd);
   }
 
@@ -99,12 +107,27 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent): void {
+      const context = createCommandContext("shortcut", kernel);
+      dispatchShortcutCommand(kernel.commands, event, context);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [kernel]);
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const kernel = useMemo(() => createKernel(), []);
 
   return (
     <KernelContext.Provider value={kernel}>
       <RealtimeConnector kernel={kernel} />
+      <CommandShortcutConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>
   );

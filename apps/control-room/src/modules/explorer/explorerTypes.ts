@@ -14,9 +14,9 @@ export type ExplorerNodeKind =
   | "object.root"
   | "object.geometry"
   | "object.material"
+  | "object.physics"
   | "object.mesh"
   | "object.visualization"
-  | "object.initial_state"
   | "airbox.visualization"
   | "materials.root"
   | "material.entry"
@@ -38,6 +38,12 @@ export type ExplorerNodeKind =
 
 export type ExplorerNodeStatus =
   | "ready"
+  | "primitive-only"
+  | "mesh-stale"
+  | "mesh-building"
+  | "mesh-ready"
+  | "mesh-failed"
+  | "validation-blocked"
   | "stale"
   | "running"
   | "failed"
@@ -80,6 +86,7 @@ export interface ModelTreeObjectSnapshot {
   id: string;
   label: string;
   geometryKind?: string | null;
+  magnetization?: string | null;
   material?: string | null;
   meshStatus?: ExplorerNodeStatus;
 }

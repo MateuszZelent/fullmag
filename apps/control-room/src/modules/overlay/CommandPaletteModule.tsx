@@ -138,7 +138,6 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     isOpen,
     query,
     setQuery,
-    toggle,
   } = useCommandPalette();
   const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
@@ -152,19 +151,6 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     },
     [commandVersion, kernel.commands],
   );
-
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent): void {
-      const modifier = event.ctrlKey || event.metaKey;
-      if (modifier && event.shiftKey && event.key.toLowerCase() === "p") {
-        event.preventDefault();
-        toggle();
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [toggle]);
 
   useEffect(() => {
     return kernel.bus.on("command:submitted", ({ commandId }) => {

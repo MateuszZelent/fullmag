@@ -70,11 +70,12 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/solver/status` | live solver state: runtime state, step, dt, torque, convergence, warnings |
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `meshing/summary` | lightweight mesh dashboard summary and revision pointers |
+| `meshing/builds` | mesh build history collection |
 | `meshing/builds/current` | current build/pipeline state and current resolved build target |
 | `meshing/builds/latest-successful` | last successful build reference or artifact summary |
 | `meshing/semantics` | solver-domain mesh semantics: universe/shared-domain/object configs and solver mesh identity |
 | `meshing/meshes/shared-domain/manifest` | mesh identity, object segments, mesh parts, and tree/selection metadata |
-| `meshing/meshes/*/quality` and `meshing/meshes/*/report` | detailed quality and report diagnostics |
+| `meshing/meshes/*/quality`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed quality, report, and realized size-field diagnostics |
 
 Transitional duplicate fields in meshing schemas are allowed only for current frontend adapters and
 must be documented as transitional in OpenAPI schema descriptions. New consumers should read from the
@@ -109,6 +110,7 @@ Current object-authoring routes:
 | `/v2/sessions/current/model/geometry/realizations` | `POST` | Create a derived geometry realization snapshot for a requested backend target. |
 | `/v2/sessions/current/model/geometry/realizations/current` | `GET` | Read the current derived geometry realization snapshot. |
 | `/v2/sessions/current/model/geometry/diagnostics` | `GET` | Read geometry diagnostics for the current scene. |
+| `/v2/sessions/current/model/geometry/diagnostics/{diagnostic_id}` | `GET` | Read one geometry diagnostic detail when the backend exposes a stable diagnostic id. |
 
 `POST /model/transactions` supports these authoring transaction kinds:
 
@@ -149,6 +151,18 @@ Required mesh topology access patterns:
 - per-part topology,
 - airbox as a mesh part.
 
+Current mesh build and object-mesh resource routes:
+
+| Route | Method | Meaning |
+|---|---|---|
+| `/v2/sessions/current/meshing/builds` | `GET` | Read mesh build history. |
+| `/v2/sessions/current/meshing/builds/current` | `GET` | Read the active/current mesh build projection. |
+| `/v2/sessions/current/meshing/builds/latest-successful` | `GET` | Read the latest successful mesh build projection. |
+| `/v2/sessions/current/meshing/meshes/objects/{object_id}/topology` | `GET` | Read object-scoped binary topology when available. |
+| `/v2/sessions/current/meshing/meshes/objects/{object_id}/report` | `GET` | Read object mesh report diagnostics. |
+| `/v2/sessions/current/meshing/meshes/objects/{object_id}/quality` | `GET` | Read object mesh quality diagnostics. |
+| `/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field` | `GET` | Read object realized size-field projection. |
+
 Required field sample scopes:
 
 | Query | Meaning |
@@ -172,7 +186,7 @@ OpenAPI v2 and generated TypeScript types are the transport contract.
 The frontend should use:
 
 - generated OpenAPI types/client for low-level transport,
-- `LiveSessionClient` as the session-scoped API facade,
+- `ControlRoomApi` as the session-scoped API facade,
 - resource hooks for caching and invalidation,
 - domain adapters for FDM/FEM interpretation,
 - binary codecs for FMVP/FMMT payloads.

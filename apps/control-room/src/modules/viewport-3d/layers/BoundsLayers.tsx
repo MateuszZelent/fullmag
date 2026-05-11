@@ -2,8 +2,14 @@
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { ColorRepresentation } from "three";
+import type { ThreeEvent } from "@react-three/fiber";
 
-import { resolveMeshPartBounds, type Viewport3DMeshPart } from "../viewport3dDomainAdapter";
+import {
+  resolveMeshPartBounds,
+  selectionForMeshPart,
+  type Viewport3DMeshPart,
+  type Viewport3DPartSelection,
+} from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DBounds,
@@ -112,13 +118,17 @@ export function DomainBoxLayer({
 
 export function AirboxLayer({
   colors,
+  vectorColorMode,
   fieldModel,
+  onSelectPart,
   settings,
   topologyModel,
   tracker,
 }: {
   colors: Viewport3DColors;
+  vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
+  onSelectPart: (selection: Viewport3DPartSelection) => void;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   tracker: Viewport3DResourceTracker;
@@ -127,42 +137,50 @@ export function AirboxLayer({
 
   return (
     <>
-      {topologyModel?.airboxParts.map((partModel) => (
-        <group key={partModel.part.id}>
-          {settings.shaderVisible ? (
-            <BoundsBox
-              bounds={resolveMeshPartBounds(partModel.part)}
-              color={colors.accent}
-              opacity={opacityFromSettings(settings)}
-              wireframe={false}
-            />
-          ) : null}
-          {settings.wireframeVisible ? (
-            <BoundsBox
-              bounds={resolveMeshPartBounds(partModel.part)}
-              color={colors.wire}
-              opacity={opacityFromSettings(settings)}
-            />
-          ) : null}
-          {settings.pointsVisible ? (
-            <BoundsPoints
-              bounds={resolveMeshPartBounds(partModel.part)}
-              color={colors.wire}
-              opacity={opacityFromSettings(settings)}
-            />
-          ) : null}
-          {settings.vectorsVisible ? (
-            <VectorFieldLayer
-              colors={colors}
-              opacity={opacityFromSettings(settings)}
-              segments={
-                fieldModel?.partVectorSegments.get(partModel.part.id) ?? null
-              }
-              tracker={tracker}
-            />
-          ) : null}
-        </group>
-      ))}
+      {topologyModel?.airboxParts.map((partModel) => {
+        const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+          event.stopPropagation();
+          onSelectPart(selectionForMeshPart(partModel.part));
+        };
+
+        return (
+          <group key={partModel.part.id} onPointerDown={handlePointerDown}>
+            {settings.shaderVisible ? (
+              <BoundsBox
+                bounds={resolveMeshPartBounds(partModel.part)}
+                color={colors.accent}
+                opacity={opacityFromSettings(settings)}
+                wireframe={false}
+              />
+            ) : null}
+            {settings.wireframeVisible ? (
+              <BoundsBox
+                bounds={resolveMeshPartBounds(partModel.part)}
+                color={colors.wire}
+                opacity={opacityFromSettings(settings)}
+              />
+            ) : null}
+            {settings.pointsVisible ? (
+              <BoundsPoints
+                bounds={resolveMeshPartBounds(partModel.part)}
+                color={colors.wire}
+                opacity={opacityFromSettings(settings)}
+              />
+            ) : null}
+            {settings.vectorsVisible ? (
+              <VectorFieldLayer
+                colors={colors}
+                colorMode={vectorColorMode}
+                opacity={opacityFromSettings(settings)}
+                segments={
+                  fieldModel?.partVectorSegments.get(partModel.part.id) ?? null
+                }
+                tracker={tracker}
+              />
+            ) : null}
+          </group>
+        );
+      })}
     </>
   );
 }

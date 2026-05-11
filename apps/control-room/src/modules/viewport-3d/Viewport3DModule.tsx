@@ -38,10 +38,16 @@ import {
   resolveTopologyBounds,
 } from "./viewport3dRenderModel";
 import {
+  buildViewport3DPrimitiveRenderModel,
+  resolvePrimitiveSelectionBounds,
+  type Viewport3DPrimitiveObject,
+} from "./viewport3dPrimitiveModel";
+import {
   getViewport3DCacheStats,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
   useViewport3DFieldVector,
+  useViewport3DScene,
   useViewport3DSharedDomainManifest,
   useViewport3DVisualizationState,
 } from "./viewport3dResources";
@@ -68,6 +74,7 @@ export default function Viewport3DModule({
   const vectorColorMode =
     visualizationState.data?.vector_style.color_mode ?? "orientation";
   const domainMeta = useViewport3DDomainMeta();
+  const scene = useViewport3DScene();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const topology = useViewport3DDomainTopology();
   const fieldVector = useViewport3DFieldVector(quantityId, FULL_FIELD_QUERY);
@@ -100,11 +107,21 @@ export default function Viewport3DModule({
       ),
     [fieldVector.data, topologyRenderModel, vectorScale],
   );
-  const selectionBounds = resolveViewport3DSelectionBounds(
-    selection,
-    femDomain,
-    bounds,
+  const primitiveModel = useMemo(
+    () =>
+      buildViewport3DPrimitiveRenderModel(
+        scene.data,
+        sharedDomainManifest.data,
+      ),
+    [scene.data, sharedDomainManifest.data],
   );
+  const selectionBounds =
+    resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
+    resolveViewport3DSelectionBounds(
+      selection,
+      femDomain,
+      bounds,
+    );
   const fallbackSettings = useMemo(
     () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
     [visualizationState.data],
@@ -131,10 +148,24 @@ export default function Viewport3DModule({
       ),
     [fallbackSettings, objectVisualizationSnapshot],
   );
+  const getObjectSettings = useCallback(
+    (object: Viewport3DPrimitiveObject) =>
+      resolveVisualizationSettings(
+        objectVisualizationSnapshot,
+        {
+          id: object.objectId,
+          kind: "object",
+          label: object.label,
+        },
+        fallbackSettings,
+      ),
+    [fallbackSettings, objectVisualizationSnapshot],
+  );
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
     fieldVector.error?.message ??
+    scene.error?.message ??
     domainMeta.error?.message ??
     sharedDomainManifest.error?.message ??
     visualizationState.error?.message ??
@@ -175,6 +206,24 @@ export default function Viewport3DModule({
     },
     [select],
   );
+  const onSelectObject = useCallback(
+    (object: Viewport3DPrimitiveObject) => {
+      select({
+        kind: "object.root",
+        label: object.label,
+        nodeId: `model:object:${object.objectId}`,
+        objectId: object.objectId,
+        ref: {
+          kind: "object.root",
+          nodeId: `model:object:${object.objectId}`,
+          objectId: object.objectId,
+          type: "scene-object",
+          visualizationTargetId: `object:${object.objectId}`,
+        },
+      });
+    },
+    [select],
+  );
 
   return (
     <section
@@ -210,14 +259,18 @@ export default function Viewport3DModule({
             femDomain={femDomain}
             fieldModel={fieldRenderModel}
             fitRevision={commandState.fitRevision}
+            getObjectSettings={getObjectSettings}
             getPartSettings={getPartSettings}
             hslReferenceVisible={hslReferenceVisible}
+            onSelectObject={onSelectObject}
             onSelectDomain={onSelectDomain}
             onSelectPart={onSelectPart}
+            primitiveModel={primitiveModel}
             resetCameraRevision={commandState.resetCameraRevision}
             selectionBounds={selectionBounds}
             topologyModel={topologyRenderModel}
             tracker={tracker}
+            vectorColorMode={vectorColorMode}
             viewCubeVisible={commandState.widgets.viewCubeVisible}
           />
         </Canvas>

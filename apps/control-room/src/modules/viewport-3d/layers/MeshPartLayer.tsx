@@ -7,6 +7,7 @@ import { BufferAttribute, BufferGeometry } from "three";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  selectionForMeshPart,
   type Viewport3DMeshPart,
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
@@ -26,6 +27,7 @@ import { opacityFromSettings } from "./viewport3DLayerSettings";
 
 export function MeshPartLayer({
   colors,
+  vectorColorMode,
   fieldModel,
   onSelectPart,
   partModel,
@@ -34,6 +36,7 @@ export function MeshPartLayer({
   tracker,
 }: {
   colors: Viewport3DColors;
+  vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
@@ -74,13 +77,7 @@ export function MeshPartLayer({
   const part = partModel.part;
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
-    onSelectPart({
-      kind: "mesh-part",
-      label: part.label,
-      nodeId: part.id,
-      objectId: part.object_id ?? null,
-      part,
-    });
+    onSelectPart(selectionForMeshPart(part));
   };
 
   return (
@@ -122,6 +119,7 @@ export function MeshPartLayer({
       {settings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
+          colorMode={vectorColorMode}
           opacity={opacityFromSettings(settings)}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
           tracker={tracker}

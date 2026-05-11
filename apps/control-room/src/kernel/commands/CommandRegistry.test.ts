@@ -79,6 +79,32 @@ describe("CommandRegistry", () => {
     expect(registry.isEnabled("cmd", { source: "palette" })).toBe(false);
   });
 
+  it("execute refuses disabled commands before running side effects", async () => {
+    const { bus, registry } = setupWithBus();
+    const submitted = vi.fn();
+    const completed = vi.fn();
+    const runFn = vi.fn(() => ({ status: "completed" as const }));
+    bus.on("command:submitted", submitted);
+    bus.on("command:completed", completed);
+    registry.register(
+      command("selection-only", {
+        disabledReason: () => "Select an object first.",
+        isEnabled: () => false,
+        run: runFn,
+      }),
+    );
+
+    const result = await registry.execute("selection-only", { source: "test" });
+
+    expect(result).toEqual({
+      message: "Select an object first.",
+      status: "failed",
+    });
+    expect(runFn).not.toHaveBeenCalled();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(completed).not.toHaveBeenCalled();
+  });
+
   it("isActive delegates to command predicate", () => {
     const registry = new CommandRegistry();
     registry.register(

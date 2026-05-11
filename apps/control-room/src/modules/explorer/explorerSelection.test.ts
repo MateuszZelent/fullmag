@@ -58,6 +58,13 @@ describe("selectExplorerNode", () => {
       kind: "object.root",
       label: "Free layer",
       moduleSource: "explorer",
+      ref: {
+        kind: "object.root",
+        nodeId: "model:object:free-layer",
+        objectId: "free-layer",
+        type: "scene-object",
+        visualizationTargetId: "object:free-layer",
+      },
     });
     expect(events).toEqual([
       {

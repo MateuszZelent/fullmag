@@ -80,6 +80,12 @@ export class CommandRegistry {
     if (!cmd) {
       return { status: "failed", message: `Unknown command: ${id}` };
     }
+    if (cmd.isEnabled && !cmd.isEnabled(context)) {
+      return {
+        status: "failed",
+        message: cmd.disabledReason?.(context) ?? `Command disabled: ${id}`,
+      };
+    }
 
     this.bus?.emit("command:submitted", { commandId: id });
 

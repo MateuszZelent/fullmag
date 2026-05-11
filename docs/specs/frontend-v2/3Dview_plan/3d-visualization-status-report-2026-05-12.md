@@ -2,98 +2,121 @@
 
 **Data:** 2026-05-12  
 **Zakres:** aktualny working tree `apps/control-room` oraz dokumentacja `docs/specs/frontend-v2`.  
-**Werdykt:** wizualizacja 3D ma duzy kawalek architektury i lokalnych bramek, ale **nie jest jeszcze gotowa jako w pelni dzialajacy workflow uzytkownika**. Kod przechodzi lokalne testy, typecheck, lint i build, ale realny smoke w przegladarce pokazuje pusty canvas 3D oraz blad runtime zasobow API: `Failed to execute 'fetch' on 'Window': Illegal invocation`.
+**Werdykt:** 3D visualization jest po duzym kroku naprzod i lokalnie przechodzi kluczowe bramki kodu, ale **nie jest jeszcze w 100% zamknietym workflow uzytkownika**. Najwazniejsza zmiana wzgledem poprzedniej wersji raportu: smoke runtime nie konczy sie juz na starym `Illegal invocation`/blank-center-pixel problemie. Produkcyjny `/workspace` wyrenderowal widoczny niepusty R3F canvas w kontrolowanym trybie bez aktywnej sesji. Nadal brakuje smoke na realnej aktywnej sesji z opublikowanymi zasobami `model/scene`, topology, fields i websocketem.
 
 ## Odpowiedzi krotkie
 
 | Pytanie | Odpowiedz |
 |---|---|
-| Czy mamy zaimplementowane wszystkie sekcje z dokumentacji nowego frontendu v2? | **Nie.** `22-implementation-plan.md` nadal ma wiele otwartych checkboxow w Phase 0, 1, 3, 4, 5, 6, 7 i 8. Phase 2 jest oznaczona jako domknieta, a w Phase 5 zamkniety jest tylko fragment per-target visualization overrides. |
-| Czy 3D viewport jest zaimplementowany? | **Czesciowo.** Jest modul `viewport-3d`, manifest, jeden R3F canvas `frameloop="demand"`, store kamery, zasoby, adaptery FEM/FDM, warstwy mesh/airbox/vector oraz testy. Brakuje jednak zielonego smoke runtime i pelnego pokrycia acceptance z dokumentacji. |
-| Czy ribbony 3D juz dzialaja? | **Czesciowo.** `Selected Display` jest podlaczone do wspolnego rejestru wizualizacji. Globalne menu typu `Airbox`, `Vectors`, `Quantity`, `Mesh View` zawiera UI, ale wiele pozycji jest statyczne i nie ma `commandId`, `onCheckedChange` ani `onValueChange`, wiec nie mutuje jeszcze stanu. |
-| Czy moge wlaczyc/wylaczyc airbox? | **Nie jako pewny globalny ribbon workflow.** Rejestr ma target `airbox`, inspector i selected-target flow potrafia go zmieniac po selekcji airboxa. Globalny przycisk `View -> Airbox` pokazuje statyczne checkboxy i nie jest zrodlem prawdy. Live smoke dodatkowo nie potwierdza renderu. |
-| Czy moge wlaczyc wektory w airboxie dla `H_demag`, `H_eff` itd.? | **Nie w pelnym produkcyjnym sensie.** Warstwa `AirboxLayer` moze narysowac `VectorFieldLayer` dla airbox node selection, jesli `vectorsVisible=true` i istnieje `fieldVector`. Brakuje jednak dzialajacego runtime fetch w przegladarce, podlaczonego wyboru quantity w ribbonie oraz osobnego, zweryfikowanego workflow dla `H_demag`/`H_eff` w airboxie. |
-| Czy moge wlaczac/wylaczac shader, zostawic samo wireframe albo same points? | **Modelowo tak, workflow czesciowo.** `ObjectVisualizationController`, inspector i `Selected Display` obsluguja `shaderVisible`, `wireframeVisible`, `pointsVisible` i `renderMode`. Warstwy 3D respektuja te flagi. Nie jest to jeszcze potwierdzone live, a globalny `Mesh View` jest w duzej czesci statycznym menu. |
+| Czy mamy zaimplementowane wszystkie sekcje z dokumentacji nowego frontendu v2? | **Nie.** `22-implementation-plan.md` nadal ma otwarte fragmenty poza domknietym kernelem i czescia Phase 5. Ten raport dotyczy slice'u 3D/geometry/mesh lifecycle, nie calego frontendu v2. |
+| Czy 3D viewport jest zaimplementowany? | **Czesciowo, w uzywalnym szkielecie.** Jest modul `viewport-3d`, manifest, jeden R3F canvas `frameloop="demand"`, store kamery, zasoby, adaptery FEM/FDM, mesh/airbox/vector layers, primitive fallback i smoke canvas. Brakuje aktywnej sesji do pelnego acceptance. |
+| Czy rezygnujemy z podzialu viewportu? | **Tak.** Aktualna specyfikacja Phase 5 trzyma jeden R3F viewport, jeden canvas, bez split/multi-pane. Multi-view wymagalby osobnego ADR i planu wydajnosciowego. |
+| Czy ribbony 3D juz dzialaja? | **W duzej czesci tak.** `Quantity`, `Vectors`, `Mesh View` patchuja backendowy `/visualization/state`; `Airbox` patchuje target `airbox`; Geometry/Mesh lifecycle actions ida przez `CommandRegistry`. Trim i czesc zaawansowanego stylowania airboxa pozostaja niepelne. |
+| Czy moge wlaczyc/wylaczyc airbox? | **Modelowo tak.** `View -> Airbox` ma callbacki dla visible/shaded/wireframe/points/vectors/opacity/reset i mutuje canonical target `airbox`. Smoke potwierdza niepusty canvas, ale nie potwierdza jeszcze realnych danych airbox z aktywnej sesji. |
+| Czy moge wlaczyc wektory w airboxie dla `H_demag`, `H_eff` itd.? | **Przeplyw jest podlaczony, ale niepotwierdzony na aktywnej sesji.** `Quantity` ustawia aktywna quantity, a `Airbox` ustawia `vectorsVisible`; renderer czyta `fieldVector` aktywnej quantity i mapuje airbox przez node selection. Brakuje testu z backendiem publikujacym te pola. |
+| Czy moge wlaczac/wylaczac shader, zostawic samo wireframe albo same points? | **Dla modelu targetow tak.** Inspector, selected ribbon i 3D layers respektuja `shaderVisible`, `wireframeVisible`, `pointsVisible`, `opacityPercent` i `renderMode`. Wizualna walidacja realnych danych pozostaje otwarta. |
 
 ## Mapa dokumentacja -> implementacja
 
-| Obszar dokumentacji | Stan wedlug kodu i planu |
+| Obszar dokumentacji | Stan wedlug kodu i walidacji |
 |---|---|
-| `01-module-kernel-architecture.md` | Modul `viewport-3d` ma manifest, slot `viewport-main`, root `Viewport3DModule` i komendy. Pliki sa rozbite, bez importow z `apps/web` w skanach lokalnych. |
-| `04-state-management.md` | Kamera i widgety 3D sa w prywatnym `viewport3dStore`; duze zasoby ida przez hooks/cache, nie przez store. Per-target display preferences sa w `ObjectVisualizationController` jako tymczasowy client-owned registry. |
-| `05-viewport-architecture.md` | Jest jeden R3F canvas i dirty/demand frameloop. Topologia i pole sa rozdzielone w zasobach, ale smoke pokazuje, ze browser runtime nie dociera jeszcze do danych. |
-| `12-ribbon-toolbar-command-system.md` | Komendy fit/reset/orientation sa zarejestrowane. Selected-target display korzysta z rejestru. Globalne display menus nie sa jeszcze pelnym rendererem komend i zasobow. |
-| `14-viewport-3d-module.md` | Wiekszosc struktury Phase 5 istnieje: canvas, camera, mesh, airbox, selection, diagnostics, resource hooks. Nie ma pelnego potwierdzenia: browser/canvas smoke pada, a quantity switch/no topology rebuild nie jest udowodniony live. |
-| `21-cutover-acceptance.md` | Nie spelnione. V2 nie ma jeszcze wszystkich workflow: project start, pelne authoring modules, 2D/charts/console/results, desktop, side-by-side parity i legacy freeze. |
-| `22-implementation-plan.md` | Nie jest caly odhaczony. Najwazniejsze: Phase 2 oznaczona jako gotowa; Phase 5 ma tylko czesciowe checkboxy dla per-target overrides. |
-| `23-per-object-visualization-control.md` | Najlepiej domkniety fragment: explorer nodes, inspector, selected ribbon i 3D warstwy uzywaja wspolnego rejestru targetow object/part/airbox. Backend persistence nadal nie jest czescia tego slice'u. |
+| `01-module-kernel-architecture.md` | `viewport-3d` jest modulem z manifestem, slotem `viewport-main`, root componentem i command contributions. Komunikacja idzie przez kernel/API/resource hooks, nie przez importy miedzy modulami. |
+| `04-state-management.md` | Kamera i widgety 3D sa w prywatnym `viewport3dStore`; zasoby ida przez resource hooks/cache; per-target display state jest przez `ObjectVisualizationController` i backendowy visualization state. |
+| `05-viewport-architecture.md` | Jest jeden R3F canvas i dirty/demand frameloop. Topologia i field resources sa rozdzielone. Kontrolowany smoke potwierdzil render canvas; aktywna sesja jest nadal niezweryfikowana. |
+| `12-ribbon-toolbar-command-system.md` | Fit/reset/orientation, Geometry lifecycle i Mesh lifecycle actions sa w `CommandRegistry`. Disabled-state guard dziala przed side effectami. |
+| `14-viewport-3d-module.md` | Struktura Phase 5 jest w duzej czesci obecna: canvas, camera, mesh, airbox, selection, diagnostics, resource hooks, primitive fallback. Otwarte: aktywna sesja, quantity switch bez pelnej live-profiler walidacji, pelny memory stress dla 3D/2D. |
+| `15-viewport-2d-module.md` | Po decyzji o jednym R3F viewport 2D pozostaje niezaleznym modulem dla slices/profiles/charts, nie podzialem 3D viewportu. Ten slice nie wdraza jeszcze 2D. |
+| `21-cutover-acceptance.md` | Nie spelnione globalnie. Nadal brakuje pelnego start-project workflow, authoring modules, 2D/charts/console/results, desktop, parity i legacy freeze. |
+| `22-implementation-plan.md` | Nie jest caly odhaczony. Phase 2 kernel contracts sa domkniete; Phase 5 ma istotny postep, ale nie ma jeszcze 100% acceptance. |
+| `23-per-object-visualization-control.md` | Najlepiej domkniety fragment tego slice'u: explorer nodes, inspector, selected ribbon i 3D layers uzywaja wspolnego target modelu object/part/airbox. Backend persistence targetow nadal wymaga finalizacji. |
+| `24-geometry-object-authoring-lifecycle.md` | Wdrozone sa command adapters dla object draft/apply/delete/focus i invalidacje resource hooks. Pelne field-level editing, transform commit i validation display pozostaja otwarte. |
 
 ## Stan ribbonow 3D
 
 ### Dziala w kodzie
 
-- `viewport-3d.fit` i `viewport-3d.reset-camera` mutuja `viewport3dStore`.
-- `viewport-3d.toggle-viewcube` oraz `viewport-3d.hsl-reference-*` sa w manifeście i maja testy.
-- `buildSelectedVisualizationGroup(...)` buduje `Selected Display` na podstawie aktualnej selekcji i `ObjectVisualizationController`.
-- Inspector `ObjectVisualizationPanel` i selected ribbon zmieniaja ten sam rejestr: `visible`, `shaderVisible`, `wireframeVisible`, `pointsVisible`, `vectorsVisible`, `opacityPercent`, `renderMode`.
+- `viewport-3d.fit`, `viewport-3d.reset-camera`, `viewport-3d.toggle-viewcube` i HSL reference commands sa zarejestrowane w module.
+- `Selected Display` buduje UI z aktualnej selekcji i `ObjectVisualizationController`.
+- Inspector `ObjectVisualizationPanel` i selected ribbon zmieniaja ten sam target registry: `visible`, `shaderVisible`, `wireframeVisible`, `pointsVisible`, `vectorsVisible`, `opacityPercent`, `renderMode`.
+- `View -> Quantity` patchuje `active_quantity_id`, overlay quantity, colormap, auto-scale i vector color mode.
+- `View -> Vectors` patchuje `layers.vectors.visible`, glyph style, density, max glyphs, component, domain i vector style.
+- `View -> Mesh View` patchuje globalny render mode surface/wireframe/points oraz opacity warstw mesh.
+- `View -> Airbox` patchuje canonical target `airbox` dla visible, shaded, wireframe, points, vectors, opacity i resetu.
+- Geometry/Mesh ribbon actions `geometry.add-*`, `geometry.focus-primitive`, `geometry.delete-object`, `geometry.commit-object-draft`, `mesh.build-selected` i `mesh.build-shared-domain` ida przez `CommandRegistry`.
+- Shortcut dispatcher wykonuje komendy z `shortcut` przez `CommandRegistry` i ignoruje editable targets.
 
-### Nie jest jeszcze pelnym workflow
+### Nadal nie jest pelnym workflow
 
-- `View -> Airbox` ma checkboxy i suwaki, ale w aktualnym kodzie sa to glownie statyczne nodes. Nie ida przez command registry ani przez `ObjectVisualizationController`.
-- `View -> Vectors` i `View -> Quantity` zawieraja statyczne `radio-group`/checkbox/slider nodes bez podlaczonego `onValueChange` do `/visualization/state`.
-- `View -> Mesh View` zawiera statyczny wybor render mode i opacity, ale nie aktualizuje jeszcze globalnego stanu renderera.
-- Selected-target flow zalezy od poprawnej selekcji object/airbox/part. Dla explorer `Airbox Visualization` sciezka istnieje; dla bezposredniego klikniecia airbox layer nie widac jeszcze pointer handlera w `AirboxLayer`.
+- `View -> Mesh View -> 3D trim` nadal jest glownie statycznym UI.
+- Zaawansowane parametry airbox style, np. vector density/length/thickness/alpha i mono-color picker, nie maja jeszcze pelnego backendowego modelu per-airbox.
+- `Focus airbox` wybiera canonical `Airbox Visualization` node, a klik w `AirboxLayer` wybiera `mesh-part-airbox`, ale realny active-session inspector flow wymaga jeszcze smoke.
+- Mesh build integration invaliduje immediate resources, ale build completion, provenance match i stale badge clearing po zakonczonym buildzie pozostaja otwarte.
 
 ## Stan airbox i pol wektorowych
 
-Airbox jest modelowany poprawnie jako osobny target, nie jako `SceneObject`:
+Airbox jest osobnym targetem wizualizacji, nie `SceneObject`:
 
 - `AIRBOX_VISUALIZATION_TARGET` ma id `airbox`.
 - `resolveVisualizationTargetFromSelection(...)` mapuje `airbox.visualization` i `mesh-part-airbox` na target `airbox`.
-- `adaptFemSharedDomainManifest(...)` rozdziela `role === "air"` do `airboxParts`.
+- Adapter FEM shared-domain rozdziela `role === "air"` do `airboxParts`.
 - `AirboxLayer` renderuje shader/wireframe/points/vectors zależnie od `VisualizationTargetSettings`.
 
 Ograniczenia:
 
-- `Viewport3DModule` pobiera tylko aktywne `quantityId` z `/visualization/state` i domyslnie `m`.
-- Field vector request idzie jako `FULL_FIELD_QUERY` (`scope_kind: "full"`), a airbox dostaje node selection dopiero w warstwie renderowania.
-- Nie ma jeszcze podlaczonego UI, ktory zmienia aktywna quantity na `H_demag`, `H_eff`, `H_ex` itd. z ribbonu.
-- Live smoke nie potwierdza zadnego pola, bo zasoby API w przegladarce koncza sie bledem fetch.
-
-Wniosek: backend/API i renderer maja kierunek na airbox vectors, ale uzytkownik nie ma jeszcze pewnego, zweryfikowanego przycisku "wlacz airbox vectors dla H_demag/H_eff".
+- Field vector request jest nadal scoped jako full-field query, a airbox jest filtrowany/renderowany po stronie render modelu.
+- Airbox vectors dla `H_demag`/`H_eff` wymagaja aktywnego backendu publikujacego te pola; obecny lokalny API smoke mial `active_session:false`.
+- Skalarny coloring nadal aktualizuje atrybut kolorow `BufferGeometry` w warstwach mesh/fallback. To nie jest rebuild topologii, ale nie jest jeszcze idealnym uniform/GPU-buffer split dla wszystkich przypadkow.
 
 ## Smoke runtime
 
-Uruchomiono lokalny serwer produkcyjny:
+Stary problem opisany w poprzedniej wersji raportu byl dwojaki:
+
+1. `ControlRoomApi` uzywal niezwiazanego `globalThis.fetch`, co w przegladarce dawalo `Illegal invocation`.
+2. Smoke czytal `gl.readPixels` z WebGL drawing buffer przy `preserveDrawingBuffer=false`, przez co potrafil widziec blank canvas mimo widocznego composited renderu.
+
+Naprawione:
+
+- `ControlRoomApi` binduje domyslny fetch przez `globalThis.fetch.bind(globalThis)`.
+- Regresja jednostkowa wymusza poprawny receiver dla fetch.
+- `smoke-viewport-3d.mjs` probkuje compositor screenshot PNG zamiast polegac na `gl.readPixels`.
+- Smoke potrafi wstrzyknac `CONTROL_ROOM_API_BASE_URL` do `window.__FULLMAG_CONFIG__.controlRoomApiBase`.
+- Smoke ma jawny tryb `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1`, ktory dopuszcza 404 dla `/v2/sessions/current/*` i websocketu tylko wtedy, gdy testujemy sam render canvas bez aktywnej sesji.
+
+Sprawdzony wariant produkcyjny:
 
 ```bash
-pnpm --dir apps/control-room exec next start -p 3910
+# terminal 1, z katalogu apps/control-room
+pnpm exec next start --hostname 127.0.0.1 --port 3920
+
+# terminal 2
+FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 FULLMAG_API_PORT=8181 .fullmag/local/bin/fullmag-api
+
+# terminal 3
+CONTROL_ROOM_URL=http://127.0.0.1:3920/workspace \
+CONTROL_ROOM_API_BASE_URL=http://127.0.0.1:8181 \
+CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1 \
+pnpm --dir apps/control-room smoke:viewport-3d
 ```
 
-Nastepnie uruchomiono smoke:
-
-```bash
-CONTROL_ROOM_URL=http://127.0.0.1:3910/workspace pnpm --dir apps/control-room smoke:viewport-3d
-```
-
-Wynik po uruchomieniu poza sandboxem:
+Wynik:
 
 ```text
-Error: 3D viewport canvas center pixel is blank.
+Viewport 3D smoke passed at http://127.0.0.1:3920/workspace.
 ```
 
-Dodatkowy sampling 25 pikseli canvas:
+Wazna uwaga operacyjna: `next start` musi byc uruchamiany z `apps/control-room`. Wariant `pnpm --dir apps/control-room exec next start` potrafil serwowac HTML, ale psul serwowanie niektorych `_next/static` chunkow dla `/workspace`.
+
+Strict smoke bez `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1` nadal nie przechodzi z lokalnym API na 8181, bo ten proces nie ma aktywnej sesji:
 
 ```text
-hasContext: true
-canvas: 741 x 528
-nonBlank sampled pixels: 0 / 25
-browser console errors: 0
-HUD: Failed to execute 'fetch' on 'Window': Illegal invocation
-HUD diagnostics: q:m top:none field:none obj:0 air:0 geo:0 cache:0B frames:2
+active_session: false
+404 /v2/sessions/current/status
+404 /v2/sessions/current/model/scene
+404 /v2/sessions/current/data/domain/meta
+404 /v2/sessions/current/events/ws
 ```
 
-Najbardziej prawdopodobne zrodlo runtime failure: domyslny `fetchImpl = fetch` w `ControlRoomApi` jest trzymany jako metoda instancji i wywolywany przez `this.fetchImpl(...)`. W przegladarce niepodpiety `window.fetch` wywolany z blednym `this` moze dac `Illegal invocation`. Testy jednostkowe tego nie lapia, bo mockowany/node'owy fetch nie wymaga `Window` jako receivera.
+To nie jest dowod, ze viewport nie renderuje; to brak aktywnego runtime/session fixture do acceptance testu.
 
 ## Weryfikacja lokalna
 
@@ -101,55 +124,49 @@ Zielone:
 
 ```bash
 pnpm --dir apps/control-room typecheck
-pnpm --dir apps/control-room test -- --run viewport
 pnpm --dir apps/control-room lint
+pnpm --dir apps/control-room test
 pnpm --dir apps/control-room check:api-hygiene
 pnpm --dir apps/control-room audit:idle-performance
+pnpm --dir apps/control-room build
 pnpm --dir apps/control-room build:webpack
-pnpm --dir apps/control-room build   # po uruchomieniu poza sandboxem
 node --check apps/control-room/scripts/smoke-viewport-3d.mjs
+git diff --check
 ```
 
 Wyniki istotne:
 
 ```text
-Test Files  47 passed (47)
-Tests       153 passed (153)
+Typecheck passed.
+ESLint passed with --max-warnings=0.
+Test Files 59 passed (59).
+Tests 203 passed (203).
+API hygiene passed.
 Idle performance audit passed.
-Webpack build: passed.
-Turbopack build: passed outside sandbox; sandbox failure was EPERM on helper process/port binding.
+Default Next/Turbopack build passed after sandbox escalation.
+Webpack build compiled, but nie jest runtime proof dla /workspace.
+Viewport 3D controlled smoke passed on production /workspace.
 ```
 
-Czerwone:
+Ograniczenia walidacji:
 
-```bash
-CONTROL_ROOM_URL=http://127.0.0.1:3910/workspace pnpm --dir apps/control-room smoke:viewport-3d
-```
-
-Powod:
-
-```text
-WebGL context exists, but sampled canvas is blank.
-Viewport HUD reports: Failed to execute 'fetch' on 'Window': Illegal invocation.
-```
+- `react-doctor` nie zostal wykonany. Standardowe uruchomienie padlo na DNS `EAI_AGAIN registry.npmjs.org`; eskalowane `npx -y react-doctor@latest ...` zostalo odrzucone, bo wymagaloby pobrania i wykonania zewnetrznego pakietu npm.
+- Strict active-session smoke nadal wymaga realnego backendu z aktywna sesja i opublikowanymi zasobami.
+- Live airbox vectors dla `H_demag`/`H_eff` nie zostaly jeszcze potwierdzone na aktywnych danych.
 
 ## Prompt-to-artifact checklist
 
 | Wymaganie z promptu | Dowod w tym raporcie | Status |
 |---|---|---|
-| Uzyc `executing-plans` | Wczytano skill; potraktowano zadanie jako raportowy plan audytu, nie implementacje produkcyjna. | Done |
-| Uzyc `test-driven-development` | Nie zmieniano kodu produkcyjnego, wiec TDD nie mialo zastosowania poza istniejacymi testami. Raport dokumentuje uruchomione testy. | Done / not applicable |
-| Uzyc `frontend-v2-viewport-lifecycle` | Sprawdzono single canvas, frameloop demand, resource hooks/cache, tracker, smoke i idle audit. | Done |
-| Uzyc `frontend-v2-module-architecture` | Sprawdzono manifest, slot, command registry i skany braku `apps/web`/direct fetch w badanym zakresie. | Done |
-| Uzyc `frontend-v2-state-hygiene` | Sprawdzono ownership: resource hooks/cache vs store vs visualization registry. | Done |
-| Uzyc `high-end-visual-design` | Sprawdzono token/ribbon tests i brak raw hex w ribbon contribution testach; brak finalnej visual acceptance przez blank canvas. | Partial |
-| Uzyc `verification-before-completion` | Uruchomiono swieze bramki lokalne, build i browser smoke; raport rozroznia zielone i czerwone dowody. | Done |
-| Raport o stanie implementacji 3D | Ten plik. | Done |
-| Odpowiedz czy wszystkie sekcje frontend v2 sa zaimplementowane | Sekcja "Odpowiedzi krotkie" i "Mapa dokumentacja -> implementacja". | Done |
-| Odpowiedz czy 3D ribbony dzialaja | Sekcja "Stan ribbonow 3D". | Done |
-| Odpowiedz airbox on/off | Sekcje "Odpowiedzi krotkie", "Stan ribbonow 3D", "Stan airbox i pol wektorowych". | Done |
-| Odpowiedz airbox vectors dla `H_demag`/`H_eff` | Sekcja "Stan airbox i pol wektorowych". | Done |
-| Odpowiedz shader/wireframe/points | Sekcje "Odpowiedzi krotkie" i "Stan ribbonow 3D". | Done |
+| Przeczytac plan `3Dview_plan` i skorygowac kierunek | Raport odnosi sie do Phase 5, single R3F viewport i rezygnacji ze split viewportu. | Done |
+| Nie dzielic viewportu 3D | `14-viewport-3d-module.md` i ten raport trzymaja one-R3F/one-canvas decision. | Done |
+| Zweryfikowac czy 3D jest zaimplementowane | Sekcje "Odpowiedzi krotkie", "Mapa dokumentacja -> implementacja" i "Smoke runtime". | Done |
+| Zweryfikowac ribbony 3D | Sekcja "Stan ribbonow 3D". | Done |
+| Zweryfikowac airbox on/off | Sekcje "Odpowiedzi krotkie", "Stan ribbonow 3D", "Stan airbox i pol wektorowych". | Done modelowo, live partial |
+| Zweryfikowac airbox vectors dla `H_demag`/`H_eff` | Sekcja "Stan airbox i pol wektorowych". | Partial |
+| Zweryfikowac shader/wireframe/points | Sekcje "Odpowiedzi krotkie" i "Stan ribbonow 3D". | Partial live |
+| Browser/canvas smoke | `smoke:viewport-3d` przeszedl na produkcyjnym `/workspace` z `ALLOW_MISSING_SESSION=1`. | Partial |
+| Lokalne bramki jakosci | Typecheck, lint, test, API hygiene, idle audit, build, diff check. | Done |
 
 ## Decyzja koncowa
 
@@ -157,9 +174,8 @@ Nie nalezy jeszcze mowic, ze frontend-v2 3D visualization jest "100% gotowa".
 
 Najbardziej uczciwy status:
 
-1. **Architektura i lokalne bramki sa mocne:** modul 3D, per-target registry, inspector/selected ribbon, API facade, cache i test suite sa w working tree.
-2. **Globalne ribbony 3D sa tylko czesciowo podlaczone:** czesc jest realna przez command registry i selected-target registry, czesc jest nadal statycznym UI.
-3. **Airbox ma dobry model targetu, ale workflow uzytkownika nie jest domkniety:** szczegolnie globalne airbox toggles i airbox field vectors dla wybranych quantity.
-4. **Najwiekszy aktualny blocker live:** browser runtime fetch failure powoduje brak danych i pusty canvas.
-
-Najblizszy P0 fix przed kolejnym raportem: naprawic browser `fetchImpl` w `ControlRoomApi`, dodac regresje, ponownie uruchomic `smoke:viewport-3d`, a potem dopiero oceniac wizualnie shadery/wireframe/points i airbox vectors na realnych danych.
+1. **Kod jest lokalnie shippable dla tego slice'u:** typecheck, lint, test, API hygiene, idle audit, build, syntax check i diff check sa zielone.
+2. **3D viewport runtime nie jest juz blank:** produkcyjny `/workspace` wyrenderowal niepusty R3F canvas w kontrolowanym smoke.
+3. **Architektura idzie w dobra strone:** jeden R3F canvas, command registry, resource hooks, target visualization model, primitive fallback i geometry/mesh lifecycle commands sa spojne z dokumentacja.
+4. **Najwiekszy blocker acceptance:** brak aktywnej lokalnej sesji do strict smoke z prawdziwymi zasobami `model/scene`, topology, fields, websocket i airbox vector data.
+5. **Najblizszy P0 nastepny krok:** przygotowac deterministic active-session fixture albo uruchomic realny runtime z sesja, a potem powtorzyc strict `smoke:viewport-3d` bez `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1` dla `m`, `H_demag`, `H_eff`, airbox vectors oraz shader/wireframe/points toggles.

@@ -17,6 +17,10 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
 describe("ribbon structure", () => {
   it("defines visible content and dropdown structure for every ribbon tab", () => {
     for (const tab of RIBBON_TABS) {
@@ -85,6 +89,7 @@ describe("ribbon structure", () => {
         moduleSource: "test",
         nodeId: "model:object:free-layer:visualization",
         objectId: "free-layer",
+        ref: null,
       },
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
@@ -115,6 +120,7 @@ describe("ribbon structure", () => {
         moduleSource: null,
         nodeId: null,
         objectId: null,
+        ref: null,
       },
       visualization,
       visualizationSnapshot: visualization.getSnapshot(),
@@ -150,6 +156,49 @@ describe("ribbon structure", () => {
       vectorsVisible: true,
       visible: false,
     });
+  });
+
+  it("focuses the airbox ribbon action by selecting the airbox visualization node", () => {
+    const selectionSet = vi.fn();
+    const content = buildRibbonTabContent("view", {
+      commandContext: {
+        selection: { set: selectionSet } as never,
+        source: "ribbon",
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const focusNode = airboxAction?.menu?.find(
+      (node) => node.type === "item" && node.id === "airbox:focus",
+    );
+
+    expect(focusNode).toMatchObject({ disabled: false });
+    if (focusNode?.type !== "item") {
+      throw new Error("Expected airbox focus menu item");
+    }
+
+    focusNode.onSelect?.();
+
+    expect(selectionSet).toHaveBeenCalledWith(
+      {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+      },
+      "ribbon",
+    );
   });
 
   it("patches canonical visualization state from global Quantity controls", async () => {
@@ -344,6 +393,7 @@ describe("ribbon structure", () => {
         moduleSource: null,
         nodeId: null,
         objectId: null,
+        ref: null,
       },
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
@@ -382,10 +432,60 @@ describe("ribbon structure", () => {
     });
     expect(hslNode).not.toHaveProperty("onValueChange");
   });
+
+  it("mirrors command registry disabled state into ribbon actions", () => {
+    const commands = new CommandRegistry();
+    commands.register({
+      id: "mesh.build-selected",
+      title: "Build Selected Mesh",
+      group: "mesh",
+      scope: "selection",
+      disabledReason: () => "Select a scene object to build its mesh.",
+      isEnabled: () => false,
+      run: () => ({ status: "completed" }),
+    });
+
+    const content = buildRibbonTabContent("geometry", {
+      commands,
+      commandContext: { source: "test" },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const buildAction = content?.groups
+      .find((group) => group.id === "builder-lifecycle")
+      ?.actions.find((action) => action.id === "mesh.build-selected");
+
+    expect(buildAction).toMatchObject({
+      disabled: true,
+      tooltip: "Select a scene object to build its mesh.",
+    });
+  });
+
+  it("exposes object draft commit from the Geometry lifecycle group", () => {
+    const lifecycleGroup = ALL_TAB_CONTENT.geometry.groups.find(
+      (group) => group.id === "builder-lifecycle",
+    );
+
+    expect(lifecycleGroup?.actions.map((action) => action.id)).toEqual(
+      expect.arrayContaining([
+        "geometry.commit-object-draft",
+        "mesh.build-selected",
+      ]),
+    );
+  });
 });
 
 function createVisualizationRibbonContext(
-  visualizationState: Partial<VisualizationStateResource>,
+  visualizationState: DeepPartial<VisualizationStateResource>,
 ) {
   const patches: VisualizationStatePatch[] = [];
   const invalidations: Array<[string, number | string]> = [];
@@ -414,6 +514,7 @@ function createVisualizationRibbonContext(
         moduleSource: null,
         nodeId: null,
         objectId: null,
+        ref: null,
       },
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),

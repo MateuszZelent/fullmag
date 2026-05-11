@@ -18,7 +18,7 @@ export const overlayManifest: ModuleManifest = {
         scope: "global",
         shortcut: "Ctrl+Shift+P",
         run: () => {
-          commandPaletteStore.open();
+          commandPaletteStore.toggle();
           return { status: "completed" };
         },
       },

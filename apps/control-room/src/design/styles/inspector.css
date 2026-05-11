@@ -118,6 +118,94 @@
   font-family: var(--fm-font-ui);
 }
 
+.fm-inspector-edit-field {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.7fr) minmax(0, 1fr);
+  min-height: 30px;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding: 0 var(--fm-space-2);
+}
+
+.fm-inspector-edit-field > span:first-child {
+  overflow: hidden;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-inspector-edit-field input {
+  min-width: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  padding: 3px var(--fm-space-2);
+}
+
+.fm-inspector-edit-field input:focus-visible {
+  border-color: var(--fm-accent);
+  outline: 2px solid color-mix(in srgb, var(--fm-accent) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.fm-inspector-edit-field__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-inspector-edit-field__control small {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-inspector-vector-field {
+  display: grid;
+  gap: 1px;
+}
+
+.fm-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-1);
+}
+
+.fm-inspector-validation-message {
+  margin: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+  padding: var(--fm-space-2);
+}
+
+.fm-inspector-validation-message[data-kind="error"] {
+  border-color: color-mix(in srgb, var(--fm-danger) 55%, var(--fm-border-subtle));
+  color: var(--fm-danger);
+}
+
+.fm-inspector-validation-message[data-kind="success"] {
+  border-color: color-mix(in srgb, var(--fm-success) 45%, var(--fm-border-subtle));
+  color: var(--fm-success);
+}
+
+.fm-inspector-validation-list {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin: 0;
+  color: var(--fm-warning);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-1) var(--fm-space-3);
+}
+
 /* ── Visualization toggles and controls ── */
 .fm-visualization-toggle-grid {
   display: grid;

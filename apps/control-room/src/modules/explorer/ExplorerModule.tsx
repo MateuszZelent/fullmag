@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { Search } from "lucide-react";
 
-import { useResource } from "@/kernel/resources/useResource";
+import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 
@@ -12,28 +12,25 @@ import {
   buildModelTree,
   filterExplorerNodes,
 } from "./builders/buildModelTree";
+import { modelTreeSnapshotFromScene } from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
 import {
   setExplorerActiveTab,
   setExplorerFilterText,
   useExplorerStore,
 } from "./explorerStore";
-import type { ModelTreeSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 
 export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const explorer = useExplorerStore();
   const { selection } = useSelection(moduleId);
-  const loadModelSnapshot = useCallback(async (): Promise<ModelTreeSnapshot | null> => null, []);
-  const modelResource = useResource<ModelTreeSnapshot | null>({
-    load: loadModelSnapshot,
-    resourceKey: "model:scene",
-  });
+  const modelResource = useSceneResource();
 
   const nodes = useMemo(() => {
+    const modelSnapshot = modelTreeSnapshotFromScene(modelResource.data);
     const baseNodes =
       explorer.activeTab === "model"
-        ? buildModelTree(modelResource.data)
+        ? buildModelTree(modelSnapshot)
         : buildExplorerTree(explorer.activeTab);
     return filterExplorerNodes(baseNodes, explorer.filterText);
   }, [explorer.activeTab, explorer.filterText, modelResource.data]);

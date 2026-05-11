@@ -599,6 +599,148 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("commits geometry authoring transactions through the v2 model transaction resource", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse({
+          committed_scene: { objects: [{ id: "box-1" }], revision: 12 },
+          scene_revision: 12,
+          transaction_kind: "create_object",
+        });
+      },
+    });
+
+    const response = await api.model.commitTransaction({
+      base_revision: 11,
+      geometry: { kind: "box", size: [1, 2, 3] },
+      kind: "create_object",
+      name: "Box 1",
+      object_id: "box-1",
+      transform: { rotation: [0, 0, 0], translation: [0, 0, 0] },
+    });
+
+    expect(response.scene_revision).toBe(12);
+    expect(response.committed_scene).toEqual({
+      objects: [{ id: "box-1" }],
+      revision: 12,
+    });
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/model/transactions",
+    );
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestBody(observedInit?.body)).toEqual({
+      base_revision: 11,
+      geometry: { kind: "box", size: [1, 2, 3] },
+      kind: "create_object",
+      name: "Box 1",
+      object_id: "box-1",
+      transform: { rotation: [0, 0, 0], translation: [0, 0, 0] },
+    });
+  });
+
+  it("mutates geometry objects through v2 model object facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({ revision: requests.length });
+      },
+    });
+
+    await api.model.createObject({
+      base_revision: 1,
+      geometry: { kind: "box" },
+      name: "Box",
+      object_id: "box",
+    });
+    await api.model.patchObject("box", {
+      base_revision: 2,
+      name: "Box updated",
+      transform: { translation: [1, 0, 0] },
+    });
+    await api.model.patchObjectGeometry("box", {
+      base_revision: 3,
+      geometry: { kind: "box", size: [2, 2, 2] },
+    });
+    await api.model.deleteObject("box");
+
+    expect(requests).toEqual([
+      {
+        body: {
+          base_revision: 1,
+          geometry: { kind: "box" },
+          name: "Box",
+          object_id: "box",
+        },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects",
+      },
+      {
+        body: {
+          base_revision: 2,
+          name: "Box updated",
+          transform: { translation: [1, 0, 0] },
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/box",
+      },
+      {
+        body: {
+          base_revision: 3,
+          geometry: { kind: "box", size: [2, 2, 2] },
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/box/geometry",
+      },
+      {
+        body: null,
+        method: "DELETE",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/box",
+      },
+    ]);
+  });
+
+  it("loads geometry diagnostics and mesh build resources through facade methods", async () => {
+    const seenUrls: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        seenUrls.push(String(url));
+        return jsonResponse({ revision: seenUrls.length });
+      },
+    });
+
+    await api.model.geometry.capabilities();
+    await api.model.geometry.validation();
+    await api.model.geometry.diagnostics();
+    await api.model.geometry.realization();
+    await api.meshing.builds.current();
+    await api.meshing.builds.latestSuccessful();
+    await api.meshing.objectReport("box");
+    await api.meshing.objectQuality("box");
+
+    expect(seenUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/model/geometry/capabilities",
+      "http://127.0.0.1:8765/v2/sessions/current/model/geometry/validation",
+      "http://127.0.0.1:8765/v2/sessions/current/model/geometry/diagnostics",
+      "http://127.0.0.1:8765/v2/sessions/current/model/geometry/realizations/current",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/builds/current",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/builds/latest-successful",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/report",
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/quality",
+    ]);
+  });
+
   it("treats an absent shared-domain manifest as not applicable", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>

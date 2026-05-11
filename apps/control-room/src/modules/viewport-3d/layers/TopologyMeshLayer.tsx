@@ -18,6 +18,7 @@ import { MeshPartLayer } from "./MeshPartLayer";
 
 export function TopologyMeshLayer({
   colors,
+  vectorColorMode,
   fallbackSettings,
   femDomain,
   fieldModel,
@@ -28,6 +29,7 @@ export function TopologyMeshLayer({
   topologyModel,
 }: {
   colors: Viewport3DColors;
+  vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
@@ -50,6 +52,7 @@ export function TopologyMeshLayer({
             settings={getPartSettings(partModel.part)}
             topologyModel={topologyModel}
             tracker={tracker}
+            vectorColorMode={vectorColorMode}
           />
         ))}
       </>
@@ -66,6 +69,7 @@ export function TopologyMeshLayer({
       onSelectPart={onSelectPart}
       topologyModel={topologyModel}
       tracker={tracker}
+      vectorColorMode={vectorColorMode}
     />
   );
 }

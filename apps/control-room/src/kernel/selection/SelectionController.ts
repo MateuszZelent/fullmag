@@ -6,6 +6,15 @@ import { EMPTY_SELECTION, type Selection } from "./selectionTypes";
 
 type SelectionListener = (selection: Selection) => void;
 
+function sameSelectionRef(
+  left: Selection["ref"],
+  right: Selection["ref"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 /**
  * Kernel-owned selection state.
  * Modules read via `get()`, mutate via `set()`.
@@ -26,14 +35,21 @@ export class SelectionController {
     source: ModuleId,
   ): void {
     const prev = this.state;
-    this.state = { ...prev, ...patch, moduleSource: source };
+    const carriesRef = Object.prototype.hasOwnProperty.call(patch, "ref");
+    this.state = {
+      ...prev,
+      ...patch,
+      moduleSource: source,
+      ref: carriesRef ? patch.ref ?? null : null,
+    };
 
     // Skip if nothing actually changed.
     if (
       prev.kind === this.state.kind &&
       prev.label === this.state.label &&
       prev.objectId === this.state.objectId &&
-      prev.nodeId === this.state.nodeId
+      prev.nodeId === this.state.nodeId &&
+      sameSelectionRef(prev.ref, this.state.ref)
     ) {
       return;
     }
@@ -49,7 +65,10 @@ export class SelectionController {
   }
 
   clear(source: ModuleId): void {
-    this.set({ kind: null, label: null, objectId: null, nodeId: null }, source);
+    this.set(
+      { kind: null, label: null, objectId: null, nodeId: null, ref: null },
+      source,
+    );
   }
 
   subscribe(listener: SelectionListener): () => void {

@@ -23,6 +23,7 @@ import { opacityFromSettings } from "./viewport3DLayerSettings";
 
 export function FallbackTopologyMeshLayer({
   colors,
+  vectorColorMode,
   fallbackSettings,
   femDomain,
   fieldModel,
@@ -32,6 +33,7 @@ export function FallbackTopologyMeshLayer({
   tracker,
 }: {
   colors: Viewport3DColors;
+  vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
@@ -130,6 +132,7 @@ export function FallbackTopologyMeshLayer({
       {fallbackSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
+          colorMode={vectorColorMode}
           opacity={opacityFromSettings(fallbackSettings)}
           segments={fieldModel?.fullVectorSegments ?? null}
           tracker={tracker}

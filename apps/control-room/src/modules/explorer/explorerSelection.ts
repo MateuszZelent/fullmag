@@ -1,6 +1,38 @@
+import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 
 import type { ExplorerNode } from "./explorerTypes";
+
+function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (
+    node.objectId &&
+    (node.kind === "object.root" ||
+      node.kind === "object.geometry" ||
+      node.kind === "object.material" ||
+      node.kind === "object.physics" ||
+      node.kind === "object.mesh" ||
+      node.kind === "object.visualization")
+  ) {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      objectId: node.objectId,
+      type: "scene-object",
+      visualizationTargetId: `object:${node.objectId}`,
+    };
+  }
+
+  if (node.kind === "airbox.visualization") {
+    return {
+      kind: "airbox.visualization",
+      nodeId: node.id,
+      type: "airbox",
+      visualizationTargetId: "airbox",
+    };
+  }
+
+  return null;
+}
 
 export function selectExplorerNode(
   kernel: KernelApi,
@@ -13,6 +45,7 @@ export function selectExplorerNode(
       label: node.label,
       nodeId: node.id,
       objectId: node.objectId ?? null,
+      ref: selectionRefFromNode(node),
     },
     source,
   );

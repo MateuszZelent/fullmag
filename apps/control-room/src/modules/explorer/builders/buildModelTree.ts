@@ -21,6 +21,7 @@ function formatSize(size: readonly [number, number, number] | null | undefined):
 function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
+  const meshStatus = object.meshStatus ?? "primitive-only";
 
   return {
     id: parentId,
@@ -30,8 +31,11 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
     badge: object.geometryKind ?? "object",
     icon: "box",
     objectId,
-    status: "ready",
+    status: meshStatus,
     contextCommands: [
+      "geometry.focus-primitive",
+      "geometry.delete-object",
+      "mesh.build-selected",
       "workspace.focus-selection",
       "explorer.expand-all",
       "explorer.collapse-all",
@@ -49,6 +53,17 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         contextCommands: ["workspace.focus-selection"],
       },
       {
+        id: `${parentId}:physics`,
+        kind: "object.physics",
+        label: "Physics",
+        parentId,
+        badge: object.magnetization ?? "default",
+        icon: "activity",
+        objectId,
+        status: "ready",
+        contextCommands: ["workspace.focus-selection"],
+      },
+      {
         id: `${parentId}:material`,
         kind: "object.material",
         label: "Material",
@@ -61,12 +76,13 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
       {
         id: `${parentId}:mesh`,
         kind: "object.mesh",
-        label: "Mesh Override",
+        label: "Mesh",
         parentId,
-        badge: object.meshStatus === "stale" ? "out of date" : "default",
+        badge: meshStatusBadge(meshStatus),
         icon: "mesh",
         objectId,
-        status: object.meshStatus ?? "ready",
+        status: meshStatus,
+        contextCommands: ["mesh.build-selected", "mesh.open-object-report"],
       },
       {
         id: `${parentId}:visualization`,
@@ -79,18 +95,19 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
       },
-      {
-        id: `${parentId}:initial-state`,
-        kind: "object.initial_state",
-        label: "Initial State",
-        parentId,
-        badge: "m0",
-        icon: "wave",
-        objectId,
-        status: "ready",
-      },
     ],
   };
+}
+
+function meshStatusBadge(status: ExplorerNodeStatus): string {
+  if (status === "primitive-only") return "primitive";
+  if (status === "mesh-stale") return "mesh stale";
+  if (status === "mesh-building") return "building";
+  if (status === "mesh-ready") return "mesh ready";
+  if (status === "mesh-failed") return "failed";
+  if (status === "validation-blocked") return "blocked";
+  if (status === "stale") return "out of date";
+  return "default";
 }
 
 const DEFAULT_OBJECTS: ModelTreeObjectSnapshot[] = [
@@ -116,7 +133,7 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
     label: "Universe",
     size: [2e-6, 1e-6, 5e-8] as const,
   };
-  const objects = snapshot?.objects?.length ? snapshot.objects : DEFAULT_OBJECTS;
+  const objects = snapshot?.objects ?? DEFAULT_OBJECTS;
 
   return [
     {

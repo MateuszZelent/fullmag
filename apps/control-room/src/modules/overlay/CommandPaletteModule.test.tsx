@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 
+import { commandPaletteStore } from "./commandPaletteStore";
 import {
   CommandPaletteView,
   executePaletteCommand,
   filterPaletteCommands,
 } from "./CommandPaletteModule";
+import { overlayManifest } from "./manifest";
 
 describe("CommandPaletteModule", () => {
   it("renders all registered commands when open", () => {
@@ -86,5 +88,18 @@ describe("CommandPaletteModule", () => {
     });
 
     expect(run).toHaveBeenCalledWith({ source: "palette" });
+  });
+
+  it("keeps the command palette shortcut as a toggle command", () => {
+    commandPaletteStore.close();
+    const command = overlayManifest.contributes?.commands?.find(
+      (item) => item.id === "workspace.command-palette",
+    );
+
+    expect(command?.shortcut).toBe("Ctrl+Shift+P");
+    command?.run({ source: "shortcut" });
+    expect(commandPaletteStore.getSnapshot().isOpen).toBe(true);
+    command?.run({ source: "shortcut" });
+    expect(commandPaletteStore.getSnapshot().isOpen).toBe(false);
   });
 });

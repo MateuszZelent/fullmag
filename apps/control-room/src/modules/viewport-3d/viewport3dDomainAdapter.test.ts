@@ -10,6 +10,7 @@ import {
   adaptFemSharedDomainManifest,
   resolveFemPartSelectionByBoundaryFace,
   resolveMeshPartBounds,
+  selectionForMeshPart,
 } from "./viewport3dDomainAdapter";
 
 function fdmMeta(cells: number): DomainMetaResource {
@@ -108,6 +109,17 @@ describe("viewport3dDomainAdapter", () => {
       objectId: "object-1",
     });
     expect(resolveFemPartSelectionByBoundaryFace(domain, 999)).toBeNull();
+  });
+
+  it("resolves airbox mesh parts to the canonical airbox selection kind", () => {
+    const domain = adaptFemSharedDomainManifest(manifestFixture());
+
+    expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      kind: "mesh-part-airbox",
+      label: "Airbox",
+      nodeId: "part-air",
+      objectId: null,
+    });
   });
 
   it("resolves mesh-part bounds for airbox and selection layers", () => {

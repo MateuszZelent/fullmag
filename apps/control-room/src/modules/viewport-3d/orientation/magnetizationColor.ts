@@ -14,6 +14,32 @@ export function magnetizationHslRgb(
   return hslToRgb(hue, saturation, lightness);
 }
 
+export const HSL_REFERENCE_AXES = [
+  {
+    color: [1, 0, 0],
+    direction: [1, 0, 0],
+    id: "x",
+    label: "+X",
+  },
+  {
+    color: magnetizationHslRgb(0, 1, 0),
+    direction: [0, 1, 0],
+    id: "y",
+    label: "+Y",
+  },
+  {
+    color: [1, 1, 1],
+    direction: [0, 0, 1],
+    id: "z",
+    label: "+Z",
+  },
+] satisfies Array<{
+  color: [number, number, number];
+  direction: [number, number, number];
+  id: string;
+  label: string;
+}>;
+
 function normalizedHue(hue: number): number {
   return hue < 0 ? hue + 1 : hue;
 }
