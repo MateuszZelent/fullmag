@@ -4,6 +4,8 @@ import {
   AIRBOX_VISUALIZATION_TARGET,
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
+  DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
@@ -14,6 +16,101 @@ import {
 } from "./ObjectVisualizationController";
 
 describe("ObjectVisualizationController", () => {
+  it("keeps production style defaults for object and airbox targets", () => {
+    expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
+      geometryScope: "full",
+      opacityPercent: 55,
+      renderMode: "surface+edges",
+      shaderColorMode: "orientation",
+      shaderMonoColor: "var(--fm-surface-magnetic)",
+      shaderVisible: true,
+      vectorAlphaPercent: 100,
+      vectorColorMode: "orientation",
+      vectorMonoColor: "var(--fm-accent)",
+      vectorThickness: 1,
+      vectorsVisible: false,
+      wireframeColor: "var(--fm-border-strong)",
+      wireframeOpacityPercent: 100,
+      wireframeVisible: true,
+    });
+    expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
+      geometryScope: "full",
+      opacityPercent: 28,
+      renderMode: "wireframe",
+      shaderColorMode: "monochrome",
+      shaderMonoColor: "var(--fm-airbox-fill)",
+      shaderVisible: false,
+      vectorAlphaPercent: 100,
+      vectorColorMode: "orientation",
+      vectorMonoColor: "var(--fm-accent)",
+      vectorThickness: 1,
+      vectorsVisible: false,
+      wireframeColor: "var(--fm-airbox-wire)",
+      wireframeOpacityPercent: 100,
+      wireframeVisible: true,
+    });
+  });
+
+  it("patches and normalizes per-target shader wireframe and vector style fields", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "arch", kind: "object" as const };
+
+    controller.patchTarget(target, {
+      shaderColorMode: "monochrome",
+      shaderMonoColor: "#ff3366",
+      vectorAlphaPercent: 144,
+      vectorColorMode: "x",
+      vectorMonoColor: "#44ccff",
+      vectorThickness: -3,
+      wireframeColor: "#111111",
+      wireframeOpacityPercent: -20,
+    });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      shaderColorMode: "monochrome",
+      shaderMonoColor: "#ff3366",
+      vectorAlphaPercent: 100,
+      vectorColorMode: "x",
+      vectorMonoColor: "#44ccff",
+      vectorThickness: 0.1,
+      wireframeColor: "#111111",
+      wireframeOpacityPercent: 0,
+    });
+  });
+
+  it("keeps local-only airbox style fields out of backend visualization patches", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        shaderColorMode: "monochrome",
+        shaderMonoColor: "#ffffff",
+        vectorAlphaPercent: 44,
+        vectorColorMode: "magnitude",
+        vectorThickness: 2,
+        wireframeColor: "#888888",
+        wireframeOpacityPercent: 75,
+      }),
+    ).toEqual({});
+    expect(
+      airboxLocalVisualizationPatchFromTargetPatch({
+        shaderColorMode: "monochrome",
+        shaderMonoColor: "#ffffff",
+        vectorAlphaPercent: 44,
+        vectorColorMode: "magnitude",
+        vectorThickness: 2,
+        wireframeColor: "#888888",
+        wireframeOpacityPercent: 75,
+      }),
+    ).toEqual({
+      shaderColorMode: "monochrome",
+      shaderMonoColor: "#ffffff",
+      vectorAlphaPercent: 44,
+      vectorColorMode: "magnitude",
+      vectorThickness: 2,
+      wireframeColor: "#888888",
+      wireframeOpacityPercent: 75,
+    });
+  });
+
   it("resolves canonical target ids from object and airbox selections", () => {
     expect(
       resolveVisualizationTargetFromSelection({
@@ -122,6 +219,7 @@ describe("ObjectVisualizationController", () => {
 
     expect(
       resolveVisualizationSettings(controller.getSnapshot(), target, {
+        ...DEFAULT_OBJECT_VISUALIZATION,
         boundsVisible: false,
         geometryScope: "full",
         opacityPercent: 80,

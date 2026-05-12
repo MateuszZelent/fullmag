@@ -11,6 +11,13 @@ export type VisualizationRenderMode =
   | "surface+edges"
   | "wireframe";
 export type VisualizationGeometryScope = "surface" | "full";
+export type VisualizationColorMode =
+  | "orientation"
+  | "x"
+  | "y"
+  | "z"
+  | "magnitude"
+  | "monochrome";
 
 export interface VisualizationTargetRef {
   id: string;
@@ -24,9 +31,17 @@ export interface VisualizationTargetSettings {
   opacityPercent: number;
   pointsVisible: boolean;
   renderMode: VisualizationRenderMode;
+  shaderColorMode: VisualizationColorMode;
+  shaderMonoColor: string;
   shaderVisible: boolean;
+  vectorAlphaPercent: number;
+  vectorColorMode: VisualizationColorMode;
+  vectorMonoColor: string;
+  vectorThickness: number;
   vectorsVisible: boolean;
   visible: boolean;
+  wireframeColor: string;
+  wireframeOpacityPercent: number;
   wireframeVisible: boolean;
 }
 
@@ -58,21 +73,37 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   opacityPercent: 55,
   pointsVisible: false,
   renderMode: "surface+edges",
+  shaderColorMode: "orientation",
+  shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
+  vectorAlphaPercent: 100,
+  vectorColorMode: "orientation",
+  vectorMonoColor: "var(--fm-accent)",
+  vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
+  wireframeColor: "var(--fm-border-strong)",
+  wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
-  geometryScope: "surface",
+  geometryScope: "full",
   opacityPercent: 28,
   pointsVisible: false,
   renderMode: "wireframe",
+  shaderColorMode: "monochrome",
+  shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: false,
+  vectorAlphaPercent: 100,
+  vectorColorMode: "orientation",
+  vectorMonoColor: "var(--fm-accent)",
+  vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
+  wireframeColor: "var(--fm-airbox-wire)",
+  wireframeOpacityPercent: 100,
   wireframeVisible: true,
 };
 
@@ -350,6 +381,30 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.geometryScope === undefined
       ? {}
       : { geometryScope: patch.geometryScope }),
+    ...(patch.shaderColorMode === undefined
+      ? {}
+      : { shaderColorMode: patch.shaderColorMode }),
+    ...(patch.shaderMonoColor === undefined
+      ? {}
+      : { shaderMonoColor: patch.shaderMonoColor }),
+    ...(patch.vectorAlphaPercent === undefined
+      ? {}
+      : { vectorAlphaPercent: patch.vectorAlphaPercent }),
+    ...(patch.vectorColorMode === undefined
+      ? {}
+      : { vectorColorMode: patch.vectorColorMode }),
+    ...(patch.vectorMonoColor === undefined
+      ? {}
+      : { vectorMonoColor: patch.vectorMonoColor }),
+    ...(patch.vectorThickness === undefined
+      ? {}
+      : { vectorThickness: patch.vectorThickness }),
+    ...(patch.wireframeColor === undefined
+      ? {}
+      : { wireframeColor: patch.wireframeColor }),
+    ...(patch.wireframeOpacityPercent === undefined
+      ? {}
+      : { wireframeOpacityPercent: patch.wireframeOpacityPercent }),
   };
 }
 
@@ -397,6 +452,25 @@ function normalizePatch(
   if (normalized.opacityPercent !== undefined) {
     normalized.opacityPercent = clampOpacity(normalized.opacityPercent);
   }
+  if (normalized.vectorAlphaPercent !== undefined) {
+    normalized.vectorAlphaPercent = clampOpacity(normalized.vectorAlphaPercent);
+  }
+  if (normalized.wireframeOpacityPercent !== undefined) {
+    normalized.wireframeOpacityPercent = clampOpacity(
+      normalized.wireframeOpacityPercent,
+    );
+  }
+  if (normalized.vectorThickness !== undefined) {
+    normalized.vectorThickness = clampScale(normalized.vectorThickness);
+  }
+  if (normalized.shaderColorMode !== undefined) {
+    normalized.shaderColorMode =
+      normalizeColorMode(normalized.shaderColorMode) ?? "orientation";
+  }
+  if (normalized.vectorColorMode !== undefined) {
+    normalized.vectorColorMode =
+      normalizeColorMode(normalized.vectorColorMode) ?? "orientation";
+  }
   if (normalized.renderMode) {
     Object.assign(normalized, renderModePatch(normalized.renderMode));
   }
@@ -418,6 +492,21 @@ function normalizeVisualizationSettings(
 
 function clampOpacity(value: number): number {
   return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function clampScale(value: number): number {
+  return Math.min(8, Math.max(0.1, value));
+}
+
+function normalizeColorMode(value: unknown): VisualizationColorMode | undefined {
+  return value === "orientation" ||
+    value === "x" ||
+    value === "y" ||
+    value === "z" ||
+    value === "magnitude" ||
+    value === "monochrome"
+    ? value
+    : undefined;
 }
 
 function layerOpacityToPercent(value: number): number {
