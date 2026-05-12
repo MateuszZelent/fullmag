@@ -18,6 +18,7 @@ import {
   useMeshSemanticsResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import { useSelection } from "@/kernel/selection/useSelection";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
@@ -54,6 +55,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const meshSemantics = useMeshSemanticsResource({
     enabled: needsMeshResources,
   });
+  const sessionStatus = useSessionStatus();
   const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
     () => kernel.commands.getVersion(),
@@ -90,6 +92,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
         meshSummary: meshSummary.data,
         resources: kernel.resources,
         selection,
+        sessionStatus: sessionStatus.data,
         visualization,
         visualizationSnapshot,
         visualizationState: visualizationState.data,
@@ -107,6 +110,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       meshSemantics.data,
       meshSummary.data,
       selection,
+      sessionStatus.data,
       visualization,
       visualizationSnapshot,
       visualizationState.data,

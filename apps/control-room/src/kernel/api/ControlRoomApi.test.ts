@@ -371,6 +371,43 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads selected object metrics through the v2 simulation object resource", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          energies: {
+            anisotropy: 0,
+            demag: 0,
+            dmi: 0,
+            exchange: 0,
+            total: 0,
+            zeeman: 0,
+          },
+          has_solver_sample: false,
+          magnetization_average: { mx: 1, my: 0, mz: 0 },
+          object_id: "arch_Waveguide",
+          revision: 12,
+          source: "initial_state",
+          step: 0,
+          time_seconds: 0,
+        });
+      },
+    });
+
+    const result = await api.simulation.objects.metrics("arch_Waveguide");
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/objects/arch_Waveguide/metrics",
+    );
+    expect(result).toMatchObject({
+      has_solver_sample: false,
+      object_id: "arch_Waveguide",
+    });
+  });
+
   it("retries idempotent GET failures and records the final request diagnostic", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const seenRequestIds: Array<string | null> = [];

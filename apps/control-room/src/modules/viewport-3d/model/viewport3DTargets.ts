@@ -6,6 +6,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   resolveAirboxVisualizationSettingsFromState,
+  surfaceColorSourceFromColorMode,
   type VisualizationRenderMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
@@ -36,6 +37,12 @@ export function resolveGlobalObjectVisualizationSettings(
     DEFAULT_OBJECT_VISUALIZATION.wireframeVisible;
   const pointsVisible =
     state?.layers?.points?.visible ?? DEFAULT_OBJECT_VISUALIZATION.pointsVisible;
+  const vectorColorMode =
+    state?.vector_style?.color_mode ??
+    DEFAULT_OBJECT_VISUALIZATION.vectorColorMode;
+  const vectorMonoColor =
+    state?.vector_style?.mono_color ??
+    DEFAULT_OBJECT_VISUALIZATION.vectorMonoColor;
 
   return {
     ...DEFAULT_OBJECT_VISUALIZATION,
@@ -50,6 +57,19 @@ export function resolveGlobalObjectVisualizationSettings(
       wireframeVisible,
     }),
     shaderVisible: surfaceVisible,
+    shaderColorMode: vectorColorMode,
+    shaderMonoColor: vectorMonoColor,
+    surfaceColorSource:
+      surfaceColorSourceFromColorMode(vectorColorMode) ??
+      DEFAULT_OBJECT_VISUALIZATION.surfaceColorSource,
+    vectorAlphaPercent: layerOpacityToPercent(
+      state?.vector_style?.alpha ?? 1,
+    ),
+    vectorColorMode,
+    vectorMonoColor,
+    vectorThickness:
+      state?.vector_style?.thickness ??
+      DEFAULT_OBJECT_VISUALIZATION.vectorThickness,
     vectorsVisible:
       state?.layers?.vectors?.visible ??
       state?.vector_glyphs ??

@@ -1156,6 +1156,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/magnetization-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_magnetization_assets_asset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_magnetization_assets_asset_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/model/materials/{material_id}": {
         parameters: {
             query?: never;
@@ -1500,6 +1516,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["simulation_get_sessions_current_simulation_commands_command_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/objects/{object_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_objects_object_id_metrics"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2507,6 +2539,16 @@ export interface components {
             /** @description Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`. */
             solver: components["schemas"]["SolverSummary"];
         };
+        MagnetizationAssetPatchRequest: {
+            asset: Record<string, never>;
+            /** Format: int64 */
+            base_revision?: number | null;
+        };
+        MagnetizationAssetResource: {
+            asset: Record<string, never>;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         MaterialPatchRequest: {
             name?: string | null;
             properties?: null | components["schemas"]["MaterialPropertiesPatchRequest"];
@@ -2949,6 +2991,7 @@ export interface components {
             uptime_seconds: number;
         };
         NullableF64PatchValue: number | null;
+        NullableStringPatchValue: string | null;
         NullableU32PatchValue: number | null;
         ObjectCreateRequest: {
             /** Format: int64 */
@@ -2964,6 +3007,20 @@ export interface components {
             study_universe_mesh?: Record<string, never> | null;
             transform?: Record<string, never> | null;
             universe?: Record<string, never> | null;
+        };
+        ObjectEnergySummary: {
+            /** Format: double */
+            anisotropy: number;
+            /** Format: double */
+            demag: number;
+            /** Format: double */
+            dmi: number;
+            /** Format: double */
+            exchange: number;
+            /** Format: double */
+            total: number;
+            /** Format: double */
+            zeeman: number;
         };
         ObjectGeometryPatchRequest: {
             /** Format: int64 */
@@ -2983,6 +3040,27 @@ export interface components {
             params: Record<string, never>;
             present: boolean;
         };
+        ObjectMagnetizationAverage: {
+            /** Format: double */
+            mx: number;
+            /** Format: double */
+            my: number;
+            /** Format: double */
+            mz: number;
+        };
+        ObjectMetricsResource: {
+            energies: components["schemas"]["ObjectEnergySummary"];
+            has_solver_sample: boolean;
+            magnetization_average: components["schemas"]["ObjectMagnetizationAverage"];
+            object_id: string;
+            /** Format: int64 */
+            revision: number;
+            source: string;
+            /** Format: int64 */
+            step: number;
+            /** Format: double */
+            time_seconds: number;
+        };
         ObjectPatchRequest: {
             /** Format: int64 */
             base_revision?: number | null;
@@ -2990,6 +3068,7 @@ export interface components {
             magnetization_ref?: string | null;
             material_ref?: string | null;
             name?: string | null;
+            notes?: string | null;
             region_name?: string | null;
             transform?: Record<string, never> | null;
             visible?: boolean | null;
@@ -3058,6 +3137,7 @@ export interface components {
         };
         RegionPatchRequest: {
             enabled?: boolean | null;
+            magnetization_ref?: null | components["schemas"]["NullableStringPatchValue"];
             name?: string | null;
         };
         RegionResource: {
@@ -3476,6 +3556,9 @@ export interface components {
         } | {
             /** @enum {string} */
             kind: "compute_fields";
+        } | {
+            /** @enum {string} */
+            kind: "compute_energies";
         } | {
             /** @enum {string} */
             kind: "close";
@@ -6604,6 +6687,84 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_magnetization_assets_asset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical magnetization asset id */
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical magnetization asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagnetizationAssetResource"];
+                };
+            };
+            /** @description No active workspace or magnetization asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_magnetization_assets_asset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Canonical magnetization asset id */
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagnetizationAssetPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Committed canonical magnetization asset */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MagnetizationAssetResource"];
+                };
+            };
+            /** @description Invalid magnetization asset payload */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or magnetization asset not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Base scene revision does not match current scene revision */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_materials_material_id: {
         parameters: {
             query?: never;
@@ -7599,6 +7760,36 @@ export interface operations {
                 };
             };
             /** @description Command not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_objects_object_id_metrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Scene object id or name */
+                object_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Selected object magnetization and energy read-model */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectMetricsResource"];
+                };
+            };
+            /** @description Object or workspace not found */
             404: {
                 headers: {
                     [name: string]: unknown;

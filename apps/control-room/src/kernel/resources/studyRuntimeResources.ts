@@ -4,6 +4,7 @@ import { useCallback } from "react";
 
 import {
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
@@ -14,6 +15,7 @@ import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type {
   CommandQueueStatusResource,
   CurrentRunResource,
+  ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverStatusResource,
@@ -125,6 +127,28 @@ export function useSolverEnergyHistoryResource(limit = 200) {
   );
 
   return useResource<SolverEnergyHistoryResource | null>({
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
+  });
+}
+
+export function useObjectMetricsResource(objectId: string | null | undefined) {
+  const { api } = useKernel();
+  const resourceKey = objectId
+    ? SIMULATION_OBJECT_METRICS_PATH.replace("{object_id}", objectId)
+    : `${SIMULATION_OBJECT_METRICS_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      objectId
+        ? api.simulation.objects
+            .metrics(objectId, { signal })
+            .catch(ignoreMissingResource<ObjectMetricsResource>)
+        : Promise.resolve(null),
+    [api, objectId],
+  );
+
+  return useResource<ObjectMetricsResource | null>({
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,

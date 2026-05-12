@@ -3,30 +3,31 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
-use axum::Json;
 use serde::Deserialize;
 
 use crate::error::ApiError;
-use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
+use crate::fem_slice::{SlabAggregation, fem_tetra_linear_slice, fem_tetra_slab_slice};
 use crate::fem_slice_overlay::{
-    collect_fem_slice_overlay, cut_norm_from_world, fem_normal_bounds_from_nodes,
-    overlay_segments_to_pixel_lines, FemSliceOverlayInput, SliceOverlayBounds,
+    FemSliceOverlayInput, SliceOverlayBounds, collect_fem_slice_overlay, cut_norm_from_world,
+    fem_normal_bounds_from_nodes, overlay_segments_to_pixel_lines,
 };
 use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::{
-    component_etag_token, parse_component, project_values, ComponentSelection,
+    ComponentSelection, component_etag_token, parse_component, project_values,
 };
 use crate::field_render_png::{
-    encode_rgba_matrix_png, encode_rgba_matrix_png_with_lines, encode_scalar_png,
-    encode_scalar_png_with_lines, AutoScaleMode,
+    AutoScaleMode, encode_rgba_matrix_png, encode_rgba_matrix_png_with_lines, encode_scalar_png,
+    encode_scalar_png_with_lines,
 };
 use crate::field_slice::{
-    fdm_projection, fdm_slice, fem_projection_exact, fem_projection_profile, fem_slice_fallback,
+    FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery, FieldSliceQuery,
+    ProjectionResult, ResolvedProjectionQuery, SlicePlane, fdm_projection, fdm_slice,
+    fem_projection_exact, fem_projection_profile, fem_slice_fallback,
     resolve_projection_profile_query, resolve_projection_query, resolve_slice_query,
-    slice_etag_token, FdmField, FemField, FieldProjectionProfileQuery, FieldProjectionQuery,
-    FieldSliceQuery, ProjectionResult, ResolvedProjectionQuery, SlicePlane,
+    slice_etag_token,
 };
 use crate::field_store::serialize_field_vector_binary_v2;
 use crate::orientation_color::apply_magnetization_hsl_rgba;
@@ -422,7 +423,7 @@ fn resolve_field_scope(
         _ => {
             return Err(ApiError::bad_request(format!(
                 "unsupported field scope_kind '{scope_kind}'"
-            )))
+            )));
         }
     };
     let node_indices = scope
@@ -975,9 +976,12 @@ fn projection_etag_token(
             .map(|value| value.to_bits().to_string())
             .unwrap_or_else(|| "none".to_string()),
         q.min_samples,
-        q.tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
-        q.tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
-        q.tile_size.map_or_else(|| "full".to_string(), |value| value.to_string()),
+        q.tile_x
+            .map_or_else(|| "full".to_string(), |value| value.to_string()),
+        q.tile_y
+            .map_or_else(|| "full".to_string(), |value| value.to_string()),
+        q.tile_size
+            .map_or_else(|| "full".to_string(), |value| value.to_string()),
     )
 }
 

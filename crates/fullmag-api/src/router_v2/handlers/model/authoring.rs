@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use serde_json::Value;
 
 use crate::error::ApiError;
@@ -19,10 +19,10 @@ use crate::schemas::authoring::{
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use fullmag_authoring::{
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
-    SceneRegionOverride, ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderUniverseState, Transform3D,
+    GeometryBackendTarget, MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset,
+    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene,
 };
 
 #[utoipa::path(
@@ -714,9 +714,7 @@ pub async fn get_authoring_magnetization_asset(
         .magnetization_assets
         .iter()
         .find(|entry| entry.id == asset_id)
-        .ok_or_else(|| {
-            ApiError::not_found(format!("magnetization asset not found: {asset_id}"))
-        })?;
+        .ok_or_else(|| ApiError::not_found(format!("magnetization asset not found: {asset_id}")))?;
     build_magnetization_asset_resource(&scene, asset).map(Json)
 }
 
@@ -1328,6 +1326,7 @@ fn apply_create_object_transaction(
         physics_stack: Vec::new(),
         object_mesh: None,
         mesh_override: None,
+        notes: None,
         visible: true,
         locked: false,
         tags: Vec::new(),
@@ -1443,6 +1442,14 @@ fn apply_object_patch(
             return Err(ApiError::bad_request("object name must not be empty"));
         }
         object.name = name.to_string();
+    }
+    if let Some(notes) = req.notes {
+        let notes = notes.trim();
+        object.notes = if notes.is_empty() {
+            None
+        } else {
+            Some(notes.to_string())
+        };
     }
     if let Some(visible) = req.visible {
         object.visible = visible;

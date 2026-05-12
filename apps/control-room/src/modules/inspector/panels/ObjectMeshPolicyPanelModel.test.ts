@@ -58,6 +58,34 @@ describe("ObjectMeshPolicyPanelModel", () => {
     );
   });
 
+  it("hydrates structured fields from script-exported numeric strings", () => {
+    const resource = {
+      config: {
+        curvature_factor: "0.35",
+        maximum_element_growth_rate: "1.22",
+        maximum_element_size: "6e-09",
+        minimum_element_size: "1.8e-09",
+        narrow_region_resolution: "1",
+        order: 1,
+        transition_distance: "8e-08",
+        transition_growth: 1.18,
+      },
+      object_id: "arch_waveguide",
+      revision: 3,
+    };
+
+    expect(draftFromObjectMeshPolicyResource(resource)).toMatchObject({
+      curvatureFactor: "0.35",
+      maximumElementGrowthRate: "1.22",
+      maximumElementSize: "6e-09",
+      minimumElementSize: "1.8e-09",
+      narrowRegionResolution: "1",
+      order: "1",
+      transitionDistance: "8e-08",
+      transitionGrowth: "1.18",
+    });
+  });
+
   it("builds a replace request for enabled and disabled object mesh policies", () => {
     expect(
       buildObjectMeshPolicyReplaceRequest(objectMeshPolicyDraft({

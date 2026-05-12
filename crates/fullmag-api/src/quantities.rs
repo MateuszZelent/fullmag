@@ -2,7 +2,7 @@
 
 use crate::types::*;
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
-use fullmag_quantities::{quantity_specs, QuantityShape};
+use fullmag_quantities::{QuantityShape, quantity_specs};
 use fullmag_runner::{BackendCapabilities, FemMeshPayload};
 use serde_json::Value;
 
@@ -197,6 +197,7 @@ mod tests {
                 grid: [2, 1, 1],
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },

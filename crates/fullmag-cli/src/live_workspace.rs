@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::control_room::{
@@ -309,7 +309,7 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLiveSnapshotPayload};
+    use super::{CurrentLiveSnapshotPayload, bootstrap_live_state, merge_pending_publish_payload};
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
@@ -343,6 +343,8 @@ mod tests {
             boundary_markers: Vec::new(),
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
             domain_mesh_mode: None,
             domain_frame: None,
             generation_id: Some(generation_id.to_string()),
@@ -479,8 +481,7 @@ fn current_live_publisher_loop(
                             pending.store(true, Ordering::Release);
                             eprintln!(
                                 "fullmag live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
-                                error,
-                                fallback_error
+                                error, fallback_error
                             );
                         }
                     }
@@ -529,6 +530,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             grid: [0, 0, 0],
             fem_mesh: None,
             magnetization: None,
+            per_object_scalars: Default::default(),
             preview_field: None,
             finished: false,
         },

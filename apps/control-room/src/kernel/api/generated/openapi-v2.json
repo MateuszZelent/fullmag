@@ -2978,6 +2978,42 @@
         ],
         "type": "object"
       },
+      "MagnetizationAssetPatchRequest": {
+        "properties": {
+          "asset": {
+            "type": "object"
+          },
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "type": "object"
+      },
+      "MagnetizationAssetResource": {
+        "properties": {
+          "asset": {
+            "type": "object"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "asset"
+        ],
+        "type": "object"
+      },
       "MaterialPatchRequest": {
         "properties": {
           "name": {
@@ -4778,6 +4814,17 @@
           }
         ]
       },
+      "NullableStringPatchValue": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "default": null,
+            "type": "null"
+          }
+        ]
+      },
       "NullableU32PatchValue": {
         "oneOf": [
           {
@@ -4866,6 +4913,43 @@
         ],
         "type": "object"
       },
+      "ObjectEnergySummary": {
+        "properties": {
+          "anisotropy": {
+            "format": "double",
+            "type": "number"
+          },
+          "demag": {
+            "format": "double",
+            "type": "number"
+          },
+          "dmi": {
+            "format": "double",
+            "type": "number"
+          },
+          "exchange": {
+            "format": "double",
+            "type": "number"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          },
+          "zeeman": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "exchange",
+          "demag",
+          "zeeman",
+          "anisotropy",
+          "dmi",
+          "total"
+        ],
+        "type": "object"
+      },
       "ObjectGeometryPatchRequest": {
         "properties": {
           "base_revision": {
@@ -4941,6 +5025,72 @@
         ],
         "type": "object"
       },
+      "ObjectMagnetizationAverage": {
+        "properties": {
+          "mx": {
+            "format": "double",
+            "type": "number"
+          },
+          "my": {
+            "format": "double",
+            "type": "number"
+          },
+          "mz": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "mx",
+          "my",
+          "mz"
+        ],
+        "type": "object"
+      },
+      "ObjectMetricsResource": {
+        "properties": {
+          "energies": {
+            "$ref": "#/components/schemas/ObjectEnergySummary"
+          },
+          "has_solver_sample": {
+            "type": "boolean"
+          },
+          "magnetization_average": {
+            "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "time_seconds": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "object_id",
+          "revision",
+          "source",
+          "has_solver_sample",
+          "step",
+          "time_seconds",
+          "magnetization_average",
+          "energies"
+        ],
+        "type": "object"
+      },
       "ObjectPatchRequest": {
         "properties": {
           "base_revision": {
@@ -4970,6 +5120,12 @@
             ]
           },
           "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
             "type": [
               "string",
               "null"
@@ -5256,6 +5412,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "magnetization_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NullableStringPatchValue"
+              }
             ]
           },
           "name": {
@@ -6873,6 +7039,20 @@
               "kind": {
                 "enum": [
                   "compute_fields"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "compute_energies"
                 ],
                 "type": "string"
               }
@@ -12009,6 +12189,88 @@
         ]
       }
     },
+    "/v2/sessions/current/model/magnetization-assets/{asset_id}": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_magnetization_assets_asset_id",
+        "parameters": [
+          {
+            "description": "Canonical magnetization asset id",
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagnetizationAssetResource"
+                }
+              }
+            },
+            "description": "Canonical magnetization asset"
+          },
+          "404": {
+            "description": "No active workspace or magnetization asset not found"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_magnetization_assets_asset_id",
+        "parameters": [
+          {
+            "description": "Canonical magnetization asset id",
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagnetizationAssetPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MagnetizationAssetResource"
+                }
+              }
+            },
+            "description": "Committed canonical magnetization asset"
+          },
+          "400": {
+            "description": "Invalid magnetization asset payload"
+          },
+          "404": {
+            "description": "No active workspace or magnetization asset not found"
+          },
+          "409": {
+            "description": "Base scene revision does not match current scene revision"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/materials/{material_id}": {
       "get": {
         "operationId": "model_get_sessions_current_model_materials_material_id",
@@ -13003,6 +13265,40 @@
           },
           "404": {
             "description": "Command not found"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/objects/{object_id}/metrics": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_objects_object_id_metrics",
+        "parameters": [
+          {
+            "description": "Scene object id or name",
+            "in": "path",
+            "name": "object_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectMetricsResource"
+                }
+              }
+            },
+            "description": "Selected object magnetization and energy read-model"
+          },
+          "404": {
+            "description": "Object or workspace not found"
           }
         },
         "tags": [

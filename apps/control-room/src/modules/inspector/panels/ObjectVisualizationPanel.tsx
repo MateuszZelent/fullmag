@@ -3,6 +3,7 @@
 import { RotateCcw } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
+import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
@@ -17,8 +18,10 @@ import {
   resolveVisualizationTargetFromSelection,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
+  type SurfaceColorSource,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import {
   VISUALIZATION_STATE_RESOURCE_KEY,
@@ -29,9 +32,11 @@ import { Button } from "@/shared/ui/Button";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildVisualizationPanelSections,
+  SURFACE_COLOR_SOURCE_ITEMS,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
 
@@ -39,8 +44,8 @@ const RENDER_MODES: Array<{
   label: string;
   value: VisualizationRenderMode;
 }> = [
-  { label: "Shader", value: "surface" },
-  { label: "Shader + wire", value: "surface+edges" },
+  { label: "Shaded", value: "surface" },
+  { label: "Shaded + wireframe", value: "surface+edges" },
   { label: "Wire", value: "wireframe" },
   { label: "Points", value: "points" },
 ];
@@ -53,11 +58,32 @@ const GEOMETRY_SCOPES: Array<{
   { label: "Full", value: "full" },
 ];
 
+function surfaceFieldStatus(
+  source: SurfaceColorSource,
+  status: LiveStatusResource | null,
+  fetchStatus: string,
+): string {
+  if (source === "solid") return "not required";
+  const revision = Math.max(
+    typeof status?.resources.field_revision === "number"
+      ? status.resources.field_revision
+      : 0,
+    typeof status?.resources.fields_revision === "number"
+      ? status.resources.fields_revision
+      : 0,
+  );
+  if (revision > 0) {
+    return `available r${revision}`;
+  }
+  return fetchStatus === "ready" ? "none" : fetchStatus;
+}
+
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const target = resolveVisualizationTargetFromSelection(selection);
   const { api, resources } = useKernel();
   const { snapshot, visualization } = useObjectVisualizationRegistry();
   const visualizationState = useVisualizationStateResource();
+  const sessionStatus = useSessionStatus();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const airboxBaseSettings = useMemo(
@@ -205,7 +231,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
           <ToggleButton
             active={effectiveSettings?.shaderVisible ?? false}
             disabled={passControlsDisabled}
-            label="Shader"
+            label="Surface"
             onClick={() => void patch({ shaderVisible: !settings.shaderVisible })}
           />
           <ToggleButton
@@ -260,30 +286,37 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Surface Shader">
-        <div className="fm-visualization-segments" role="group" aria-label="Shader coloring">
-          {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
-            <Button
-              key={mode.value}
-              size="sm"
-              type="button"
-              disabled={pending || sectionDisabled("surface-shader")}
-              variant={
-                settings.shaderColorMode === mode.value
-                  ? "primary"
-                  : "secondary"
-              }
-              onClick={() => void patch({ shaderColorMode: mode.value })}
-            >
-              {mode.label}
-            </Button>
+      <InspectorSection title="Surface Coloring" collapsible>
+        <FormField
+          disabled={pending || sectionDisabled("surface-coloring")}
+          label="Color source"
+          type="select"
+          value={settings.surfaceColorSource}
+          onChange={(event) =>
+            void patch({
+              surfaceColorSource: event.target.value as SurfaceColorSource,
+            })
+          }
+        >
+          {SURFACE_COLOR_SOURCE_ITEMS.map((source) => (
+            <option key={source.value} value={source.value}>
+              {source.label}
+            </option>
           ))}
-        </div>
+        </FormField>
         <ColorField
-          disabled={pending || sectionDisabled("surface-shader")}
-          label="Monochrome color"
+          disabled={pending || sectionDisabled("surface-coloring")}
+          label="Solid color"
           value={settings.shaderMonoColor}
           onChange={(value) => patchColor("shaderMonoColor", value)}
+        />
+        <FieldRow
+          label="Field status"
+          value={surfaceFieldStatus(
+            settings.surfaceColorSource,
+            sessionStatus.data,
+            sessionStatus.status,
+          )}
         />
       </InspectorSection>
 

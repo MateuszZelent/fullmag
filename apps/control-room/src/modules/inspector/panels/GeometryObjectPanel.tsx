@@ -10,6 +10,7 @@ import {
   commitObjectTransformTransaction,
   deleteObjectTransaction,
   patchObjectGeometryTransaction,
+  patchObjectTransaction,
 } from "@/kernel/authoring/geometryLifecycleCommands";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -18,6 +19,9 @@ import {
   useGeometryValidationResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -31,6 +35,7 @@ import {
   createDraftObjectId,
   resolveGeometryObjectDraft,
   resolveGeometryObjectPanelModel,
+  resolveObjectMetricsPanelModel,
   summarizeGeometryValidationMessages,
   type GeometryObjectDraft,
 } from "./geometryObjectPanelModel";
@@ -51,7 +56,17 @@ interface FeedbackState {
 }
 
 type VectorDraftField = "rotation" | "scale" | "size" | "translation";
-type DraftField = "height" | "material" | "name" | "radius" | "region";
+type DraftField =
+  | "archHeight"
+  | "height"
+  | "length"
+  | "material"
+  | "name"
+  | "notes"
+  | "radius"
+  | "region"
+  | "width"
+  | "z0";
 type DraftFieldUpdater = (field: DraftField, value: string) => void;
 type VectorDraftUpdater = (
   field: VectorDraftField,
@@ -81,9 +96,13 @@ function invalidateAuthoringResources(
 
 export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   const { api, resources, selection: selectionController } = useKernel();
+  const { visualization } = useObjectVisualizationRegistry();
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveGeometryObjectPanelModel(selection, scene.data);
+  const objectMetrics = useObjectMetricsResource(
+    object.mode === "committed" ? object.objectId : null,
+  );
   const baseDraft = useMemo(
     () => resolveGeometryObjectDraft(selection, scene.data),
     [scene.data, selection],
@@ -105,6 +124,14 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     validation.data,
     draft.objectId,
   );
+  const visualizationTarget =
+    object.mode === "committed"
+      ? { id: object.objectId, kind: "object" as const, label: object.name }
+      : null;
+  const visualizationSettings = visualizationTarget
+    ? visualization.getSettings(visualizationTarget)
+    : null;
+  const metricsModel = resolveObjectMetricsPanelModel(objectMetrics.data);
 
   function updateDraft(updater: (current: GeometryObjectDraft) => GeometryObjectDraft): void {
     setDraftState((current) => ({
@@ -228,6 +255,28 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  async function applyIdentityPatch(): Promise<void> {
+    if (draft.mode !== "committed") return;
+    setPending(true);
+    try {
+      const response = await patchObjectTransaction(api, draft.objectId, {
+        base_revision: draft.baseRevision,
+        name: draft.name,
+        notes: draft.notes,
+      });
+      const revision =
+        typeof response.revision === "number"
+          ? response.revision
+          : (draft.baseRevision ?? 0) + 1;
+      invalidateAuthoringResources(resources, revision);
+      setFeedback({ kind: "success", message: "Object identity committed." });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function deleteObject(): Promise<void> {
     if (draft.mode !== "committed") return;
     setPending(true);
@@ -249,9 +298,31 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     setFeedback(null);
   }
 
+  function patchObjectColor(
+    field: "primitiveColor" | "frameColor",
+    value: string,
+  ): void {
+    if (!visualizationTarget) return;
+    if (field === "primitiveColor") {
+      visualization.patchTarget(visualizationTarget, {
+        shaderColorMode: "monochrome",
+        shaderMonoColor: value,
+      });
+      return;
+    }
+    visualization.patchTarget(visualizationTarget, { wireframeColor: value });
+  }
+
   return (
     <div className="fm-inspector-panel">
-      <GeometryObjectSummarySection object={object} />
+      <GeometryObjectSummarySection
+        draft={draft}
+        object={object}
+        visualizationSettings={visualizationSettings}
+        onColorChange={patchObjectColor}
+        onFieldChange={updateField}
+      />
+      <ObjectMetricsSection metrics={metricsModel} status={objectMetrics.status} />
       <GeometryResourceStateSection object={object} sceneStatus={scene.status} />
       <PrimitiveGeometrySection
         draft={draft}
@@ -266,6 +337,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         pending={pending}
         onApplyCreateDraft={applyCreateDraft}
         onApplyGeometryPatch={applyGeometryPatch}
+        onApplyIdentityPatch={applyIdentityPatch}
         onApplyTransformPatch={applyTransformPatch}
         onDeleteObject={deleteObject}
         onRevertDraft={revertDraft}
@@ -279,18 +351,85 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 }
 
 function GeometryObjectSummarySection({
+  draft,
   object,
+  onColorChange,
+  onFieldChange,
+  visualizationSettings,
 }: {
+  draft: GeometryObjectDraft;
   object: ReturnType<typeof resolveGeometryObjectPanelModel>;
+  onColorChange: (field: "primitiveColor" | "frameColor", value: string) => void;
+  onFieldChange: DraftFieldUpdater;
+  visualizationSettings: VisualizationTargetSettings | null;
 }) {
   return (
     <InspectorSection title="Geometry Object" collapsible defaultCollapsed={false}>
-      <FieldRow label="Name" value={object.name} />
+      {draft.mode === "committed" ? (
+        <>
+          <FormField
+            label="Name"
+            mono={false}
+            type="text"
+            value={draft.name}
+            onChange={(event) => onFieldChange("name", event.target.value)}
+          />
+          <FormField
+            label="Notes"
+            type="textarea"
+            value={draft.notes}
+            onChange={(event) => onFieldChange("notes", event.target.value)}
+          />
+        </>
+      ) : (
+        <FieldRow label="Name" value={object.name} />
+      )}
       <FieldRow label="Object ID" value={object.objectId} />
       <FieldRow label="Shape" value={object.shape} />
       <FieldRow label="Dimensions" value={object.dimensions} />
       <FieldRow label="Material" value={object.material} />
       <FieldRow label="Region" value={object.region} />
+      {draft.mode === "committed" && visualizationSettings ? (
+        <>
+          <FormField
+            label="Primitive color"
+            mono={false}
+            type="text"
+            value={visualizationSettings.shaderMonoColor}
+            onChange={(event) => onColorChange("primitiveColor", event.target.value)}
+          />
+          <FormField
+            label="Frame color"
+            mono={false}
+            type="text"
+            value={visualizationSettings.wireframeColor}
+            onChange={(event) => onColorChange("frameColor", event.target.value)}
+          />
+        </>
+      ) : null}
+    </InspectorSection>
+  );
+}
+
+function ObjectMetricsSection({
+  metrics,
+  status,
+}: {
+  metrics: ReturnType<typeof resolveObjectMetricsPanelModel>;
+  status: string;
+}) {
+  return (
+    <InspectorSection title="Energies" badge={metrics.status}>
+      <FieldRow label="Fetch state" value={status} />
+      <FieldRow label="Sample" value={metrics.sample} />
+      <FieldRow label="Source" value={metrics.source} />
+      <FieldRow label="Average m" value={metrics.magnetization} />
+      <FieldRow label="Exchange" value={metrics.exchange} />
+      <FieldRow label="Demag" value={metrics.demag} />
+      <FieldRow label="Zeeman" value={metrics.zeeman} />
+      <FieldRow label="Anisotropy" value={metrics.anisotropy} />
+      <FieldRow label="DMI" value={metrics.dmi} />
+      <FieldRow label="Total" value={metrics.total} />
     </InspectorSection>
   );
 }
@@ -380,6 +519,48 @@ function PrimitiveGeometryFields({
     );
   }
 
+  if (geometryKind === "archwaveguide" || geometryKind === "arch_waveguide") {
+    return (
+      <>
+        <FormField
+          label="Length"
+          type="number"
+          unit="m"
+          value={draft.length}
+          onChange={(event) => onFieldChange("length", event.target.value)}
+        />
+        <FormField
+          label="Width"
+          type="number"
+          unit="m"
+          value={draft.width}
+          onChange={(event) => onFieldChange("width", event.target.value)}
+        />
+        <FormField
+          label="Height"
+          type="number"
+          unit="m"
+          value={draft.height}
+          onChange={(event) => onFieldChange("height", event.target.value)}
+        />
+        <FormField
+          label="Arch height"
+          type="number"
+          unit="m"
+          value={draft.archHeight}
+          onChange={(event) => onFieldChange("archHeight", event.target.value)}
+        />
+        <FormField
+          label="z0"
+          type="number"
+          unit="m"
+          value={draft.z0}
+          onChange={(event) => onFieldChange("z0", event.target.value)}
+        />
+      </>
+    );
+  }
+
   return (
     <DraftVectorFormField
       labels={["X", "Y", "Z"]}
@@ -462,6 +643,7 @@ function ActionsSection({
   feedback,
   onApplyCreateDraft,
   onApplyGeometryPatch,
+  onApplyIdentityPatch,
   onApplyTransformPatch,
   onDeleteObject,
   onRevertDraft,
@@ -471,6 +653,7 @@ function ActionsSection({
   feedback: Feedback | null;
   onApplyCreateDraft: () => Promise<void>;
   onApplyGeometryPatch: () => Promise<void>;
+  onApplyIdentityPatch: () => Promise<void>;
   onApplyTransformPatch: () => Promise<void>;
   onDeleteObject: () => Promise<void>;
   onRevertDraft: () => void;
@@ -494,6 +677,7 @@ function ActionsSection({
             draft={draft}
             pending={pending}
             onApplyGeometryPatch={onApplyGeometryPatch}
+            onApplyIdentityPatch={onApplyIdentityPatch}
             onApplyTransformPatch={onApplyTransformPatch}
             onDeleteObject={onDeleteObject}
             onRevertDraft={onRevertDraft}
@@ -510,6 +694,7 @@ function ActionsSection({
 function CommittedObjectActions({
   draft,
   onApplyGeometryPatch,
+  onApplyIdentityPatch,
   onApplyTransformPatch,
   onDeleteObject,
   onRevertDraft,
@@ -517,6 +702,7 @@ function CommittedObjectActions({
 }: {
   draft: GeometryObjectDraft;
   onApplyGeometryPatch: () => Promise<void>;
+  onApplyIdentityPatch: () => Promise<void>;
   onApplyTransformPatch: () => Promise<void>;
   onDeleteObject: () => Promise<void>;
   onRevertDraft: () => void;
@@ -524,6 +710,14 @@ function CommittedObjectActions({
 }) {
   return (
     <>
+      <Button
+        disabled={pending || draft.mode !== "committed"}
+        size="sm"
+        type="button"
+        onClick={() => void onApplyIdentityPatch()}
+      >
+        Apply Identity
+      </Button>
       <Button
         disabled={pending || draft.mode !== "committed"}
         size="sm"

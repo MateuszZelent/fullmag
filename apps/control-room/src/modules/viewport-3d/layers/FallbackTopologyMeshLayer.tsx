@@ -20,7 +20,16 @@ import type { Viewport3DFieldRenderModel, Viewport3DTopologyRenderModel } from "
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
-import { opacityFromSettings } from "./viewport3DLayerSettings";
+import {
+  opacityFromSettings,
+  shaderColorFromSettings,
+  shaderUsesVertexColors,
+  surfaceScalarColorModeFromSettings,
+  vectorColorModeFromSettings,
+  vectorStyleFromSettings,
+  wireframeColorFromSettings,
+  wireframeOpacityFromSettings,
+} from "./viewport3DLayerSettings";
 
 export function FallbackTopologyMeshLayer({
   colors,
@@ -62,16 +71,28 @@ export function FallbackTopologyMeshLayer({
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
 
+  const scalarColorMode = surfaceScalarColorModeFromSettings(fallbackSettings);
+  const scalarColors = scalarColorMode
+    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
+    : null;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
+    if (!shaderUsesVertexColors(fallbackSettings)) {
+      if (geometry.hasAttribute("color")) {
+        geometry.deleteAttribute("color");
+      }
+      tracker.recordDirtyFrame("field-colors");
+      invalidate();
+      return;
+    }
     applyVertexScalarColorBuffer(
       geometry,
-      fieldModel?.scalarColors,
+      scalarColors,
       topologyModel.nodeCount,
     );
     tracker.recordDirtyFrame("field-colors");
     invalidate();
-  }, [fieldModel?.scalarColors, geometry, invalidate, topologyModel, tracker]);
+  }, [fallbackSettings, geometry, invalidate, scalarColors, topologyModel, tracker]);
 
   if (!geometry) return null;
   if (
@@ -102,22 +123,25 @@ export function FallbackTopologyMeshLayer({
       {fallbackSettings.shaderVisible ? (
         <mesh geometry={geometry}>
           <meshStandardMaterial
-            color={colors.mesh}
+            color={shaderColorFromSettings(fallbackSettings, colors.mesh)}
             opacity={opacityFromSettings(fallbackSettings)}
             roughness={0.86}
             transparent
-            vertexColors={canApplyVertexScalarColorBuffer(
-              fieldModel?.scalarColors,
-              topologyModel?.nodeCount ?? 0,
-            )}
+            vertexColors={
+              shaderUsesVertexColors(fallbackSettings) &&
+              canApplyVertexScalarColorBuffer(
+                scalarColors,
+                topologyModel?.nodeCount ?? 0,
+              )
+            }
           />
         </mesh>
       ) : null}
       {fallbackSettings.wireframeVisible ? (
         <mesh geometry={geometry}>
           <meshBasicMaterial
-            color={colors.wire}
-            opacity={opacityFromSettings(fallbackSettings)}
+            color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(fallbackSettings)}
             transparent
             wireframe
           />
@@ -137,10 +161,13 @@ export function FallbackTopologyMeshLayer({
       {fallbackSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorMode}
+          colorMode={vectorColorModeFromSettings(
+            fallbackSettings,
+            vectorColorMode,
+          )}
           opacity={opacityFromSettings(fallbackSettings)}
           segments={fieldModel?.fullVectorSegments ?? null}
-          style={vectorStyle}
+          style={vectorStyleFromSettings(fallbackSettings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}

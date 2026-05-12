@@ -23,10 +23,14 @@ import type {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
-
-function opacityFromSettings(settings: VisualizationTargetSettings): number {
-  return Math.max(0, Math.min(1, settings.opacityPercent / 100));
-}
+import {
+  opacityFromSettings,
+  shaderColorFromSettings,
+  vectorColorModeFromSettings,
+  vectorStyleFromSettings,
+  wireframeColorFromSettings,
+  wireframeOpacityFromSettings,
+} from "./viewport3DLayerSettings";
 
 export function BoundsBox({
   bounds,
@@ -132,7 +136,7 @@ function AirboxMeshPartLayer({
         {settings.shaderVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={colors.accent}
+            color={shaderColorFromSettings(settings, colors.accent)}
             opacity={opacity}
             wireframe={false}
           />
@@ -140,8 +144,8 @@ function AirboxMeshPartLayer({
         {settings.wireframeVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={colors.wire}
-            opacity={opacity}
+            color={wireframeColorFromSettings(settings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(settings)}
           />
         ) : null}
         {settings.boundsVisible ? (
@@ -154,17 +158,17 @@ function AirboxMeshPartLayer({
         {settings.pointsVisible ? (
           <BoundsPoints
             bounds={resolveMeshPartBounds(part)}
-            color={colors.wire}
+            color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={opacity}
           />
         ) : null}
         {settings.vectorsVisible ? (
           <VectorFieldLayer
             colors={colors}
-            colorMode={vectorColorMode}
+            colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
             opacity={opacity}
             segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-            style={vectorStyle}
+            style={vectorStyleFromSettings(settings, vectorStyle)}
             tracker={tracker}
           />
         ) : null}
@@ -177,7 +181,7 @@ function AirboxMeshPartLayer({
       {settings.shaderVisible ? (
         <mesh geometry={geometry}>
           <meshStandardMaterial
-            color={colors.mesh}
+            color={shaderColorFromSettings(settings, colors.mesh)}
             opacity={opacity}
             roughness={0.86}
             side={BackSide}
@@ -189,8 +193,8 @@ function AirboxMeshPartLayer({
         settings.geometryScope === "surface" ? (
           <mesh geometry={geometry}>
             <meshBasicMaterial
-              color={colors.wire}
-              opacity={opacity}
+              color={wireframeColorFromSettings(settings, colors.wire)}
+              opacity={wireframeOpacityFromSettings(settings)}
               side={DoubleSide}
               transparent
               wireframe
@@ -199,8 +203,8 @@ function AirboxMeshPartLayer({
         ) : (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={colors.wire}
-            opacity={opacity}
+            color={wireframeColorFromSettings(settings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(settings)}
           />
         )
       ) : null}
@@ -214,7 +218,7 @@ function AirboxMeshPartLayer({
       {settings.pointsVisible ? (
         <points geometry={geometry}>
           <pointsMaterial
-            color={colors.wire}
+            color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={opacity}
             sizeAttenuation={false}
             size={3}
@@ -225,10 +229,10 @@ function AirboxMeshPartLayer({
       {settings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorMode}
+          colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
           opacity={opacity}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-          style={vectorStyle}
+          style={vectorStyleFromSettings(settings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}

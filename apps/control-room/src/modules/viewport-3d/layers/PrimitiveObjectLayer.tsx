@@ -17,7 +17,12 @@ import type {
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { opacityFromSettings } from "./viewport3DLayerSettings";
+import {
+  opacityFromSettings,
+  shaderColorFromSettings,
+  wireframeColorFromSettings,
+  wireframeOpacityFromSettings,
+} from "./viewport3DLayerSettings";
 
 export function trackPrimitiveObjectGeometry(
   tracker: Viewport3DResourceTracker,
@@ -94,7 +99,12 @@ function PrimitiveObject({
     onSelectObject(object);
   };
   const opacity = opacityFromSettings(settings);
-  const shaderColor = object.magnetizationTexturePreview?.color ?? colors.mesh;
+  const shaderColor = shaderColorFromSettings(
+    settings,
+    (settings.surfaceColorSource !== "solid"
+      ? object.magnetizationTexturePreview?.color
+      : null) ?? colors.mesh,
+  );
 
   return (
     <group
@@ -121,8 +131,8 @@ function PrimitiveObject({
         <mesh>
           <primitive attach="geometry" object={geometry} />
           <meshBasicMaterial
-            color={colors.wire}
-            opacity={Math.max(opacity, 0.68)}
+            color={wireframeColorFromSettings(settings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(settings)}
             transparent
             wireframe
           />

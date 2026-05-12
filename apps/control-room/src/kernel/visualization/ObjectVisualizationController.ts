@@ -18,6 +18,14 @@ export type VisualizationColorMode =
   | "z"
   | "magnitude"
   | "monochrome";
+export type SurfaceColorSource =
+  | "solid"
+  | "orientation"
+  | "component_x"
+  | "component_y"
+  | "component_z"
+  | "magnitude"
+  | "colormap";
 
 export interface VisualizationTargetRef {
   id: string;
@@ -34,6 +42,7 @@ export interface VisualizationTargetSettings {
   shaderColorMode: VisualizationColorMode;
   shaderMonoColor: string;
   shaderVisible: boolean;
+  surfaceColorSource: SurfaceColorSource;
   vectorAlphaPercent: number;
   vectorColorMode: VisualizationColorMode;
   vectorMonoColor: string;
@@ -76,6 +85,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   shaderColorMode: "orientation",
   shaderMonoColor: "var(--fm-surface-magnetic)",
   shaderVisible: true,
+  surfaceColorSource: "orientation",
   vectorAlphaPercent: 100,
   vectorColorMode: "orientation",
   vectorMonoColor: "var(--fm-accent)",
@@ -96,6 +106,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   shaderColorMode: "monochrome",
   shaderMonoColor: "var(--fm-airbox-fill)",
   shaderVisible: false,
+  surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
   vectorColorMode: "orientation",
   vectorMonoColor: "var(--fm-accent)",
@@ -387,6 +398,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.shaderMonoColor === undefined
       ? {}
       : { shaderMonoColor: patch.shaderMonoColor }),
+    ...(patch.surfaceColorSource === undefined
+      ? {}
+      : { surfaceColorSource: patch.surfaceColorSource }),
     ...(patch.vectorAlphaPercent === undefined
       ? {}
       : { vectorAlphaPercent: patch.vectorAlphaPercent }),
@@ -448,7 +462,9 @@ export function visualizationTargetKey(target: VisualizationTargetRef): string {
 function normalizePatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
-  const normalized = { ...patch };
+  const normalized = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined),
+  ) as VisualizationTargetPatch;
   if (normalized.opacityPercent !== undefined) {
     normalized.opacityPercent = clampOpacity(normalized.opacityPercent);
   }
@@ -467,6 +483,22 @@ function normalizePatch(
     normalized.shaderColorMode =
       normalizeColorMode(normalized.shaderColorMode) ?? "orientation";
   }
+  if (
+    normalized.surfaceColorSource === undefined &&
+    normalized.shaderColorMode !== undefined
+  ) {
+    normalized.surfaceColorSource = surfaceColorSourceFromColorMode(
+      normalized.shaderColorMode,
+    );
+  }
+  if (normalized.surfaceColorSource !== undefined) {
+    normalized.surfaceColorSource =
+      normalizeSurfaceColorSource(normalized.surfaceColorSource) ??
+      "orientation";
+    normalized.shaderColorMode = surfaceColorSourceToColorMode(
+      normalized.surfaceColorSource,
+    ) ?? "monochrome";
+  }
   if (normalized.vectorColorMode !== undefined) {
     normalized.vectorColorMode =
       normalizeColorMode(normalized.vectorColorMode) ?? "orientation";
@@ -480,6 +512,10 @@ function normalizePatch(
 function normalizeVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
+  const surfaceColorSource =
+    normalizeSurfaceColorSource(settings.surfaceColorSource) ??
+    surfaceColorSourceFromColorMode(settings.shaderColorMode) ??
+    "orientation";
   return {
     ...settings,
     geometryScope:
@@ -487,6 +523,9 @@ function normalizeVisualizationSettings(
         ? settings.geometryScope
         : "full",
     opacityPercent: clampOpacity(settings.opacityPercent),
+    shaderColorMode:
+      surfaceColorSourceToColorMode(surfaceColorSource) ?? "monochrome",
+    surfaceColorSource,
   };
 }
 
@@ -507,6 +546,42 @@ function normalizeColorMode(value: unknown): VisualizationColorMode | undefined 
     value === "monochrome"
     ? value
     : undefined;
+}
+
+export function normalizeSurfaceColorSource(
+  value: unknown,
+): SurfaceColorSource | undefined {
+  return value === "solid" ||
+    value === "orientation" ||
+    value === "component_x" ||
+    value === "component_y" ||
+    value === "component_z" ||
+    value === "magnitude" ||
+    value === "colormap"
+    ? value
+    : undefined;
+}
+
+export function surfaceColorSourceFromColorMode(
+  value: VisualizationColorMode | undefined,
+): SurfaceColorSource | undefined {
+  if (value === "monochrome") return "solid";
+  if (value === "x") return "component_x";
+  if (value === "y") return "component_y";
+  if (value === "z") return "component_z";
+  if (value === "orientation" || value === "magnitude") return value;
+  return undefined;
+}
+
+export function surfaceColorSourceToColorMode(
+  value: SurfaceColorSource,
+): VisualizationColorMode | null {
+  if (value === "solid") return null;
+  if (value === "component_x") return "x";
+  if (value === "component_y") return "y";
+  if (value === "component_z") return "z";
+  if (value === "colormap") return "magnitude";
+  return value;
 }
 
 function layerOpacityToPercent(value: number): number {

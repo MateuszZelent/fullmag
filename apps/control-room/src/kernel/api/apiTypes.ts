@@ -35,6 +35,8 @@ export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
 export type MaterialResource = components["schemas"]["MaterialResource"];
+// Wygenerowane typy używają `Record<string, never>` dla `asset` (pusty schemat OpenAPI),
+// ale faktycznie jest to dowolny JSON object — utrzymujemy silniejsze typy po stronie frontendu.
 export interface MagnetizationAssetPatchRequest extends BaseAuthoringTransaction {
   asset: JsonObject;
 }
@@ -95,11 +97,7 @@ export interface MeshSharedDomainConfigReplaceRequest {
 export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
-export interface RegionPatchRequest {
-  enabled?: boolean | null;
-  magnetization_ref?: string | null;
-  name?: string | null;
-}
+export type RegionPatchRequest = components["schemas"]["RegionPatchRequest"];
 export type SolverEnergyCurrentResource =
   components["schemas"]["SolverEnergyCurrentResource"];
 export type SolverEnergyHistoryResource =
@@ -179,9 +177,31 @@ export interface ObjectPatchRequest extends BaseAuthoringTransaction {
   magnetization_ref?: string | null;
   material_ref?: string | null;
   name?: string | null;
+  notes?: string | null;
   region_name?: string | null;
   transform?: JsonObject | null;
   visible?: boolean | null;
+}
+export interface ObjectMetricsResource {
+  energies: {
+    anisotropy: number;
+    demag: number;
+    dmi: number;
+    exchange: number;
+    total: number;
+    zeeman: number;
+  };
+  has_solver_sample: boolean;
+  magnetization_average: {
+    mx: number;
+    my: number;
+    mz: number;
+  };
+  object_id: string;
+  revision: number;
+  source: string;
+  step: number;
+  time_seconds: number;
 }
 export type SceneResource = JsonObject;
 export type StructuredCommandRequest =

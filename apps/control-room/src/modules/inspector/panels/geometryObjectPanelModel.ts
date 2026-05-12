@@ -1,4 +1,8 @@
-import type { JsonObject, SceneResource } from "@/kernel/api/apiTypes";
+import type {
+  JsonObject,
+  ObjectMetricsResource,
+  SceneResource,
+} from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 export interface GeometryObjectPanelModel {
@@ -7,6 +11,7 @@ export interface GeometryObjectPanelModel {
   meshStatus: string;
   mode: "committed" | "draft-new" | "missing";
   name: string;
+  notes: string;
   objectId: string;
   region: string;
   revision: number | null;
@@ -15,12 +20,15 @@ export interface GeometryObjectPanelModel {
 }
 
 export interface GeometryObjectDraft {
+  archHeight: string;
   baseRevision: number | null;
   geometryKind: string;
   height: string;
+  length: string;
   material: string;
   mode: "committed" | "draft-new" | "missing";
   name: string;
+  notes: string;
   objectId: string;
   radius: string;
   region: string;
@@ -28,6 +36,8 @@ export interface GeometryObjectDraft {
   scale: [string, string, string];
   size: [string, string, string];
   translation: [string, string, string];
+  width: string;
+  z0: string;
 }
 
 export interface GeometryDraftGeometryResult {
@@ -38,6 +48,19 @@ export interface GeometryDraftGeometryResult {
 export interface GeometryDraftTransformResult {
   error: string | null;
   transform: JsonObject | null;
+}
+
+export interface ObjectMetricsPanelModel {
+  anisotropy: string;
+  demag: string;
+  dmi: string;
+  exchange: string;
+  magnetization: string;
+  sample: string;
+  source: string;
+  status: string;
+  total: string;
+  zeeman: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -90,12 +113,24 @@ function lengthScale(values: readonly number[]): { scale: number; unit: string }
 function formatDimensions(geometry: JsonRecord | null): string {
   const params = asRecord(geometry?.geometry_params);
   const size =
+    archWaveguideSize(params) ??
     asNumberArray(params?.size) ??
     asNumberArray(params?.dimensions) ??
     boundsSize(geometry);
   if (!size?.length) return "unresolved";
   const { scale, unit } = lengthScale(size);
   return `${size.map((value) => (value * scale).toFixed(1)).join(" x ")} ${unit}`;
+}
+
+function archWaveguideSize(params: JsonRecord | null): number[] | null {
+  const length = asNumber(params?.length);
+  const width = asNumber(params?.width);
+  const height = asNumber(params?.height);
+  const archHeight = asNumber(params?.arch_height);
+  if (length === null || width === null || height === null || archHeight === null) {
+    return null;
+  }
+  return [length, width, height + archHeight];
 }
 
 function boundsSize(geometry: JsonRecord | null): number[] | null {
@@ -159,12 +194,15 @@ function defaultDraftForPrimitive(
         : "Box";
 
   return {
+    archHeight: "",
     baseRevision: revision,
     geometryKind,
     height: geometryKind === "Cylinder" ? "1e-8" : "",
+    length: "",
     material: "unassigned",
     mode: "draft-new",
     name: selection.label ?? `New ${primitiveKind}`,
+    notes: "",
     objectId: "draft",
     radius: geometryKind === "Box" ? "" : "5e-8",
     region: "unassigned",
@@ -172,6 +210,8 @@ function defaultDraftForPrimitive(
     scale: ["1", "1", "1"],
     size: ["1e-7", "1e-7", "1e-8"],
     translation: ["0", "0", "0"],
+    width: "",
+    z0: "",
   };
 }
 
@@ -193,6 +233,7 @@ export function resolveGeometryObjectDraft(
     return {
       ...defaultDraftForPrimitive(selection, revision),
       mode: "missing",
+      notes: "",
       objectId: objectId ?? "none",
     };
   }
@@ -206,12 +247,15 @@ export function resolveGeometryObjectDraft(
     "Box";
 
   return {
+    archHeight: formatNumberInput(params?.arch_height, 5e-8),
     baseRevision: revision,
     geometryKind,
     height: formatNumberInput(params?.height, 1e-8),
+    length: formatNumberInput(params?.length, 1e-6),
     material: stringOrFallback(object.material_ref, "unassigned"),
     mode: "committed",
     name: stringOrFallback(object.name, objectId),
+    notes: asString(object.notes) ?? "",
     objectId,
     radius: formatNumberInput(params?.radius, 5e-8),
     region: stringOrFallback(object.region_name, "unassigned"),
@@ -219,6 +263,8 @@ export function resolveGeometryObjectDraft(
     scale: formatVectorInput(transform?.scale, [1, 1, 1]),
     size: formatVectorInput(params?.size ?? params?.dimensions, [1e-7, 1e-7, 1e-8]),
     translation: formatVectorInput(transform?.translation, [0, 0, 0]),
+    width: formatNumberInput(params?.width, 1e-6),
+    z0: formatNumberInput(params?.z0, 0),
   };
 }
 
@@ -258,8 +304,13 @@ function parseVector(
   return { error: null, value: result as [number, number, number] };
 }
 
-function normalizedGeometryKind(kind: string): "Box" | "Cylinder" | "Sphere" | null {
+function normalizedGeometryKind(
+  kind: string,
+): "ArchWaveguide" | "Box" | "Cylinder" | "Sphere" | null {
   const normalized = kind.trim().toLowerCase();
+  if (normalized === "archwaveguide" || normalized === "arch_waveguide") {
+    return "ArchWaveguide";
+  }
   if (normalized === "box") return "Box";
   if (normalized === "cylinder") return "Cylinder";
   if (normalized === "sphere") return "Sphere";
@@ -285,6 +336,35 @@ export function buildGeometryDraftPatch(
       geometry: {
         geometry_kind: "Box",
         geometry_params: { size: size.value },
+      },
+    };
+  }
+
+  if (geometryKind === "ArchWaveguide") {
+    const length = parsePositiveNumber(draft.length, "Arch waveguide length");
+    if (length.error) return { error: length.error, geometry: null };
+    const width = parsePositiveNumber(draft.width, "Arch waveguide width");
+    if (width.error) return { error: width.error, geometry: null };
+    const height = parsePositiveNumber(draft.height, "Arch waveguide height");
+    if (height.error) return { error: height.error, geometry: null };
+    const archHeight = parsePositiveNumber(
+      draft.archHeight,
+      "Arch waveguide arch height",
+    );
+    if (archHeight.error) return { error: archHeight.error, geometry: null };
+    const z0 = parseFiniteNumber(draft.z0, "Arch waveguide z0");
+    if (z0.error) return { error: z0.error, geometry: null };
+    return {
+      error: null,
+      geometry: {
+        geometry_kind: "ArchWaveguide",
+        geometry_params: {
+          arch_height: archHeight.value,
+          height: height.value,
+          length: length.value,
+          width: width.value,
+          z0: z0.value,
+        },
       },
     };
   }
@@ -404,6 +484,7 @@ export function resolveGeometryObjectPanelModel(
       meshStatus: "primitive-only",
       mode: "draft-new",
       name: selection.label ?? `New ${primitiveKind}`,
+      notes: "",
       objectId: "draft",
       region: "unassigned",
       revision,
@@ -421,6 +502,7 @@ export function resolveGeometryObjectPanelModel(
       meshStatus: "primitive-only",
       mode: "missing",
       name: selection.label ?? "No object",
+      notes: "",
       objectId: objectId ?? "none",
       region: "unassigned",
       revision,
@@ -435,6 +517,7 @@ export function resolveGeometryObjectPanelModel(
     meshStatus: meshStatus(object.tags),
     mode: "committed",
     name: asString(object.name) ?? objectId,
+    notes: asString(object.notes) ?? "",
     objectId,
     region: asString(object.region_name) ?? "unassigned",
     revision,
@@ -443,5 +526,45 @@ export function resolveGeometryObjectPanelModel(
       asString(geometry?.kind) ??
       "object",
     source: "SceneDocument",
+  };
+}
+
+function formatScientific(value: number, unit: string): string {
+  return `${value.toExponential(3)} ${unit}`;
+}
+
+function formatMagnetization(value: ObjectMetricsResource["magnetization_average"]): string {
+  return `(${value.mx.toFixed(3)}, ${value.my.toFixed(3)}, ${value.mz.toFixed(3)})`;
+}
+
+export function resolveObjectMetricsPanelModel(
+  metrics: ObjectMetricsResource | null,
+): ObjectMetricsPanelModel {
+  if (!metrics) {
+    return {
+      anisotropy: "unavailable",
+      demag: "unavailable",
+      dmi: "unavailable",
+      exchange: "unavailable",
+      magnetization: "unavailable",
+      sample: "no resource",
+      source: "unavailable",
+      status: "unavailable",
+      total: "unavailable",
+      zeeman: "unavailable",
+    };
+  }
+
+  return {
+    anisotropy: formatScientific(metrics.energies.anisotropy, "J"),
+    demag: formatScientific(metrics.energies.demag, "J"),
+    dmi: formatScientific(metrics.energies.dmi, "J"),
+    exchange: formatScientific(metrics.energies.exchange, "J"),
+    magnetization: formatMagnetization(metrics.magnetization_average),
+    sample: `step ${metrics.step} @ ${metrics.time_seconds.toExponential(3)} s`,
+    source: metrics.source,
+    status: metrics.has_solver_sample ? "computed" : "initial",
+    total: formatScientific(metrics.energies.total, "J"),
+    zeeman: formatScientific(metrics.energies.zeeman, "J"),
   };
 }

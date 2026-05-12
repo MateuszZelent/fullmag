@@ -47,6 +47,7 @@ import {
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
@@ -100,6 +101,7 @@ import type {
   MeshUniverseReportResource,
   ObjectCreateRequest,
   ObjectGeometryPatchRequest,
+  ObjectMetricsResource,
   ObjectInteractionKind,
   ObjectInteractionPatchRequest,
   ObjectInteractionResource,
@@ -540,6 +542,14 @@ export class ControlRoomApi {
         SIMULATION_RUN_CURRENT_PATH,
         options,
       ),
+    objects: {
+      metrics: (objectId: string, options?: RequestOptions) =>
+        this.requestJson<ObjectMetricsResource>(
+          SIMULATION_OBJECT_METRICS_PATH,
+          options,
+          { path: { object_id: objectId } },
+        ),
+    },
     run: (runId: string, options?: RequestOptions) =>
       this.requestJson<CurrentRunResource>(
         SIMULATION_RUN_PATH,

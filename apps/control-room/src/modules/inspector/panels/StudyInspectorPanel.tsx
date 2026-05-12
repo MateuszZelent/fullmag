@@ -5,6 +5,7 @@ import {
   Pause,
   Play,
   Plus,
+  Sigma,
   SkipForward,
   Square,
   Zap,
@@ -255,6 +256,16 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           >
             <Activity size={13} />
             Fields
+          </Button>
+          <Button
+            size="sm"
+            type="button"
+            variant="ghost"
+            disabled={!commandEnabled("study.compute-energies")}
+            onClick={() => runCommand("study.compute-energies")}
+          >
+            <Sigma size={13} />
+            Energies
           </Button>
         </div>
       </InspectorSection>

@@ -195,27 +195,192 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
     GeometryCapabilitiesResource {
         revision,
         primitive_capabilities: vec![
-            primitive("box", "Box", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("cylinder", "Cylinder", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("sphere", "Sphere", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("ellipsoid", "Ellipsoid", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("disk", "Disk", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("thin_film", "Thin Film", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("pillar", "Pillar", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("nanowire", "Nanowire", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("ring", "Ring", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("arch_waveguide", "Arch Waveguide", "core", true, true, true, false, GeometrySupportStatus::Production),
-            primitive("triangular_prism", "Triangular Prism", "core", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("cone", "Cone", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("capsule", "Capsule", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("tube", "Tube", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("wedge", "Wedge", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("polygon_prism", "Polygon Prism", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive(
+                "box",
+                "Box",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "cylinder",
+                "Cylinder",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "sphere",
+                "Sphere",
+                "mumax",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "ellipsoid",
+                "Ellipsoid",
+                "mumax",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "disk",
+                "Disk",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "thin_film",
+                "Thin Film",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "pillar",
+                "Pillar",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "nanowire",
+                "Nanowire",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "ring",
+                "Ring",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "arch_waveguide",
+                "Arch Waveguide",
+                "core",
+                true,
+                true,
+                true,
+                false,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "triangular_prism",
+                "Triangular Prism",
+                "core",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "cone",
+                "Cone",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "capsule",
+                "Capsule",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "tube",
+                "Tube",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "wedge",
+                "Wedge",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "polygon_prism",
+                "Polygon Prism",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
         ],
         csg_capabilities: vec![
-            boolean("union", false, false, false, GeometrySupportStatus::Unsupported, "Union is represented in SceneDocument but not yet realized by the production mesh pipeline."),
-            boolean("subtract", true, true, true, GeometrySupportStatus::Production, "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings."),
-            boolean("intersect", false, false, false, GeometrySupportStatus::Unsupported, "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline."),
+            boolean(
+                "union",
+                false,
+                false,
+                false,
+                GeometrySupportStatus::Unsupported,
+                "Union is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+            ),
+            boolean(
+                "subtract",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings.",
+            ),
+            boolean(
+                "intersect",
+                false,
+                false,
+                false,
+                GeometrySupportStatus::Unsupported,
+                "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+            ),
         ],
     }
 }
@@ -1252,6 +1417,7 @@ mod tests {
                 physics_stack: vec![],
                 object_mesh: None,
                 mesh_override: None,
+                notes: None,
                 visible: true,
                 locked: false,
                 tags: vec!["mesh:dirty".to_string()],
@@ -1395,14 +1561,18 @@ mod tests {
         second.transform.translation = [0.25, 0.0, 0.0];
         scene.objects.push(second);
         let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
-        assert!(validation
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "GEOMETRY_REGION_NAME_DUPLICATE"));
-        assert!(validation
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "GEOMETRY_OBJECT_OVERLAPS_OBJECT"));
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "GEOMETRY_REGION_NAME_DUPLICATE")
+        );
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "GEOMETRY_OBJECT_OVERLAPS_OBJECT")
+        );
     }
 
     #[test]
@@ -1415,9 +1585,11 @@ mod tests {
         });
         scene.study.mesh_defaults.maximum_element_size = Some("0.2".to_string());
         let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
-        assert!(validation
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE"));
+        assert!(
+            validation
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE")
+        );
     }
 }

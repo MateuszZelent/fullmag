@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 
@@ -8,9 +8,24 @@ function readString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
 }
 
+function subscribeToMounted(): () => void {
+  return () => {};
+}
+
+function clientMountedSnapshot(): boolean {
+  return true;
+}
+
+function serverMountedSnapshot(): boolean {
+  return false;
+}
+
 export default function StatusBarModule() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(
+    subscribeToMounted,
+    clientMountedSnapshot,
+    serverMountedSnapshot,
+  );
 
   const status = useSessionStatus();
   const sessionState = mounted

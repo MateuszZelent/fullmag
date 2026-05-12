@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, FemDomainMeshModeIR};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::control_room::*;
 use crate::live_workspace::*;
@@ -578,6 +578,23 @@ impl InteractiveRuntimeHost {
         Ok(())
     }
 
+    pub(super) fn compute_current_energies(
+        &mut self,
+        continuation_magnetization: Option<&[[f64; 3]]>,
+        live_workspace: &LocalLiveWorkspace,
+    ) -> Result<()> {
+        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
+
+        if let Some(runtime) = self.runtime.as_mut() {
+            let step_stats = runtime.snapshot_step_stats()?;
+            live_workspace.update(|state| {
+                apply_step_stats_to_idle_live_state(state, &step_stats);
+            });
+        }
+
+        Ok(())
+    }
+
     pub(super) fn ensure_runtime_for_problem(
         &mut self,
         problem: &ProblemIR,
@@ -823,26 +840,36 @@ fn refresh_interactive_preview_runtime_display(
         fullmag_runner::DisplayPayload::GlobalScalar { .. } => None,
     };
     live_workspace.update(|state| {
-        state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
-        state.live_state.latest_step.step = step_stats.step;
-        state.live_state.latest_step.time = step_stats.time;
-        state.live_state.latest_step.dt = step_stats.dt;
-        state.live_state.latest_step.e_ex = step_stats.e_ex;
-        state.live_state.latest_step.e_demag = step_stats.e_demag;
-        state.live_state.latest_step.e_ext = step_stats.e_ext;
-        state.live_state.latest_step.e_total = step_stats.e_total;
-        state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
-        state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
-        state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
-        state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
-        state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
-        state.latest_scalar_row = Some(scalar_row_from_stats(&step_stats));
+        apply_step_stats_to_idle_live_state(state, &step_stats);
         state.live_state.latest_step.preview_field = preview_field.clone();
         if let Some(preview_field) = preview_field.as_ref() {
             upsert_cached_preview_field(state, preview_field);
         }
     });
     Ok(())
+}
+
+fn apply_step_stats_to_idle_live_state(
+    state: &mut LocalLiveWorkspaceState,
+    step_stats: &fullmag_runner::StepStats,
+) {
+    state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+    state.live_state.latest_step.step = step_stats.step;
+    state.live_state.latest_step.time = step_stats.time;
+    state.live_state.latest_step.dt = step_stats.dt;
+    state.live_state.latest_step.e_ex = step_stats.e_ex;
+    state.live_state.latest_step.e_demag = step_stats.e_demag;
+    state.live_state.latest_step.e_ext = step_stats.e_ext;
+    state.live_state.latest_step.e_ani = step_stats.e_ani;
+    state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+    state.live_state.latest_step.e_total = step_stats.e_total;
+    state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
+    state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
+    state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
+    state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
+    state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
+    state.live_state.latest_step.per_object_scalars = step_stats.per_object_scalars.clone();
+    state.latest_scalar_row = Some(scalar_row_from_stats(step_stats));
 }
 
 fn refresh_interactive_preview_fields(

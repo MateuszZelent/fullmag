@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderMap;
+use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
 use crate::artifacts::{sanitize_artifact_relative_path, try_resolve_artifact_path};

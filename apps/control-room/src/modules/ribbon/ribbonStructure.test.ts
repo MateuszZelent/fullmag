@@ -104,13 +104,13 @@ describe("ribbon structure", () => {
     const renderAction = selectedGroup?.actions.find(
       (action) => action.id === "view-selected-render",
     );
-    const shaderColoringNode = textureAction?.menu?.find(
+    const surfaceColoringNode = textureAction?.menu?.find(
       (node) =>
         node.type === "radio-group" &&
-        node.id === "selected-texture:shader-coloring",
+        node.id === "selected-texture:surface-coloring",
     );
-    const shaderMonoColorNode = textureAction?.menu?.find(
-      (node) => node.type === "color" && node.id === "selected-texture:shader-mono-color",
+    const solidColorNode = textureAction?.menu?.find(
+      (node) => node.type === "color" && node.id === "selected-texture:solid-color",
     );
     const vectorAlphaNode = textureAction?.menu?.find(
       (node) => node.type === "slider" && node.id === "selected-texture:vector-alpha",
@@ -127,12 +127,12 @@ describe("ribbon structure", () => {
 
     expect(textureAction?.disabled).toBe(false);
     expect(renderAction?.disabled).toBe(false);
-    expect(shaderColoringNode).toMatchObject({
+    expect(surfaceColoringNode).toMatchObject({
       disabled: false,
-      value: "orientation",
+      value: "inherit",
     });
-    expect(shaderMonoColorNode).toMatchObject({
-      disabled: false,
+    expect(solidColorNode).toMatchObject({
+      disabled: true,
       value: "var(--fm-surface-magnetic)",
     });
     expect(vectorAlphaNode).toMatchObject({ value: 100 });
@@ -147,8 +147,8 @@ describe("ribbon structure", () => {
 
     if (
       frameNode?.type !== "checkbox" ||
-      shaderColoringNode?.type !== "radio-group" ||
-      shaderMonoColorNode?.type !== "color" ||
+      surfaceColoringNode?.type !== "radio-group" ||
+      solidColorNode?.type !== "color" ||
       vectorAlphaNode?.type !== "slider" ||
       wireframeOpacityNode?.type !== "slider"
     ) {
@@ -156,8 +156,8 @@ describe("ribbon structure", () => {
     }
 
     frameNode.onCheckedChange?.(true);
-    shaderColoringNode.onValueChange?.("monochrome");
-    shaderMonoColorNode.onValueChange?.("#ff0000");
+    surfaceColoringNode.onValueChange?.("solid");
+    solidColorNode.onValueChange?.("#ff0000");
     vectorAlphaNode.onValueChange?.(48);
     wireframeOpacityNode.onValueChange?.(64);
 
@@ -166,8 +166,75 @@ describe("ribbon structure", () => {
         boundsVisible: true,
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ff0000",
+        surfaceColorSource: "solid",
         vectorAlphaPercent: 48,
         wireframeOpacityPercent: 64,
+      });
+  });
+
+  it("wires global Surface and Texture ribbon menus to object and part display defaults", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      sessionStatus: {
+        resources: { field_revision: 12, fields_revision: 12 },
+      } as never,
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const globalGroup = content?.groups.find(
+      (group) => group.id === "view-global-display",
+    );
+    const surfaceAction = globalGroup?.actions.find(
+      (action) => action.id === "view-surface",
+    );
+    const textureAction = globalGroup?.actions.find(
+      (action) => action.id === "view-texture",
+    );
+    const surfaceVisibleNode = surfaceAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "surface:visible",
+    );
+    const textureSourceNode = textureAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "texture:source",
+    );
+    const textureStatusNode = textureAction?.menu?.find(
+      (node) => node.type === "status" && node.id === "texture:field-status",
+    );
+
+    expect(surfaceVisibleNode).toMatchObject({ checked: true });
+    expect(textureSourceNode).toMatchObject({ value: "orientation" });
+    expect(textureStatusNode).toMatchObject({
+      tone: "success",
+      value: "available r12",
+    });
+    if (
+      surfaceVisibleNode?.type !== "checkbox" ||
+      textureSourceNode?.type !== "radio-group"
+    ) {
+      throw new Error("Expected global surface and texture controls");
+    }
+
+    surfaceVisibleNode.onCheckedChange?.(false);
+    textureSourceNode.onValueChange?.("component_y");
+
+    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+      .toMatchObject({
+        shaderColorMode: "y",
+        shaderVisible: false,
+        surfaceColorSource: "component_y",
+      });
+    expect(visualization.getSettings({ id: "part-a", kind: "part" }))
+      .toMatchObject({
+        shaderColorMode: "y",
+        shaderVisible: false,
+        surfaceColorSource: "component_y",
       });
   });
 
@@ -206,10 +273,10 @@ describe("ribbon structure", () => {
     const renderAction = selectedGroup?.actions.find(
       (action) => action.id === "view-selected-render",
     );
-    const shaderColoringNode = textureAction?.menu?.find(
+    const surfaceColoringNode = textureAction?.menu?.find(
       (node) =>
         node.type === "radio-group" &&
-        node.id === "selected-texture:shader-coloring",
+        node.id === "selected-texture:surface-coloring",
     );
     const vectorThicknessNode = textureAction?.menu?.find(
       (node) =>
@@ -223,9 +290,9 @@ describe("ribbon structure", () => {
       (node) => node.type === "checkbox" && node.id === "selected:visible",
     );
 
-    expect(shaderColoringNode).toMatchObject({
+    expect(surfaceColoringNode).toMatchObject({
       disabled: false,
-      value: "monochrome",
+      value: "inherit",
     });
     expect(vectorThicknessNode).toMatchObject({ disabled: false, value: 1 });
     expect(wireframeColorNode).toMatchObject({
@@ -234,7 +301,7 @@ describe("ribbon structure", () => {
     });
 
     if (
-      shaderColoringNode?.type !== "radio-group" ||
+      surfaceColoringNode?.type !== "radio-group" ||
       vectorThicknessNode?.type !== "slider" ||
       wireframeColorNode?.type !== "color" ||
       visibleNode?.type !== "checkbox"
@@ -242,7 +309,7 @@ describe("ribbon structure", () => {
       throw new Error("Expected selected airbox style controls");
     }
 
-    shaderColoringNode.onValueChange?.("x");
+    surfaceColoringNode.onValueChange?.("component_x");
     vectorThicknessNode.onValueChange?.(2.4);
     wireframeColorNode.onValueChange?.("#ffffff");
     visibleNode.onCheckedChange?.(false);
@@ -250,6 +317,7 @@ describe("ribbon structure", () => {
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({
         shaderColorMode: "x",
+        surfaceColorSource: "component_x",
         vectorThickness: 2.4,
         wireframeColor: "#ffffff",
       });

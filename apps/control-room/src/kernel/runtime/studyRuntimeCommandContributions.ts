@@ -3,7 +3,10 @@ import {
   MODEL_SCENE_PATH,
   MODEL_STUDY_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 } from "../api/apiPaths";
@@ -11,6 +14,7 @@ import type { JsonObject, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext } from "../commands/commandTypes";
 import type { CommandContribution } from "../commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
+import { viewport3dStore } from "../../modules/viewport-3d/viewport3dStore";
 
 const DEFAULT_RELAX_STAGE: JsonObject = {
   entrypoint_kind: "relax",
@@ -55,6 +59,18 @@ function invalidateRuntimeResources(
   context.resources?.invalidate(SIMULATION_RUN_CURRENT_PATH, revision);
   context.resources?.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
   context.resources?.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
+}
+
+function invalidateEnergyResources(
+  context: CommandContext,
+  revision: string | number,
+): void {
+  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH, revision);
+  context.resources?.invalidate(SIMULATION_SOLVER_ENERGIES_HISTORY_PATH, revision);
+  context.resources?.invalidatePrefix(
+    SIMULATION_OBJECT_METRICS_PATH.split("{object_id}")[0],
+    revision,
+  );
 }
 
 async function submitRuntimeCommand(
@@ -234,6 +250,57 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
 
       return {
         message: "Compute fields command accepted.",
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.compute-energies",
+    title: "Compute Energies",
+    category: "Study",
+    group: "study-runtime",
+    scope: "runtime",
+    isEnabled: isApiAvailable,
+    disabledReason: disabledWithoutApi,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+
+      const response = await context.api.commands.submit({
+        kind: "compute_energies",
+      });
+      if (!response.accepted) {
+        return {
+          message: response.error ?? "Compute energies command rejected.",
+          status: "failed",
+        };
+      }
+
+      const revision = commandRevision(response, "compute-energies");
+      invalidateRuntimeResources(context, revision);
+      invalidateEnergyResources(context, revision);
+
+      return {
+        message: "Compute energies command accepted.",
+        status: "completed",
+      };
+    },
+  },
+  {
+    id: "study.test-random-field",
+    title: "Test Random Field",
+    category: "Study",
+    group: "study-debug",
+    scope: "workspace",
+    isActive: () => viewport3dStore.getSnapshot().mockField.running,
+    run: async () => {
+      viewport3dStore.toggleMockField();
+      const running = viewport3dStore.getSnapshot().mockField.running;
+      return {
+        message: running
+          ? "Mock field animation started — viewport receives random magnetization at ~8 fps."
+          : "Mock field animation stopped.",
         status: "completed",
       };
     },

@@ -4,7 +4,9 @@ import type {
   CommandResponse,
   ObjectCreateRequest,
   ObjectGeometryPatchRequest,
+  ObjectPatchRequest,
   RequestOptions,
+  SceneResource,
   StructuredCommandRequest,
 } from "../api/apiTypes";
 
@@ -80,6 +82,23 @@ export function patchObjectGeometryTransaction(
     },
     options,
   );
+}
+
+export function patchObjectTransaction(
+  api: {
+    model: {
+      patchObject: (
+        objectId: string,
+        request: ObjectPatchRequest,
+        options?: RequestOptions,
+      ) => Promise<SceneResource>;
+    };
+  },
+  objectId: string,
+  request: ObjectPatchRequest,
+  options?: RequestOptions,
+): Promise<SceneResource> {
+  return api.model.patchObject(objectId, request, options);
 }
 
 export function commitObjectTransformTransaction(

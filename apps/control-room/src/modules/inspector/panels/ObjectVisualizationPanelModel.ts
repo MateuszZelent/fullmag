@@ -1,7 +1,21 @@
 import type {
+  SurfaceColorSource,
   VisualizationColorMode,
   VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+
+export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
+  label: string;
+  value: SurfaceColorSource;
+}> = [
+  { value: "solid", label: "Solid (plain material)" },
+  { value: "orientation", label: "HSL orientation" },
+  { value: "component_x", label: "Component X" },
+  { value: "component_y", label: "Component Y" },
+  { value: "component_z", label: "Component Z" },
+  { value: "magnitude", label: "Magnitude |m|" },
+  { value: "colormap", label: "Colormap" },
+];
 
 export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
   label: string;
@@ -29,7 +43,7 @@ export interface VisualizationPanelSection {
     | "geometry-scope"
     | "opacity"
     | "overrides"
-    | "surface-shader"
+    | "surface-coloring"
     | "vectors"
     | "wireframe";
   title: string;
@@ -49,7 +63,7 @@ export function buildVisualizationPanelSections({
       disabled: false,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
-        { id: "shaderVisible", kind: "toggle", label: "Shader" },
+        { id: "shaderVisible", kind: "toggle", label: "Surface" },
         { id: "wireframeVisible", kind: "toggle", label: "Wireframe" },
         { id: "boundsVisible", kind: "toggle", label: "Frame" },
         { id: "pointsVisible", kind: "toggle", label: "Points" },
@@ -61,11 +75,11 @@ export function buildVisualizationPanelSections({
     {
       disabled: passDisabled || !effectiveSettings.shaderVisible,
       fields: [
-        { id: "shaderColorMode", kind: "mode", label: "Shader coloring" },
-        { id: "shaderMonoColor", kind: "color", label: "Monochrome color" },
+        { id: "surfaceColorSource", kind: "mode", label: "Color source" },
+        { id: "shaderMonoColor", kind: "color", label: "Solid color" },
       ],
-      id: "surface-shader",
-      title: "Surface Shader",
+      id: "surface-coloring",
+      title: "Surface Coloring",
     },
     {
       disabled: passDisabled || !effectiveSettings.wireframeVisible,

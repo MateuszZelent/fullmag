@@ -4,6 +4,8 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
 } from "../api/apiPaths";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
@@ -56,6 +58,43 @@ describe("study runtime command contributions", () => {
     expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-fields");
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe("cmd-fields");
     expect(fieldVectorListener).toHaveBeenCalledWith("cmd-fields");
+  });
+
+  it("submits compute energies without a run command and invalidates energy/object metrics resources", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-energies",
+      error: null,
+    }));
+    const objectMetricsKey = SIMULATION_OBJECT_METRICS_PATH.replace(
+      "{object_id}",
+      "arch_Waveguide",
+    );
+    const objectMetricsListener = vi.fn();
+    resources.subscribe(objectMetricsKey, objectMetricsListener);
+
+    const result = await registry.execute("study.compute-energies", {
+      api: {
+        commands: { submit },
+      } as never,
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Compute energies command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith({ kind: "compute_energies" });
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-energies");
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-energies");
+    expect(resources.getRevision(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH)).toBe(
+      "cmd-energies",
+    );
+    expect(objectMetricsListener).toHaveBeenCalledWith("cmd-energies");
   });
 
   it("reports a clear disabled reason when the API facade is unavailable", () => {

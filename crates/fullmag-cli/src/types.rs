@@ -1,7 +1,7 @@
 use fullmag_ir::{GeometryAssetsIR, ProblemIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -143,6 +143,8 @@ pub(crate) struct LiveStepView {
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,

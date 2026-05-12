@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR, ExecutionPlanIR, FemHintsIR,
@@ -7,7 +7,7 @@ use fullmag_ir::{
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -409,13 +409,7 @@ fn format_stage_progress_line(
     } else {
         let mut line = format!(
             "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  [{:.0}ms]",
-            stats.step,
-            stats.time,
-            stats.dt,
-            torque_t,
-            stats.e_total,
-            stats.max_h_eff,
-            wall_ms,
+            stats.step, stats.time, stats.dt, torque_t, stats.e_total, stats.max_h_eff, wall_ms,
         );
         append_detailed_fem_step_profile(&mut line, stats);
         line
@@ -1621,9 +1615,7 @@ fn execute_manual_interactive_remesh(
                 .unwrap_or(0);
             eprintln!(
                 "[fullmag] shared-domain remesh scope — applying local object sizing for {} (custom object overrides={}, default body hmax={:.3e} m)",
-                object_id,
-                custom_override_count,
-                hmax
+                object_id, custom_override_count, hmax
             );
             live_workspace.push_log(
                 "info",
@@ -2689,6 +2681,44 @@ fn refresh_problem_preview_state(
     Ok(())
 }
 
+fn refresh_problem_energy_state(
+    base_problem: &ProblemIR,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    live_workspace: &LocalLiveWorkspace,
+) -> Result<()> {
+    let mut problem = base_problem.clone();
+    if let Some(previous_final_magnetization) = continuation_magnetization {
+        apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
+    }
+
+    let mut runtime = fullmag_runner::create_interactive_runtime(&problem, None)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let step_stats = runtime
+        .snapshot_step_stats()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    live_workspace.update(|state| {
+        state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+        state.live_state.latest_step.step = step_stats.step;
+        state.live_state.latest_step.time = step_stats.time;
+        state.live_state.latest_step.dt = step_stats.dt;
+        state.live_state.latest_step.e_ex = step_stats.e_ex;
+        state.live_state.latest_step.e_demag = step_stats.e_demag;
+        state.live_state.latest_step.e_ext = step_stats.e_ext;
+        state.live_state.latest_step.e_ani = step_stats.e_ani;
+        state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+        state.live_state.latest_step.e_total = step_stats.e_total;
+        state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
+        state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
+        state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
+        state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
+        state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
+        state.live_state.latest_step.per_object_scalars = step_stats.per_object_scalars.clone();
+        state.latest_scalar_row = Some(scalar_row_from_stats(&step_stats));
+    });
+
+    Ok(())
+}
+
 fn is_control_checkpoint_only(update: &fullmag_runner::StepUpdate) -> bool {
     update.preview_field.is_none()
         && !update.scalar_row_due
@@ -2716,6 +2746,7 @@ fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WaitForSolveCommandAction {
     RefreshFields,
+    RefreshEnergies,
     StartSolver,
     Remesh,
     Stop,
@@ -2725,6 +2756,7 @@ enum WaitForSolveCommandAction {
 fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
     match kind {
         "compute_fields" => WaitForSolveCommandAction::RefreshFields,
+        "compute_energies" => WaitForSolveCommandAction::RefreshEnergies,
         "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
         "remesh" => WaitForSolveCommandAction::Remesh,
         "stop" => WaitForSolveCommandAction::Stop,
@@ -4003,6 +4035,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     continue;
                 }
+                WaitForSolveCommandAction::RefreshEnergies => {
+                    eprintln!("[fullmag] compute_energies requested — evaluating current energies");
+                    live_workspace.push_log(
+                        "system",
+                        "Compute energies requested — evaluating current magnetization",
+                    );
+                    let live_magnetization = live_workspace.latest_magnetization_vectors();
+                    let compute_magnetization = live_magnetization
+                        .as_deref()
+                        .or(continuation_magnetization.as_deref());
+                    match refresh_problem_energy_state(
+                        &stages[0].ir,
+                        compute_magnetization,
+                        &live_workspace,
+                    ) {
+                        Ok(()) => live_workspace
+                            .push_log("success", "Energies computed for the current magnetization"),
+                        Err(error) => live_workspace
+                            .push_log("error", format!("Compute energies failed: {}", error)),
+                    }
+                    continue;
+                }
                 WaitForSolveCommandAction::StartSolver => {
                     eprintln!("[fullmag] compute requested — starting solver");
                     live_workspace.push_log("system", "Compute requested — starting solver");
@@ -4753,6 +4807,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     ),
                     Err(error) => live_workspace
                         .push_log("error", format!("Compute fields failed: {}", error)),
+                }
+                continue;
+            }
+
+            if command.kind == "compute_energies" {
+                eprintln!("[fullmag] compute_energies requested — evaluating current energies");
+                live_workspace.push_log(
+                    "system",
+                    "Compute energies requested — evaluating current magnetization",
+                );
+                let live_magnetization = live_workspace.latest_magnetization_vectors();
+                let compute_magnetization = live_magnetization
+                    .as_deref()
+                    .or(continuation_magnetization.as_deref());
+                match interactive_runtime_host
+                    .compute_current_energies(compute_magnetization, &live_workspace)
+                {
+                    Ok(()) => live_workspace
+                        .push_log("success", "Energies computed for the current magnetization"),
+                    Err(error) => live_workspace
+                        .push_log("error", format!("Compute energies failed: {}", error)),
                 }
                 continue;
             }
@@ -6020,11 +6095,11 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
+        LIVE_PROGRESS_PUBLISH_INTERVAL, LiveProgressCadence, WaitForSolveCommandAction,
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
         fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
-        wait_for_solve_supported, LiveProgressCadence, WaitForSolveCommandAction,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        wait_for_solve_supported,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{

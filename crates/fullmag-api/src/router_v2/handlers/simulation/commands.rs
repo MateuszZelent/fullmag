@@ -3,16 +3,16 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
-    geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
-    GeometryRealizationSnapshot, SceneDocument, SceneObject,
+    GeometryBackendTarget, GeometryRealizationSnapshot, SceneDocument, SceneObject,
+    geometry_blocks_solver_run, realize_geometry_scene,
 };
 use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, RegionIR};
 
@@ -63,6 +63,7 @@ async fn validate_authoring_gate_for_command(
             | StructuredCommandRequest::Relax { .. }
             | StructuredCommandRequest::Solve
             | StructuredCommandRequest::ComputeFields
+            | StructuredCommandRequest::ComputeEnergies
     );
     if !should_check_mesh && !should_check_run {
         return Ok(None);
@@ -689,6 +690,9 @@ fn command_from_structured(
         }
         StructuredCommandRequest::ComputeFields => {
             new_session_command(command_id, "compute_fields", created_at_unix_ms)
+        }
+        StructuredCommandRequest::ComputeEnergies => {
+            new_session_command(command_id, "compute_energies", created_at_unix_ms)
         }
         StructuredCommandRequest::Close => {
             new_session_command(command_id, "close", created_at_unix_ms)

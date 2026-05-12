@@ -4,6 +4,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
 
 export type Viewport3DPrimitiveKind = "box" | "cylinder" | "sphere" | "unsupported";
@@ -185,11 +186,30 @@ function firstRegionOverrideMagnetizationRef(
   return null;
 }
 
-function magnetizationPreviewColor(presetKind: string): string {
+function magnetizationPreviewColor(
+  presetKind: string,
+  asset: JsonRecord,
+): string {
+  if (presetKind === "uniform") {
+    return rgbToHex(
+      magnetizationHslRgb(
+        ...(asVec3(asRecord(asset.preset_params)?.direction) ?? [1, 0, 0]),
+      ),
+    );
+  }
   if (presetKind === "vortex") return "#27c4e8";
   if (presetKind === "random_seeded") return "#43d17a";
-  if (presetKind === "uniform") return "#f0b429";
   return "#9fb5ff";
+}
+
+function rgbToHex([red, green, blue]: [number, number, number]): string {
+  return `#${[red, green, blue]
+    .map((channel) =>
+      Math.round(Math.max(0, Math.min(1, channel)) * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
 }
 
 function magnetizationTexturePreview(
@@ -204,7 +224,7 @@ function magnetizationTexturePreview(
     asString(asset.preset_kind) ?? asString(asset.kind) ?? "texture";
   return {
     assetId,
-    color: magnetizationPreviewColor(presetKind),
+    color: magnetizationPreviewColor(presetKind, asset),
     label:
       asString(asset.ui_label) ??
       asString(asset.name) ??

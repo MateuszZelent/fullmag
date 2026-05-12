@@ -80,6 +80,10 @@ interface Viewport3DGridSpec {
 }
 
 const FALLBACK_GRID_SIZE = 1e-6;
+const PREFERRED_GRID_CELL_SIZE = 1e-6;
+const GRID_SIZE_UNIVERSE_LIMIT_SCALE = 1.5;
+const GRID_TARGET_DIVISIONS = 12;
+const GRID_MAX_DIVISIONS = 64;
 
 export function resolveViewport3DGridSpec(
   bounds: Viewport3DBounds | null,
@@ -93,10 +97,13 @@ export function resolveViewport3DGridSpec(
     };
   }
 
-  const maxSpan = Math.max(...bounds.size, bounds.radius * 2, 1e-12);
-  const paddedSize = maxSpan * 1.25;
-  const targetCellSize = niceGridStep(paddedSize / 12);
-  const divisions = clamp(Math.round(paddedSize / targetCellSize), 4, 64);
+  const maxSpan = Math.max(...bounds.size, 1e-12);
+  const maxGridSize = maxSpan * GRID_SIZE_UNIVERSE_LIMIT_SCALE;
+  const targetCellSize = resolveViewport3DGridCellSize(maxGridSize);
+  const divisions = Math.min(
+    Math.max(1, Math.floor(maxGridSize / targetCellSize)),
+    GRID_MAX_DIVISIONS,
+  );
   const size = targetCellSize * divisions;
 
   return {
@@ -105,6 +112,21 @@ export function resolveViewport3DGridSpec(
     divisions,
     size,
   };
+}
+
+function resolveViewport3DGridCellSize(maxGridSize: number): number {
+  if (
+    maxGridSize >= PREFERRED_GRID_CELL_SIZE * 4 &&
+    maxGridSize <= PREFERRED_GRID_CELL_SIZE * GRID_MAX_DIVISIONS
+  ) {
+    return PREFERRED_GRID_CELL_SIZE;
+  }
+
+  if (maxGridSize > PREFERRED_GRID_CELL_SIZE * GRID_MAX_DIVISIONS) {
+    return niceGridStep(maxGridSize / GRID_MAX_DIVISIONS);
+  }
+
+  return niceGridStep(maxGridSize / GRID_TARGET_DIVISIONS);
 }
 
 export function resolveViewport3DOrthographicZoom(

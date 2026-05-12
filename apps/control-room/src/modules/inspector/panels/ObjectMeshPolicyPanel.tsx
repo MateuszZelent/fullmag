@@ -27,6 +27,7 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   asRecord,
   formatCount,
+  formatValue,
   JsonResourceSection,
   MeshResourceFields,
   recordField,
@@ -79,6 +80,14 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const reportRecord = asRecord(report.data?.report);
   const effectiveTarget = asRecord(recordField(reportRecord, "effective_target"));
+  const configRecord = asRecord(resource.config);
+  const sizeFieldRecord = asRecord(sizeField.data?.size_field);
+  const sizeFields = Array.isArray(recordField(sizeFieldRecord, "size_fields"))
+    ? (recordField(sizeFieldRecord, "size_fields") as unknown[])
+    : [];
+  const sizeFieldKinds = sizeFields
+    .map((field) => asRecord(field)?.kind)
+    .filter((kind): kind is string => typeof kind === "string" && kind.length > 0);
   const qualityRecord = asRecord(quality.data?.quality);
   const commandContext = useMemo(
     () => createCommandContext("ribbon", kernel),
@@ -306,6 +315,57 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
           type="number"
           value={draft.transitionGrowth}
           onChange={(event) => updateDraft({ transitionGrowth: event.target.value })}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Backend Mesh Parameters" badge="backend truth">
+        <MeshResourceFields
+          fields={[
+            {
+              label: "Gmsh 2D algorithm",
+              value: formatValue(recordField(configRecord, "algorithm_2d")),
+            },
+            {
+              label: "Gmsh 3D algorithm",
+              value: formatValue(recordField(configRecord, "algorithm_3d")),
+            },
+            {
+              label: "Size from curvature",
+              value: formatValue(recordField(configRecord, "size_from_curvature")),
+            },
+            {
+              label: "Narrow regions",
+              value: formatValue(recordField(configRecord, "narrow_regions")),
+            },
+            {
+              label: "Smoothing steps",
+              value: formatValue(recordField(configRecord, "smoothing_steps")),
+            },
+            {
+              label: "Optimizer",
+              value: formatValue(recordField(configRecord, "optimize")),
+            },
+            {
+              label: "Optimizer iterations",
+              value: formatValue(recordField(configRecord, "optimize_iterations")),
+            },
+            {
+              label: "Compute quality",
+              value: formatValue(recordField(configRecord, "compute_quality")),
+            },
+            {
+              label: "Per-element quality",
+              value: formatValue(recordField(configRecord, "per_element_quality")),
+            },
+            {
+              label: "Size-field count",
+              value: String(sizeFields.length),
+            },
+            {
+              label: "Size-field kinds",
+              value: sizeFieldKinds.length ? sizeFieldKinds.join(", ") : "none",
+            },
+          ]}
         />
       </InspectorSection>
 

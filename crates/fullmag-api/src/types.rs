@@ -16,11 +16,11 @@ use fullmag_runner::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{broadcast, watch, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock, broadcast, watch};
 use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
@@ -346,6 +346,8 @@ pub(crate) struct StepUpdateView {
     /// Retained for backwards-compatible imports / load_state only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
     /// **Deprecated (Q17):** Never serialized to the frontend
     /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
     /// rebuild; will be removed once preview pipeline is fully quantities-based.
@@ -388,6 +390,7 @@ impl StepUpdateView {
             max_h_demag: self.max_h_demag,
             max_torque_Apm: self.max_torque_Apm,
             max_torque_T: self.max_torque_T,
+            per_object_scalars: self.per_object_scalars.clone(),
             ..Default::default()
         };
 
@@ -1254,6 +1257,7 @@ mod tests {
             grid: [2, 1, 1],
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            per_object_scalars: Default::default(),
             preview_field: None,
             finished: false,
         };

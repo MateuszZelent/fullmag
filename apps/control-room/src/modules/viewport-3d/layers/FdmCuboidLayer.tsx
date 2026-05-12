@@ -15,7 +15,12 @@ import {
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { opacityFromSettings } from "./viewport3DLayerSettings";
+import {
+  opacityFromSettings,
+  shaderColorFromSettings,
+  wireframeColorFromSettings,
+  wireframeOpacityFromSettings,
+} from "./viewport3DLayerSettings";
 
 interface FdmCuboidInstanceModel {
   cellSize: [number, number, number];
@@ -93,7 +98,7 @@ export function FdmCuboidLayer({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: colors.mesh,
+          color: shaderColorFromSettings(settings, colors.mesh),
           opacity: opacityFromSettings(settings),
           transparent: opacityFromSettings(settings) < 1,
         }),
@@ -105,8 +110,8 @@ export function FdmCuboidLayer({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: colors.wire,
-          opacity: Math.max(opacityFromSettings(settings), 0.42),
+          color: wireframeColorFromSettings(settings, colors.wire),
+          opacity: wireframeOpacityFromSettings(settings),
           transparent: true,
           wireframe: true,
         }),

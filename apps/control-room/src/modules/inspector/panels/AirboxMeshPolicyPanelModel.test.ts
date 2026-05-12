@@ -41,6 +41,25 @@ describe("AirboxMeshPolicyPanelModel", () => {
     expect(draftKeyForUniverseMeshPolicyResource(resource)).toContain("12");
   });
 
+  it("hydrates structured Airbox drafts from numeric strings", () => {
+    const resource = {
+      config: {
+        airbox_grading: "geometric",
+        airbox_growth_rate: "2.5",
+        airbox_hmax: "2e-7",
+        airbox_hmin: "2e-8",
+      },
+      revision: 13,
+    };
+
+    expect(draftFromUniverseMeshPolicyResource(resource)).toMatchObject({
+      airboxGrading: "geometric",
+      airboxGrowthRate: "2.5",
+      airboxHmax: "2e-7",
+      airboxHmin: "2e-8",
+    });
+  });
+
   it("builds a replace request while preserving unrelated universe mesh config keys", () => {
     const result = buildAirboxMeshPolicyReplaceRequest({
       airboxGrading: "geometric",

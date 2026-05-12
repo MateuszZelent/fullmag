@@ -1,11 +1,11 @@
 use crate::{
-    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
-    SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
-    SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
-    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
-    ScriptBuilderMeshInterfaceState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
-    StudyPipelineNode, Transform3D,
+    MagnetizationAsset, SceneCurrentModulesState, SceneDocument, SceneDocumentValidationError,
+    SceneEditorState, SceneGeometry, SceneMaterialAsset, SceneMeshInterface, SceneMetadata,
+    SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderMagnetizationState, ScriptBuilderMeshInterfaceState,
+    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, StudyPipelineNode, Transform3D,
+    validate_scene_document,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -740,6 +740,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         physics_stack: ensure_object_physics_stack(&geometry.physics_stack, geometry.material.dind),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
+        notes: None,
         visible: true,
         locked: false,
         tags: Vec::new(),
@@ -1622,9 +1623,11 @@ mod tests {
         scene.objects[0].magnetization_ref = None;
         let error = scene_document_to_script_builder(&scene)
             .expect_err("missing magnetization ref must fail");
-        assert!(error
-            .message
-            .contains("must reference a magnetization asset"));
+        assert!(
+            error
+                .message
+                .contains("must reference a magnetization asset")
+        );
     }
 
     #[test]
@@ -1652,9 +1655,11 @@ mod tests {
         scene.magnetization_assets[0].kind = "procedural".to_string();
         let error = scene_document_to_script_builder(&scene)
             .expect_err("unsupported magnetization kind must fail");
-        assert!(error
-            .message
-            .contains("unsupported magnetization asset kind"));
+        assert!(
+            error
+                .message
+                .contains("unsupported magnetization asset kind")
+        );
     }
 
     #[test]

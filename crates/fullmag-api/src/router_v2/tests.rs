@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use tower::ServiceExt; // for `oneshot`
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
@@ -549,6 +549,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 grid: [4, 4, 1],
                 fem_mesh: None,
                 magnetization: None,
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -1326,6 +1327,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 grid: [4, 3, 2],
                 fem_mesh: None,
                 magnetization: None,
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -2859,8 +2861,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
-            ["body"]["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -2872,8 +2874,7 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -4278,10 +4279,12 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(json["source"]
-        .as_str()
-        .expect("source string")
-        .contains("from fullmag import *"));
+    assert!(
+        json["source"]
+            .as_str()
+            .expect("source string")
+            .contains("from fullmag import *")
+    );
 }
 
 #[tokio::test]
@@ -4418,21 +4421,27 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
-    assert!(json["csg_capabilities"]
-        .as_array()
-        .expect("csg capabilities")
-        .iter()
-        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
+    );
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
+    );
+    assert!(
+        json["csg_capabilities"]
+            .as_array()
+            .expect("csg capabilities")
+            .iter()
+            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
+    );
 }
 
 #[tokio::test]
@@ -4548,11 +4557,13 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(created_object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        created_object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -4616,11 +4627,13 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(!delete_json["committed_scene"]["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "box_001"));
+    assert!(
+        !delete_json["committed_scene"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "box_001")
+    );
 }
 
 #[tokio::test]
@@ -4725,11 +4738,13 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(json["diagnostics"]
-        .as_array()
-        .expect("diagnostics")
-        .iter()
-        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
+    assert!(
+        json["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
+    );
 }
 
 #[tokio::test]
@@ -4825,10 +4840,12 @@ async fn authoring_regions_returns_object_derived_regions() {
     assert_eq!(json["regions"][0]["name"], "free_layer");
     assert_eq!(json["regions"][0]["source"], "object");
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
-    assert!(json["regions"][0]["source_body_ids"][0]
-        .as_str()
-        .unwrap()
-        .starts_with("body:body:"));
+    assert!(
+        json["regions"][0]["source_body_ids"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("body:body:")
+    );
     assert_eq!(
         json["regions"][0]["mesh_part_ids"]
             .as_array()
@@ -4872,11 +4889,13 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
 }
 
 #[tokio::test]
@@ -5140,11 +5159,13 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(create_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        create_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 
     let patch_response = app
         .clone()
@@ -5175,11 +5196,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(patched_object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        patched_object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
 
     let delete_response = app
         .oneshot(
@@ -5193,11 +5216,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(!delete_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        !delete_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 }
 
 #[tokio::test]
@@ -5559,6 +5584,38 @@ async fn commands_endpoint_enqueues_compute_fields_command() {
     assert_eq!(
         queue.front().map(|command| command.kind.as_str()),
         Some("compute_fields")
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_enqueues_compute_energies_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "compute_energies"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue.front().map(|command| command.kind.as_str()),
+        Some("compute_energies")
     );
 }
 
@@ -5982,6 +6039,106 @@ async fn solver_energies_history_endpoint_honors_limit() {
     assert_eq!(json["rows"][0]["step"], 42);
 }
 
+#[tokio::test]
+async fn object_metrics_endpoint_returns_zero_energies_before_solver_sample() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.state_version = 12;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["object_id"], "body");
+    assert_eq!(json["has_solver_sample"], false);
+    assert_eq!(json["magnetization_average"]["mx"], 1.0);
+    assert_eq!(json["magnetization_average"]["my"], 0.0);
+    assert_eq!(json["magnetization_average"]["mz"], 0.0);
+    assert_eq!(json["energies"]["total"], 0.0);
+}
+
+#[tokio::test]
+async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 4.2e-12,
+                dt: 1.0e-13,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 15.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![0.1, 0.2, 0.3]),
+                per_object_scalars: HashMap::from([(
+                    "body".to_string(),
+                    HashMap::from([
+                        ("mx".to_string(), 0.25),
+                        ("my".to_string(), 0.5),
+                        ("mz".to_string(), 0.75),
+                        ("e_ex".to_string(), 11.0),
+                        ("e_demag".to_string(), 12.0),
+                        ("e_ext".to_string(), 13.0),
+                        ("e_ani".to_string(), 14.0),
+                        ("e_dmi".to_string(), 15.0),
+                        ("e_total".to_string(), 65.0),
+                    ]),
+                )]),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.scalar_revision = 21;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 21);
+    assert_eq!(json["has_solver_sample"], true);
+    assert_eq!(json["source"], "solver_per_object");
+    assert_eq!(json["magnetization_average"]["mx"], 0.25);
+    assert_eq!(json["energies"]["exchange"], 11.0);
+    assert_eq!(json["energies"]["total"], 65.0);
+}
+
 // ─── session endpoints ──────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -6032,9 +6189,11 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(json["fms_base64"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["fms_base64"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -6515,6 +6674,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 grid: [2, 1, 1],
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -6701,6 +6861,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 grid: [2, 1, 1],
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -7537,9 +7698,11 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -7570,9 +7733,11 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
 }
 
 #[tokio::test]

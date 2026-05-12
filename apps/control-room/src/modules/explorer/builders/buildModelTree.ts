@@ -398,6 +398,7 @@ function studyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode {
       "study.add-run-stage",
       "study.run",
       "study.compute-fields",
+      "study.compute-energies",
     ],
     children: stages.map(studyStageNode),
   };

@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fullmag_ir::{BackendPlanIR, ProblemIR};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{
-    normalize_unit_vectors, transfer_fem_field_to_grid, GridTransferResult,
+    GridTransferResult, normalize_unit_vectors, transfer_fem_field_to_grid,
 };
 
 use crate::formatting::unix_time_millis;
@@ -113,6 +113,7 @@ pub(crate) fn live_state_manifest_from_update(
             grid: update.grid,
             fem_mesh: update.fem_mesh.clone(),
             magnetization: update.magnetization.clone(),
+            per_object_scalars: update.stats.per_object_scalars.clone(),
             preview_field: update.preview_field.clone(),
             finished: update.finished,
         },
@@ -1646,9 +1647,9 @@ fn payload_k_sampling(
                 let values: Vec<f64> = trimmed
                     .split(',')
                     .map(|component| {
-                        component.trim().parse::<f64>().with_context(|| {
-                            "invalid eigen_k_vector component in study pipeline payload"
-                        })
+                        component.trim().parse::<f64>().with_context(
+                            || "invalid eigen_k_vector component in study pipeline payload",
+                        )
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if values.len() != 3 {

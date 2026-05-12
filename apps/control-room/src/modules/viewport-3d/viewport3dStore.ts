@@ -10,8 +10,16 @@ export interface Viewport3DCameraState {
 export interface Viewport3DCommandState {
   camera: Viewport3DCameraState;
   fitRevision: number;
+  mockField: Viewport3DMockFieldState;
   resetCameraRevision: number;
   widgets: Viewport3DWidgetState;
+}
+
+export interface Viewport3DMockFieldState {
+  /** Incrementing counter used to signal Viewport3DModule to regenerate mock data. */
+  tick: number;
+  /** Whether mock field animation is currently running. */
+  running: boolean;
 }
 
 type Viewport3DListener = () => void;
@@ -34,6 +42,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
     ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
   fitRevision: 0,
+  mockField: { running: false, tick: 0 },
   resetCameraRevision: 0,
   widgets: {
     cameraProjection: "perspective",
@@ -45,6 +54,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
 class Viewport3DStore {
   private snapshot: Viewport3DCommandState = DEFAULT_VIEWPORT_3D_STATE;
   private readonly listeners = new Set<Viewport3DListener>();
+  private mockAnimationHandle: ReturnType<typeof setInterval> | null = null;
 
   getSnapshot(): Viewport3DCommandState {
     return this.snapshot;
@@ -68,8 +78,52 @@ class Viewport3DStore {
   }
 
   resetForTest(): void {
+    this.stopMockField();
     this.snapshot = DEFAULT_VIEWPORT_3D_STATE;
     this.notify();
+  }
+
+  /** Start mock field animation at ~8 fps. Ticks `mockField.tick` every frame. */
+  startMockField(): void {
+    if (this.mockAnimationHandle !== null) return;
+    this.snapshot = {
+      ...this.snapshot,
+      mockField: { running: true, tick: this.snapshot.mockField.tick },
+    };
+    this.notify();
+    this.mockAnimationHandle = setInterval(() => {
+      this.snapshot = {
+        ...this.snapshot,
+        mockField: {
+          running: true,
+          tick: this.snapshot.mockField.tick + 1,
+        },
+      };
+      this.notify();
+    }, 125);
+  }
+
+  /** Stop mock field animation and clear mock data. */
+  stopMockField(): void {
+    if (this.mockAnimationHandle !== null) {
+      clearInterval(this.mockAnimationHandle);
+      this.mockAnimationHandle = null;
+    }
+    if (!this.snapshot.mockField.running) return;
+    this.snapshot = {
+      ...this.snapshot,
+      mockField: { running: false, tick: 0 },
+    };
+    this.notify();
+  }
+
+  /** Toggle mock field animation on/off. */
+  toggleMockField(): void {
+    if (this.snapshot.mockField.running) {
+      this.stopMockField();
+    } else {
+      this.startMockField();
+    }
   }
 
   setHslReferenceMode(mode: Viewport3DHslReferenceMode): void {

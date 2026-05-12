@@ -77,6 +77,8 @@ pub struct SceneObject {
     pub object_mesh: Option<ScriptBuilderPerGeometryMeshState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_override: Option<ScriptBuilderPerGeometryMeshState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     #[serde(default = "default_true")]
     pub visible: bool,
     #[serde(default)]

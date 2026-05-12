@@ -211,7 +211,15 @@ function parseConfig(
 }
 
 function readNumberText(value: unknown): string {
-  return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return Number.isFinite(Number(trimmed)) ? trimmed : "";
+  }
+  return "";
 }
 
 function readStringText(value: unknown): string {

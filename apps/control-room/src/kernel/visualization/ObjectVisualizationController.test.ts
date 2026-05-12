@@ -24,6 +24,7 @@ describe("ObjectVisualizationController", () => {
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",
       shaderVisible: true,
+      surfaceColorSource: "orientation",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
       vectorMonoColor: "var(--fm-accent)",
@@ -40,6 +41,7 @@ describe("ObjectVisualizationController", () => {
       shaderColorMode: "monochrome",
       shaderMonoColor: "var(--fm-airbox-fill)",
       shaderVisible: false,
+      surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
       vectorMonoColor: "var(--fm-accent)",
@@ -69,6 +71,7 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSettings(target)).toMatchObject({
       shaderColorMode: "monochrome",
       shaderMonoColor: "#ff3366",
+      surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "x",
       vectorMonoColor: "#44ccff",
@@ -78,11 +81,44 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("normalizes surface color source while preserving legacy color mode compatibility", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "arch", kind: "object" as const };
+
+    controller.patchTarget(target, { surfaceColorSource: "component_x" });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      shaderColorMode: "x",
+      surfaceColorSource: "component_x",
+    });
+
+    controller.patchTarget(target, {
+      shaderColorMode: "magnitude",
+      surfaceColorSource: undefined,
+    });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      shaderColorMode: "magnitude",
+      surfaceColorSource: "magnitude",
+    });
+
+    controller.patchTarget(target, {
+      shaderColorMode: undefined,
+      surfaceColorSource: undefined,
+    });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      shaderColorMode: "orientation",
+      surfaceColorSource: "orientation",
+    });
+  });
+
   it("keeps local-only airbox style fields out of backend visualization patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ffffff",
+        surfaceColorSource: "solid",
         vectorAlphaPercent: 44,
         vectorColorMode: "magnitude",
         vectorThickness: 2,
@@ -94,6 +130,7 @@ describe("ObjectVisualizationController", () => {
       airboxLocalVisualizationPatchFromTargetPatch({
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ffffff",
+        surfaceColorSource: "solid",
         vectorAlphaPercent: 44,
         vectorColorMode: "magnitude",
         vectorThickness: 2,
@@ -103,6 +140,7 @@ describe("ObjectVisualizationController", () => {
     ).toEqual({
       shaderColorMode: "monochrome",
       shaderMonoColor: "#ffffff",
+      surfaceColorSource: "solid",
       vectorAlphaPercent: 44,
       vectorColorMode: "magnitude",
       vectorThickness: 2,

@@ -55,6 +55,7 @@ import { createElement } from "react";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
+  LiveStatusResource,
   MeshActiveBuildResource,
   MeshLastSuccessfulBuildResource,
   MeshSemanticsResource,
@@ -79,8 +80,10 @@ import {
   resolveEffectiveVisualizationSettings,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
+  visualizationTargetKey,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
+  type SurfaceColorSource,
   type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
@@ -214,12 +217,30 @@ const VECTOR_COLOR_ITEMS: Array<{
   label: string;
   value: VisualizationColorMode;
 }> = [
-  { value: "orientation", label: "HSLSPHERE orientation" },
+  { value: "orientation", label: "HSL orientation" },
   { value: "magnitude",   label: "Magnitude" },
   { value: "x",           label: "X component" },
   { value: "y",           label: "Y component" },
   { value: "z",           label: "Z component" },
   { value: "monochrome",  label: "Monochrome" },
+];
+
+const SURFACE_COLOR_SOURCE_ITEMS: Array<{
+  label: string;
+  value: SurfaceColorSource;
+}> = [
+  { value: "solid", label: "Solid" },
+  { value: "orientation", label: "HSL orientation" },
+  { value: "component_x", label: "Component X" },
+  { value: "component_y", label: "Component Y" },
+  { value: "component_z", label: "Component Z" },
+  { value: "magnitude", label: "Magnitude |m|" },
+  { value: "colormap", label: "Colormap" },
+];
+
+const SELECTED_SURFACE_COLOR_SOURCE_ITEMS = [
+  { value: "inherit", label: "Inherited" },
+  ...SURFACE_COLOR_SOURCE_ITEMS,
 ];
 
 const VECTOR_COMPONENT_ITEMS = [
@@ -292,19 +313,32 @@ export const viewTab: RibbonTabContent = {
           ],
         },
         {
-          id: "view-primitive",
-          icon: icon(Sparkles),
-          label: "Primitive",
+          id: "view-surface",
+          icon: icon(Box),
+          label: "Surface",
           iconColor: "text-teal-300",
           menu: [
-            { type: "label",    id: "primitive:header",           label: "Primitive display",        badge: "on" },
-            { type: "status",   id: "primitive:scope",            label: "Scope",                    value: "Global ferromagnet base shading" },
-            { type: "checkbox", id: "primitive:visible",          label: "Primitive on/off",         checked: true },
-            { type: "checkbox", id: "primitive:texture-visible",  label: "Texture on/off",           checked: false },
-            { type: "separator",id: "primitive:s0" },
-            { type: "radio-group", id: "primitive:mesh-display",  label: "Mesh display",             value: "surface",    items: MESH_RENDER_ITEMS },
-            { type: "radio-group", id: "primitive:texture-component", label: "Primitive texture",    value: "magnitude",  items: VECTOR_COMPONENT_ITEMS },
-            { type: "slider",   id: "primitive:texture-density",  label: "Texture downsample cells", value: 65536, min: 8, max: 131072, step: 8 },
+            { type: "label",    id: "surface:header",           label: "Surface display",        badge: "on" },
+            { type: "status",   id: "surface:scope",            label: "Scope",                  value: "Global ferromagnet surface" },
+            { type: "checkbox", id: "surface:visible",          label: "Surface on/off",         checked: true },
+            { type: "separator",id: "surface:s0" },
+            { type: "radio-group", id: "surface:mesh-display",  label: "Render mode",            value: "surface",    items: MESH_RENDER_ITEMS },
+            { type: "checkbox", id: "surface:wireframe",        label: "Wireframe on/off",       checked: true },
+            { type: "checkbox", id: "surface:frame",            label: "Frame on/off",           checked: false },
+            { type: "checkbox", id: "surface:points",           label: "Points on/off",          checked: false },
+            { type: "slider",   id: "surface:opacity",          label: "Opacity",                value: 55, min: 0, max: 100, step: 1, unit: "%" },
+          ],
+        },
+        {
+          id: "view-texture",
+          icon: icon(Sparkles),
+          label: "Texture",
+          iconColor: "text-purple-300",
+          menu: [
+            { type: "label",    id: "texture:header",        label: "Surface coloring", badge: "HSL" },
+            { type: "radio-group", id: "texture:source",     label: "Color source",      value: "orientation", items: SURFACE_COLOR_SOURCE_ITEMS },
+            { type: "separator",id: "texture:s0" },
+            { type: "status",   id: "texture:field-status",  label: "Field status",      value: "unknown" },
           ],
         },
         {
@@ -327,7 +361,7 @@ export const viewTab: RibbonTabContent = {
                 {
                   type: "radio-group",
                   id: "quantity:shader",
-                  label: "Shader coloring",
+                  label: "Colormap",
                   value: "viridis",
                   items: [
                     { value: "viridis",  label: "Viridis" },
@@ -390,7 +424,7 @@ export const viewTab: RibbonTabContent = {
             { type: "label",    id: "airbox:header",  label: "Airbox display", badge: "hidden" },
             { type: "checkbox", id: "airbox:visible", label: "Airbox on/off",  checked: false },
             { type: "separator",id: "airbox:s-primitive" },
-            { type: "label",    id: "airbox:primitive-section", label: "Primitive", badge: "off" },
+            { type: "label",    id: "airbox:primitive-section", label: "Surface", badge: "off" },
             { type: "checkbox", id: "airbox:shaded",            label: "Shaded on/off",    checked: false },
             { type: "checkbox", id: "airbox:wireframe",         label: "Wireframe on/off", checked: true },
             { type: "radio-group", id: "airbox:wireframe-scope",label: "Wireframe extent", value: "surface", items: AIRBOX_EXTENT_ITEMS },
@@ -695,13 +729,13 @@ export const viewTab: RibbonTabContent = {
         {
           id: "view-selected-texture",
           icon: icon(Sparkles),
-          label: "Texture",
+          label: "Coloring",
           iconColor: "text-teal-300",
           disabled: true,
           menu: [
-            { type: "label",    id: "selected-texture:header", label: "Selected texture", badge: "inherit" },
-            { type: "status",   id: "selected-texture:state",  label: "Global texture",   value: "Enabled" },
-            { type: "checkbox", id: "selected-texture:visible",label: "Texture on/off",   checked: true, disabled: true },
+            { type: "label",    id: "selected-texture:header", label: "Selected coloring", badge: "inherit" },
+            { type: "status",   id: "selected-texture:state",  label: "Global coloring",   value: "Enabled" },
+            { type: "checkbox", id: "selected-texture:visible",label: "Surface on/off",   checked: true, disabled: true },
           ],
         },
         {
@@ -1306,6 +1340,8 @@ export const studyTab: RibbonTabContent = {
       tone: "compute",
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
+        { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
+        { id: "study.test-random-field", icon: icon(FlaskConical), label: "Test Random", iconColor: "text-amber-400", tooltip: "Toggle mock solver: feed random magnetization data to the 3D viewport at ~8 fps" },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
@@ -1416,6 +1452,7 @@ export interface RibbonBuildContext {
   meshSummary?: MeshSummaryResource | null;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
   selection: Selection;
+  sessionStatus?: LiveStatusResource | null;
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
@@ -1816,6 +1853,8 @@ function buildViewGlobalDisplayGroup(
   return {
     ...group,
     actions: group.actions.map((action) => {
+      if (action.id === "view-surface") return buildSurfaceAction(context);
+      if (action.id === "view-texture") return buildTextureAction(context);
       if (action.id === "view-quantity") return buildQuantityAction(context);
       if (action.id === "view-vectors") return buildVectorsAction(context);
       if (action.id === "view-airbox") return buildAirboxAction(context);
@@ -1932,6 +1971,178 @@ function quantityLabel(quantityId: string): string {
   );
 }
 
+function surfaceColorSourceLabel(source: SurfaceColorSource): string {
+  return (
+    SURFACE_COLOR_SOURCE_ITEMS.find((item) => item.value === source)?.label ??
+    source
+  );
+}
+
+function surfaceFieldStatus(
+  source: SurfaceColorSource,
+  status: LiveStatusResource | null | undefined,
+): {
+  tone: "success" | "warning" | "danger" | "neutral";
+  value: string;
+} {
+  if (source === "solid") {
+    return { tone: "neutral", value: "not required" };
+  }
+  const revision = Math.max(
+    typeof status?.resources.field_revision === "number"
+      ? status.resources.field_revision
+      : 0,
+    typeof status?.resources.fields_revision === "number"
+      ? status.resources.fields_revision
+      : 0,
+  );
+  if (revision > 0) {
+    return { tone: "success", value: `available r${revision}` };
+  }
+  return status
+    ? { tone: "warning", value: "none" }
+    : { tone: "neutral", value: "unknown" };
+}
+
+function patchGlobalObjectAndPartDefaults(
+  context: RibbonBuildContext,
+  patch: VisualizationTargetPatch,
+): void {
+  context.visualization.patchDefaults("object", patch);
+  context.visualization.patchDefaults("part", patch);
+}
+
+function buildSurfaceAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const settings = context.visualization.getDefaultSettings("object");
+  const effectiveSettings = resolveEffectiveVisualizationSettings(settings);
+  const passControlsDisabled = !settings.visible;
+  const patch = (patchValue: VisualizationTargetPatch) =>
+    patchGlobalObjectAndPartDefaults(context, patchValue);
+
+  return {
+    id: "view-surface",
+    icon: icon(Box),
+    label: "Surface",
+    iconColor: "text-teal-300",
+    menu: [
+      {
+        type: "label",
+        id: "surface:header",
+        label: "Surface display",
+        badge: effectiveSettings.shaderVisible ? "on" : "off",
+      },
+      {
+        type: "status",
+        id: "surface:scope",
+        label: "Scope",
+        value: "Global ferromagnet surface",
+      },
+      {
+        type: "checkbox",
+        id: "surface:visible",
+        label: "Surface on/off",
+        checked: effectiveSettings.shaderVisible,
+        disabled: passControlsDisabled,
+        onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+      },
+      { type: "separator", id: "surface:s0" },
+      {
+        type: "radio-group",
+        id: "surface:mesh-display",
+        label: "Render mode",
+        value: settings.renderMode,
+        items: MESH_RENDER_ITEMS,
+        disabled: passControlsDisabled,
+        onValueChange: (value) =>
+          patch(renderModePatch(value as VisualizationRenderMode)),
+      },
+      {
+        type: "checkbox",
+        id: "surface:wireframe",
+        label: "Wireframe on/off",
+        checked: effectiveSettings.wireframeVisible,
+        disabled: passControlsDisabled,
+        onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+      },
+      {
+        type: "checkbox",
+        id: "surface:frame",
+        label: "Frame on/off",
+        checked: effectiveSettings.boundsVisible,
+        disabled: passControlsDisabled,
+        onCheckedChange: (checked) => patch({ boundsVisible: checked }),
+      },
+      {
+        type: "checkbox",
+        id: "surface:points",
+        label: "Points on/off",
+        checked: effectiveSettings.pointsVisible,
+        disabled: passControlsDisabled,
+        onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+      },
+      {
+        type: "slider",
+        id: "surface:opacity",
+        label: "Opacity",
+        value: settings.opacityPercent,
+        min: 0,
+        max: 100,
+        step: 1,
+        unit: "%",
+        disabled: passControlsDisabled,
+        onValueChange: (value) => patch({ opacityPercent: value }),
+      },
+    ],
+  };
+}
+
+function buildTextureAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const settings = context.visualization.getDefaultSettings("object");
+  const fieldStatus = surfaceFieldStatus(
+    settings.surfaceColorSource,
+    context.sessionStatus,
+  );
+  const patch = (patchValue: VisualizationTargetPatch) =>
+    patchGlobalObjectAndPartDefaults(context, patchValue);
+
+  return {
+    id: "view-texture",
+    icon: icon(Sparkles),
+    label: "Texture",
+    active: settings.surfaceColorSource !== "solid",
+    iconColor: "text-purple-300",
+    menu: [
+      {
+        type: "label",
+        id: "texture:header",
+        label: "Surface coloring",
+        badge: surfaceColorSourceLabel(settings.surfaceColorSource),
+      },
+      {
+        type: "radio-group",
+        id: "texture:source",
+        label: "Color source",
+        value: settings.surfaceColorSource,
+        items: SURFACE_COLOR_SOURCE_ITEMS,
+        onValueChange: (value) =>
+          patch({ surfaceColorSource: value as SurfaceColorSource }),
+      },
+      { type: "separator", id: "texture:s0" },
+      {
+        type: "status",
+        id: "texture:field-status",
+        label: "Field status",
+        tone: fieldStatus.tone,
+        value: fieldStatus.value,
+      },
+    ],
+  };
+}
+
 function buildQuantityAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
@@ -1993,7 +2204,7 @@ function buildQuantityAction(
           {
             type: "radio-group",
             id: "quantity:shader",
-            label: "Shader coloring",
+            label: "Colormap",
             value: colormap,
             items: [
               { value: "viridis", label: "Viridis" },
@@ -2370,7 +2581,7 @@ function buildAirboxAction(
       {
         type: "label",
         id: "airbox:primitive-section",
-        label: "Primitive",
+        label: "Surface",
         badge: effectiveSettings.shaderVisible ? "on" : "off",
       },
       {
@@ -2688,6 +2899,21 @@ function buildSelectedVisualizationGroup(
     target?.kind === "airbox"
       ? DEFAULT_AIRBOX_VISUALIZATION
       : DEFAULT_OBJECT_VISUALIZATION;
+  const targetOverride = target
+    ? visualizationSnapshot.overrides[visualizationTargetKey(target)]
+    : null;
+  const hasSurfaceColorOverride = Boolean(
+    targetOverride &&
+      ("surfaceColorSource" in targetOverride ||
+        "shaderColorMode" in targetOverride),
+  );
+  const selectedSurfaceColorSource = hasSurfaceColorOverride
+    ? settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource
+    : "inherit";
+  const selectedFieldStatus = surfaceFieldStatus(
+    settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource,
+    context.sessionStatus,
+  );
   const revision = visualizationSnapshot.version;
   const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
     if (!target) return;
@@ -2707,14 +2933,14 @@ function buildSelectedVisualizationGroup(
       {
         id: "view-selected-texture",
         icon: icon(Sparkles),
-        label: "Texture",
+        label: "Coloring",
         iconColor: "text-teal-300",
         disabled: !enabled,
         menu: [
           {
             type: "label",
             id: "selected-texture:header",
-            label: "Selected texture",
+            label: "Selected coloring",
             badge: targetBadge,
           },
           {
@@ -2726,34 +2952,50 @@ function buildSelectedVisualizationGroup(
           {
             type: "checkbox",
             id: "selected-texture:visible",
-            label: "Shader on/off",
+            label: "Surface on/off",
             checked: effectiveSettings?.shaderVisible ?? false,
             disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ shaderVisible: checked }),
           },
           {
             type: "radio-group",
-            id: "selected-texture:shader-coloring",
-            label: "Shader coloring",
-            value: settings?.shaderColorMode ?? "orientation",
-            items: VECTOR_COLOR_ITEMS,
+            id: "selected-texture:surface-coloring",
+            label: "Color source",
+            value: selectedSurfaceColorSource,
+            items: SELECTED_SURFACE_COLOR_SOURCE_ITEMS,
             disabled:
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.shaderVisible,
-            onValueChange: (value) =>
-              patch({ shaderColorMode: value as VisualizationColorMode }),
+            onValueChange: (value) => {
+              if (value === "inherit") {
+                patch({
+                  shaderColorMode: undefined,
+                  surfaceColorSource: undefined,
+                });
+                return;
+              }
+              patch({ surfaceColorSource: value as SurfaceColorSource });
+            },
           },
           {
             type: "color",
-            id: "selected-texture:shader-mono-color",
-            label: "Shader mono color",
+            id: "selected-texture:solid-color",
+            label: "Solid color",
             value: settings?.shaderMonoColor ?? targetDefaults.shaderMonoColor,
             disabled:
               !enabled ||
               passControlsDisabled ||
-              !effectiveSettings?.shaderVisible,
+              !effectiveSettings?.shaderVisible ||
+              settings?.surfaceColorSource !== "solid",
             onValueChange: (value) => patch({ shaderMonoColor: value }),
+          },
+          {
+            type: "status",
+            id: "selected-texture:field-status",
+            label: "Field status",
+            tone: selectedFieldStatus.tone,
+            value: selectedFieldStatus.value,
           },
           { type: "separator", id: "selected-texture:vectors-separator" },
           {

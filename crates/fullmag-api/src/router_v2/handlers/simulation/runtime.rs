@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
 use axum::Json;
+use axum::extract::{Path, Query, State};
+use fullmag_authoring::{MagnetizationAsset, SceneDocument, SceneObject};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::schemas::runtime::{
     CommandDetailResource, CommandQueueStatusResource, CommandStatusResource, CurrentRunResource,
+    ObjectEnergySummary, ObjectMagnetizationAverage, ObjectMetricsResource,
     SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow,
     SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
@@ -304,6 +307,119 @@ pub async fn get_solver_energies_history(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/simulation/objects/{object_id}/metrics",
+    params(
+        ("object_id" = String, Path, description = "Scene object id or name"),
+    ),
+    responses(
+        (status = 200, description = "Selected object magnetization and energy read-model", body = ObjectMetricsResource),
+        (status = 404, description = "Object or workspace not found"),
+    ),
+    tag = "simulation"
+)]
+pub async fn get_object_metrics(
+    State(state): State<Arc<AppState>>,
+    Path(object_id): Path<String>,
+) -> Result<Json<ObjectMetricsResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let scene = snapshot
+        .scene_document
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no authoring scene"))?;
+    let object = scene
+        .objects
+        .iter()
+        .find(|object| object.id == object_id || object.name == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let canonical_object_id = object.id.clone();
+    let initial_m = initial_magnetization_for_object(scene, object);
+    let object_scalars = latest_object_scalars(snapshot, &canonical_object_id, &object.name);
+    let latest_row = latest_solver_sample(snapshot);
+    let has_solver_sample = object_scalars.is_some() || latest_row.is_some();
+    let source = if object_scalars.is_some() {
+        "solver_per_object"
+    } else if latest_row.is_some() {
+        "solver_global"
+    } else {
+        "initial_state"
+    };
+    let step = object_scalars
+        .and_then(|values| number_from_metric(values, "step").map(|value| value as u64))
+        .or_else(|| latest_row.as_ref().map(|row| row.step))
+        .unwrap_or(0);
+    let time_seconds = object_scalars
+        .and_then(|values| number_from_metric(values, "time"))
+        .or_else(|| latest_row.as_ref().map(|row| row.time))
+        .unwrap_or(0.0);
+
+    let magnetization_average = if let Some(values) = object_scalars {
+        [
+            number_from_metric(values, "mx").unwrap_or(initial_m[0]),
+            number_from_metric(values, "my").unwrap_or(initial_m[1]),
+            number_from_metric(values, "mz").unwrap_or(initial_m[2]),
+        ]
+    } else if has_solver_sample {
+        latest_magnetization_average(snapshot, &canonical_object_id, initial_m)
+            .or_else(|| latest_row.as_ref().map(|row| [row.mx, row.my, row.mz]))
+            .unwrap_or(initial_m)
+    } else {
+        initial_m
+    };
+
+    let zero_energies = ObjectEnergySummary {
+        exchange: 0.0,
+        demag: 0.0,
+        zeeman: 0.0,
+        anisotropy: 0.0,
+        dmi: 0.0,
+        total: 0.0,
+    };
+    let energies = object_scalars
+        .map(|values| ObjectEnergySummary {
+            exchange: number_from_metric(values, "e_ex").unwrap_or(0.0),
+            demag: number_from_metric(values, "e_demag").unwrap_or(0.0),
+            zeeman: number_from_metric(values, "e_ext").unwrap_or(0.0),
+            anisotropy: number_from_metric(values, "e_ani").unwrap_or(0.0),
+            dmi: number_from_metric(values, "e_dmi").unwrap_or(0.0),
+            total: number_from_metric(values, "e_total").unwrap_or(0.0),
+        })
+        .or_else(|| {
+            latest_row.as_ref().map(|row| ObjectEnergySummary {
+                exchange: row.e_ex,
+                demag: row.e_demag,
+                zeeman: row.e_ext,
+                anisotropy: row.e_ani,
+                dmi: row.e_dmi,
+                total: row.e_total,
+            })
+        })
+        .unwrap_or(zero_energies);
+
+    Ok(Json(ObjectMetricsResource {
+        object_id: canonical_object_id,
+        revision: if has_solver_sample {
+            snapshot.scalar_revision
+        } else {
+            snapshot.state_version
+        },
+        source: source.to_string(),
+        has_solver_sample,
+        step,
+        time_seconds,
+        magnetization_average: ObjectMagnetizationAverage {
+            mx: magnetization_average[0],
+            my: magnetization_average[1],
+            mz: magnetization_average[2],
+        },
+        energies,
+    }))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/simulation/commands",
     responses(
         (status = 200, description = "Current command queue and dispatch ledger", body = CommandQueueStatusResource),
@@ -438,6 +554,158 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             max_torque_T: live_state.latest_step.max_torque_T,
         })
     })
+}
+
+fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
+    snapshot.scalar_rows.last().cloned().or_else(|| {
+        let live_state = snapshot.live_state.as_ref()?;
+        if snapshot.scalar_revision == 0 && live_state.latest_step.step == 0 {
+            return None;
+        }
+        Some(ScalarRow {
+            step: live_state.latest_step.step,
+            time: live_state.latest_step.time,
+            solver_dt: live_state.latest_step.dt,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
+            e_ex: live_state.latest_step.e_ex,
+            e_demag: live_state.latest_step.e_demag,
+            e_ext: live_state.latest_step.e_ext,
+            e_ani: live_state.latest_step.e_ani,
+            e_dmi: live_state.latest_step.e_dmi,
+            e_total: live_state.latest_step.e_total,
+            max_dm_dt: live_state.latest_step.max_dm_dt,
+            max_h_eff: live_state.latest_step.max_h_eff,
+            max_h_demag: live_state.latest_step.max_h_demag,
+            max_torque_Apm: live_state.latest_step.max_torque_Apm,
+            max_torque_T: live_state.latest_step.max_torque_T,
+        })
+    })
+}
+
+fn latest_object_scalars<'a>(
+    snapshot: &'a SessionStateResponse,
+    object_id: &str,
+    object_name: &str,
+) -> Option<&'a HashMap<String, f64>> {
+    let per_object = &snapshot.live_state.as_ref()?.latest_step.per_object_scalars;
+    per_object
+        .get(object_id)
+        .or_else(|| per_object.get(object_name))
+        .or_else(|| {
+            if per_object.len() == 1 {
+                per_object.values().next()
+            } else {
+                None
+            }
+        })
+}
+
+fn number_from_metric(values: &HashMap<String, f64>, key: &str) -> Option<f64> {
+    values.get(key).copied().filter(|value| value.is_finite())
+}
+
+fn initial_magnetization_for_object(scene: &SceneDocument, object: &SceneObject) -> [f64; 3] {
+    object
+        .magnetization_ref
+        .as_ref()
+        .and_then(|asset_id| {
+            scene
+                .magnetization_assets
+                .iter()
+                .find(|asset| asset.id == *asset_id)
+        })
+        .and_then(magnetization_asset_direction)
+        .unwrap_or([0.0, 0.0, 1.0])
+}
+
+fn magnetization_asset_direction(asset: &MagnetizationAsset) -> Option<[f64; 3]> {
+    if let Some(values) = asset
+        .value
+        .as_ref()
+        .and_then(|values| number_slice3(values))
+    {
+        return Some(values);
+    }
+    asset
+        .preset_params
+        .as_ref()
+        .and_then(|params| params.get("direction"))
+        .and_then(value_array3)
+}
+
+fn number_slice3(values: &[f64]) -> Option<[f64; 3]> {
+    if values.len() < 3 || !values[..3].iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    Some([values[0], values[1], values[2]])
+}
+
+fn value_array3(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    if values.len() < 3 {
+        return None;
+    }
+    let out = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+    ];
+    out.iter().all(|value| value.is_finite()).then_some(out)
+}
+
+fn latest_magnetization_average(
+    snapshot: &SessionStateResponse,
+    object_id: &str,
+    fallback: [f64; 3],
+) -> Option<[f64; 3]> {
+    let live_state = snapshot.live_state.as_ref()?;
+    let values = live_state.latest_step.magnetization.as_ref()?;
+    if values.len() < 3 || values.len() % 3 != 0 {
+        return None;
+    }
+    if let Some(segment) = live_state.latest_step.fem_mesh.as_ref().and_then(|mesh| {
+        mesh.object_segments
+            .iter()
+            .find(|segment| segment.object_id == object_id)
+    }) {
+        return average_flat_magnetization(
+            values,
+            segment.node_start as usize,
+            segment.node_count as usize,
+        )
+        .or(Some(fallback));
+    }
+    average_flat_magnetization(values, 0, values.len() / 3).or(Some(fallback))
+}
+
+fn average_flat_magnetization(values: &[f64], start: usize, count: usize) -> Option<[f64; 3]> {
+    if count == 0 {
+        return None;
+    }
+    let end = start.saturating_add(count).min(values.len() / 3);
+    if end <= start {
+        return None;
+    }
+    let mut sum = [0.0; 3];
+    let mut used = 0usize;
+    for index in start..end {
+        let offset = index * 3;
+        let vector = [values[offset], values[offset + 1], values[offset + 2]];
+        if !vector.iter().all(|value| value.is_finite()) {
+            continue;
+        }
+        sum[0] += vector[0];
+        sum[1] += vector[1];
+        sum[2] += vector[2];
+        used += 1;
+    }
+    if used == 0 {
+        return None;
+    }
+    let scale = 1.0 / used as f64;
+    Some([sum[0] * scale, sum[1] * scale, sum[2] * scale])
 }
 
 fn metadata_string(metadata: Option<&Value>, path: &[&str]) -> Option<String> {

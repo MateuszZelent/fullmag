@@ -17,7 +17,7 @@ describe("viewport3DTargets", () => {
           vectors: { density: 512, domain: "full_domain", visible: true },
           wireframe: { opacity: 0.45, visible: false },
         },
-      } as VisualizationStateResource),
+      } as unknown as VisualizationStateResource),
     ).toMatchObject({
       opacityPercent: 45,
       pointsVisible: true,
@@ -25,6 +25,29 @@ describe("viewport3DTargets", () => {
       shaderVisible: false,
       vectorsVisible: true,
       wireframeVisible: false,
+    });
+  });
+
+  it("maps global vector style into object display fallback style fields", () => {
+    expect(
+      resolveGlobalObjectVisualizationSettings({
+        vector_style: {
+          alpha: 0.4,
+          color_mode: "x",
+          ferromagnet_visibility: "all",
+          length_scale: 1,
+          mono_color: "#44ccff",
+          thickness: 2,
+        },
+      } as unknown as VisualizationStateResource),
+    ).toMatchObject({
+      shaderColorMode: "x",
+      shaderMonoColor: "#44ccff",
+      surfaceColorSource: "component_x",
+      vectorAlphaPercent: 40,
+      vectorColorMode: "x",
+      vectorMonoColor: "#44ccff",
+      vectorThickness: 2,
     });
   });
 

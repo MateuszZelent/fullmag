@@ -80,6 +80,40 @@ describe("viewport3dPrimitiveModel", () => {
     });
   });
 
+  it("colors uniform +Z magnetization preview as HSL orientation white", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        magnetization_assets: [
+          {
+            id: "mag-uniform-z",
+            kind: "preset_texture",
+            preset_kind: "uniform",
+            preset_params: { direction: [0, 0, 1] },
+            ui_label: "Out-of-plane",
+          },
+        ],
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "arch_waveguide",
+            magnetization_ref: "mag-uniform-z",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 8,
+      },
+      null,
+    );
+
+    expect(model.objects[0]?.magnetizationTexturePreview).toMatchObject({
+      color: "#ffffff",
+      presetKind: "uniform",
+    });
+  });
+
   it("prefers region override magnetization texture metadata for preview", () => {
     const scene = {
       magnetization_assets: [

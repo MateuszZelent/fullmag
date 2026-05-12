@@ -27,7 +27,16 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { BoundsBox } from "./BoundsLayers";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
-import { opacityFromSettings } from "./viewport3DLayerSettings";
+import {
+  opacityFromSettings,
+  shaderColorFromSettings,
+  shaderUsesVertexColors,
+  surfaceScalarColorModeFromSettings,
+  vectorColorModeFromSettings,
+  vectorStyleFromSettings,
+  wireframeColorFromSettings,
+  wireframeOpacityFromSettings,
+} from "./viewport3DLayerSettings";
 
 export function MeshPartLayer({
   colors,
@@ -70,27 +79,46 @@ export function MeshPartLayer({
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
 
+  const scalarColorMode = surfaceScalarColorModeFromSettings(settings);
+  const scalarColors = scalarColorMode
+    ? fieldModel?.scalarColorsByMode.get(scalarColorMode) ?? null
+    : null;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
+    if (!shaderUsesVertexColors(settings)) {
+      if (geometry.hasAttribute("color")) {
+        geometry.deleteAttribute("color");
+      }
+      tracker.recordDirtyFrame("field-colors");
+      invalidate();
+      return;
+    }
     applyVertexScalarColorBuffer(
       geometry,
-      fieldModel?.scalarColors,
+      scalarColors,
       topologyModel.nodeCount,
     );
     tracker.recordDirtyFrame("field-colors");
     invalidate();
-  }, [fieldModel?.scalarColors, geometry, invalidate, topologyModel, tracker]);
+  }, [geometry, invalidate, scalarColors, settings, topologyModel, tracker]);
 
   if (!geometry || !settings.visible) return null;
 
   const part = partModel.part;
-  const hasScalarColors = canApplyVertexScalarColorBuffer(
-    fieldModel?.scalarColors,
-    topologyModel?.nodeCount ?? 0,
+  const hasScalarColors =
+    shaderUsesVertexColors(settings) &&
+    canApplyVertexScalarColorBuffer(
+      scalarColors,
+      topologyModel?.nodeCount ?? 0,
+    );
+  const meshColor = shaderColorFromSettings(
+    settings,
+    hasScalarColors
+      ? colors.mesh
+      : (settings.surfaceColorSource !== "solid"
+          ? magnetizationTexturePreview?.color
+          : null) ?? colors.mesh,
   );
-  const meshColor = hasScalarColors
-    ? colors.mesh
-    : (magnetizationTexturePreview?.color ?? colors.mesh);
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
@@ -112,8 +140,8 @@ export function MeshPartLayer({
       {settings.wireframeVisible ? (
         <mesh geometry={geometry}>
           <meshBasicMaterial
-            color={colors.wire}
-            opacity={opacityFromSettings(settings)}
+            color={wireframeColorFromSettings(settings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(settings)}
             transparent
             wireframe
           />
@@ -140,10 +168,10 @@ export function MeshPartLayer({
       {settings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorMode}
+          colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
           opacity={opacityFromSettings(settings)}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-          style={vectorStyle}
+          style={vectorStyleFromSettings(settings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}

@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -112,6 +112,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::simulation::runtime::get_solver_status,
         crate::router_v2::handlers::simulation::runtime::get_solver_energies_current,
         crate::router_v2::handlers::simulation::runtime::get_solver_energies_history,
+        crate::router_v2::handlers::simulation::runtime::get_object_metrics,
         crate::router_v2::handlers::data::artifacts::list_artifacts,
         crate::router_v2::handlers::data::artifacts::get_artifact,
         crate::router_v2::handlers::analysis::eigen::get_spectrum,
@@ -285,6 +286,9 @@ use utoipa::OpenApi;
         crate::schemas::runtime::SolverEnergyCurrentResource,
         crate::schemas::runtime::SolverEnergyHistoryResource,
         crate::schemas::runtime::SolverEnergyRow,
+        crate::schemas::runtime::ObjectMetricsResource,
+        crate::schemas::runtime::ObjectMagnetizationAverage,
+        crate::schemas::runtime::ObjectEnergySummary,
         crate::schemas::runtime::CommandQueueStatusResource,
         crate::schemas::runtime::CommandStatusResource,
         crate::schemas::runtime::CommandDetailResource,

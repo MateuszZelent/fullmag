@@ -135,6 +135,35 @@ pub struct SolverEnergyHistoryResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ObjectMetricsResource {
+    pub object_id: String,
+    pub revision: u64,
+    pub source: String,
+    pub has_solver_sample: bool,
+    pub step: u64,
+    pub time_seconds: f64,
+    pub magnetization_average: ObjectMagnetizationAverage,
+    pub energies: ObjectEnergySummary,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ObjectMagnetizationAverage {
+    pub mx: f64,
+    pub my: f64,
+    pub mz: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ObjectEnergySummary {
+    pub exchange: f64,
+    pub demag: f64,
+    pub zeeman: f64,
+    pub anisotropy: f64,
+    pub dmi: f64,
+    pub total: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SolverEnergyRow {
     pub step: u64,
     pub time_seconds: f64,

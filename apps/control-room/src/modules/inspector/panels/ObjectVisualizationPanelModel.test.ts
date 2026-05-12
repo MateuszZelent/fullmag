@@ -7,10 +7,23 @@ import {
 
 import {
   buildVisualizationPanelSections,
+  SURFACE_COLOR_SOURCE_ITEMS,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("exposes the surface color source options used by Surface Coloring", () => {
+    expect(SURFACE_COLOR_SOURCE_ITEMS.map((item) => item.value)).toEqual([
+      "solid",
+      "orientation",
+      "component_x",
+      "component_y",
+      "component_z",
+      "magnitude",
+      "colormap",
+    ]);
+  });
+
   it("exposes the production color mode options used by Global Display", () => {
     expect(VISUALIZATION_COLOR_MODE_ITEMS.map((item) => item.value)).toEqual([
       "orientation",
@@ -32,18 +45,18 @@ describe("ObjectVisualizationPanelModel", () => {
 
     expect(sections.map((section) => section.id)).toEqual([
       "display-passes",
-      "surface-shader",
+      "surface-coloring",
       "wireframe",
       "vectors",
       "geometry-scope",
       "opacity",
       "overrides",
     ]);
-    expect(sections.find((section) => section.id === "surface-shader"))
+    expect(sections.find((section) => section.id === "surface-coloring"))
       .toMatchObject({
         disabled: false,
         fields: expect.arrayContaining([
-          expect.objectContaining({ id: "shaderColorMode" }),
+          expect.objectContaining({ id: "surfaceColorSource" }),
           expect.objectContaining({ id: "shaderMonoColor" }),
         ]),
       });
@@ -60,13 +73,13 @@ describe("ObjectVisualizationPanelModel", () => {
       settings: hidden,
     });
 
-    expect(sections.find((section) => section.id === "surface-shader"))
+    expect(sections.find((section) => section.id === "surface-coloring"))
       .toMatchObject({ disabled: true });
     expect(sections.find((section) => section.id === "vectors"))
       .toMatchObject({ disabled: true });
   });
 
-  it("keeps shader vector and wireframe fields addressable by target setting keys", () => {
+  it("keeps surface vector and wireframe fields addressable by target setting keys", () => {
     const sections = buildVisualizationPanelSections({
       effectiveSettings: resolveEffectiveVisualizationSettings(
         DEFAULT_OBJECT_VISUALIZATION,
@@ -78,7 +91,7 @@ describe("ObjectVisualizationPanelModel", () => {
     );
 
     expect(fieldIds).toEqual(expect.arrayContaining([
-      "shaderColorMode",
+      "surfaceColorSource",
       "shaderMonoColor",
       "wireframeColor",
       "wireframeOpacityPercent",

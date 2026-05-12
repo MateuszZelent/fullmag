@@ -9,6 +9,7 @@ import type { ModuleProps } from "@/kernel/types";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveVisualizationSettings,
+  surfaceColorSourceToColorMode,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
@@ -75,6 +76,28 @@ import {
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+
+function unitHash(seed: number): number {
+  let value = seed | 0;
+  value = Math.imul(value ^ (value >>> 16), 2246822507);
+  value = Math.imul(value ^ (value >>> 13), 3266489909);
+  return ((value ^ (value >>> 16)) >>> 0) / 0x100000000;
+}
+
+function mockUnitVector(index: number, tick: number): [number, number, number] {
+  const base =
+    Math.imul(index + 1, 374761393) ^ Math.imul(tick + 1, 668265263);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const x = unitHash(base + attempt * 2) * 2 - 1;
+    const y = unitHash(base + attempt * 2 + 1) * 2 - 1;
+    const s = x * x + y * y;
+    if (s > 0 && s < 1) {
+      const r = 2 * Math.sqrt(1 - s);
+      return [x * r, y * r, 1 - 2 * s];
+    }
+  }
+  return [0, 0, 1];
+}
 
 interface Viewport3DFrameProps
   extends Omit<Viewport3DSceneProps, "colors"> {
@@ -276,6 +299,10 @@ function useViewport3DSceneModel({
       globalLayers?.points?.visible,
       globalLayers?.vectors?.visible,
       objectKindDefaults,
+      visualizationState.data?.vector_style.alpha,
+      visualizationState.data?.vector_style.color_mode,
+      visualizationState.data?.vector_style.mono_color,
+      visualizationState.data?.vector_style.thickness,
       visualizationState.data?.vector_glyphs,
     ],
   );
@@ -324,22 +351,50 @@ function useViewport3DSceneModel({
     vectorColorMode,
     vectorDomain,
   });
+  const mockField = commandState.mockField;
+  // When mock animation is running, generate random unit-vector field data
+  // instead of fetching from the API. The tick counter causes this memo to
+  // re-run on every animation frame (~8 fps) so the viewport gets fresh data.
+  const mockFieldVector = useMemo(() => {
+    if (!mockField.running || !topologyRenderModel) return null;
+    const pointCount = topologyRenderModel.nodeCount;
+    if (pointCount === 0) return null;
+    const tick = mockField.tick;
+    const values = new Float64Array(pointCount * 3);
+    for (let i = 0; i < pointCount; i++) {
+      const [x, y, z] = mockUnitVector(i, tick);
+      values[i * 3] = x;
+      values[i * 3 + 1] = y;
+      values[i * 3 + 2] = z;
+    }
+    return {
+      dtype: "float64" as const,
+      grid: [pointCount, 1, 1] as [number, number, number],
+      nComp: 3,
+      pointCount,
+      quantityId: "m",
+      valueCount: pointCount * 3,
+      values,
+    };
+  }, [mockField.running, mockField.tick, topologyRenderModel]);
+
   const fieldVectorEnabled =
-    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
+    !mockField.running && viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
   const fieldVector = useViewport3DFieldVector(
     quantityId,
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
+  const effectiveFieldData = mockFieldVector ?? fieldVector.data;
   const fieldRenderModel = useMemo(
     () =>
       buildViewport3DFieldRenderModel(
         topologyRenderModel,
-        fieldVector.data,
+        effectiveFieldData,
         vectorScale,
         fieldRenderOptions,
       ),
-    [fieldRenderOptions, fieldVector.data, topologyRenderModel, vectorScale],
+    [fieldRenderOptions, effectiveFieldData, topologyRenderModel, vectorScale],
   );
   const selectedLabel = selection.label ?? "No selection";
   const status =
@@ -510,6 +565,7 @@ function useViewport3DFieldRenderOptions({
       return {
         fullVectorBudget: 0,
         partVectorBudgets: new Map(),
+        scalarColorModes: new Set(),
         scalarColorsVisible: false,
       };
     }
@@ -518,6 +574,7 @@ function useViewport3DFieldRenderOptions({
     const magneticVectorTargets: Viewport3DVectorBudgetTarget[] = [];
     const airboxVectorTargets: Viewport3DVectorBudgetTarget[] = [];
     const partVectorScopes = new Map<string, "surface" | "full">();
+    const scalarColorModes = new Set<string>();
     let scalarColorsVisible = false;
     const magneticVectorsAllowed = vectorDomain !== "airbox_only";
     const airboxVectorsAllowed =
@@ -533,7 +590,13 @@ function useViewport3DFieldRenderOptions({
           settings.visible &&
           settings.vectorsVisible;
         if (settings.visible && settings.shaderVisible) {
-          scalarColorsVisible = true;
+          const scalarColorMode = surfaceColorSourceToColorMode(
+            settings.surfaceColorSource,
+          );
+          if (scalarColorMode) {
+            scalarColorsVisible = true;
+            scalarColorModes.add(scalarColorMode);
+          }
         }
         partVectorScopes.set(partModel.part.id, settings.geometryScope);
         magneticVectorTargets.push({
@@ -550,6 +613,16 @@ function useViewport3DFieldRenderOptions({
     } else {
       scalarColorsVisible =
         fallbackSettings.visible && fallbackSettings.shaderVisible;
+      if (scalarColorsVisible) {
+        const scalarColorMode = surfaceColorSourceToColorMode(
+          fallbackSettings.surfaceColorSource,
+        );
+        if (scalarColorMode) {
+          scalarColorModes.add(scalarColorMode);
+        } else {
+          scalarColorsVisible = false;
+        }
+      }
       magneticVectorTargets.push({
         id: fullVectorTargetId,
         nodeCount: topologyRenderModel.nodeCount,
@@ -561,6 +634,15 @@ function useViewport3DFieldRenderOptions({
     }
 
     for (const partModel of topologyRenderModel.airboxParts) {
+      if (airboxSettings.visible && airboxSettings.shaderVisible) {
+        const scalarColorMode = surfaceColorSourceToColorMode(
+          airboxSettings.surfaceColorSource,
+        );
+        if (scalarColorMode) {
+          scalarColorsVisible = true;
+          scalarColorModes.add(scalarColorMode);
+        }
+      }
       partVectorScopes.set(partModel.part.id, airboxSettings.geometryScope);
       airboxVectorTargets.push({
         id: partModel.part.id,
@@ -592,13 +674,17 @@ function useViewport3DFieldRenderOptions({
       fullVectorBudget,
       partVectorBudgets: new Map([...magneticBudgets, ...airboxBudgets]),
       partVectorScopes,
+      scalarColorModes,
       scalarColorsVisible,
       vectorColorMode,
     };
   }, [
     airboxSettings.vectorsVisible,
     airboxSettings.geometryScope,
+    airboxSettings.surfaceColorSource,
+    airboxSettings.shaderVisible,
     airboxSettings.visible,
+    fallbackSettings.surfaceColorSource,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
