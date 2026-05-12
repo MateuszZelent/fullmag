@@ -2,11 +2,8 @@
  * Canonical physical <-> scene coordinate conversion helpers.
  *
  * Fullmag geometry authoring uses physical vectors in `[x, y, z]`.
- * The current Three.js scene convention swaps Y and Z for rendering.
- *
- * NOTE:
- * Keep all swap logic in this module; do not duplicate Y<->Z conversion
- * in viewport components.
+ * The Three.js scene uses the same axis order; only SI metres are scaled
+ * to nanometres for rendering.
  */
 
 export type Vec3Tuple = [number, number, number];
@@ -31,25 +28,24 @@ export function sceneLengthToPhysical(value: number): number {
 }
 
 /**
- * Physical position `[x, y, z]` in metres -> scene `[x, z, y]` in nanometres.
+ * Physical position `[x, y, z]` in metres -> scene `[x, y, z]` in nanometres.
  */
 export function physicalPositionToScene(v: Vec3Tuple): Vec3Tuple {
   return [
     physicalLengthToScene(v[0]),
-    physicalLengthToScene(v[2]),
     physicalLengthToScene(v[1]),
+    physicalLengthToScene(v[2]),
   ];
 }
 
 /**
- * Scene position `[x, y, z]` in nanometres -> physical `[x, z, y]` in metres.
- * For the current swap matrix, inverse equals forward transform.
+ * Scene position `[x, y, z]` in nanometres -> physical `[x, y, z]` in metres.
  */
 export function scenePositionToPhysical(v: Vec3Tuple): Vec3Tuple {
   return [
     sceneLengthToPhysical(v[0]),
-    sceneLengthToPhysical(v[2]),
     sceneLengthToPhysical(v[1]),
+    sceneLengthToPhysical(v[2]),
   ];
 }
 
@@ -81,24 +77,23 @@ export function sceneScaleToPhysical(v: Vec3Tuple): Vec3Tuple {
  * those are unitless multipliers, not SI lengths.
  */
 export function dimensionlessScaleToScene(v: Vec3Tuple): Vec3Tuple {
-  return [v[0], v[2], v[1]];
+  return [v[0], v[1], v[2]];
 }
 
 export function sceneScaleToDimensionless(v: Vec3Tuple): Vec3Tuple {
-  return [v[0], v[2], v[1]];
+  return [v[0], v[1], v[2]];
 }
 
 /**
  * Physical quaternion -> scene quaternion.
- * Current convention is axis relabeling X->X, Y->Z, Z->Y.
  */
 export function physicalQuatToScene(q: QuatTuple): QuatTuple {
-  return [q[0], q[2], q[1], q[3]];
+  return [q[0], q[1], q[2], q[3]];
 }
 
 /**
  * Scene quaternion -> physical quaternion.
  */
 export function sceneQuatToPhysical(q: QuatTuple): QuatTuple {
-  return [q[0], q[2], q[1], q[3]];
+  return [q[0], q[1], q[2], q[3]];
 }

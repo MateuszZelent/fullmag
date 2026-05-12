@@ -795,6 +795,76 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads and patches material and region resources through v2 model facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        if (String(url).includes("/model/regions")) {
+          return jsonResponse({
+            geometry_realization_revision: 2,
+            regions: [],
+            scene_revision: 1,
+          });
+        }
+        return jsonResponse({
+          id: "mat:free layer",
+          name: "Free layer",
+          properties: { Aex: 1e-11, Dind: null, Ms: 8e5, alpha: 0.02 },
+          revision: requests.length,
+        });
+      },
+    });
+
+    const material = await api.model.material("mat:free layer");
+    const patchedMaterial = await api.model.patchMaterial("mat:free layer", {
+      name: "Free layer updated",
+      properties: { Aex: 1.2e-11, Dind: null, Ms: 8e5, alpha: 0.03 },
+    });
+    const regions = await api.model.regions();
+    await api.model.patchRegion("region:free layer", {
+      enabled: false,
+      name: "free",
+    });
+
+    expect(material.id).toBe("mat:free layer");
+    expect(patchedMaterial.properties.alpha).toBe(0.02);
+    expect(regions.scene_revision).toBe(1);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/materials/mat%3Afree%20layer",
+      },
+      {
+        body: {
+          name: "Free layer updated",
+          properties: { Aex: 1.2e-11, Dind: null, Ms: 8e5, alpha: 0.03 },
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/materials/mat%3Afree%20layer",
+      },
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/regions",
+      },
+      {
+        body: {
+          enabled: false,
+          name: "free",
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/regions/region%3Afree%20layer",
+      },
+    ]);
+  });
+
   it("loads and replaces per-object mesh policy resources through v2 meshing facade methods", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

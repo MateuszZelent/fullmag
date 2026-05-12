@@ -2,7 +2,6 @@ import type {
   ExplorerNode,
   ExplorerNodeStatus,
   ExplorerTabId,
-  ModelTreeMaterialSnapshot,
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeSnapshot,
@@ -54,26 +53,22 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
       },
+      regionsNode(parentId, object),
+      magneticParametersNode(parentId, object),
       {
-        id: `${parentId}:physics`,
-        kind: "object.physics",
-        label: "Physics",
+        id: `${parentId}:magnetic-texture`,
+        kind: "object.magnetic-texture",
+        label: "Magnetic Texture",
         parentId,
-        badge: object.magnetization ?? "default",
-        icon: "activity",
+        badge:
+          object.magnetizationKind ??
+          object.magnetizationLabel ??
+          object.magnetization ??
+          "unassigned",
+        icon: "wave",
         objectId,
-        status: "ready",
-        contextCommands: ["workspace.focus-selection"],
-      },
-      {
-        id: `${parentId}:material`,
-        kind: "object.material",
-        label: "Material",
-        parentId,
-        badge: object.material ?? "unassigned",
-        icon: "magnet",
-        objectId,
-        status: object.material ? "ready" : "degraded",
+        status: object.magnetization ? "ready" : "degraded",
+        children: magneticTextureChildren(parentId, object),
       },
       {
         id: `${parentId}:mesh`,
@@ -101,6 +96,118 @@ function objectNodes(object: ModelTreeObjectSnapshot): ExplorerNode {
   };
 }
 
+function regionsNode(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+): ExplorerNode {
+  const regionLabel = object.region ?? object.label;
+  return {
+    id: `${parentId}:regions`,
+    kind: "object.regions",
+    label: "Regions",
+    parentId,
+    badge: "1",
+    icon: "layers",
+    objectId: object.id,
+    status: "ready",
+    children: [
+      {
+        id: `${parentId}:regions:primary`,
+        kind: "object.regions",
+        label: regionLabel,
+        parentId: `${parentId}:regions`,
+        badge: object.materialLabel ?? object.material ?? "material",
+        icon: "circle",
+        objectId: object.id,
+        status: "ready",
+      },
+    ],
+  };
+}
+
+function magneticParametersNode(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+): ExplorerNode {
+  const materialLabel = object.materialLabel ?? object.material ?? "unassigned";
+  const interactions = object.physicsInteractions ?? [];
+  const optionalInteractionCount = interactions.filter(
+    (interaction) => interaction.id !== "exchange" && interaction.id !== "demag",
+  ).length;
+
+  return {
+    id: `${parentId}:magnetic-parameters`,
+    kind: "object.magnetic-parameters",
+    label: "Magnetic Parameters",
+    parentId,
+    badge: optionalInteractionCount > 0 ? `+${optionalInteractionCount}` : "core",
+    icon: "magnet",
+    objectId: object.id,
+    status: object.material ? "ready" : "degraded",
+    children: [
+      {
+        id: `${parentId}:magnetic-parameters:material`,
+        kind: "object.material",
+        label: `Material: ${materialLabel}`,
+        parentId: `${parentId}:magnetic-parameters`,
+        badge: materialParametersBadge(object.materialPropertyKeys ?? []),
+        icon: "magnet",
+        objectId: object.id,
+        status: object.material ? "ready" : "degraded",
+      },
+      ...interactions.map((interaction) => ({
+        id: `${parentId}:magnetic-parameters:${interaction.id}`,
+        kind: "object.physics" as const,
+        label: interaction.label,
+        parentId: `${parentId}:magnetic-parameters`,
+        badge: physicsInteractionBadge(interaction),
+        icon: "activity" as const,
+        objectId: object.id,
+        status: interaction.enabledCount > 0 ? "ready" as const : "degraded" as const,
+      })),
+    ],
+  };
+}
+
+function materialParametersBadge(keys: readonly string[]): string {
+  if (keys.length === 0) return "parameters";
+  return keys.slice(0, 3).join(", ");
+}
+
+function magneticTextureChildren(
+  parentId: string,
+  object: ModelTreeObjectSnapshot,
+): ExplorerNode[] {
+  const textureParent = `${parentId}:magnetic-texture`;
+  const children: ExplorerNode[] = [
+    {
+      id: `${textureParent}:asset`,
+      kind: "object.magnetic-texture",
+      label: object.magnetizationLabel ?? object.magnetization ?? "No texture assigned",
+      parentId: textureParent,
+      badge: object.magnetization ?? "unassigned",
+      icon: "wave",
+      objectId: object.id,
+      status: object.magnetization ? "ready" : "degraded",
+    },
+  ];
+
+  if (object.textureTransformAvailable) {
+    children.push({
+      id: `${textureParent}:transform`,
+      kind: "object.magnetic-texture",
+      label: "Texture Transform",
+      parentId: textureParent,
+      badge: "m0",
+      icon: "braces",
+      objectId: object.id,
+      status: "ready",
+    });
+  }
+
+  return children;
+}
+
 function meshStatusBadge(status: ExplorerNodeStatus): string {
   if (status === "primitive-only") return "primitive";
   if (status === "mesh-stale") return "mesh stale";
@@ -112,64 +219,13 @@ function meshStatusBadge(status: ExplorerNodeStatus): string {
   return "default";
 }
 
-function materialBadge(material: ModelTreeMaterialSnapshot): string {
-  if (material.propertyKeys.length === 0) return "properties";
-  return material.propertyKeys.slice(0, 3).join(", ");
-}
-
-function materialNodes(materials: readonly ModelTreeMaterialSnapshot[]): ExplorerNode {
-  return {
-    id: "model:materials",
-    kind: "materials.root",
-    label: "Materials",
-    parentId: "model:session",
-    badge: `${materials.length}`,
-    icon: "magnet",
-    status: "ready",
-    children: materials.map((material) => ({
-      id: `model:material:${material.id}`,
-      kind: "material.entry",
-      label: material.label,
-      parentId: "model:materials",
-      badge: materialBadge(material),
-      icon: "circle",
-      resourceRef: material.id,
-      status: "ready",
-    })),
-  };
-}
-
 function physicsInteractionBadge(
   interaction: ModelTreePhysicsInteractionSnapshot,
 ): string {
-  if (interaction.objectCount === 0) return "inactive";
+  if (interaction.objectCount === 0) return "default";
   if (interaction.enabledCount === interaction.objectCount) return "active";
   if (interaction.enabledCount === 0) return "disabled";
   return `${interaction.enabledCount}/${interaction.objectCount} active`;
-}
-
-function physicsNodes(
-  interactions: readonly ModelTreePhysicsInteractionSnapshot[],
-): ExplorerNode {
-  return {
-    id: "model:physics",
-    kind: "physics.root",
-    label: "Physics",
-    parentId: "model:session",
-    badge: `${interactions.length}`,
-    icon: "sparkles",
-    status: "ready",
-    children: interactions.map((interaction) => ({
-      id: `model:physics:${interaction.id}`,
-      kind: "physics.interaction",
-      label: interaction.label,
-      parentId: "model:physics",
-      badge: physicsInteractionBadge(interaction),
-      icon: "activity",
-      resourceRef: interaction.id,
-      status: interaction.enabledCount > 0 ? "ready" : "degraded",
-    })),
-  };
 }
 
 export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): ExplorerNode[] {
@@ -179,8 +235,6 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
     size: [2e-6, 1e-6, 5e-8] as const,
   };
   const objects = snapshot?.objects ?? [];
-  const materials = snapshot?.materials ?? [];
-  const physicsInteractions = snapshot?.physicsInteractions ?? [];
   const sessionChildren: ExplorerNode[] = [
     {
       id: "model:universe",
@@ -224,14 +278,6 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
       children: objects.map(objectNodes),
     },
   ];
-
-  if (materials.length > 0) {
-    sessionChildren.push(materialNodes(materials));
-  }
-
-  if (physicsInteractions.length > 0) {
-    sessionChildren.push(physicsNodes(physicsInteractions));
-  }
 
   sessionChildren.push(
     {

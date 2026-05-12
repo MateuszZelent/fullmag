@@ -21,8 +21,7 @@ interface SceneAxes3DProps {
   sceneScale: [number, number, number];
   /**
    * Custom axis labels [xLabel, yLabel, zLabel].
-   * Defaults to ["x", "y", "z"]. For FDM scene where scene-Y=sim-Z
-   * and scene-Z=sim-Y, pass ["x", "z", "y"].
+   * Defaults to physical XYZ labels.
    */
   axisLabels?: [string, string, string];
   /** Toggle visibility */

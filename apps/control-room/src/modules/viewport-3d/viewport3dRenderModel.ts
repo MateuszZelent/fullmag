@@ -65,6 +65,7 @@ export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   partVectorBudgets?: ReadonlyMap<string, number>;
   scalarColorsVisible?: boolean;
+  vectorColorMode?: string;
 }
 
 export interface Viewport3DVectorBudgetTarget {
@@ -128,7 +129,12 @@ export function buildViewport3DFieldRenderModel(
   const scalarColors =
     options.scalarColorsVisible === false
       ? null
-      : buildVertexScalarColors(fieldVector, topology.nodeCount);
+      : buildVertexScalarColors(
+          fieldVector,
+          topology.nodeCount,
+          undefined,
+          options.vectorColorMode,
+        );
   const partVectorSegments = new Map<string, Float32Array | null>();
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
 

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
   ObjectVisualizationController,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
+  resolveEffectiveVisualizationSettings,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationTargetKey,
@@ -120,6 +122,7 @@ describe("ObjectVisualizationController", () => {
 
     expect(
       resolveVisualizationSettings(controller.getSnapshot(), target, {
+        boundsVisible: false,
         opacityPercent: 80,
         pointsVisible: true,
         renderMode: "points",
@@ -130,10 +133,42 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toMatchObject({
       opacityPercent: 35,
+      boundsVisible: false,
       pointsVisible: true,
       shaderVisible: false,
       vectorsVisible: true,
       wireframeVisible: true,
+    });
+  });
+
+  it("applies global object display defaults before per-target overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+
+    controller.patchDefaults("object", {
+      boundsVisible: true,
+      vectorsVisible: true,
+    });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      boundsVisible: true,
+      vectorsVisible: true,
+    });
+
+    controller.patchTarget(target, {
+      boundsVisible: false,
+    });
+
+    expect(controller.getSettings(target)).toMatchObject({
+      boundsVisible: false,
+      vectorsVisible: true,
+    });
+
+    controller.clearDefaults("object");
+
+    expect(controller.getSettings(target)).toMatchObject({
+      boundsVisible: false,
+      vectorsVisible: false,
     });
   });
 
@@ -162,6 +197,37 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("derives effective pass visibility from the target master visibility", () => {
+    const configured = resolveAirboxVisualizationSettingsFromState({
+      layers: {
+        airbox: {
+          opacity: 0.31,
+          points: { opacity: 1, visible: true },
+          surface: { opacity: 1, visible: true },
+          vectors: { density: 64, domain: "airbox_only", visible: true },
+          visible: false,
+          wireframe: { opacity: 1, visible: true },
+        },
+      },
+    });
+
+    expect(configured).toMatchObject({
+      pointsVisible: true,
+      shaderVisible: true,
+      vectorsVisible: true,
+      visible: false,
+      wireframeVisible: true,
+    });
+    expect(resolveEffectiveVisualizationSettings(configured)).toMatchObject({
+      boundsVisible: false,
+      pointsVisible: false,
+      shaderVisible: false,
+      vectorsVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+  });
+
   it("builds backend airbox layer patches from target display patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
@@ -182,5 +248,20 @@ describe("ObjectVisualizationController", () => {
         },
       },
     });
+  });
+
+  it("keeps airbox local-only target fields out of backend state patches", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        boundsVisible: true,
+      }),
+    ).toEqual({});
+    expect(
+      airboxLocalVisualizationPatchFromTargetPatch({
+        boundsVisible: true,
+        visible: false,
+        wireframeVisible: false,
+      }),
+    ).toEqual({ boundsVisible: true });
   });
 });

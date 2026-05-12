@@ -1,7 +1,11 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import type { CSSProperties } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 
 import {
   DropdownMenu,
@@ -73,6 +77,7 @@ function RibbonActionButton({
   accent,
   tooltip,
   iconColor,
+  splitButton,
   onAction,
 }: {
   actionMenu?: RibbonGroupData["actions"][number]["menu"];
@@ -84,6 +89,7 @@ function RibbonActionButton({
   accent?: boolean;
   tooltip?: string;
   iconColor?: string;
+  splitButton?: boolean;
   onAction?: (actionId: string) => void;
 }) {
   const hasMenu = Boolean(actionMenu?.length);
@@ -92,6 +98,33 @@ function RibbonActionButton({
   const style = resolvedIconColor
     ? ({ "--fm-ribbon-icon-color": resolvedIconColor } as CSSProperties)
     : undefined;
+  const runAction = () => {
+    if (!isTriggerDisabled) {
+      onAction?.(id);
+    }
+  };
+  // Split-button handlers: only used when splitButton=true (body runs command,
+  // chevron opens dropdown). For pure-menu buttons the whole area opens the dropdown.
+  const runMenuActionFromPointer = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const target = event.target;
+    const menuTrigger =
+      target instanceof Element &&
+      Boolean(target.closest("[data-ribbon-menu-trigger='true']"));
+    if (event.button === 0 && !menuTrigger) {
+      event.preventDefault();
+      runAction();
+    }
+  };
+  const runMenuActionFromKeyboard = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+  ) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      runAction();
+    }
+  };
   const trigger = (
     <button
       className="fm-ribbon-action"
@@ -104,14 +137,20 @@ function RibbonActionButton({
       style={style}
       title={tooltip ?? label}
       type="button"
-      onClick={() => onAction?.(id)}
+      onClick={hasMenu && splitButton ? undefined : runAction}
+      onKeyDownCapture={hasMenu && splitButton ? runMenuActionFromKeyboard : undefined}
+      onPointerDownCapture={hasMenu && splitButton ? runMenuActionFromPointer : undefined}
     >
       <span className="fm-ribbon-action__icon">
         {icon}
       </span>
       <span className="fm-ribbon-action__label">{label}</span>
       {hasMenu ? (
-        <ChevronDown className="fm-ribbon-action__chevron" size={11} />
+        <ChevronDown
+          className="fm-ribbon-action__chevron"
+          data-ribbon-menu-trigger="true"
+          size={11}
+        />
       ) : null}
     </button>
   );
@@ -155,6 +194,7 @@ function RibbonGroup({
             id={action.id}
             iconColor={action.iconColor}
             label={action.label}
+            splitButton={action.splitButton}
             tooltip={action.tooltip}
             onAction={onAction}
           />

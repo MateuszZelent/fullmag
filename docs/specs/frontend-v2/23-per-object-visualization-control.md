@@ -1,6 +1,6 @@
 # Frontend v2 - Per-Object Visualization Control
 
-**Status:** Airbox backend-backed; per-object backend persistence and live browser smoke still pending
+**Status:** Airbox backend-backed with kernel effective-state resolver; per-object backend persistence and live browser smoke still pending
 **Date:** 2026-05-11
 
 ## 1. Goal
@@ -43,6 +43,27 @@ The registry stores only small display preferences:
 - render mode summary for ribbon menus.
 
 It must not store topology, field arrays, mesh manifests, scene documents, or backend runtime snapshots.
+
+### 3.1 Configured vs effective display state
+
+Target display state has two distinct meanings:
+
+- **configured state**: the stored pass preferences, for example an airbox can keep
+  `wireframe=true` while the whole target is hidden;
+- **effective state**: the state shown to the user and consumed by active display
+  controls after the target master visibility is applied.
+
+When `visible=false`, shader, wireframe, points, vectors, and frame controls must
+render as inactive and be disabled in both the View ribbon and inspector. Their
+configured values are preserved so they can be restored when the target is made
+visible again. This rule prevents the visible UI drift where `View -> Airbox` says
+`off` while `Explorer -> Airbox Visualization` still appears to have an active
+wireframe pass.
+
+For airbox, backend-owned fields (`visible`, surface, wireframe, points, vectors,
+opacity) are written only to `visualization/state.layers.airbox`. The temporary
+kernel controller may store only local fields that are not present in the v2
+contract, currently `boundsVisible`.
 
 ## 4. UI Contract
 

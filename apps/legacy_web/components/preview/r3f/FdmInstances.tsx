@@ -671,11 +671,11 @@ function FdmInstances({
               matrices,
               outBaseMatrix,
               ix,
-              iz,
               iy,
+              iz,
+              gapScale,
               gapScale,
               depthS,
-              gapScale,
             );
             colors[outBaseColor] = _color.r;
             colors[outBaseColor + 1] = _color.g;
@@ -747,32 +747,32 @@ function FdmInstances({
           const strengthScale = STRENGTH_SCALE_MIN + STRENGTH_SCALE_RANGE * Math.sqrt(normalizedStrength);
 
           if (isVoxel) {
-            let worldY = iz;
+            let worldZ = iz;
             let vH = depthScale * strengthScale;
             const voxelScale = baseScale * strengthScale;
             if (topoEnabled) {
               const compVal = componentValue(mx, my, mz, topoComponent);
               const displacement = compVal * topoMultiplier;
               const topo = resolveVoxelTopography(iz, vH, displacement);
-              worldY = topo.centerZ;
+              worldZ = topo.centerZ;
               vH = topo.depthScale;
             }
             writeScaleTranslateMatrix(
               matrices,
               outBaseMatrix,
               ix,
-              worldY,
               iy,
+              worldZ,
+              voxelScale,
               voxelScale,
               vH,
-              voxelScale,
             );
             applyVoxelColor(mx, my, mz, voxelColorModeRef.current, _color);
           } else {
-            _tempPos.set(ix, iz, iy);
+            _tempPos.set(ix, iy, iz);
             const glyphScale = GLYPH_SCALE_MIN + GLYPH_SCALE_RANGE * Math.sqrt(Math.min(1, mag / normMag));
             _tempScale.set(glyphScale, glyphScale, glyphScale);
-            _tempVec.set(mx, mz, my);
+            _tempVec.set(mx, my, mz);
             if (_tempVec.lengthSq() > ZERO_VEC_EPSILON) {
               _tempVec.normalize();
             } else {

@@ -1,4 +1,10 @@
-import { magnetizationHslRgb } from "../orientation/magnetizationColor";
+import {
+  normalizeViewport3DVectorColorMode,
+  resolveViewport3DVectorColorRgb,
+  resolveViewport3DVectorColorScalar,
+  type Viewport3DScalarColorRange,
+  type Viewport3DVectorColorMode,
+} from "../viewport3dVectorColoring";
 
 export interface VectorGlyphInstanceOptions {
   colorMode?: string;
@@ -27,14 +33,19 @@ export function buildVectorGlyphInstances(
   options: VectorGlyphInstanceOptions = {},
 ): VectorGlyphInstances {
   const count = Math.floor(segments.length / FLOATS_PER_SEGMENT);
-  const colorMode = options.colorMode ?? "orientation";
+  const colorMode = normalizeViewport3DVectorColorMode(options.colorMode);
   const headLengthRatio =
     options.headLengthRatio ?? DEFAULT_HEAD_LENGTH_RATIO;
   const headRadiusRatio = options.headRadiusRatio ?? DEFAULT_HEAD_RADIUS_RATIO;
   const shaftRadiusRatio =
     options.shaftRadiusRatio ?? DEFAULT_SHAFT_RADIUS_RATIO;
   const colors =
-    colorMode === "orientation" ? new Float32Array(count * 3) : null;
+    colorMode !== "monochrome" && colorMode !== "magnitude"
+      ? new Float32Array(count * 3)
+      : null;
+  const colorRange = colors
+    ? resolveSegmentColorRange(segments, count, colorMode)
+    : null;
   const directions = new Float32Array(count * 3);
   const headCenters = new Float32Array(count * 3);
   const headScales = new Float32Array(count * 3);
@@ -82,8 +93,15 @@ export function buildVectorGlyphInstances(
     shaftScales.set([shaftRadius, shaftLength, shaftRadius], target);
     headScales.set([headRadius, headLength, headRadius], target);
 
-    if (colors) {
-      colors.set(magnetizationHslRgb(dx, dy, dz), target);
+    if (colors && colorRange) {
+      const rgb = resolveViewport3DVectorColorRgb(
+        colorMode,
+        dx,
+        dy,
+        dz,
+        colorRange,
+      );
+      if (rgb) colors.set(rgb, target);
     }
   }
 
@@ -96,4 +114,37 @@ export function buildVectorGlyphInstances(
     shaftCenters,
     shaftScales,
   };
+}
+
+function resolveSegmentColorRange(
+  segments: Float32Array,
+  count: number,
+  colorMode: Viewport3DVectorColorMode,
+): Viewport3DScalarColorRange {
+  let min = Infinity;
+  let max = -Infinity;
+
+  for (let vector = 0; vector < count; vector += 1) {
+    const source = vector * FLOATS_PER_SEGMENT;
+    const sx = segments[source] ?? 0;
+    const sy = segments[source + 1] ?? 0;
+    const sz = segments[source + 2] ?? 0;
+    const ex = segments[source + 3] ?? sx;
+    const ey = segments[source + 4] ?? sy;
+    const ez = segments[source + 5] ?? sz;
+    const value = resolveViewport3DVectorColorScalar(
+      colorMode,
+      ex - sx,
+      ey - sy,
+      ez - sz,
+    );
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return { max: 0, min: 0 };
+  }
+
+  return { max, min };
 }

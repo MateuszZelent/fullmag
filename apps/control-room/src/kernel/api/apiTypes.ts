@@ -31,6 +31,9 @@ export type GeometryRealizationRequest =
 export type GeometryRealizationResource = JsonValue;
 export type GeometryValidationResource = JsonValue;
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
+export type MaterialPatchRequest =
+  components["schemas"]["MaterialPatchRequest"];
+export type MaterialResource = components["schemas"]["MaterialResource"];
 export type MeshActiveBuildResource =
   components["schemas"]["MeshActiveBuildResource"];
 export type MeshBuildHistoryResource =
@@ -60,6 +63,8 @@ export interface MeshUniverseConfigResource {
 }
 export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
+export type RegionListResource = components["schemas"]["RegionListResource"];
+export type RegionPatchRequest = components["schemas"]["RegionPatchRequest"];
 export type AuthoringTransactionRequest =
   | { kind: "replace_scene"; scene: JsonObject }
   | { kind: "merge_patch"; merge_patch: JsonObject }

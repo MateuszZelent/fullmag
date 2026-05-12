@@ -1,8 +1,10 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
+import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
+import { ObjectRegionsPanel } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
@@ -34,9 +36,21 @@ const PANELS: InspectorPanelContribution[] = [
   },
   {
     id: "object-material",
-    title: "Object Material",
-    selectionKinds: ["object.material"],
+    title: "Magnetic Parameters",
+    selectionKinds: ["object.magnetic-parameters", "object.material"],
     component: ObjectMaterialPanel,
+  },
+  {
+    id: "object-regions",
+    title: "Object Regions",
+    selectionKinds: ["object.regions"],
+    component: ObjectRegionsPanel,
+  },
+  {
+    id: "object-magnetic-texture",
+    title: "Magnetic Texture",
+    selectionKinds: ["object.magnetic-texture"],
+    component: ObjectMagneticTexturePanel,
   },
   {
     id: "airbox-mesh-policy",

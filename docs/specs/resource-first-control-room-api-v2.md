@@ -93,6 +93,8 @@ Capability resources have distinct scopes:
 
 The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
 
+The control-room Model explorer is object-first. Ferromagnetic objects own the primary navigation path for geometry, regions, magnetic parameters, magnetic texture, mesh, and visualization. Material and magnetization entries may remain reusable assets in `SceneDocument`, but browser modules focus them through the selected object instead of exposing standalone top-level Model branches.
+
 Current object-authoring routes:
 
 | Route | Method | Meaning |
@@ -104,6 +106,12 @@ Current object-authoring routes:
 | `/v2/sessions/current/model/objects/{object_id}` | `PATCH` | Patch object identity, visibility, material/region/magnetization refs, geometry, or transform and return the committed scene. |
 | `/v2/sessions/current/model/objects/{object_id}` | `DELETE` | Delete object and return the committed scene. |
 | `/v2/sessions/current/model/objects/{object_id}/geometry` | `PATCH` | Patch object geometry and optional transform. |
+| `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}` | `GET` | Read one required or optional interaction entry for the selected object. |
+| `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}` | `PATCH` | Patch one selected-object interaction entry. |
+| `/v2/sessions/current/model/materials/{material_id}` | `GET` | Read a material asset referenced by an object. |
+| `/v2/sessions/current/model/materials/{material_id}` | `PATCH` | Patch a material asset referenced by an object. Shared-asset semantics are explicit until object-private material assets are introduced. |
+| `/v2/sessions/current/model/regions` | `GET` | Read object-derived region resources for the current scene realization. |
+| `/v2/sessions/current/model/regions/{region_id}` | `PATCH` | Patch an object-derived region name/visibility and return the committed scene. |
 | `/v2/sessions/current/model/transactions` | `POST` | Commit an explicit semantic authoring transaction. |
 | `/v2/sessions/current/model/geometry/capabilities` | `GET` | Read backend-owned primitive/CSG capability matrix. |
 | `/v2/sessions/current/model/geometry/validation` | `GET` | Read validation diagnostics for the current scene. |
@@ -123,7 +131,9 @@ Current object-authoring routes:
 - `commit_object_transform`;
 - `patch_universe`.
 
-The response includes `transaction_kind`, `scene_revision`, and `committed_scene`. Direct object mutation routes also return the committed scene. There is currently no `GET /v2/sessions/current/model/objects/{object_id}` read route; browser consumers refresh object state from `model/scene` and derive object panels from that snapshot.
+The response includes `transaction_kind`, `scene_revision`, and `committed_scene`. Direct object and region mutation routes also return the committed scene. Material mutation returns the committed material asset and must invalidate `model/scene` because material changes can synchronize interaction state such as interfacial DMI. There is currently no `GET /v2/sessions/current/model/objects/{object_id}` read route; browser consumers refresh object state from `model/scene` and derive object panels from that snapshot.
+
+Solver/runtime endpoints stay global study/run resources. Per-object physics and mesh authoring uses `model/objects/*`, `model/regions/*`, `model/materials/*`, `model/objects/*/interactions/*`, and `meshing/policies/objects/*`; it must not create screen-shaped solver endpoints for Explorer rows.
 
 Mesh-affecting model changes mark affected objects or the scene as mesh-stale. A frontend may show primitive authoring geometry immediately after a create/edit commit, but solver topology remains owned by `meshing` resources and is current only after mesh-build provenance matches the committed scene revision.
 

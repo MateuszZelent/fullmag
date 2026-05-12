@@ -1,4 +1,3 @@
-export type ViewCubeSceneConvention = "identity" | "swapYZ";
 export type ViewCubeTargetKind = "face" | "edge" | "corner";
 
 export interface ViewCubeAxisLabels {
@@ -33,17 +32,7 @@ export interface ViewCubeTargetCell {
 
 const AXIS_STEPS = [-1, 0, 1] as const;
 
-export function getViewCubeAxisLabels(
-  convention: ViewCubeSceneConvention = "swapYZ",
-): ViewCubeAxisLabels {
-  if (convention === "swapYZ") {
-    return {
-      x: "+X",
-      y: "+Z",
-      z: "+Y",
-    };
-  }
-
+export function getViewCubeAxisLabels(): ViewCubeAxisLabels {
   return {
     x: "+X",
     y: "+Y",
@@ -51,9 +40,7 @@ export function getViewCubeAxisLabels(
   };
 }
 
-export function buildViewCubeTargetMap(
-  convention: ViewCubeSceneConvention,
-): Map<string, ViewCubeTarget> {
+export function buildViewCubeTargetMap(): Map<string, ViewCubeTarget> {
   const targets = new Map<string, ViewCubeTarget>();
 
   for (const x of AXIS_STEPS) {
@@ -65,7 +52,7 @@ export function buildViewCubeTargetMap(
 
         const id = viewCubeTargetId(x, y, z);
         targets.set(id, {
-          direction: directionForConvention(convention, [x, y, z]),
+          direction: [x, y, z],
           id,
         });
       }
@@ -75,10 +62,8 @@ export function buildViewCubeTargetMap(
   return targets;
 }
 
-export function buildViewCubeFaces(
-  convention: ViewCubeSceneConvention = "swapYZ",
-): readonly ViewCubeFaceModel[] {
-  const axisLabels = getViewCubeAxisLabels(convention);
+export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
+  const axisLabels = getViewCubeAxisLabels();
 
   return [
     {
@@ -232,17 +217,6 @@ function neg3(a: [number, number, number]): [number, number, number] {
 
 function trimPositive(label: string): string {
   return label.startsWith("+") ? label.slice(1) : label;
-}
-
-function directionForConvention(
-  convention: ViewCubeSceneConvention,
-  direction: [number, number, number],
-): [number, number, number] {
-  if (convention === "swapYZ") {
-    return [direction[0], direction[2], direction[1]];
-  }
-
-  return direction;
 }
 
 function viewCubeTargetId(x: number, y: number, z: number): string {

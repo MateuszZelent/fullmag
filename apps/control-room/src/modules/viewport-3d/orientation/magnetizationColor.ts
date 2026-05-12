@@ -17,14 +17,6 @@ export function magnetizationHslRgb(
   return orientationHsvToRgb(hueRadians, saturation, value);
 }
 
-export function magnetizationHslRgbForSceneVector(
-  sceneX: number,
-  sceneY: number,
-  sceneZ: number,
-): [number, number, number] {
-  return magnetizationHslRgb(sceneX, sceneZ, sceneY);
-}
-
 const AXIS_RGB = {
   x: [1, 0, 0],
   y: [0x50 / 255, 0xc8 / 255, 0x50 / 255],
@@ -39,16 +31,16 @@ export const HSL_REFERENCE_AXES = [
     label: "+X",
   },
   {
-    color: AXIS_RGB.z,
+    color: AXIS_RGB.y,
     direction: [0, 1, 0],
     id: "y",
-    label: "+Z",
+    label: "+Y",
   },
   {
-    color: AXIS_RGB.y,
+    color: AXIS_RGB.z,
     direction: [0, 0, 1],
     id: "z",
-    label: "+Y",
+    label: "+Z",
   },
 ] satisfies Array<{
   color: [number, number, number];

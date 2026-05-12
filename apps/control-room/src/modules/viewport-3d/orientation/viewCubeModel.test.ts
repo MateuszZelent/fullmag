@@ -8,8 +8,8 @@ import {
 } from "./viewCubeModel";
 
 describe("view cube model", () => {
-  it("keeps v1-compatible axis labels for the default scene convention", () => {
-    expect(getViewCubeAxisLabels("identity")).toEqual({
+  it("uses canonical physical XYZ labels", () => {
+    expect(getViewCubeAxisLabels()).toEqual({
       x: "+X",
       y: "+Y",
       z: "+Z",
@@ -17,7 +17,7 @@ describe("view cube model", () => {
   });
 
   it("builds face, edge, and corner snap targets", () => {
-    const targets = buildViewCubeTargetMap("identity");
+    const targets = buildViewCubeTargetMap();
 
     expect(targets.size).toBe(26);
     expect(targets.get("right")?.direction).toEqual([1, 0, 0]);
@@ -27,24 +27,8 @@ describe("view cube model", () => {
     expect(targets.get("right-top-front")?.direction).toEqual([1, 1, 1]);
   });
 
-  it("maps labels through the v1 swapYZ convention", () => {
-    expect(getViewCubeAxisLabels("swapYZ")).toEqual({
-      x: "+X",
-      y: "+Z",
-      z: "+Y",
-    });
-  });
-
-  it("uses the v1 swapYZ convention by default", () => {
-    expect(getViewCubeAxisLabels()).toEqual({
-      x: "+X",
-      y: "+Z",
-      z: "+Y",
-    });
-  });
-
-  it("builds the v1 face grid with face, edge, and corner snap targets", () => {
-    const faces = buildViewCubeFaces("swapYZ");
+  it("builds the canonical face grid with face, edge, and corner snap targets", () => {
+    const faces = buildViewCubeFaces();
     const topFace = faces.find((face) => face.id === "top");
     const frontFace = faces.find((face) => face.id === "front");
 
@@ -61,12 +45,12 @@ describe("view cube model", () => {
     expect(topFace?.targets[4]).toMatchObject({
       direction: [0, 1, 0],
       kind: "face",
-      label: "Z",
+      label: "Y",
     });
     expect(frontFace?.targets[4]).toMatchObject({
       direction: [0, 0, 1],
       kind: "face",
-      label: "Y",
+      label: "Z",
     });
   });
 

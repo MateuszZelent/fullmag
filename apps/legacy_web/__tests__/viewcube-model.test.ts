@@ -22,12 +22,12 @@ describe("buildViewCubeFaces", () => {
     expect(targets.has("left-bottom-back")).toBe(true);
   });
 
-  it("maps face labels through the active axis convention", () => {
-    const faces = buildViewCubeFaces("swapYZ");
+  it("labels the top and front faces as physical Y and Z", () => {
+    const faces = buildViewCubeFaces("identity");
     const topFace = faces.find((face) => face.id === "top");
     const frontFace = faces.find((face) => face.id === "front");
 
-    expect(topFace?.targets[4]?.label).toBe("Z");
-    expect(frontFace?.targets[4]?.label).toBe("Y");
+    expect(topFace?.targets[4]?.label).toBe("Y");
+    expect(frontFace?.targets[4]?.label).toBe("Z");
   });
 });

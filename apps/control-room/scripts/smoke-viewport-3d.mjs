@@ -1,6 +1,6 @@
 import { inflateSync } from "node:zlib";
 
-const url = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3100/workspace";
+const url = process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -170,6 +170,8 @@ try {
   }
   if (requireGeometryFlow) {
     await verifyGeometryAuthoringFlow({
+      canvas,
+      canvasBaseline: pixelSample,
       page,
       realtimeMessages,
       sceneResponses,
@@ -182,6 +184,8 @@ try {
 }
 
 async function verifyGeometryAuthoringFlow({
+  canvas,
+  canvasBaseline,
   page,
   realtimeMessages,
   sceneResponses,
@@ -191,144 +195,189 @@ async function verifyGeometryAuthoringFlow({
     (record) => Array.isArray(sceneObjects(record.body)),
     "initial GET /v2/sessions/current/model/scene",
   );
+  const cleanupObjectIds = [];
+  let cleanupRevision = sceneRevision(initialScene.body);
   const knownObjectIds = new Set(
     sceneObjects(initialScene.body).map(sceneObjectId).filter(Boolean),
   );
   const objectName = `Smoke Box ${Date.now().toString(36)}`;
   const sceneSequenceBeforeCommit = sceneResponseSequence;
 
-  await page.getByRole("tab", { name: "Geometry" }).click();
-  const addBox = page.locator('[data-action-id="geometry.add-box"]');
-  await addBox.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
-  await addBox.click();
+  try {
+    await page.getByRole("tab", { name: "Geometry" }).click();
+    const addBox = page.locator('[data-action-id="geometry.add-box"]');
+    await addBox.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+    await addBox.click();
 
-  const draftName = page.locator('.fm-inspector-panel input[aria-label="Name"]').first();
-  await draftName.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
-  await draftName.fill(objectName);
+    const draftName = page.locator('.fm-inspector-panel input[aria-label="Name"]').first();
+    await draftName.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+    await fillDraftInput(draftName, objectName);
+    await fillDraftField(page, "X", "1.4e-7");
+    await fillDraftField(page, "Y", "1.4e-7");
+    await fillDraftField(page, "Z", "1.4e-8");
+    await fillDraftField(page, "TX", "-1.6e-6");
 
-  const transactionResponsePromise = page.waitForResponse(
-    (response) =>
-      isModelTransactionUrl(response.url()) &&
-      response.request().method() === "POST" &&
-      response.status() < 400,
-    { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
-  );
-  await page.getByRole("button", { name: "Apply Draft" }).click();
+    const transactionResponsePromise = page.waitForResponse(
+      (response) =>
+        isModelTransactionUrl(response.url()) &&
+        response.request().method() === "POST" &&
+        response.status() < 400,
+      { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
+    );
+    await page
+      .locator(".fm-inspector-panel button")
+      .filter({ hasText: "Apply Draft" })
+      .first()
+      .click();
 
-  const transactionResponse = await transactionResponsePromise;
-  const transaction = await transactionResponse.json();
-  const committedScene = transaction.committed_scene ?? null;
-  let createdObject = findCreatedObject(
-    sceneObjects(committedScene),
-    knownObjectIds,
-    objectName,
-  );
+    const transactionResponse = await transactionResponsePromise;
+    const transaction = await transactionResponse.json();
+    cleanupRevision =
+      transaction.scene_revision ?? sceneRevision(transaction.committed_scene) ?? cleanupRevision;
+    const committedScene = transaction.committed_scene ?? null;
+    let createdObject = findCreatedObject(
+      sceneObjects(committedScene),
+      knownObjectIds,
+      objectName,
+    );
 
-  if (!createdObject) {
-    const sceneWithCreatedObject = await waitForSceneResponse(
+    if (!createdObject) {
+      const sceneWithCreatedObject = await waitForSceneResponse(
+        sceneResponses,
+        (record) =>
+          record.sequence >= sceneSequenceBeforeCommit &&
+          sceneObjects(record.body).some((object) => sceneObjectName(object) === objectName),
+        "model/scene refetch containing the committed smoke object",
+      );
+      cleanupRevision = sceneRevision(sceneWithCreatedObject.body) ?? cleanupRevision;
+      createdObject = sceneObjects(sceneWithCreatedObject.body).find(
+        (object) => sceneObjectName(object) === objectName,
+      );
+    }
+
+    const objectId = sceneObjectId(createdObject);
+    if (!objectId) {
+      throw new Error("Committed geometry object has no id in SceneDocument.");
+    }
+    cleanupObjectIds.push(objectId);
+
+    const uiScene = await waitForSceneResponse(
       sceneResponses,
       (record) =>
         record.sequence >= sceneSequenceBeforeCommit &&
-        sceneObjects(record.body).some((object) => sceneObjectName(object) === objectName),
-      "model/scene refetch containing the committed smoke object",
+        sceneObjects(record.body).some((object) => sceneObjectId(object) === objectId),
+      "GET /v2/sessions/current/model/scene refetch after UI object commit",
     );
-    createdObject = sceneObjects(sceneWithCreatedObject.body).find(
-      (object) => sceneObjectName(object) === objectName,
+    cleanupRevision = sceneRevision(uiScene.body) ?? cleanupRevision;
+    await verifyObjectInViewportRenderModel(page, objectId);
+    await verifyObjectInExplorerViewportAndInspector(page, objectId);
+    const uiCanvasSample = await waitForCanvasChange(
+      page,
+      canvas,
+      canvasBaseline,
+      "3D viewport canvas change after UI object commit",
     );
-  }
 
-  const objectId = sceneObjectId(createdObject);
-  if (!objectId) {
-    throw new Error("Committed geometry object has no id in SceneDocument.");
-  }
+    const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
+    const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
+    const externalBaseRevision =
+      sceneRevision(uiScene.body) ?? transaction.scene_revision ?? null;
+    if (typeof externalBaseRevision !== "number") {
+      throw new Error(
+        "Cannot run websocket refetch check: current SceneDocument revision is missing.",
+      );
+    }
 
-  const uiScene = await waitForSceneResponse(
-    sceneResponses,
-    (record) =>
-      record.sequence >= sceneSequenceBeforeCommit &&
-      sceneObjects(record.body).some((object) => sceneObjectId(object) === objectId),
-    "GET /v2/sessions/current/model/scene refetch after UI object commit",
-  );
-  await verifyObjectInExplorerViewportAndInspector(page, objectId, objectName);
-
-  const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
-  const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
-  const externalBaseRevision =
-    sceneRevision(uiScene.body) ?? transaction.scene_revision ?? null;
-  if (typeof externalBaseRevision !== "number") {
-    throw new Error(
-      "Cannot run websocket refetch check: current SceneDocument revision is missing.",
-    );
-  }
-
-  const realtimeMessageStartIndex = realtimeMessages.length;
-  const sceneSequenceBeforeExternalCommit = sceneResponseSequence;
-  await commitExternalObjectTransaction(page, {
-    baseRevision: externalBaseRevision,
-    objectId: externalObjectId,
-    objectName: externalObjectName,
-  });
-  const realtimeSceneChange = await waitForRealtimeBatchChanged(
-    realtimeMessages,
-    "/v2/sessions/current/model/scene",
-    "resource.batch_changed for externally committed model/scene",
-    realtimeMessageStartIndex,
-  );
-  const externalScene = await waitForSceneResponse(
-    sceneResponses,
-    (record) =>
-      record.sequence >= sceneSequenceBeforeExternalCommit &&
-      record.timestamp >= realtimeSceneChange.timestamp &&
-      sceneObjects(record.body).some(
-        (object) => sceneObjectId(object) === externalObjectId,
-      ),
-    "GET /v2/sessions/current/model/scene refetch after websocket invalidation",
-  );
-  await verifyObjectInExplorerViewportAndInspector(
-    page,
-    externalObjectId,
-    externalObjectName,
-  );
-  if (!keepGeometrySmokeObjects) {
-    await cleanupGeometrySmokeObjects(page, {
-      baseRevision: sceneRevision(externalScene.body),
-      objectIds: [externalObjectId, objectId],
+    const realtimeMessageStartIndex = realtimeMessages.length;
+    const sceneSequenceBeforeExternalCommit = sceneResponseSequence;
+    const externalTransaction = await commitExternalObjectTransaction(page, {
+      baseRevision: externalBaseRevision,
+      objectId: externalObjectId,
+      objectName: externalObjectName,
     });
+    cleanupRevision = externalTransaction.scene_revision ?? cleanupRevision;
+    cleanupObjectIds.push(externalObjectId);
+    const realtimeSceneChange = await waitForRealtimeBatchChanged(
+      realtimeMessages,
+      "/v2/sessions/current/model/scene",
+      "resource.batch_changed for externally committed model/scene",
+      realtimeMessageStartIndex,
+    );
+    const externalScene = await waitForSceneResponse(
+      sceneResponses,
+      (record) =>
+        record.sequence >= sceneSequenceBeforeExternalCommit &&
+        record.timestamp >= realtimeSceneChange.timestamp &&
+        sceneObjects(record.body).some(
+          (object) => sceneObjectId(object) === externalObjectId,
+        ),
+      "GET /v2/sessions/current/model/scene refetch after websocket invalidation",
+    );
+    cleanupRevision = sceneRevision(externalScene.body) ?? cleanupRevision;
+    await verifyObjectInViewportRenderModel(page, externalObjectId);
+    await verifyObjectInExplorerViewportAndInspector(
+      page,
+      externalObjectId,
+    );
+    await waitForCanvasChange(
+      page,
+      canvas,
+      uiCanvasSample,
+      "3D viewport canvas change after websocket scene refetch",
+    );
+    if (!keepGeometrySmokeObjects) {
+      await cleanupGeometrySmokeObjects(page, {
+        baseRevision: cleanupRevision,
+        objectIds: [...cleanupObjectIds].reverse(),
+      });
+      cleanupObjectIds.length = 0;
+    }
+    logGeometryFlowSuccess(transaction, objectId, externalObjectId);
+  } finally {
+    if (!keepGeometrySmokeObjects && cleanupObjectIds.length > 0) {
+      try {
+        await cleanupGeometrySmokeObjects(page, {
+          baseRevision: cleanupRevision,
+          objectIds: [...cleanupObjectIds].reverse(),
+        });
+      } catch (error) {
+        console.warn(
+          `Smoke object cleanup after failure did not complete: ${error.message}`,
+        );
+      }
+    }
   }
-  logGeometryFlowSuccess(transaction, objectId, externalObjectId);
 }
 
 async function verifyObjectInExplorerViewportAndInspector(
   page,
   objectId,
-  objectName,
 ) {
   const explorerRow = page.locator(
     `[data-node-id="${cssAttributeValue(`model:object:${objectId}`)}"]`,
   );
   await explorerRow.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
 
-  const primitiveLabel = page
-    .locator(
-      [
-        ".fm-viewport-3d__primitive-label",
-        `[data-object-id="${cssAttributeValue(objectId)}"]`,
-        `[data-object-name="${cssAttributeValue(objectName)}"]`,
-      ].join(""),
-    )
-    .first();
-  await primitiveLabel
-    .waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
-  await waitForLocatorText(
-    primitiveLabel,
-    "primitive",
-    "Viewport primitive status label",
-  );
-
-  await explorerRow.click();
+  await clickExplorerRow(explorerRow);
   const inspector = page.locator(".fm-inspector");
   await waitForLocatorText(inspector, objectId, "Inspector object id");
   await waitForLocatorText(inspector, "SceneDocument", "Inspector source");
+}
+
+async function clickExplorerRow(explorerRow) {
+  await explorerRow.evaluate((node) => {
+    node.scrollIntoView({ block: "center", inline: "nearest" });
+    if ("click" in node && typeof node.click === "function") {
+      node.click();
+    }
+  });
+}
+
+async function verifyObjectInViewportRenderModel(page, objectId) {
+  const viewport = page.locator(
+    `.fm-viewport-3d[data-primitive-object-ids~="${cssAttributeValue(objectId)}"]`,
+  );
+  await viewport.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
 }
 
 function logGeometryFlowSuccess(transaction, objectId, externalObjectId) {
@@ -341,7 +390,7 @@ function logGeometryFlowSuccess(transaction, objectId, externalObjectId) {
       "model/scene=refetched",
       "realtime=resource.batch_changed",
       "explorer=selected",
-      "viewport=primitive-object-label",
+      "viewport=render-model+canvas-delta",
       "inspector=SceneDocument",
     ].join(" "),
   );
@@ -364,7 +413,7 @@ async function commitExternalObjectTransaction(
       pivot: [0, 0, 0],
       rotation_quat: [0, 0, 0, 1],
       scale: [1, 1, 1],
-      translation: [0, 0, 0],
+      translation: [1.6e-6, 0, 0],
     },
   });
 }
@@ -456,6 +505,31 @@ async function waitForLocatorText(locator, expectedText, label) {
   });
 }
 
+async function fillDraftField(page, label, value) {
+  const field = page
+    .locator(`.fm-inspector-panel input[aria-label="${cssAttributeValue(label)}"]`)
+    .first();
+  await field.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await fillDraftInput(field, value);
+}
+
+async function fillDraftInput(field, value) {
+  await field.scrollIntoViewIfNeeded({ timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await field.fill(value, { force: true, timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+}
+
+async function waitForCanvasChange(page, canvas, baseline, label) {
+  return waitForCondition(label, async () => {
+    const current = await sampleCanvasComposite(page, canvas);
+    const diff = canvasCompositeDifference(baseline, current);
+    if (diff.changed) return current;
+    throw new Error(
+      `canvas changed ${diff.changedPixels}/${diff.sampledPixels} sampled pixels; ` +
+        `threshold=${diff.minimumChangedPixels}`,
+    );
+  });
+}
+
 async function waitForCondition(label, predicate) {
   const deadline = Date.now() + GEOMETRY_FLOW_TIMEOUT_MS;
   let lastError = null;
@@ -511,7 +585,8 @@ async function sampleCanvasComposite(page, canvas) {
     },
   });
   const bitmap = parsePng(png);
-  const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 32));
+  const stride = Math.max(1, Math.floor(Math.min(bitmap.width, bitmap.height) / 64));
+  const signature = [];
   let sampledPixels = 0;
   let variedPixels = 0;
 
@@ -529,6 +604,7 @@ async function sampleCanvasComposite(page, canvas) {
         bitmap.rgba[offset + 1],
         bitmap.rgba[offset + 2],
       ];
+      signature.push(...rgb);
       if (pixelDiffers(rgb, backgroundRgb)) {
         variedPixels += 1;
       }
@@ -538,7 +614,33 @@ async function sampleCanvasComposite(page, canvas) {
   return {
     nonBlank: variedPixels > 0,
     sampledPixels,
+    signature,
     variedPixels,
+  };
+}
+
+function canvasCompositeDifference(before, after) {
+  const length = Math.min(before.signature.length, after.signature.length);
+  if (length === 0) return { changed: false, changedPixels: 0, sampledPixels: 0 };
+
+  let changedPixels = 0;
+  for (let offset = 0; offset < length; offset += 3) {
+    const delta =
+      Math.abs(before.signature[offset] - after.signature[offset]) +
+      Math.abs(before.signature[offset + 1] - after.signature[offset + 1]) +
+      Math.abs(before.signature[offset + 2] - after.signature[offset + 2]);
+    if (delta > 18) {
+      changedPixels += 1;
+    }
+  }
+
+  const sampledPixels = Math.floor(length / 3);
+  const minimumChangedPixels = Math.max(6, Math.floor(sampledPixels * 0.005));
+  return {
+    changed: changedPixels >= minimumChangedPixels,
+    changedPixels,
+    minimumChangedPixels,
+    sampledPixels,
   };
 }
 

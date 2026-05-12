@@ -103,7 +103,7 @@ import type {
   VectorLiveRenderDebugData,
 } from "@/features/viewport-unified/model/vectorLiveRenderDebugData";
 
-const VECTOR_SURFACE_AXIS_CONVENTION = "swapYZ" as const;
+const VECTOR_SURFACE_AXIS_CONVENTION = "identity" as const;
 const VECTOR_SURFACE_DEBUG_LOGS =
   FRONTEND_DIAGNOSTIC_FLAGS.renderDebug.enableRenderLogging &&
   FRONTEND_DIAGNOSTIC_FLAGS.interactions.trace &&
@@ -1583,16 +1583,16 @@ function UnifiedVectorFieldRendererInner({
     [grid, sceneMode, selectedAxesOverlay, universeCenter, worldExtent],
   );
 
-  // SceneAxes3D props — vector-surface coordinate mapping: scene-X=sim-X, scene-Y=sim-Z, scene-Z=sim-Y
+  // SceneAxes3D props: scene axes match physical simulation axes.
   const objectAxesWorldExtent = selectedAxesOverlay
     ? [
         selectedAxesOverlay.boundsMax[0] - selectedAxesOverlay.boundsMin[0],
-        selectedAxesOverlay.boundsMax[2] - selectedAxesOverlay.boundsMin[2],
         selectedAxesOverlay.boundsMax[1] - selectedAxesOverlay.boundsMin[1],
+        selectedAxesOverlay.boundsMax[2] - selectedAxesOverlay.boundsMin[2],
       ] as [number, number, number]
     : null;
   const universeAxesWorldExtent = worldExtent
-    ? [worldExtent[0], worldExtent[2], worldExtent[1]] as [number, number, number]
+    ? [worldExtent[0], worldExtent[1], worldExtent[2]] as [number, number, number]
     : null;
   const axesWorldExtent =
     viewportAxesScope === "object" && objectAxesWorldExtent
@@ -2282,7 +2282,6 @@ function UnifiedVectorFieldRendererInner({
                 previewProxy={activeTexturePreviewProxy}
                 showPreviewProxy
                 syncPivotWithTranslation
-                swapYZ
                 onLiveChange={onTextureTransformChange}
                 visible
                 onCommit={onTextureTransformCommit}

@@ -11,20 +11,10 @@ import {
   textureTransformToPivotFrame,
   type Vec3,
 } from "@/lib/textureTransformMath";
-import { swapYZQuat, swapYZVec3 } from "./transform/axisConvention";
 
 export type TextureGizmoMode = "translate" | "rotate" | "scale";
 export type TexturePreviewProxy = "none" | "disc" | "box" | "cylinder" | "wall" | "wave";
 
-/**
- * Whether to apply a Y↔Z axis swap between the physical coordinate system
- * (used by TextureTransform3D, where Y is the vertical/physical-Y axis)
- * and the Three.js scene coordinate system (where the FDM viewport swaps
- * scene-Y = physical-Z, scene-Z = physical-Y via axisLabels=["x","z","y"]).
- *
- * When `true`, the gizmo converts physical→scene on mount and scene→physical
- * on drag, so the transform values remain in physical coordinates.
- */
 interface Props {
   transform: TextureTransform3D;
   mode: TextureGizmoMode;
@@ -32,8 +22,6 @@ interface Props {
   previewProxy?: TexturePreviewProxy;
   showPreviewProxy?: boolean;
   syncPivotWithTranslation?: boolean;
-  /** Swap Y↔Z between physical TextureTransform3D and Three.js scene. Default false. */
-  swapYZ?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
   onLiveChange?: (next: TextureTransform3D) => void;
@@ -68,15 +56,12 @@ function summarizeTransform(transform: TextureTransform3D) {
   };
 }
 
-function toSceneTextureTransform(
-  transform: TextureTransform3D,
-  doSwap: boolean,
-): TextureTransform3D {
+function toSceneTextureTransform(transform: TextureTransform3D): TextureTransform3D {
   return {
-    translation: doSwap ? swapYZVec3(transform.translation) : [...transform.translation],
-    rotation_quat: doSwap ? swapYZQuat(transform.rotation_quat) : [...transform.rotation_quat],
-    scale: doSwap ? swapYZVec3(transform.scale) : [...transform.scale],
-    pivot: doSwap ? swapYZVec3(transform.pivot) : [...transform.pivot],
+    translation: [...transform.translation],
+    rotation_quat: [...transform.rotation_quat],
+    scale: [...transform.scale],
+    pivot: [...transform.pivot],
   };
 }
 
@@ -113,20 +98,12 @@ function snapshotMatrixTransform(
   baseTransform: TextureTransform3D,
   mode: TextureGizmoMode,
   syncPivotWithTranslation: boolean,
-  doSwap: boolean,
 ): TextureTransform3D {
-  const scenePivot = doSwap ? swapYZVec3(baseTransform.pivot) : [...baseTransform.pivot];
+  const scenePivot = [...baseTransform.pivot];
   const sceneTransform = textureTransformFromPivotMatrix(matrix, scenePivot as Vec3);
-  let translation: [number, number, number] = [...sceneTransform.translation];
-  let rotation_quat: [number, number, number, number] = [...sceneTransform.rotation_quat];
-  let scaleVec: [number, number, number] = [...sceneTransform.scale];
-
-  // Convert scene → physical
-  if (doSwap) {
-    translation = swapYZVec3(translation);
-    rotation_quat = swapYZQuat(rotation_quat);
-    scaleVec = swapYZVec3(scaleVec);
-  }
+  const translation: [number, number, number] = [...sceneTransform.translation];
+  const rotation_quat: [number, number, number, number] = [...sceneTransform.rotation_quat];
+  const scaleVec: [number, number, number] = [...sceneTransform.scale];
 
   const pivot = [...baseTransform.pivot] as [number, number, number];
 
@@ -261,14 +238,13 @@ export default function TextureTransformGizmo({
   previewProxy = "box",
   showPreviewProxy = false,
   syncPivotWithTranslation = false,
-  swapYZ = false,
   onDragStart,
   onDragEnd,
   onLiveChange,
   onCommit,
 }: Props) {
   const lastSnapshotLogRef = useRef<string>("");
-  const sceneTransform = toSceneTextureTransform(transform, swapYZ);
+  const sceneTransform = toSceneTextureTransform(transform);
   const pivotFrame = textureTransformToPivotFrame(sceneTransform);
   const [matrix] = useState(() => composePivotedTextureTransformMatrix(sceneTransform));
 
@@ -282,7 +258,6 @@ export default function TextureTransformGizmo({
     }
     const signature = JSON.stringify({
       mode,
-      swapYZ,
       transform,
       sceneMatrix: summarizeSceneMatrix(matrix),
     });
@@ -292,13 +267,13 @@ export default function TextureTransformGizmo({
     lastSnapshotLogRef.current = signature;
     writeFrontendDiagnosticConsole(
       "groupCollapsed",
-      `[GizmoSync] TextureTransformGizmo mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+      `[GizmoSync] TextureTransformGizmo mode=${mode}`,
     );
     writeFrontendDiagnosticConsole("log", "physical transform input", summarizeTransform(transform));
     writeFrontendDiagnosticConsole("log", "scene pivot frame", pivotFrame);
     writeFrontendDiagnosticConsole("log", "scene transform passed to PivotControls", summarizeSceneMatrix(matrix));
     writeFrontendDiagnosticConsole("groupEnd");
-  }, [matrix, mode, pivotFrame, swapYZ, transform, visible]);
+  }, [matrix, mode, pivotFrame, transform, visible]);
 
   if (!visible) {
     return null;
@@ -325,7 +300,7 @@ export default function TextureTransformGizmo({
         }
         writeFrontendDiagnosticConsole(
           "groupCollapsed",
-          `[GizmoSync] drag-start mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+          `[GizmoSync] drag-start mode=${mode}`,
         );
         writeFrontendDiagnosticConsole("log", "scene pivot frame", pivotFrame);
         writeFrontendDiagnosticConsole("log", "scene matrix", summarizeSceneMatrix(matrix));
@@ -340,7 +315,6 @@ export default function TextureTransformGizmo({
               transform,
               mode,
               syncPivotWithTranslation,
-              swapYZ,
             ),
           );
         }
@@ -352,12 +326,11 @@ export default function TextureTransformGizmo({
           transform,
           mode,
           syncPivotWithTranslation,
-          swapYZ,
         );
         if (gizmoDebugEnabled()) {
           writeFrontendDiagnosticConsole(
             "groupCollapsed",
-            `[GizmoSync] drag-end mode=${mode} swapYZ=${swapYZ ? "on" : "off"}`,
+            `[GizmoSync] drag-end mode=${mode}`,
           );
           writeFrontendDiagnosticConsole("log", "scene matrix", summarizeSceneMatrix(matrix));
           writeFrontendDiagnosticConsole("log", "committed physical transform", summarizeTransform(committed));

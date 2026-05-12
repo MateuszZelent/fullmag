@@ -8,6 +8,8 @@ import type {
 
 interface SceneLike {
   [key: string]: unknown;
+  magnetization_assets?: unknown;
+  materials?: unknown;
   objects?: unknown;
   universe?: unknown;
 }
@@ -15,11 +17,23 @@ interface SceneLike {
 export function modelTreeSnapshotFromScene(
   scene: SceneLike | null | undefined,
 ): ModelTreeSnapshot {
+  const materials = sceneMaterials(scene?.materials);
+  const materialById = new Map(
+    materials.map((material) => [material.id, material]),
+  );
+  const magnetizationAssets = sceneMagnetizationAssets(
+    scene?.magnetization_assets,
+  );
+  const magnetizationById = new Map(
+    magnetizationAssets.map((asset) => [asset.id, asset]),
+  );
   return {
-    materials: sceneMaterials(scene?.materials),
+    materials,
     objects: Array.isArray(scene?.objects)
       ? scene.objects
-          .map(sceneObjectSnapshot)
+          .map((object) =>
+            sceneObjectSnapshot(object, materialById, magnetizationById),
+          )
           .filter((object): object is ModelTreeObjectSnapshot => Boolean(object))
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
@@ -47,9 +61,49 @@ function sceneMaterials(value: unknown): ModelTreeMaterialSnapshot[] {
     );
 }
 
+interface SceneMagnetizationAssetSnapshot {
+  id: string;
+  kind: string | null;
+  label: string;
+  textureTransformAvailable: boolean;
+}
+
+function sceneMagnetizationAssets(
+  value: unknown,
+): SceneMagnetizationAssetSnapshot[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item): SceneMagnetizationAssetSnapshot | null => {
+      if (!item || typeof item !== "object") return null;
+      const asset = item as Record<string, unknown>;
+      const id = stringValue(asset.id);
+      if (!id) return null;
+      const kind = stringValue(asset.kind);
+      return {
+        id,
+        kind,
+        label:
+          stringValue(asset.ui_label) ??
+          stringValue(asset.name) ??
+          stringValue(asset.preset_kind) ??
+          kind ??
+          id,
+        textureTransformAvailable:
+          kind === "preset_texture" && Boolean(asset.texture_transform),
+      };
+    })
+    .filter((asset): asset is SceneMagnetizationAssetSnapshot =>
+      Boolean(asset),
+    );
+}
+
 function materialPropertyKeys(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.keys(value as Record<string, unknown>).sort();
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== null && entry !== undefined)
+    .map(([key]) => key)
+    .sort();
 }
 
 function scenePhysicsInteractions(
@@ -88,20 +142,93 @@ function scenePhysicsInteractions(
     }));
 }
 
-function sceneObjectSnapshot(value: unknown): ModelTreeObjectSnapshot | null {
+function sceneObjectSnapshot(
+  value: unknown,
+  materialById: ReadonlyMap<string, ModelTreeMaterialSnapshot>,
+  magnetizationById: ReadonlyMap<string, SceneMagnetizationAssetSnapshot>,
+): ModelTreeObjectSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const object = value as Record<string, unknown>;
   const id = stringValue(object.id);
   if (!id) return null;
+  const materialRef = stringValue(object.material_ref);
+  const material = materialRef ? materialById.get(materialRef) : undefined;
+  const magnetizationRef = stringValue(object.magnetization_ref);
+  const magnetization = magnetizationRef
+    ? magnetizationById.get(magnetizationRef)
+    : undefined;
 
   return {
     geometryKind: geometryKind(object.geometry),
     id,
     label: stringValue(object.name) ?? id,
-    magnetization: stringValue(object.magnetization_ref),
-    material: stringValue(object.material_ref),
+    magnetization: magnetizationRef,
+    magnetizationKind: magnetization?.kind,
+    magnetizationLabel: magnetization?.label,
+    material: materialRef,
+    materialLabel: material?.label ?? materialRef,
+    materialPropertyKeys: material?.propertyKeys,
     meshStatus: meshStatusFromTags(object.tags),
+    physicsInteractions: sceneObjectPhysicsInteractions(
+      object.physics_stack,
+      materialHasDind(material),
+    ),
+    region: stringValue(object.region_name),
+    textureTransformAvailable:
+      magnetization?.textureTransformAvailable ?? false,
   };
+}
+
+function sceneObjectPhysicsInteractions(
+  value: unknown,
+  materialDmiEnabled: boolean,
+): ModelTreePhysicsInteractionSnapshot[] {
+  const byKind = new Map<string, { enabledCount: number; objectCount: number }>();
+  byKind.set("exchange", { enabledCount: 1, objectCount: 1 });
+  byKind.set("demag", { enabledCount: 1, objectCount: 1 });
+  if (materialDmiEnabled) {
+    byKind.set("interfacial_dmi", { enabledCount: 1, objectCount: 1 });
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!item || typeof item !== "object") continue;
+      const interaction = item as Record<string, unknown>;
+      const kind = stringValue(interaction.kind);
+      if (!kind) continue;
+      byKind.set(kind, {
+        enabledCount: interaction.enabled === false ? 0 : 1,
+        objectCount: 1,
+      });
+    }
+  }
+
+  return interactionOrder
+    .filter((kind) => byKind.has(kind))
+    .map((kind) => {
+      const counts = byKind.get(kind)!;
+      return {
+        enabledCount: counts.enabledCount,
+        id: kind,
+        label: interactionLabel(kind),
+        objectCount: counts.objectCount,
+      };
+    });
+}
+
+const interactionOrder = [
+  "exchange",
+  "demag",
+  "interfacial_dmi",
+  "uniaxial_anisotropy",
+] as const;
+
+function materialHasDind(
+  material: ModelTreeMaterialSnapshot | undefined,
+): boolean {
+  return Boolean(
+    material?.propertyKeys.some((key) => key.toLowerCase() === "dind"),
+  );
 }
 
 function sceneUniverseSnapshot(value: unknown): ModelTreeSnapshot["universe"] {
@@ -140,6 +267,7 @@ function interactionLabel(kind: string): string {
   if (kind === "demag") return "Demagnetization";
   if (kind === "dmi") return "DMI";
   if (kind === "exchange") return "Exchange";
+  if (kind === "interfacial_dmi") return "Interfacial DMI";
   if (kind === "uniaxial_anisotropy") return "Uniaxial anisotropy";
 
   return kind

@@ -78,7 +78,9 @@ describe("viewport3dDomainAdapter", () => {
       displayCellBudget: 1000,
       displayCellCount: 1000,
       kind: "fdm-grid",
+      origin: [0, 0, 0],
       shape: [100, 100, 1],
+      spacing: [0.1, 0.1, 1],
       stride: 10,
       totalCells: 10000,
     });

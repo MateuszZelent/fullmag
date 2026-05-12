@@ -22,10 +22,13 @@ import {
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MATERIAL_PATH,
   MODEL_OBJECT_GEOMETRY_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_OBJECT_PATH,
   MODEL_OBJECTS_PATH,
+  MODEL_REGION_PATH,
+  MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_UNIVERSE_PATH,
@@ -50,6 +53,8 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   LiveStatusResource,
+  MaterialPatchRequest,
+  MaterialResource,
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshLastSuccessfulBuildResource,
@@ -67,6 +72,8 @@ import type {
   ObjectInteractionPatchRequest,
   ObjectInteractionResource,
   ObjectPatchRequest,
+  RegionListResource,
+  RegionPatchRequest,
   RequestOptions,
   SceneResource,
   StructuredCommandRequest,
@@ -368,6 +375,34 @@ export class ControlRoomApi {
         patch,
         options,
         { path: { object_id: objectId, interaction_kind: interactionKind } },
+      ),
+    material: (materialId: string, options?: RequestOptions) =>
+      this.requestJson<MaterialResource>(MODEL_MATERIAL_PATH, options, {
+        path: { material_id: materialId },
+      }),
+    patchMaterial: (
+      materialId: string,
+      patch: MaterialPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<MaterialResource, MaterialPatchRequest>(
+        MODEL_MATERIAL_PATH,
+        patch,
+        options,
+        { path: { material_id: materialId } },
+      ),
+    regions: (options?: RequestOptions) =>
+      this.requestJson<RegionListResource>(MODEL_REGIONS_PATH, options),
+    patchRegion: (
+      regionId: string,
+      patch: RegionPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<SceneResource, RegionPatchRequest>(
+        MODEL_REGION_PATH,
+        patch,
+        options,
+        { path: { region_id: regionId } },
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),

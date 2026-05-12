@@ -10,6 +10,9 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.geometry" ||
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
+      node.kind === "object.regions" ||
+      node.kind === "object.magnetic-parameters" ||
+      node.kind === "object.magnetic-texture" ||
       node.kind === "object.mesh" ||
       node.kind === "object.visualization")
   ) {

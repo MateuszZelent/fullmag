@@ -5,11 +5,14 @@ import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
   DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
+  hasVisualizationStatePatch,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
+  resolveEffectiveVisualizationSettings,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   type VisualizationRenderMode,
@@ -52,6 +55,10 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       ? resolveVisualizationSettings(snapshot, target, airboxBaseSettings)
       : visualization.getSettings(target)
     : null;
+  const effectiveSettings = settings
+    ? resolveEffectiveVisualizationSettings(settings)
+    : null;
+  const passControlsDisabled = pending || !settings?.visible;
   const revision =
     target?.kind === "airbox"
       ? visualizationState.revision ?? visualizationState.status
@@ -60,13 +67,21 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
     if (target.kind === "airbox") {
+      const localPatch =
+        airboxLocalVisualizationPatchFromTargetPatch(patchValue);
+      const statePatch = airboxVisualizationStatePatchFromTargetPatch(patchValue);
+      if (Object.keys(localPatch).length > 0) {
+        visualization.patchTarget(target, localPatch);
+      }
+      if (!hasVisualizationStatePatch(statePatch)) {
+        setFeedback(null);
+        return;
+      }
+
       setPending(true);
       try {
-        const next = await api.visualization.patch(
-          airboxVisualizationStatePatchFromTargetPatch(patchValue),
-        );
+        const next = await api.visualization.patch(statePatch);
         resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
-        visualization.patchTarget(target, patchValue);
         setFeedback(null);
       } catch (error) {
         setFeedback(error instanceof Error ? error.message : String(error));
@@ -132,28 +147,36 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
             onClick={() => void patch({ visible: !settings.visible })}
           />
           <ToggleButton
-            active={settings.shaderVisible}
-            disabled={pending}
+            active={effectiveSettings?.shaderVisible ?? false}
+            disabled={passControlsDisabled}
             label="Shader"
             onClick={() => void patch({ shaderVisible: !settings.shaderVisible })}
           />
           <ToggleButton
-            active={settings.wireframeVisible}
-            disabled={pending}
+            active={effectiveSettings?.wireframeVisible ?? false}
+            disabled={passControlsDisabled}
             label="Wireframe"
             onClick={() =>
               void patch({ wireframeVisible: !settings.wireframeVisible })
             }
           />
           <ToggleButton
-            active={settings.pointsVisible}
-            disabled={pending}
+            active={effectiveSettings?.boundsVisible ?? false}
+            disabled={passControlsDisabled}
+            label="Frame"
+            onClick={() =>
+              void patch({ boundsVisible: !settings.boundsVisible })
+            }
+          />
+          <ToggleButton
+            active={effectiveSettings?.pointsVisible ?? false}
+            disabled={passControlsDisabled}
             label="Points"
             onClick={() => void patch({ pointsVisible: !settings.pointsVisible })}
           />
           <ToggleButton
-            active={settings.vectorsVisible}
-            disabled={pending}
+            active={effectiveSettings?.vectorsVisible ?? false}
+            disabled={passControlsDisabled}
             label="Vectors"
             onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })}
           />
@@ -167,8 +190,12 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
               key={mode.value}
               size="sm"
               type="button"
-              disabled={pending}
-              variant={settings.renderMode === mode.value ? "primary" : "secondary"}
+              disabled={passControlsDisabled}
+              variant={
+                settings.visible && settings.renderMode === mode.value
+                  ? "primary"
+                  : "secondary"
+              }
               onClick={() => void patch(renderModePatch(mode.value))}
             >
               {mode.label}

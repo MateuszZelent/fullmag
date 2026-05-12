@@ -17,6 +17,7 @@ const colors = {
 };
 
 const visibleWireframeAirbox: VisualizationTargetSettings = {
+  boundsVisible: false,
   opacityPercent: 35,
   pointsVisible: false,
   renderMode: "wireframe",
@@ -61,6 +62,7 @@ describe("AirboxLayer", () => {
       topologyModel: airboxTopology(),
       tracker: {} as never,
       vectorColorMode: "orientation",
+      vectorStyle: {},
     });
 
     expect(isValidElement(element)).toBe(true);

@@ -8,6 +8,7 @@ import type { Camera } from "three";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import {
+  DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   viewport3dStore,
   type Viewport3DCameraState,
 } from "../viewport3dStore";
@@ -73,6 +74,20 @@ function applyCameraClipping(camera: Camera, near: number, far: number) {
   clippedCamera.far = far;
 }
 
+function sameVector(
+  left: [number, number, number],
+  right: [number, number, number],
+): boolean {
+  return left.every((value, index) => value === right[index]);
+}
+
+function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
+  return (
+    sameVector(cameraState.position, DEFAULT_VIEWPORT_3D_CAMERA_STATE.position) &&
+    sameVector(cameraState.target, DEFAULT_VIEWPORT_3D_CAMERA_STATE.target)
+  );
+}
+
 export function CameraController({
   bounds,
   cameraState,
@@ -102,10 +117,14 @@ export function CameraController({
   // Does NOT depend on cameraState to avoid the store write → re-render loop.
   useEffect(() => {
     const nextBoundsSignature = boundsSignature(bounds);
+    const shouldAutoFitInitialBounds =
+      nextBoundsSignature !== null &&
+      autoFittedBoundsRef.current === null &&
+      isDefaultCameraState(cameraStateRef.current);
     const shouldFit =
       handledFitRevisionRef.current !== fitRevision ||
       handledResetCameraRevisionRef.current !== resetCameraRevision ||
-      (nextBoundsSignature !== null && autoFittedBoundsRef.current === null);
+      shouldAutoFitInitialBounds;
     if (!shouldFit) return;
 
     const fit = resolveViewport3DCameraFit(bounds);

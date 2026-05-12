@@ -11,7 +11,7 @@ The explorer is the primary navigation and selection surface. It replaces scatte
 
 | Tab | Contents |
 |---|---|
-| `Model` | universe, objects, materials, physics interactions, mesh policies, studies |
+| `Model` | universe/airbox, ferromagnetic objects, per-object geometry, regions, magnetic parameters, magnetic texture, mesh policy, visualization, study |
 | `Resources` | live fields, meshes, quantities, scalar series, visualization resources |
 | `Results` | artifacts, completed runs, analysis datasets, exported files |
 | `Jobs` | active commands, runs, stages, queued work, failures |
@@ -75,10 +75,12 @@ Context menus render command registry entries whose `scope` and `selection` gate
 
 Examples:
 
-- object: rename, duplicate, assign material, isolate, focus in viewport, mesh settings;
+- object: rename, duplicate, assign material asset, isolate, focus in viewport, mesh settings;
+- object regions: edit object-derived region name/visibility and inspect material/magnetization refs;
+- object magnetic parameters: edit material assignment, material parameters, and interaction stack;
+- object magnetic texture: edit magnetization texture assignment and inspect mapping/transform;
 - object visualization: focus visualization inspector, clear per-object display overrides, copy/paste display style;
 - airbox visualization: focus airbox display inspector, reset airbox display, apply current view defaults;
-- material: edit, duplicate, assign to selection, show references;
 - mesh build: open report, rebuild, export mesh;
 - field: set as viewport quantity, add chart if scalar-compatible, export;
 - stage: run from here, disable, duplicate, inspect provenance.
@@ -128,18 +130,25 @@ The explorer does not own visibility or display style. It only exposes the node 
 
 ## 10. Geometry Object Nodes
 
-Scene objects come from the `model/scene` resource. The explorer must render object subtrees that can focus authoring, mesh, and visualization panels without creating another scene store:
+Scene objects come from the `model/scene` resource. A micromagnetic model is object-first: material parameters, regions, magnetization texture, mesh policy, and visualization are focused through the selected ferromagnetic object. Material and magnetization entries may remain reusable backend assets, but the Model explorer must not expose them as standalone primary branches.
+
+The explorer must render object subtrees that can focus authoring, mesh, and visualization panels without creating another scene store:
 
 ```text
 Objects
   <object name>
     Geometry
-    Material
-    Physics
+    Regions
+    Magnetic Parameters
+      Material: <asset>
+      Exchange
+      Demagnetization
+      <optional interactions>
+    Magnetic Texture
     Mesh
     Visualization
 ```
 
-The Geometry child focuses primitive dimensions and transform. The Mesh child focuses object mesh settings, build state, reports, and quality. Newly created objects should be selected immediately after the backend commits the create transaction, then shown as primitive-only or mesh-stale until meshing resources publish current topology.
+The Geometry child focuses primitive dimensions and transform. Regions focuses the object-derived region resource and future per-object region gradients. Magnetic Parameters owns material assignment, material scalar/tensor parameters, and object interaction stack. Magnetic Texture owns the object magnetization reference and texture mapping/transform inspection. The Mesh child focuses object mesh settings, build state, reports, and quality. Newly created objects should be selected immediately after the backend commits the create transaction, then shown as primitive-only or mesh-stale until meshing resources publish current topology.
 
 Object rows expose mesh/geometry badges derived from resources: primitive-only, mesh stale, mesh building, mesh ready, mesh failed, validation blocked. Deleting an object clears selection if the deleted object or one of its children was selected.

@@ -98,4 +98,30 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects object authoring child groups as scene-object selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer:magnetic-texture",
+      kind: "object.magnetic-texture",
+      label: "Magnetic Texture",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.magnetic-texture",
+      label: "Magnetic Texture",
+      nodeId: "model:object:free-layer:magnetic-texture",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.magnetic-texture",
+        objectId: "free-layer",
+        type: "scene-object",
+        visualizationTargetId: "object:free-layer",
+      },
+    });
+  });
 });

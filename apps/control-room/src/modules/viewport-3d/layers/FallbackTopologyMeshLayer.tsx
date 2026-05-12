@@ -19,6 +19,7 @@ import {
 import type { Viewport3DFieldRenderModel, Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { opacityFromSettings } from "./viewport3DLayerSettings";
 
 export function FallbackTopologyMeshLayer({
@@ -31,6 +32,7 @@ export function FallbackTopologyMeshLayer({
   onSelectPart,
   topologyModel,
   tracker,
+  vectorStyle,
 }: {
   colors: Viewport3DColors;
   vectorColorMode: string;
@@ -41,6 +43,7 @@ export function FallbackTopologyMeshLayer({
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   topologyModel: Viewport3DTopologyRenderModel | null;
   tracker: Viewport3DResourceTracker;
+  vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const geometry = useMemo(() => {
@@ -125,7 +128,8 @@ export function FallbackTopologyMeshLayer({
           <pointsMaterial
             color={colors.wire}
             opacity={opacityFromSettings(fallbackSettings)}
-            size={0.01}
+            sizeAttenuation={false}
+            size={3}
             transparent
           />
         </points>
@@ -136,6 +140,7 @@ export function FallbackTopologyMeshLayer({
           colorMode={vectorColorMode}
           opacity={opacityFromSettings(fallbackSettings)}
           segments={fieldModel?.fullVectorSegments ?? null}
+          style={vectorStyle}
           tracker={tracker}
         />
       ) : null}

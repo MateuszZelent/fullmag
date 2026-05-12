@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   HSL_REFERENCE_AXES,
   magnetizationHslRgb,
-  magnetizationHslRgbForSceneVector,
 } from "./magnetizationColor";
 
 function expectRgb(actual: [number, number, number], expected: [number, number, number]) {
@@ -34,7 +33,7 @@ describe("magnetization HSL color mapping", () => {
     expectRgb(magnetizationHslRgb(0, 0, 0), [0.6, 0.6, 0.6]);
   });
 
-  it("defines HSL reference axes with the v1 swapYZ scene convention", () => {
+  it("defines HSL reference axes in canonical physical XYZ", () => {
     expect(HSL_REFERENCE_AXES).toEqual([
       {
         color: [1, 0, 0],
@@ -43,25 +42,22 @@ describe("magnetization HSL color mapping", () => {
         label: "+X",
       },
       {
-        color: [0.3137254901960784, 0.5647058823529412, 0.9019607843137255],
+        color: [0.3137254901960784, 0.7843137254901961, 0.3137254901960784],
         direction: [0, 1, 0],
         id: "y",
-        label: "+Z",
+        label: "+Y",
       },
       {
-        color: [0.3137254901960784, 0.7843137254901961, 0.3137254901960784],
+        color: [0.3137254901960784, 0.5647058823529412, 0.9019607843137255],
         direction: [0, 0, 1],
         id: "z",
-        label: "+Y",
+        label: "+Z",
       },
     ]);
   });
 
-  it("samples HSL reference-sphere colors through the v1 swapYZ scene convention", () => {
-    expectRgb(magnetizationHslRgbForSceneVector(0, 1, 0), [1, 1, 1]);
-    expectRgb(
-      magnetizationHslRgbForSceneVector(0, 0, 1),
-      magnetizationHslRgb(0, 1, 0),
-    );
+  it("samples HSL reference-sphere colors in physical XYZ", () => {
+    expectRgb(magnetizationHslRgb(0, 0, 1), [1, 1, 1]);
+    expectRgb(magnetizationHslRgb(0, 1, 0), [0.25, 0.5, 0]);
   });
 });

@@ -7,7 +7,7 @@ interface ViewportGizmoStackProps {
   onRotate?: (quat: THREE.Quaternion) => void;
   onReset?: () => void;
   showOrientationSphere?: boolean;
-  orientationSphereAxisConvention?: "identity" | "swapYZ";
+  orientationSphereAxisConvention?: "identity";
   orientationSpherePositionClassName?: string;
   compact?: boolean;
   embedded?: boolean;

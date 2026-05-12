@@ -79,8 +79,11 @@ function renderNode(
           onCheckedChange={(checked) => {
             if (node.commandId) {
               onCommand?.(node.commandId);
+            } else if (node.onCheckedChange) {
+              node.onCheckedChange(Boolean(checked));
             } else {
-              node.onCheckedChange?.(Boolean(checked));
+              // Fall back to node.id as the command id — mirrors applyCommandStateToMenuNode.
+              onCommand?.(node.id);
             }
           }}
           onSelect={(event) => event.preventDefault()}

@@ -3,6 +3,7 @@
 import { Canvas } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, type ComponentProps } from "react";
 
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -125,8 +126,25 @@ export default function Viewport3DModule({
     visualizationState.data?.vector_style.color_mode ?? "orientation";
   const vectorLengthScale =
     visualizationState.data?.vector_style.length_scale ?? 1;
+  const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
+  const vectorStyle = useMemo(
+    () => ({
+      alpha: visualizationState.data?.vector_style.alpha ?? 1,
+      monoColor: visualizationState.data?.vector_style.mono_color ?? "#00c2ff",
+      thickness: visualizationState.data?.vector_style.thickness ?? 1,
+    }),
+    [
+      visualizationState.data?.vector_style.alpha,
+      visualizationState.data?.vector_style.mono_color,
+      visualizationState.data?.vector_style.thickness,
+    ],
+  );
   const maxVectorGlyphs = resolveViewport3DMaxVectorGlyphs(
     visualizationState.data,
+  );
+  const maxAirboxVectorGlyphs = resolveViewport3DAirboxMaxVectorGlyphs(
+    visualizationState.data,
+    maxVectorGlyphs,
   );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
@@ -224,8 +242,11 @@ export default function Viewport3DModule({
     airboxSettings,
     fallbackSettings,
     getPartSettings,
+    maxAirboxVectorGlyphs,
     maxVectorGlyphs,
     topologyRenderModel,
+    vectorColorMode,
+    vectorDomain,
   });
   const fieldRenderModel = useMemo(
     () =>
@@ -357,6 +378,7 @@ export default function Viewport3DModule({
       diagnostics={diagnostics}
       domainSummary={domainSummary}
       fallbackSettings={fallbackSettings}
+      fdmDomain={fdmDomain}
       femDomain={femDomain}
       fieldModel={fieldRenderModel}
       fitRevision={commandState.fitRevision}
@@ -379,6 +401,7 @@ export default function Viewport3DModule({
       topologyModel={topologyRenderModel}
       tracker={tracker}
       vectorColorMode={vectorColorMode}
+      vectorStyle={vectorStyle}
       viewCubeVisible={commandState.widgets.viewCubeVisible}
     />
   );
@@ -388,14 +411,20 @@ function useViewport3DFieldRenderOptions({
   airboxSettings,
   fallbackSettings,
   getPartSettings,
+  maxAirboxVectorGlyphs,
   maxVectorGlyphs,
   topologyRenderModel,
+  vectorColorMode,
+  vectorDomain,
 }: {
   airboxSettings: VisualizationTargetSettings;
   fallbackSettings: VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  maxAirboxVectorGlyphs: number;
   maxVectorGlyphs: number;
   topologyRenderModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  vectorColorMode: string;
+  vectorDomain: string;
 }): Viewport3DFieldRenderOptions {
   return useMemo(() => {
     if (!topologyRenderModel) {
@@ -407,17 +436,26 @@ function useViewport3DFieldRenderOptions({
     }
 
     const fullVectorTargetId = "__full__";
-    const vectorTargets: Viewport3DVectorBudgetTarget[] = [];
+    const magneticVectorTargets: Viewport3DVectorBudgetTarget[] = [];
+    const airboxVectorTargets: Viewport3DVectorBudgetTarget[] = [];
     let scalarColorsVisible = false;
+    const magneticVectorsAllowed = vectorDomain !== "airbox_only";
+    const airboxVectorsAllowed =
+      vectorDomain !== "magnetic_only" &&
+      vectorDomain !== "object" &&
+      vectorDomain !== "part";
 
     if (topologyRenderModel.magneticParts.length > 0) {
       for (const partModel of topologyRenderModel.magneticParts) {
         const settings = getPartSettings(partModel.part);
-        const visible = settings.visible && settings.vectorsVisible;
+        const visible =
+          magneticVectorsAllowed &&
+          settings.visible &&
+          settings.vectorsVisible;
         if (settings.visible && settings.shaderVisible) {
           scalarColorsVisible = true;
         }
-        vectorTargets.push({
+        magneticVectorTargets.push({
           id: partModel.part.id,
           nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
           visible,
@@ -426,32 +464,43 @@ function useViewport3DFieldRenderOptions({
     } else {
       scalarColorsVisible =
         fallbackSettings.visible && fallbackSettings.shaderVisible;
-      vectorTargets.push({
+      magneticVectorTargets.push({
         id: fullVectorTargetId,
         nodeCount: topologyRenderModel.nodeCount,
-        visible: fallbackSettings.visible && fallbackSettings.vectorsVisible,
+        visible:
+          magneticVectorsAllowed &&
+          fallbackSettings.visible &&
+          fallbackSettings.vectorsVisible,
       });
     }
 
     for (const partModel of topologyRenderModel.airboxParts) {
-      vectorTargets.push({
+      airboxVectorTargets.push({
         id: partModel.part.id,
         nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
-        visible: airboxSettings.visible && airboxSettings.vectorsVisible,
+        visible:
+          airboxVectorsAllowed &&
+          airboxSettings.visible &&
+          airboxSettings.vectorsVisible,
       });
     }
 
-    const budgets = distributeVectorGlyphBudget(
-      vectorTargets,
+    const magneticBudgets = distributeVectorGlyphBudget(
+      magneticVectorTargets,
       maxVectorGlyphs,
     );
-    const fullVectorBudget = budgets.get(fullVectorTargetId) ?? 0;
-    budgets.delete(fullVectorTargetId);
+    const airboxBudgets = distributeVectorGlyphBudget(
+      airboxVectorTargets,
+      maxAirboxVectorGlyphs,
+    );
+    const fullVectorBudget = magneticBudgets.get(fullVectorTargetId) ?? 0;
+    magneticBudgets.delete(fullVectorTargetId);
 
     return {
       fullVectorBudget,
-      partVectorBudgets: budgets,
+      partVectorBudgets: new Map([...magneticBudgets, ...airboxBudgets]),
       scalarColorsVisible,
+      vectorColorMode,
     };
   }, [
     airboxSettings.vectorsVisible,
@@ -460,9 +509,20 @@ function useViewport3DFieldRenderOptions({
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,
+    maxAirboxVectorGlyphs,
     maxVectorGlyphs,
     topologyRenderModel,
+    vectorColorMode,
+    vectorDomain,
   ]);
+}
+
+function resolveViewport3DAirboxMaxVectorGlyphs(
+  state: VisualizationStateResource | null | undefined,
+  fallback: number,
+): number {
+  const density = state?.layers?.airbox?.vectors?.density ?? fallback;
+  return Math.max(0, Math.floor(density));
 }
 
 function Viewport3DFrame({
@@ -478,10 +538,15 @@ function Viewport3DFrame({
   status,
   ...sceneProps
 }: Viewport3DFrameProps) {
+  const primitiveObjectIds =
+    sceneProps.primitiveModel?.objects.map((object) => object.objectId).join(" ") ??
+    "";
   return (
     <section
       aria-label="3D viewport"
       className="fm-viewport-3d"
+      data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
+      data-primitive-object-ids={primitiveObjectIds}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">

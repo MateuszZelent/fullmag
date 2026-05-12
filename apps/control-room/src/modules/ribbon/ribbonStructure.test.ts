@@ -103,12 +103,28 @@ describe("ribbon structure", () => {
     const visibilityNode = renderAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "selected:visible",
     );
+    const frameNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:frame",
+    );
 
     expect(renderAction?.disabled).toBe(false);
     expect(visibilityNode).toMatchObject({
       checked: true,
       disabled: false,
     });
+    expect(frameNode).toMatchObject({
+      checked: false,
+      disabled: false,
+    });
+
+    if (frameNode?.type !== "checkbox") {
+      throw new Error("Expected selected frame checkbox control");
+    }
+
+    frameNode.onCheckedChange?.(true);
+
+    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+      .toMatchObject({ boundsVisible: true });
   });
 
   it("wires the global Airbox ribbon menu to the airbox visualization target", () => {
@@ -156,6 +172,298 @@ describe("ribbon structure", () => {
       vectorsVisible: true,
       visible: false,
     });
+  });
+
+  it("patches canonical visualization state from global Airbox controls", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        layers: {
+          airbox: {
+            opacity: 0.28,
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: false },
+            vectors: { density: 128, domain: "airbox_only", visible: false },
+            visible: true,
+            wireframe: { opacity: 1, visible: true },
+          },
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", context);
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const visibleNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:visible",
+    );
+    const vectorsNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:vectors",
+    );
+
+    expect(visibleNode).toMatchObject({ checked: true });
+    expect(vectorsNode).toMatchObject({ checked: false });
+    if (visibleNode?.type !== "checkbox" || vectorsNode?.type !== "checkbox") {
+      throw new Error("Expected airbox checkbox controls");
+    }
+
+    visibleNode.onCheckedChange?.(false);
+    vectorsNode.onCheckedChange?.(true);
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            visible: false,
+          },
+        },
+      },
+      {
+        layers: {
+          airbox: {
+            vectors: {
+              domain: "airbox_only",
+              visible: true,
+            },
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([
+        [VISUALIZATION_STATE_PATH, 41],
+        [VISUALIZATION_STATE_PATH, 42],
+      ]),
+    );
+  });
+
+  it("patches airbox vector controls through canonical visualization state", () => {
+    const { context, patches } = createVisualizationRibbonContext({
+      layers: {
+        airbox: {
+          opacity: 0.28,
+          points: { opacity: 1, visible: false },
+          surface: { opacity: 1, visible: false },
+          vectors: { density: 128, domain: "airbox_only", visible: true },
+          visible: true,
+          wireframe: { opacity: 1, visible: true },
+        },
+      },
+      vector_style: {
+        alpha: 0.9,
+        color_mode: "orientation",
+        length_scale: 1,
+        thickness: 1,
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const vectorSizeNode = airboxAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "airbox:vectors-submenu",
+    );
+    const vectorColorsNode = airboxAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "airbox:vector-colors",
+    );
+
+    if (vectorSizeNode?.type !== "submenu" || vectorColorsNode?.type !== "submenu") {
+      throw new Error("Expected airbox vector submenus");
+    }
+
+    const densityNode = vectorSizeNode.nodes.find(
+      (node) => node.type === "slider" && node.id === "airbox:vectors-density",
+    );
+    const thicknessNode = vectorSizeNode.nodes.find(
+      (node) => node.type === "slider" && node.id === "airbox:vectors-thickness",
+    );
+    const coloringNode = vectorColorsNode.nodes.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:vector-coloring",
+    );
+
+    expect(densityNode).toMatchObject({ value: 128 });
+    expect(thicknessNode).toMatchObject({ value: 1 });
+    expect(coloringNode).toMatchObject({ value: "orientation" });
+
+    if (
+      densityNode?.type !== "slider" ||
+      thicknessNode?.type !== "slider" ||
+      coloringNode?.type !== "radio-group"
+    ) {
+      throw new Error("Expected airbox vector controls");
+    }
+
+    densityNode.onValueChange?.(256);
+    thicknessNode.onValueChange?.(1.6);
+    coloringNode.onValueChange?.("x");
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            vectors: {
+              density: 256,
+              domain: "airbox_only",
+            },
+          },
+        },
+      },
+      {
+        vector_style: { thickness: 1.6 },
+      },
+      {
+        vector_style: { color_mode: "x" },
+      },
+    ]);
+  });
+
+  it("keeps selected airbox display controls synchronized with canonical state", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        layers: {
+          airbox: {
+            opacity: 0.28,
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: false },
+            vectors: { density: 128, domain: "airbox_only", visible: false },
+            visible: false,
+            wireframe: { opacity: 1, visible: true },
+          },
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection: {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        moduleSource: "test",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: null,
+      },
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const renderAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-render",
+    );
+    const visibleNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:visible",
+    );
+    const frameNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:frame",
+    );
+    const wireframeNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:wireframe",
+    );
+
+    expect(visibleNode).toMatchObject({ checked: false });
+    expect(frameNode).toMatchObject({ checked: false });
+    expect(wireframeNode).toMatchObject({
+      checked: false,
+      disabled: true,
+    });
+
+    if (
+      visibleNode?.type !== "checkbox" ||
+      frameNode?.type !== "checkbox" ||
+      wireframeNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected selected airbox display controls");
+    }
+
+    visibleNode.onCheckedChange?.(true);
+    frameNode.onCheckedChange?.(true);
+
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            visible: true,
+          },
+        },
+      },
+    ]);
+    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
+      .toMatchObject({ boundsVisible: true });
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("shows hidden airbox pass controls as inactive in the global View menu", () => {
+    const { context } = createVisualizationRibbonContext({
+      layers: {
+        airbox: {
+          opacity: 0.28,
+          points: { opacity: 1, visible: true },
+          surface: { opacity: 1, visible: true },
+          vectors: { density: 128, domain: "airbox_only", visible: true },
+          visible: false,
+          wireframe: { opacity: 1, visible: true },
+        },
+      },
+    });
+    const content = buildRibbonTabContent("view", context);
+    const airboxAction = content?.groups
+      .find((group) => group.id === "view-global-display")
+      ?.actions.find((action) => action.id === "view-airbox");
+    const visibleNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:visible",
+    );
+    const wireframeNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:wireframe",
+    );
+    const shadedNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:shaded",
+    );
+    const vectorsNode = airboxAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "airbox:vectors",
+    );
+
+    expect(visibleNode).toMatchObject({ checked: false, disabled: false });
+    expect(wireframeNode).toMatchObject({ checked: false, disabled: true });
+    expect(shadedNode).toMatchObject({ checked: false, disabled: true });
+    expect(vectorsNode).toMatchObject({ checked: false, disabled: true });
+  });
+
+  it("wires the global Frame ribbon menu to object and part display defaults", () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const frameAction = content?.groups
+      .find((group) => group.id === "view-display")
+      ?.actions.find((action) => action.id === "view-dimension-frame");
+    const frameNode = frameAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "frame:object-bounds",
+    );
+
+    expect(frameNode).toMatchObject({
+      checked: false,
+      disabled: false,
+    });
+
+    if (frameNode?.type !== "checkbox") {
+      throw new Error("Expected object frame checkbox control");
+    }
+
+    frameNode.onCheckedChange?.(true);
+
+    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+      .toMatchObject({ boundsVisible: true });
+    expect(visualization.getSettings({ id: "part-a", kind: "part" }))
+      .toMatchObject({ boundsVisible: true });
   });
 
   it("focuses the airbox ribbon action by selecting the airbox visualization node", () => {

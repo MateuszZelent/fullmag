@@ -20,7 +20,9 @@ export interface FdmGridRenderDomain {
   displayCellBudget: number;
   displayCellCount: number;
   kind: "fdm-grid";
+  origin: [number, number, number];
   shape: [number, number, number];
+  spacing: [number, number, number];
   stride: number;
   totalCells: number;
 }
@@ -53,6 +55,25 @@ export function adaptFdmDomainMeta(
     Math.max(meta.grid.shape[1] ?? 1, 1),
     Math.max(meta.grid.shape[2] ?? 1, 1),
   ];
+  const bounds = resolveDomainBounds(meta);
+  const fallbackSize = bounds?.size ?? [1, 1, 1];
+  const fallbackOrigin: [number, number, number] = bounds
+    ? [
+        bounds.center[0] - fallbackSize[0] / 2,
+        bounds.center[1] - fallbackSize[1] / 2,
+        bounds.center[2] - fallbackSize[2] / 2,
+      ]
+    : [0, 0, 0];
+  const origin: [number, number, number] = [
+    meta.grid.origin[0] ?? fallbackOrigin[0],
+    meta.grid.origin[1] ?? fallbackOrigin[1],
+    meta.grid.origin[2] ?? fallbackOrigin[2],
+  ];
+  const spacing: [number, number, number] = [
+    Math.max(meta.grid.spacing[0] ?? fallbackSize[0] / shape[0], 1e-18),
+    Math.max(meta.grid.spacing[1] ?? fallbackSize[1] / shape[1], 1e-18),
+    Math.max(meta.grid.spacing[2] ?? fallbackSize[2] / shape[2], 1e-18),
+  ];
   const totalCells = Math.max(
     meta.counts.cells ?? shape[0] * shape[1] * shape[2],
     0,
@@ -61,11 +82,13 @@ export function adaptFdmDomainMeta(
   const displayCellCount = totalCells === 0 ? 0 : Math.min(totalCells, safeBudget);
 
   return {
-    bounds: resolveDomainBounds(meta),
+    bounds,
     displayCellBudget: safeBudget,
     displayCellCount,
     kind: "fdm-grid",
+    origin,
     shape,
+    spacing,
     stride:
       displayCellCount === 0
         ? 1

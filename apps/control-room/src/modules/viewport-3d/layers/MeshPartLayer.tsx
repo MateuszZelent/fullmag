@@ -7,6 +7,7 @@ import { BufferAttribute, BufferGeometry } from "three";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  resolveMeshPartBounds,
   selectionForMeshPart,
   type Viewport3DMeshPart,
   type Viewport3DPartSelection,
@@ -22,7 +23,9 @@ import type {
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { BoundsBox } from "./BoundsLayers";
 import { VectorFieldLayer } from "./VectorFieldLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { opacityFromSettings } from "./viewport3DLayerSettings";
 
 export function MeshPartLayer({
@@ -34,6 +37,7 @@ export function MeshPartLayer({
   settings,
   topologyModel,
   tracker,
+  vectorStyle,
 }: {
   colors: Viewport3DColors;
   vectorColorMode: string;
@@ -43,6 +47,7 @@ export function MeshPartLayer({
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
   tracker: Viewport3DResourceTracker;
+  vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const geometry = useMemo(() => {
@@ -107,12 +112,20 @@ export function MeshPartLayer({
           />
         </mesh>
       ) : null}
+      {settings.boundsVisible ? (
+        <BoundsBox
+          bounds={resolveMeshPartBounds(part)}
+          color={colors.accent}
+          opacity={Math.max(opacityFromSettings(settings), 0.35)}
+        />
+      ) : null}
       {settings.pointsVisible ? (
         <points geometry={geometry}>
           <pointsMaterial
             color={colors.wire}
             opacity={opacityFromSettings(settings)}
-            size={0.01}
+            sizeAttenuation={false}
+            size={3}
             transparent
           />
         </points>
@@ -123,6 +136,7 @@ export function MeshPartLayer({
           colorMode={vectorColorMode}
           opacity={opacityFromSettings(settings)}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
+          style={vectorStyle}
           tracker={tracker}
         />
       ) : null}

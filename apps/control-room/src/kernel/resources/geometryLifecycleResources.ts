@@ -10,16 +10,19 @@ import {
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_UNIVERSE_POLICY_PATH,
+  MODEL_MATERIAL_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type {
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
+  MaterialResource,
   ObjectInteractionKind,
   ObjectInteractionResource,
   MeshActiveBuildResource,
@@ -28,6 +31,7 @@ import type {
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshUniverseConfigResource,
+  RegionListResource,
   ResourceRevision,
   SceneResource,
 } from "../api/apiTypes";
@@ -57,6 +61,7 @@ export const MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY =
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH;
 export const MESH_UNIVERSE_POLICY_RESOURCE_KEY =
   MESHING_UNIVERSE_POLICY_PATH;
+export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
 
 export function resolveObjectTopologyResourceKey(objectId: string): string {
   return MESHING_OBJECT_TOPOLOGY_PATH.replace(
@@ -94,6 +99,13 @@ export function resolveObjectInteractionResourceKey(
     "{object_id}",
     encodeURIComponent(objectId),
   ).replace("{interaction_kind}", interactionKind);
+}
+
+export function resolveMaterialResourceKey(materialId: string): string {
+  return MODEL_MATERIAL_PATH.replace(
+    "{material_id}",
+    encodeURIComponent(materialId),
+  );
 }
 
 export function resolveSceneResourceRevision(
@@ -167,6 +179,41 @@ export function useGeometryValidationResource() {
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: GEOMETRY_VALIDATION_RESOURCE_KEY,
+  });
+}
+
+export function useMaterialResource(materialId: string | null | undefined) {
+  const { api } = useKernel();
+  const resourceKey = materialId
+    ? resolveMaterialResourceKey(materialId)
+    : MODEL_MATERIAL_PATH;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!materialId) return Promise.resolve(null);
+      return api.model.material(materialId, { signal });
+    },
+    [api, materialId],
+  );
+
+  return useResource<MaterialResource | null>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey,
+  });
+}
+
+export function useModelRegionsResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.model.regions({ signal }),
+    [api],
+  );
+
+  return useResource<RegionListResource>({
+    load,
+    resolveRevision: (data) =>
+      data?.scene_revision ?? data?.geometry_realization_revision ?? null,
+    resourceKey: MODEL_REGIONS_RESOURCE_KEY,
   });
 }
 

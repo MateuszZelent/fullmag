@@ -5,6 +5,9 @@ export type ObjectSelectionKind =
   | "object.geometry"
   | "object.material"
   | "object.physics"
+  | "object.regions"
+  | "object.magnetic-parameters"
+  | "object.magnetic-texture"
   | "object.mesh"
   | "object.visualization";
 

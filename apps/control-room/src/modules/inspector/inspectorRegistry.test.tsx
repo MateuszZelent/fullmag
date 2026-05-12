@@ -22,6 +22,18 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
       "object-material",
     );
+    expect(resolveInspectorPanel({ kind: "object.magnetic-parameters" })?.id).toBe(
+      "object-material",
+    );
+  });
+
+  it("resolves object region and magnetic texture groups", () => {
+    expect(resolveInspectorPanel({ kind: "object.regions" })?.id).toBe(
+      "object-regions",
+    );
+    expect(resolveInspectorPanel({ kind: "object.magnetic-texture" })?.id).toBe(
+      "object-magnetic-texture",
+    );
   });
 
   it("resolves object mesh selections to the object mesh policy panel", () => {

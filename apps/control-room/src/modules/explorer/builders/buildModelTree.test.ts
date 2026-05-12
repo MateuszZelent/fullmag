@@ -24,7 +24,17 @@ describe("buildModelTree", () => {
           label: "Free layer",
           geometryKind: "thin film",
           material: "Permalloy",
+          materialLabel: "Free layer material",
+          materialPropertyKeys: ["Aex", "Ms", "alpha"],
           meshStatus: "stale",
+          physicsInteractions: [
+            {
+              enabledCount: 1,
+              id: "uniaxial_anisotropy",
+              label: "Uniaxial anisotropy",
+              objectCount: 1,
+            },
+          ],
         },
       ],
       physicsInteractions: [
@@ -46,16 +56,19 @@ describe("buildModelTree", () => {
         "model:objects",
         "model:object:free-layer",
         "model:object:free-layer:geometry",
-        "model:object:free-layer:material",
-        "model:object:free-layer:physics",
+        "model:object:free-layer:regions",
+        "model:object:free-layer:regions:primary",
+        "model:object:free-layer:magnetic-parameters",
+        "model:object:free-layer:magnetic-parameters:material",
+        "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
+        "model:object:free-layer:magnetic-texture",
+        "model:object:free-layer:magnetic-texture:asset",
         "model:object:free-layer:mesh",
         "model:object:free-layer:visualization",
         "model:airbox:mesh",
         "model:airbox:visualization",
-        "model:materials",
-        "model:material:mat:free-layer",
-        "model:physics",
-        "model:physics:uniaxial_anisotropy",
+        "model:mesh",
+        "model:study",
       ]),
     );
     expect(
@@ -70,7 +83,21 @@ describe("buildModelTree", () => {
         {
           id: "mat-1",
           name: "Material 1",
-          properties: { Aex: 1e-11, Ms: 800000, alpha: 0.02 },
+          properties: { Aex: 1e-11, Dind: 0.001, Ms: 800000, alpha: 0.02 },
+        },
+      ],
+      magnetization_assets: [
+        {
+          id: "mag-1",
+          kind: "preset_texture",
+          preset_kind: "vortex",
+          texture_transform: {
+            pivot: [0, 0, 0],
+            rotation_quat: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            translation: [0, 0, 0],
+          },
+          ui_label: "Vortex texture",
         },
       ],
       objects: [
@@ -80,6 +107,7 @@ describe("buildModelTree", () => {
             geometry_params: { size: [1, 2, 3] },
           },
           id: "box-1",
+          magnetization_ref: "mag-1",
           material_ref: "mat-1",
           name: "Box 1",
           physics_stack: [
@@ -104,24 +132,52 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:box-1:mesh")?.badge,
     ).toBe("mesh stale");
     expect(
-      flattened.find((node) => node.id === "model:object:box-1:physics")
+      flattened.find((node) => node.id === "model:object:box-1:magnetic-parameters")
         ?.label,
-    ).toBe("Physics");
-    expect(flattened.find((node) => node.id === "model:materials")?.badge).toBe(
-      "1",
-    );
+    ).toBe("Magnetic Parameters");
     expect(
-      flattened.find((node) => node.id === "model:material:mat-1")?.label,
-    ).toBe("Material 1");
-    expect(flattened.find((node) => node.id === "model:physics")?.badge).toBe(
-      "2",
-    );
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-parameters:material",
+      )?.label,
+    ).toBe("Material: Material 1");
     expect(
-      flattened.find((node) => node.id === "model:physics:exchange")?.badge,
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-parameters:material",
+      )?.badge,
+    ).toBe("Aex, Dind, Ms");
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:box-1:magnetic-parameters:interfacial_dmi",
+      )?.badge,
     ).toBe("active");
     expect(
-      flattened.find((node) => node.id === "model:physics:demag")?.badge,
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-parameters:exchange",
+      )?.badge,
+    ).toBe("active");
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-parameters:demag",
+      )?.badge,
     ).toBe("disabled");
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:materials",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain("model:physics");
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture",
+      )?.badge,
+    ).toBe("preset_texture");
+    expect(
+      flattened.find(
+        (node) => node.id === "model:object:box-1:magnetic-texture:asset",
+      )?.label,
+    ).toBe("Vortex texture");
+    expect(flattened.map((node) => node.id)).toContain(
+      "model:object:box-1:magnetic-texture:transform",
+    );
     expect(
       flattened.find((node) => node.id === "model:object:box-1")
         ?.contextCommands,

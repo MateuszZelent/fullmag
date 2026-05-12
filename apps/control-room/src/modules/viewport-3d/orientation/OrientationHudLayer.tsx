@@ -27,7 +27,7 @@ import {
 import { resolveOrientationHudAnchors } from "./hudLayout";
 import {
   HSL_REFERENCE_AXES,
-  magnetizationHslRgbForSceneVector,
+  magnetizationHslRgb,
 } from "./magnetizationColor";
 import {
   buildViewCubeFaces,
@@ -88,22 +88,22 @@ const VIEW_CUBE_FACE_PLACEMENTS: Record<ViewCubeFaceModel["id"], {
     rotation: [0, -Math.PI / 2, 0],
   },
   top: {
-    accent: VIEW_CUBE_AXIS_COLORS.z,
+    accent: VIEW_CUBE_AXIS_COLORS.y,
     position: [0, VIEW_CUBE_HALF, 0],
     rotation: [-Math.PI / 2, 0, 0],
   },
   bottom: {
-    accent: VIEW_CUBE_AXIS_COLORS.z,
+    accent: VIEW_CUBE_AXIS_COLORS.y,
     position: [0, -VIEW_CUBE_HALF, 0],
     rotation: [Math.PI / 2, 0, 0],
   },
   front: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
+    accent: VIEW_CUBE_AXIS_COLORS.z,
     position: [0, 0, VIEW_CUBE_HALF],
     rotation: [0, 0, 0],
   },
   back: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
+    accent: VIEW_CUBE_AXIS_COLORS.z,
     position: [0, 0, -VIEW_CUBE_HALF],
     rotation: [0, Math.PI, 0],
   },
@@ -200,7 +200,8 @@ function ScreenAnchoredGroup({
 
   useEffect(() => {
     invalidate();
-  }, [invalidate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useFrame(() => {
     const group = ref.current;
@@ -296,7 +297,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={VIEW_CUBE_AXIS_COLORS.z}
+        color={VIEW_CUBE_AXIS_COLORS.y}
         label={trimPositiveAxisLabel(axisLabels.y)}
         outlineColor={String(colors.background)}
         position={[0, VIEW_CUBE_LABEL_DISTANCE, 0]}
@@ -304,7 +305,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={VIEW_CUBE_AXIS_COLORS.y}
+        color={VIEW_CUBE_AXIS_COLORS.z}
         label={trimPositiveAxisLabel(axisLabels.z)}
         outlineColor={String(colors.background)}
         position={[0, 0, VIEW_CUBE_LABEL_DISTANCE]}
@@ -677,7 +678,7 @@ function buildHslSphereGeometry(): BufferGeometry {
   const colors = new Float32Array(position.count * 3);
 
   for (let index = 0; index < position.count; index += 1) {
-    const [red, green, blue] = magnetizationHslRgbForSceneVector(
+    const [red, green, blue] = magnetizationHslRgb(
       position.getX(index),
       position.getY(index),
       position.getZ(index),
@@ -778,7 +779,9 @@ function updateScreenAnchor(
   anchor: readonly [number, number, number],
   vectors: AnchorVectors,
 ): number {
-  const distance = Math.max(WIDGET_CAMERA_DISTANCE, cameraNear(camera) + 0.1);
+  const near = cameraNear(camera);
+  const far = cameraFar(camera);
+  const distance = Math.min(far * 0.99, Math.max(WIDGET_CAMERA_DISTANCE, near * 10));
   const worldHeight = visibleWorldHeight(camera, distance);
   const worldWidth = worldHeight * (size.width / Math.max(size.height, 1));
   const worldPerPixel = worldHeight / Math.max(size.height, 1);
@@ -799,6 +802,11 @@ function updateScreenAnchor(
 function cameraNear(camera: Camera): number {
   const near = (camera as { near?: unknown }).near;
   return typeof near === "number" ? near : 0.1;
+}
+
+function cameraFar(camera: Camera): number {
+  const far = (camera as { far?: unknown }).far;
+  return typeof far === "number" ? far : 1000;
 }
 
 function visibleWorldHeight(camera: Camera, distance: number): number {

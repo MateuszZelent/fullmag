@@ -22,6 +22,12 @@ export interface RibbonAction {
   menu?: RibbonMenuNode[];
   /** CSS color applied to the icon only (not label). Ignored when button is active. */
   iconColor?: string;
+  /**
+   * When true the button behaves as a split-button: clicking the body runs the command
+   * and clicking the chevron opens the dropdown. When false/undefined (default) the
+   * entire button area opens the dropdown.
+   */
+  splitButton?: boolean;
 }
 
 export interface RibbonGroup {

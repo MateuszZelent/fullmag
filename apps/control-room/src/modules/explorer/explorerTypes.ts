@@ -15,14 +15,13 @@ export type ExplorerNodeKind =
   | "object.geometry"
   | "object.material"
   | "object.physics"
+  | "object.regions"
+  | "object.magnetic-parameters"
+  | "object.magnetic-texture"
   | "object.mesh"
   | "object.visualization"
   | "airbox.mesh"
   | "airbox.visualization"
-  | "materials.root"
-  | "material.entry"
-  | "physics.root"
-  | "physics.interaction"
   | "mesh.root"
   | "study.root"
   | "study.stage.relax"
@@ -88,8 +87,15 @@ export interface ModelTreeObjectSnapshot {
   label: string;
   geometryKind?: string | null;
   magnetization?: string | null;
+  magnetizationKind?: string | null;
+  magnetizationLabel?: string | null;
   material?: string | null;
+  materialLabel?: string | null;
+  materialPropertyKeys?: readonly string[];
   meshStatus?: ExplorerNodeStatus;
+  physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
+  region?: string | null;
+  textureTransformAvailable?: boolean;
 }
 
 export interface ModelTreeMaterialSnapshot {

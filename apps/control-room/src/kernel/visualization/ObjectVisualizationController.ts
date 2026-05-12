@@ -18,6 +18,7 @@ export interface VisualizationTargetRef {
 }
 
 export interface VisualizationTargetSettings {
+  boundsVisible: boolean;
   opacityPercent: number;
   pointsVisible: boolean;
   renderMode: VisualizationRenderMode;
@@ -30,6 +31,7 @@ export interface VisualizationTargetSettings {
 export type VisualizationTargetPatch = Partial<VisualizationTargetSettings>;
 
 export interface ObjectVisualizationSnapshot {
+  defaults: Partial<Record<VisualizationTargetKind, VisualizationTargetPatch>>;
   overrides: Record<string, VisualizationTargetPatch>;
   version: number;
 }
@@ -49,6 +51,7 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
 };
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
+  boundsVisible: false,
   opacityPercent: 55,
   pointsVisible: false,
   renderMode: "surface+edges",
@@ -59,6 +62,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 };
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
+  boundsVisible: false,
   opacityPercent: 28,
   pointsVisible: false,
   renderMode: "wireframe",
@@ -75,12 +79,25 @@ const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
 };
 
 export class ObjectVisualizationController {
+  private readonly defaults = new Map<
+    VisualizationTargetKind,
+    VisualizationTargetPatch
+  >();
   private readonly listeners = new Set<ObjectVisualizationListener>();
   private readonly overrides = new Map<string, VisualizationTargetPatch>();
   private snapshot: ObjectVisualizationSnapshot = {
+    defaults: {},
     overrides: {},
     version: 0,
   };
+
+  clearDefaults(kind: VisualizationTargetKind): void {
+    if (!this.defaults.delete(kind)) {
+      return;
+    }
+
+    this.bump();
+  }
 
   clearTarget(target: VisualizationTargetRef): void {
     if (!this.overrides.delete(visualizationTargetKey(target))) {
@@ -88,6 +105,17 @@ export class ObjectVisualizationController {
     }
 
     this.bump();
+  }
+
+  getDefaultSettings(
+    kind: VisualizationTargetKind,
+    baseSettings?: VisualizationTargetSettings,
+  ): VisualizationTargetSettings {
+    return resolveDefaultVisualizationSettings(
+      this.snapshot,
+      kind,
+      baseSettings,
+    );
   }
 
   getSettings(target: VisualizationTargetRef): VisualizationTargetSettings {
@@ -117,6 +145,24 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  patchDefaults(
+    kind: VisualizationTargetKind,
+    patch: VisualizationTargetPatch,
+  ): void {
+    const current = this.defaults.get(kind) ?? {};
+    const next = normalizePatch({
+      ...current,
+      ...patch,
+    });
+
+    if (samePatch(current, next)) {
+      return;
+    }
+
+    this.defaults.set(kind, next);
+    this.bump();
+  }
+
   subscribe(listener: ObjectVisualizationListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -124,6 +170,7 @@ export class ObjectVisualizationController {
 
   private bump(): void {
     this.snapshot = {
+      defaults: Object.fromEntries(this.defaults),
       overrides: Object.fromEntries(this.overrides),
       version: this.snapshot.version + 1,
     };
@@ -191,8 +238,37 @@ export function resolveVisualizationSettings(
   baseSettings?: VisualizationTargetSettings,
 ): VisualizationTargetSettings {
   return normalizeVisualizationSettings({
-    ...(baseSettings ?? defaultVisualizationSettings(target.kind)),
+    ...resolveDefaultVisualizationSettings(snapshot, target.kind, baseSettings),
     ...(snapshot.overrides[visualizationTargetKey(target)] ?? {}),
+  });
+}
+
+export function resolveEffectiveVisualizationSettings(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  if (settings.visible) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    boundsVisible: false,
+    pointsVisible: false,
+    shaderVisible: false,
+    vectorsVisible: false,
+    wireframeVisible: false,
+  };
+}
+
+export function resolveDefaultVisualizationSettings(
+  snapshot: ObjectVisualizationSnapshot,
+  kind: VisualizationTargetKind,
+  baseSettings?: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  return normalizeVisualizationSettings({
+    ...defaultVisualizationSettings(kind),
+    ...(baseSettings ?? {}),
+    ...(snapshot.defaults[kind] ?? {}),
   });
 }
 
@@ -229,33 +305,49 @@ export function resolveAirboxVisualizationSettingsFromState(
 export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationStatePatch {
-  return {
-    layers: {
-      airbox: {
-        ...(patch.opacityPercent === undefined
-          ? {}
-          : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
-        ...(patch.pointsVisible === undefined
-          ? {}
-          : { points: { visible: patch.pointsVisible } }),
-        ...(patch.shaderVisible === undefined
-          ? {}
-          : { surface: { visible: patch.shaderVisible } }),
-        ...(patch.vectorsVisible === undefined
-          ? {}
-          : {
-              vectors: {
-                domain: "airbox_only",
-                visible: patch.vectorsVisible,
-              },
-            }),
-        ...(patch.visible === undefined ? {} : { visible: patch.visible }),
-        ...(patch.wireframeVisible === undefined
-          ? {}
-          : { wireframe: { visible: patch.wireframeVisible } }),
-      },
-    },
+  const airbox: NonNullable<
+    NonNullable<VisualizationStatePatch["layers"]>["airbox"]
+  > = {
+    ...(patch.opacityPercent === undefined
+      ? {}
+      : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
+    ...(patch.pointsVisible === undefined
+      ? {}
+      : { points: { visible: patch.pointsVisible } }),
+    ...(patch.shaderVisible === undefined
+      ? {}
+      : { surface: { visible: patch.shaderVisible } }),
+    ...(patch.vectorsVisible === undefined
+      ? {}
+      : {
+          vectors: {
+            domain: "airbox_only",
+            visible: patch.vectorsVisible,
+          },
+        }),
+    ...(patch.visible === undefined ? {} : { visible: patch.visible }),
+    ...(patch.wireframeVisible === undefined
+      ? {}
+      : { wireframe: { visible: patch.wireframeVisible } }),
   };
+
+  return Object.keys(airbox).length > 0
+    ? { layers: { airbox } }
+    : {};
+}
+
+export function airboxLocalVisualizationPatchFromTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  return patch.boundsVisible === undefined
+    ? {}
+    : { boundsVisible: patch.boundsVisible };
+}
+
+export function hasVisualizationStatePatch(
+  patch: VisualizationStatePatch,
+): boolean {
+  return Object.keys(patch).length > 0;
 }
 
 export function resolveVisualizationTargetFromSelection(

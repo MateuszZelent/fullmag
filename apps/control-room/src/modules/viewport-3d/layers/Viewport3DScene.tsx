@@ -7,6 +7,7 @@ import { useEffect, useMemo } from "react";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type {
+  FdmGridRenderDomain,
   FemManifestRenderDomain,
   Viewport3DMeshPart,
   Viewport3DPartSelection,
@@ -23,6 +24,7 @@ import type {
 } from "../viewport3dPrimitiveModel";
 import type { Viewport3DCameraProjection, Viewport3DCameraState } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
   CameraController,
@@ -37,6 +39,7 @@ import {
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
+import { FdmCuboidLayer } from "./FdmCuboidLayer";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
@@ -44,6 +47,7 @@ interface Viewport3DSceneProps {
   cameraState: Viewport3DCameraState;
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
+  fdmDomain: FdmGridRenderDomain | null;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
@@ -60,6 +64,7 @@ interface Viewport3DSceneProps {
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
+  vectorStyle: VectorFieldLayerVectorStyle;
   hslReferenceVisible: boolean;
   viewCubeVisible: boolean;
 }
@@ -133,6 +138,7 @@ export function Viewport3DScene({
   cameraState,
   colors,
   airboxSettings,
+  fdmDomain,
   femDomain,
   fieldModel,
   fitRevision,
@@ -149,6 +155,7 @@ export function Viewport3DScene({
   tracker,
   topologyModel,
   vectorColorMode,
+  vectorStyle,
   hslReferenceVisible,
   viewCubeVisible,
 }: Viewport3DSceneProps) {
@@ -193,6 +200,13 @@ export function Viewport3DScene({
         colors={colors}
         onSelectDomain={onSelectDomain}
       />
+      <FdmCuboidLayer
+        colors={colors}
+        domain={fdmDomain}
+        onSelectDomain={onSelectDomain}
+        settings={fallbackSettings}
+        tracker={tracker}
+      />
       <AirboxLayer
         colors={colors}
         fieldModel={fieldModel}
@@ -201,6 +215,7 @@ export function Viewport3DScene({
         topologyModel={topologyModel}
         tracker={tracker}
         vectorColorMode={vectorColorMode}
+        vectorStyle={vectorStyle}
       />
       <PrimitiveObjectLayer
         colors={colors}
@@ -220,6 +235,7 @@ export function Viewport3DScene({
         tracker={tracker}
         topologyModel={topologyModel}
         vectorColorMode={vectorColorMode}
+        vectorStyle={vectorStyle}
       />
       <SelectionHighlightLayer bounds={selectionBounds} colors={colors} />
       <group position={gridSpec.center}>

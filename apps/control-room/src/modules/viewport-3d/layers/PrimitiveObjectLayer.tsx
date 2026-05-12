@@ -1,6 +1,5 @@
 "use client";
 
-import { Html } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import {
@@ -128,16 +127,23 @@ function PrimitiveObject({
           />
         </mesh>
       ) : null}
-      <Html center distanceFactor={8} position={[0, object.bounds.size[1] / 2, 0]}>
-        <span
-          aria-label={`${object.label}: ${object.fallbackLabel}`}
-          className="fm-viewport-3d__primitive-label"
-          data-object-id={object.objectId}
-          data-object-name={object.label}
-        >
-          {object.fallbackLabel}
-        </span>
-      </Html>
+      {settings.boundsVisible ? (
+        <mesh>
+          <boxGeometry
+            args={[
+              Math.max(object.bounds.size[0], 1e-9),
+              Math.max(object.bounds.size[1], 1e-9),
+              Math.max(object.bounds.size[2], 1e-9),
+            ]}
+          />
+          <meshBasicMaterial
+            color={colors.accent}
+            opacity={Math.max(opacity, 0.35)}
+            transparent
+            wireframe
+          />
+        </mesh>
+      ) : null}
     </group>
   );
 }

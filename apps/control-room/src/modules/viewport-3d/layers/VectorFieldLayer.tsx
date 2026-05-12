@@ -18,29 +18,77 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
 
 const UNIT_Y = new Vector3(0, 1, 0);
+const DEFAULT_HEAD_RADIUS_RATIO = 0.14;
+const DEFAULT_SHAFT_RADIUS_RATIO = 0.045;
+
+export interface VectorFieldLayerVectorStyle {
+  alpha?: number | null;
+  monoColor?: string | null;
+  thickness?: number | null;
+}
+
+export function resolveVectorFieldLayerStyle({
+  colorMode,
+  fallbackColor,
+  opacity,
+  style,
+}: {
+  colorMode: string;
+  fallbackColor: string;
+  opacity: number;
+  style?: VectorFieldLayerVectorStyle;
+}) {
+  const thickness = clampStyleScale(style?.thickness ?? 1);
+  return {
+    headRadiusRatio: DEFAULT_HEAD_RADIUS_RATIO * thickness,
+    materialColor:
+      colorMode === "monochrome" && style?.monoColor
+        ? style.monoColor
+        : fallbackColor,
+    materialOpacity: clampOpacity(opacity * (style?.alpha ?? 1)),
+    shaftRadiusRatio: DEFAULT_SHAFT_RADIUS_RATIO * thickness,
+  };
+}
 
 export function VectorFieldLayer({
   colors,
   colorMode = "orientation",
   opacity = 1,
   segments,
+  style,
   tracker,
 }: {
   colors: Viewport3DColors;
   colorMode?: string;
   opacity?: number;
   segments: Float32Array | null;
+  style?: VectorFieldLayerVectorStyle;
   tracker: Viewport3DResourceTracker;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const shaftRef = useRef<InstancedMesh>(null);
   const headRef = useRef<InstancedMesh>(null);
+  const resolvedStyle = resolveVectorFieldLayerStyle({
+    colorMode,
+    fallbackColor: String(colors.field),
+    opacity,
+    style,
+  });
   const glyphs = useMemo(
     () =>
       segments
-        ? buildVectorGlyphInstances(segments, { colorMode })
+        ? buildVectorGlyphInstances(segments, {
+            colorMode,
+            headRadiusRatio: resolvedStyle.headRadiusRatio,
+            shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
+          })
         : null,
-    [colorMode, segments],
+    [
+      colorMode,
+      resolvedStyle.headRadiusRatio,
+      resolvedStyle.shaftRadiusRatio,
+      segments,
+    ],
   );
   const useInstanceColors = Boolean(glyphs?.colors);
   const shaftGeometry = useMemo(
@@ -56,14 +104,19 @@ export function VectorFieldLayer({
       tracker.track(
         "material",
         new MeshBasicMaterial({
-          color: useInstanceColors ? "white" : colors.field,
-          opacity,
+          color: useInstanceColors ? "white" : resolvedStyle.materialColor,
+          opacity: resolvedStyle.materialOpacity,
           toneMapped: false,
-          transparent: opacity < 1,
+          transparent: resolvedStyle.materialOpacity < 1,
           vertexColors: useInstanceColors,
         }),
       ),
-    [colors.field, opacity, tracker, useInstanceColors],
+    [
+      resolvedStyle.materialColor,
+      resolvedStyle.materialOpacity,
+      tracker,
+      useInstanceColors,
+    ],
   );
 
   useEffect(
@@ -163,4 +216,12 @@ export function VectorFieldLayer({
       />
     </>
   );
+}
+
+function clampOpacity(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function clampStyleScale(value: number): number {
+  return Math.max(0.1, Math.min(8, value));
 }

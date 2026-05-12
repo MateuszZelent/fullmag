@@ -26,7 +26,9 @@ Examples:
 - `geometry-object-panel`;
 - `object-visualization-panel`;
 - `airbox-visualization-panel`;
-- `material-panel`;
+- `object-regions-panel`;
+- `object-magnetic-parameters-panel`;
+- `object-magnetic-texture-panel`;
 - `physics-interaction-panel`;
 - `universe-mesh-panel`;
 - `object-mesh-panel`;
@@ -98,7 +100,9 @@ inspector/
   panels/
     GeometryObjectPanel.tsx
     ObjectVisualizationPanel.tsx
-    MaterialPanel.tsx
+    ObjectRegionsPanel.tsx
+    ObjectMaterialPanel.tsx
+    ObjectMagneticTexturePanel.tsx
     PhysicsInteractionPanel.tsx
     ObjectMeshPanel.tsx
     StudyStagePanel.tsx
@@ -129,12 +133,23 @@ Undo/redo requires a canonical transaction log. Do not fake undo by keeping hidd
 - identity, name, and region name;
 - primitive type and type-specific dimensions in SI units;
 - position, rotation, and scale where supported;
-- material and magnetization references;
+- material and magnetization references as object-owned refs;
 - mesh status and stale/building/failed diagnostics;
 - links to object mesh settings, report, and quality resources;
 - scene revision and last successful mesh-build source scene revision when available.
 
 For a new object, Apply commits the create transaction, selects the committed object, and lets the viewport render it in primitive mode before mesh topology exists. Failed commits keep the draft and show the backend error near the responsible field or section.
+
+## 7.2 Per-Object Authoring Panels
+
+Object selections expose required authoring panels:
+
+- `object.regions`: reads `model/scene` and `model/regions`, patches `/v2/sessions/current/model/regions/{region_id}`, and invalidates scene, regions, geometry diagnostics, and mesh build resources.
+- `object.magnetic-parameters`: reads the selected object from `model/scene`, reads the assigned material asset through `/v2/sessions/current/model/materials/{material_id}`, patches object `material_ref` through `/model/objects/{object_id}`, and patches material scalar parameters through `/model/materials/{material_id}`.
+- `object.physics`: reads and patches `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}` for required and optional interaction entries.
+- `object.magnetic-texture`: reads the object `magnetization_ref` and referenced `magnetization_assets` from `model/scene`, patches the object reference through `/model/objects/{object_id}`, and treats texture asset editing as deferred until a typed magnetization-asset endpoint exists.
+
+The inspector may show material and texture assets, but they are secondary resources owned by object context in the workspace. A standalone top-level Materials branch in the Model explorer is not the canonical navigation path.
 
 ## 8. Tests
 

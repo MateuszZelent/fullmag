@@ -108,7 +108,9 @@ Required sections:
 - identity: object id, name, region name;
 - primitive geometry: type-specific dimensions and SI units;
 - transform: position, rotation, scale where supported;
-- material reference: the backend-backed `object.material` inspector patches `material_ref` through `/v2/sessions/current/model/objects/{object_id}`; magnetization reference editing remains pending;
+- magnetic parameters: the backend-backed `object.magnetic-parameters` inspector patches object `material_ref` through `/v2/sessions/current/model/objects/{object_id}`, reads and patches the assigned material asset through `/v2/sessions/current/model/materials/{material_id}`, and links to `object.physics` interaction entries;
+- regions: the backend-backed `object.regions` inspector reads `/v2/sessions/current/model/regions` and patches `/v2/sessions/current/model/regions/{region_id}`;
+- magnetic texture: the backend-backed `object.magnetic-texture` inspector patches object `magnetization_ref` through `/v2/sessions/current/model/objects/{object_id}` and inspects referenced texture asset mapping/transform from `model/scene`;
 - mesh status: primitive-only, stale, building, ready, failed;
 - mesh policy link: jump to the backend-backed `object.mesh` inspector, which reads and writes `/v2/sessions/current/meshing/policies/objects/{object_id}`;
 - diagnostics: geometry validation, realization blockers, mesh build errors;
@@ -127,8 +129,13 @@ Required object subtree:
    + Objects
      + <object name>
        + Geometry
-       + Material
-       + Physics
+       + Regions
+       + Magnetic Parameters
+         + Material: <asset>
+         + Exchange
+         + Demagnetization
+         + <optional interactions>
+       + Magnetic Texture
        + Mesh
        + Visualization
 ```
@@ -137,6 +144,10 @@ Selection rules:
 
 - selecting `<object name>` opens the Geometry object inspector by default in the Geometry context;
 - selecting `Geometry` focuses primitive parameters and transform;
+- selecting `Regions` focuses object-derived region naming/visibility and future region gradients;
+- selecting `Magnetic Parameters` focuses material assignment and scalar/tensor magnetic parameters;
+- selecting a magnetic interaction under `Magnetic Parameters` focuses the interaction editor;
+- selecting `Magnetic Texture` focuses magnetization texture assignment and mapping inspection;
 - selecting `Mesh` focuses object mesh settings or report;
 - selecting `Visualization` focuses the target visualization panel for `object:<object_id>`;
 - viewport picking emits the same object selection ref;
@@ -185,6 +196,9 @@ The frontend implementation must add facade/resource coverage for:
 - `model.geometryCapabilities()`, `model.geometryValidation()`, and `model.geometryDiagnostics()`;
 - object mutation helpers for `/model/objects`, `/model/objects/{object_id}`, and `/model/objects/{object_id}/geometry`;
 - mesh build command adapter for `kind: "mesh_build"`;
+- material facade/resource coverage for `/v2/sessions/current/model/materials/{material_id}`;
+- region facade/resource coverage for `/v2/sessions/current/model/regions` and `/v2/sessions/current/model/regions/{region_id}`;
+- interaction facade/resource coverage for `/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}`;
 - `useMeshBuildCurrent()`, `useObjectTopology(objectId)`, `useObjectMeshReport(objectId)`, and `useObjectMeshQuality(objectId)`;
 - visualization state hook with per-target object defaults.
 

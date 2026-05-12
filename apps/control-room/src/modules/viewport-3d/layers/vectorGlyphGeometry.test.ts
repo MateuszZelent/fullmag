@@ -30,10 +30,52 @@ describe("vectorGlyphGeometry", () => {
     expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [0.5, 0, 0]);
   });
 
-  it("keeps non-orientation vector coloring on the fixed material color", () => {
+  it("uses canonical physical XYZ for orientation coloring", () => {
+    const glyphs = buildVectorGlyphInstances(
+      new Float32Array([0, 0, 0, 0, 0, 1]),
+      { colorMode: "orientation" },
+    );
+
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 1, 1]);
+  });
+
+  it("accepts HSLSPHERE aliases for vector glyph orientation coloring", () => {
+    const glyphs = buildVectorGlyphInstances(
+      new Float32Array([0, 0, 0, 0, 0, 1]),
+      { colorMode: "hsl_sphere" },
+    );
+
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 1, 1]);
+  });
+
+  it("maps component vector color modes to per-glyph colors", () => {
+    const glyphs = buildVectorGlyphInstances(
+      new Float32Array([
+        0, 0, 0, -1, 0, 0,
+        0, 0, 0, 1, 0, 0,
+      ]),
+      { colorMode: "x" },
+    );
+
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [
+      0, 0.38, 1,
+      1, 0.38, 0,
+    ]);
+  });
+
+  it("keeps magnitude vector coloring on the fixed material color", () => {
     const glyphs = buildVectorGlyphInstances(
       new Float32Array([0, 0, 0, 1, 0, 0]),
       { colorMode: "magnitude" },
+    );
+
+    expect(glyphs.colors).toBeNull();
+  });
+
+  it("keeps monochrome vector coloring on the fixed material color", () => {
+    const glyphs = buildVectorGlyphInstances(
+      new Float32Array([0, 0, 0, 1, 0, 0]),
+      { colorMode: "monochrome" },
     );
 
     expect(glyphs.colors).toBeNull();

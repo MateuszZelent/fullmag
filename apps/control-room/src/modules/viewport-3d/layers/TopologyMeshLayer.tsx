@@ -15,6 +15,7 @@ import type {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
+import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 
 export function TopologyMeshLayer({
   colors,
@@ -27,6 +28,7 @@ export function TopologyMeshLayer({
   onSelectPart,
   tracker,
   topologyModel,
+  vectorStyle,
 }: {
   colors: Viewport3DColors;
   vectorColorMode: string;
@@ -38,6 +40,7 @@ export function TopologyMeshLayer({
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   if (topologyModel?.magneticParts.length) {
     return (
@@ -53,6 +56,7 @@ export function TopologyMeshLayer({
             topologyModel={topologyModel}
             tracker={tracker}
             vectorColorMode={vectorColorMode}
+            vectorStyle={vectorStyle}
           />
         ))}
       </>
@@ -70,6 +74,7 @@ export function TopologyMeshLayer({
       topologyModel={topologyModel}
       tracker={tracker}
       vectorColorMode={vectorColorMode}
+      vectorStyle={vectorStyle}
     />
   );
 }

@@ -67,7 +67,7 @@ interface ScientificViewportShellProps {
   onViewCubeRotate?: (quat: THREE.Quaternion) => void;
   onResetView?: () => void;
   showOrientationSphere?: boolean;
-  orientationSphereAxisConvention?: "identity" | "swapYZ";
+  orientationSphereAxisConvention?: "identity";
   orientationSpherePositionClassName?: string;
   bridgeRef?: MutableRefObject<any> | null;
   controlsRef?: MutableRefObject<any> | null;

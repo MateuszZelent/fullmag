@@ -64,12 +64,20 @@ import type { ResourceInvalidationController } from "@/kernel/resources/Resource
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  airboxLocalVisualizationPatchFromTargetPatch,
+  airboxVisualizationStatePatchFromTargetPatch,
+  DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
+  hasVisualizationStatePatch,
   renderModePatch,
+  resolveAirboxVisualizationSettingsFromState,
+  resolveEffectiveVisualizationSettings,
+  resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
   type VisualizationRenderMode,
+  type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
@@ -177,7 +185,7 @@ export const homeTab: RibbonTabContent = {
       subtitle: "runtime",
       tone: "compute",
       actions: [
-        { id: "run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, iconColor: "text-cyan-400", menu: [...statusMenu("home-runtime", "Runtime", "No session"), separator("home-runtime:sep"), ...radioMenu("home-target", "Execution target", "auto", [["auto", "Auto"], ["cpu", "CPU"], ["gpu", "GPU"]])] },
+        { id: "run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, splitButton: true, iconColor: "text-cyan-400", menu: [...statusMenu("home-runtime", "Runtime", "No session"), separator("home-runtime:sep"), ...radioMenu("home-target", "Execution target", "auto", [["auto", "Auto"], ["cpu", "CPU"], ["gpu", "GPU"]])] },
         { id: "pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  disabled: true, iconColor: C.yellow },
         { id: "stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   disabled: true, iconColor: C.red },
         { id: "skip",  icon: icon(SkipForward),                           label: "Skip",                   disabled: true, iconColor: C.peach },
@@ -196,7 +204,7 @@ const QUANTITY_ITEMS = [
 ];
 
 const VECTOR_COLOR_ITEMS = [
-  { value: "orientation", label: "Orientation / HSL" },
+  { value: "orientation", label: "HSLSPHERE orientation" },
   { value: "magnitude",   label: "Magnitude" },
   { value: "x",           label: "X component" },
   { value: "y",           label: "Y component" },
@@ -963,7 +971,7 @@ export const geometryTab: RibbonTabContent = {
       subtitle: "Parametric primitives",
       tone: "authoring",
       actions: [
-        { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
+        { id: "geometry.add-box",          icon: icon(Box),      label: "Box",            iconColor: "text-emerald-400", splitButton: true, menu: menu("geometry-box", "Box primitive", ["Block", "Thin film", "Cuboid from bounds"]) },
         { id: "geometry.add-cylinder",     icon: icon(Cylinder), label: "Cylinder",       iconColor: "text-cyan-400" },
         { id: "geometry.add-sphere",       icon: icon(Circle),   label: "Sphere",         iconColor: "text-violet-400" },
         { id: "builder-add-ellipsoid",     icon: icon(Circle),   label: "Ellipsoid",      iconColor: "text-purple-300" },
@@ -1175,8 +1183,8 @@ export const meshTab: RibbonTabContent = {
       subtitle: "mesh",
       tone: "compute",
       actions: [
-        { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
-        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",                iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
+        { id: "mesh.build-selected", icon: icon(RefreshCw),  label: "Build",      accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("mesh-build-status", "Mesh state", "Not built", "warning"), separator("mesh-build-sep"), ...menu("mesh-build", "Build scope", ["Selected object", "All objects", "Universe mesh", "Shared solver mesh"])] },
+        { id: "mesh.build-shared-domain", icon: icon(Zap),   label: "Build All",  splitButton: true, iconColor: C.yellow, menu: menu("mesh-build-all", "Build all", ["FDM grid", "FEM shared domain", "Quality report"]) },
         { id: "mesh-stats",     icon: icon(BarChart3),  label: "Statistics",               iconColor: C.peach },
       ],
     },
@@ -1278,7 +1286,7 @@ export const studyTab: RibbonTabContent = {
       subtitle: "runtime",
       tone: "compute",
       actions: [
-        { id: "study-run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
+        { id: "study-run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
         { id: "study-pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  disabled: true, iconColor: C.yellow },
         { id: "study-stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   disabled: true, iconColor: C.red },
         { id: "study-skip",  icon: icon(SkipForward),                           label: "Skip",                   disabled: true, iconColor: C.peach },
@@ -1418,6 +1426,8 @@ export function buildRibbonTabContent(
           ? buildViewGlobalDisplayGroup(group, context)
           : group.id === "view-orientation-tools"
             ? buildViewOrientationGroup(group, context)
+          : group.id === "view-display"
+            ? buildViewDisplayGroup(group, context)
           : group.id === "view-selected-display"
             ? buildSelectedVisualizationGroup(context)
             : group,
@@ -1547,6 +1557,20 @@ function buildViewOrientationGroup(
     actions: group.actions.map((action) =>
       action.id === "view-hsl-reference"
         ? buildHslReferenceAction(context)
+        : action,
+    ),
+  };
+}
+
+function buildViewDisplayGroup(
+  group: RibbonTabContent["groups"][number],
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  return {
+    ...group,
+    actions: group.actions.map((action) =>
+      action.id === "view-dimension-frame"
+        ? buildDimensionFrameAction(context)
         : action,
     ),
   };
@@ -2016,13 +2040,21 @@ function percentToLayerOpacity(percent: number): number {
   return Math.max(0, Math.min(1, percent / 100));
 }
 
-function buildAirboxAction({
-  commandContext,
-  visualization,
-}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
-  const settings = visualization.getSettings(AIRBOX_VISUALIZATION_TARGET);
-  const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
-    visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, patchValue);
+function buildAirboxAction(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number]["actions"][number] {
+  const { commandContext, visualizationSnapshot } = context;
+  const vectorLayer = context.visualizationState?.layers?.airbox?.vectors;
+  const vectorStyle = context.visualizationState?.vector_style;
+  const settings = resolveVisualizationSettings(
+    visualizationSnapshot,
+    AIRBOX_VISUALIZATION_TARGET,
+    resolveAirboxVisualizationSettingsFromState(context.visualizationState),
+  );
+  const effectiveSettings = resolveEffectiveVisualizationSettings(settings);
+  const passControlsDisabled = !settings.visible;
+  const patch = (patchValue: VisualizationTargetPatch) => {
+    patchAirboxVisualization(context, patchValue);
   };
   const selectAirbox = () => {
     commandContext?.selection?.set(
@@ -2062,23 +2094,31 @@ function buildAirboxAction({
         type: "label",
         id: "airbox:primitive-section",
         label: "Primitive",
-        badge: settings.shaderVisible ? "on" : "off",
+        badge: effectiveSettings.shaderVisible ? "on" : "off",
       },
       {
         type: "checkbox",
         id: "airbox:shaded",
         label: "Shaded on/off",
-        checked: settings.shaderVisible,
-        disabled: false,
+        checked: effectiveSettings.shaderVisible,
+        disabled: passControlsDisabled,
         onCheckedChange: (checked) => patch({ shaderVisible: checked }),
       },
       {
         type: "checkbox",
         id: "airbox:wireframe",
         label: "Wireframe on/off",
-        checked: settings.wireframeVisible,
-        disabled: false,
+        checked: effectiveSettings.wireframeVisible,
+        disabled: passControlsDisabled,
         onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+      },
+      {
+        type: "checkbox",
+        id: "airbox:frame",
+        label: "Frame on/off",
+        checked: effectiveSettings.boundsVisible,
+        disabled: passControlsDisabled,
+        onCheckedChange: (checked) => patch({ boundsVisible: checked }),
       },
       {
         type: "radio-group",
@@ -2086,20 +2126,21 @@ function buildAirboxAction({
         label: "Wireframe extent",
         value: "surface",
         items: AIRBOX_EXTENT_ITEMS,
+        disabled: true,
       },
       { type: "separator", id: "airbox:s-points" },
       {
         type: "label",
         id: "airbox:points-section",
         label: "Points",
-        badge: settings.pointsVisible ? "on" : "off",
+        badge: effectiveSettings.pointsVisible ? "on" : "off",
       },
       {
         type: "checkbox",
         id: "airbox:points",
         label: "Points on/off",
-        checked: settings.pointsVisible,
-        disabled: false,
+        checked: effectiveSettings.pointsVisible,
+        disabled: passControlsDisabled,
         onCheckedChange: (checked) => patch({ pointsVisible: checked }),
       },
       {
@@ -2108,20 +2149,21 @@ function buildAirboxAction({
         label: "Points extent",
         value: "surface",
         items: AIRBOX_EXTENT_ITEMS,
+        disabled: true,
       },
       { type: "separator", id: "airbox:s-vectors" },
       {
         type: "label",
         id: "airbox:vectors-section",
         label: "Vectors",
-        badge: settings.vectorsVisible ? "on" : "off",
+        badge: effectiveSettings.vectorsVisible ? "on" : "off",
       },
       {
         type: "checkbox",
         id: "airbox:vectors",
         label: "Vectors on/off",
-        checked: settings.vectorsVisible,
-        disabled: false,
+        checked: effectiveSettings.vectorsVisible,
+        disabled: passControlsDisabled,
         onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
       },
       {
@@ -2130,16 +2172,72 @@ function buildAirboxAction({
         label: "Vectors extent",
         value: "surface",
         items: AIRBOX_EXTENT_ITEMS,
+        disabled: true,
       },
       {
         type: "submenu",
         id: "airbox:vectors-submenu",
         label: "Airbox vectors",
         nodes: [
-          { type: "slider", id: "airbox:vectors-density", label: "Density / Every N", value: 4, min: 1, max: 64, step: 1 },
-          { type: "slider", id: "airbox:vectors-length", label: "Length scale", value: 1, min: 0.2, max: 4, step: 0.1 },
-          { type: "slider", id: "airbox:vectors-thickness", label: "Thickness", value: 1, min: 0.2, max: 4, step: 0.1 },
-          { type: "slider", id: "airbox:vectors-alpha", label: "Alpha", value: 0.9, min: 0, max: 1, step: 0.05 },
+          {
+            type: "slider",
+            id: "airbox:vectors-density",
+            label: "Density / Every N",
+            value: vectorLayer?.density ?? 128,
+            min: 8,
+            max: 4096,
+            step: 8,
+            onValueChange: (value) =>
+              patchVisualizationState(context, {
+                layers: {
+                  airbox: {
+                    vectors: {
+                      density: value,
+                      domain: "airbox_only",
+                    },
+                  },
+                },
+              }),
+          },
+          {
+            type: "slider",
+            id: "airbox:vectors-length",
+            label: "Length scale",
+            value: vectorStyle?.length_scale ?? 1,
+            min: 0.2,
+            max: 4,
+            step: 0.1,
+            onValueChange: (value) =>
+              patchVisualizationState(context, {
+                vector_style: { length_scale: value },
+              }),
+          },
+          {
+            type: "slider",
+            id: "airbox:vectors-thickness",
+            label: "Thickness",
+            value: vectorStyle?.thickness ?? 1,
+            min: 0.2,
+            max: 4,
+            step: 0.1,
+            onValueChange: (value) =>
+              patchVisualizationState(context, {
+                vector_style: { thickness: value },
+              }),
+          },
+          {
+            type: "slider",
+            id: "airbox:vectors-alpha",
+            label: "Alpha",
+            value: vectorStyle?.alpha ?? 0.9,
+            min: 0,
+            max: 1,
+            step: 0.05,
+            onValueChange: (value) =>
+              patchVisualizationState(context, {
+                vector_style: { alpha: value },
+              }),
+          },
         ],
       },
       {
@@ -2147,8 +2245,24 @@ function buildAirboxAction({
         id: "airbox:vector-colors",
         label: "Airbox vector colors",
         nodes: [
-          { type: "radio-group", id: "airbox:vector-coloring", label: "Vector colors", value: "orientation", items: VECTOR_COLOR_ITEMS },
-          { type: "color", id: "airbox:vector-mono-color", label: "Monochrome vector color", value: "var(--fm-accent)", disabled: true },
+          {
+            type: "radio-group",
+            id: "airbox:vector-coloring",
+            label: "Vector colors",
+            value: vectorStyle?.color_mode ?? "orientation",
+            items: VECTOR_COLOR_ITEMS,
+            onValueChange: (value) =>
+              patchVisualizationState(context, {
+                vector_style: { color_mode: value as VectorColorModePatch },
+              }),
+          },
+          {
+            type: "color",
+            id: "airbox:vector-mono-color",
+            label: "Monochrome vector color",
+            value: vectorStyle?.mono_color ?? "var(--fm-accent)",
+            disabled: true,
+          },
         ],
       },
       { type: "separator", id: "airbox:s-visible" },
@@ -2175,19 +2289,119 @@ function buildAirboxAction({
         type: "item",
         id: "airbox:reset",
         label: "Reset airbox display",
-        onSelect: () => visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET),
+        onSelect: () => resetAirboxVisualization(context),
       },
     ],
   };
 }
 
-function buildSelectedVisualizationGroup({
-  selection,
+function patchAirboxVisualization(
+  context: RibbonBuildContext,
+  patchValue: VisualizationTargetPatch,
+): void {
+  const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patchValue);
+  if (Object.keys(localPatch).length > 0) {
+    context.visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, localPatch);
+  }
+
+  const statePatch = airboxVisualizationStatePatchFromTargetPatch(patchValue);
+  const request = hasVisualizationStatePatch(statePatch)
+    ? context.api?.visualization.patch(statePatch)
+    : null;
+  if (!request) {
+    if (!context.api) {
+      context.visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, patchValue);
+    }
+    return;
+  }
+
+  void request
+    .then((state) => {
+      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
+    })
+    .catch(() => {
+      // The viewport resource hook exposes failed visualization refreshes.
+      // Menu callbacks must stay non-throwing because Radix closes eagerly.
+    });
+}
+
+function resetAirboxVisualization(context: RibbonBuildContext): void {
+  const request = context.api?.visualization.patch(
+    airboxVisualizationStatePatchFromTargetPatch(DEFAULT_AIRBOX_VISUALIZATION),
+  );
+  if (!request) {
+    context.visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET);
+    return;
+  }
+
+  void request
+    .then((state) => {
+      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
+      context.visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET);
+    })
+    .catch(() => {
+      // The viewport resource hook exposes failed visualization refreshes.
+    });
+}
+
+function buildDimensionFrameAction({
   visualization,
-  visualizationSnapshot,
-}: RibbonBuildContext): RibbonTabContent["groups"][number] {
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const objectSettings = visualization.getDefaultSettings("object");
+  const partSettings = visualization.getDefaultSettings("part");
+  const objectFrameVisible =
+    objectSettings.boundsVisible && partSettings.boundsVisible;
+  const patchObjectFrame = (visible: boolean) => {
+    visualization.patchDefaults("object", { boundsVisible: visible });
+    visualization.patchDefaults("part", { boundsVisible: visible });
+  };
+
+  return {
+    id: "view-dimension-frame",
+    icon: icon(Ruler),
+    label: "Frame",
+    iconColor: "text-emerald-300",
+    menu: [
+      {
+        type: "radio-group",
+        id: "axes:scope",
+        label: "Axes scope",
+        value: "universe",
+        items: [
+          { value: "universe", label: "Universe scale" },
+          { value: "object", label: "Object scale" },
+        ],
+      },
+      {
+        type: "checkbox",
+        id: "frame:object-bounds",
+        label: "Object frame",
+        checked: objectFrameVisible,
+        disabled: false,
+        onCheckedChange: patchObjectFrame,
+      },
+    ],
+  };
+}
+
+function buildSelectedVisualizationGroup(
+  context: RibbonBuildContext,
+): RibbonTabContent["groups"][number] {
+  const { selection, visualization, visualizationSnapshot } = context;
   const target = resolveVisualizationTargetFromSelection(selection);
-  const settings = target ? visualization.getSettings(target) : null;
+  const settings = target
+    ? target.kind === "airbox"
+      ? resolveVisualizationSettings(
+          visualizationSnapshot,
+          target,
+          resolveAirboxVisualizationSettingsFromState(context.visualizationState),
+        )
+      : visualization.getSettings(target)
+    : null;
+  const effectiveSettings = settings
+    ? resolveEffectiveVisualizationSettings(settings)
+    : null;
+  const passControlsDisabled = !settings?.visible;
   const enabled = Boolean(target && settings);
   const targetLabel = target
     ? displayLabelForVisualizationTarget(target)
@@ -2196,6 +2410,10 @@ function buildSelectedVisualizationGroup({
   const revision = visualizationSnapshot.version;
   const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
     if (!target) return;
+    if (target.kind === "airbox") {
+      patchAirboxVisualization(context, patchValue);
+      return;
+    }
     visualization.patchTarget(target, patchValue);
   };
 
@@ -2228,16 +2446,16 @@ function buildSelectedVisualizationGroup({
             type: "checkbox",
             id: "selected-texture:visible",
             label: "Shader on/off",
-            checked: settings?.shaderVisible ?? false,
-            disabled: !enabled,
+            checked: effectiveSettings?.shaderVisible ?? false,
+            disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ shaderVisible: checked }),
           },
           {
             type: "checkbox",
             id: "selected-texture:vectors",
             label: "Vectors on/off",
-            checked: settings?.vectorsVisible ?? false,
-            disabled: !enabled,
+            checked: effectiveSettings?.vectorsVisible ?? false,
+            disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
           },
         ],
@@ -2275,7 +2493,7 @@ function buildSelectedVisualizationGroup({
             id: "selected:render-mode",
             label: "Render mode",
             value: settings?.renderMode ?? "surface",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             items: SELECTED_RENDER_ITEMS,
             onValueChange: (value) =>
               patch(renderModePatch(value as VisualizationRenderMode)),
@@ -2284,16 +2502,24 @@ function buildSelectedVisualizationGroup({
             type: "checkbox",
             id: "selected:wireframe",
             label: "Wireframe on/off",
-            checked: settings?.wireframeVisible ?? false,
-            disabled: !enabled,
+            checked: effectiveSettings?.wireframeVisible ?? false,
+            disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+          },
+          {
+            type: "checkbox",
+            id: "selected:frame",
+            label: "Frame on/off",
+            checked: effectiveSettings?.boundsVisible ?? false,
+            disabled: !enabled || passControlsDisabled,
+            onCheckedChange: (checked) => patch({ boundsVisible: checked }),
           },
           {
             type: "checkbox",
             id: "selected:points",
             label: "Points on/off",
-            checked: settings?.pointsVisible ?? false,
-            disabled: !enabled,
+            checked: effectiveSettings?.pointsVisible ?? false,
+            disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ pointsVisible: checked }),
           },
           {

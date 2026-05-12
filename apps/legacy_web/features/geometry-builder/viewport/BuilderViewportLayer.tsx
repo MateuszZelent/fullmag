@@ -45,10 +45,10 @@ function cylinderGeometry(radius: number, height: number, axis: "x" | "y" | "z")
   const sceneRadius = physicalLengthToScene(radius);
   const sceneHeight = physicalLengthToScene(height);
   const geo = new THREE.CylinderGeometry(sceneRadius, sceneRadius, sceneHeight, 32);
-  // CylinderGeometry default axis is scene-Y (physical Z with swapYZ convention).
+  // Three.js CylinderGeometry default axis is local Y.
   if (axis === "x") {
     geo.rotateZ(Math.PI / 2);
-  } else if (axis === "y") {
+  } else if (axis === "z") {
     geo.rotateX(Math.PI / 2);
   }
   return geo;
@@ -71,7 +71,7 @@ function diskGeometry(radius: number, thickness: number, axis: "x" | "y" | "z"):
   const geo = new THREE.CylinderGeometry(sceneRadius, sceneRadius, sceneThickness, 32);
   if (axis === "x") {
     geo.rotateZ(Math.PI / 2);
-  } else if (axis === "y") {
+  } else if (axis === "z") {
     geo.rotateX(Math.PI / 2);
   }
   return geo;
@@ -112,7 +112,7 @@ function coneGeometry(radiusTop: number, radiusBottom: number, height: number, a
   );
   if (axis === "x") {
     geo.rotateZ(Math.PI / 2);
-  } else if (axis === "y") {
+  } else if (axis === "z") {
     geo.rotateX(Math.PI / 2);
   }
   return geo;

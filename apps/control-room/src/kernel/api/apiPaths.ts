@@ -103,6 +103,18 @@ export const MODEL_OBJECT_INTERACTION_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
 );
 
+export const MODEL_MATERIAL_PATH = openApiV2Path(
+  "/v2/sessions/current/model/materials/{material_id}",
+);
+
+export const MODEL_REGIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/regions",
+);
+
+export const MODEL_REGION_PATH = openApiV2Path(
+  "/v2/sessions/current/model/regions/{region_id}",
+);
+
 export const MODEL_GEOMETRY_CAPABILITIES_PATH = openApiV2Path(
   "/v2/sessions/current/model/geometry/capabilities",
 );

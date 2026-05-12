@@ -38,6 +38,57 @@ describe("viewport3dFieldMapping", () => {
     ]);
   });
 
+  it("maps orientation mode through canonical physical XYZ", () => {
+    const result = buildVertexScalarColors(
+      vectorField([0, 0, 1]),
+      1,
+      undefined,
+      "orientation",
+    );
+
+    expect(Array.from(result?.colors ?? [])).toEqual([1, 1, 1]);
+  });
+
+  it("accepts HSLSPHERE aliases for surface orientation coloring", () => {
+    const result = buildVertexScalarColors(
+      vectorField([0, 0, 1]),
+      1,
+      undefined,
+      "HSLSPHERE",
+    );
+
+    expect(Array.from(result?.colors ?? [])).toEqual([1, 1, 1]);
+  });
+
+  it("maps component color modes through the scalar gradient", () => {
+    const result = buildVertexScalarColors(
+      vectorField([
+        -1, 0, 0,
+        1, 0, 0,
+      ]),
+      2,
+      undefined,
+      "x",
+    );
+
+    expect(result?.range).toEqual({ max: 1, min: -1 });
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      0, expect.closeTo(0.38), 1,
+      1, expect.closeTo(0.38), 0,
+    ]);
+  });
+
+  it("keeps monochrome mode on the material color", () => {
+    expect(
+      buildVertexScalarColors(
+        vectorField([1, 0, 0]),
+        1,
+        undefined,
+        "monochrome",
+      ),
+    ).toBeNull();
+  });
+
   it("requires chunking above the synchronous color transform threshold", () => {
     expect(fieldTransformNeedsChunking(50_001)).toBe(true);
     expect(buildVertexScalarColors(vectorField([1, 0, 0]), 1, 0)).toBeNull();
@@ -47,7 +98,7 @@ describe("viewport3dFieldMapping", () => {
     const yieldToMain = vi.fn(async () => undefined);
     const result = await buildVertexScalarColorsChunked(
       vectorField([0, 1, 2], 1),
-      { chunkSize: 1, yieldToMain },
+      { chunkSize: 1, colorMode: "magnitude", yieldToMain },
     );
 
     expect(resolveScalarRange(vectorField([0, 1, 2], 1))).toEqual({
