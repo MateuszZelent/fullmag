@@ -40,6 +40,7 @@ The registry stores only small display preferences:
 - points visible;
 - vectors visible;
 - opacity percent;
+- geometry scope for pass sampling (`surface` or `full`);
 - render mode summary for ribbon menus.
 
 It must not store topology, field arrays, mesh manifests, scene documents, or backend runtime snapshots.
@@ -77,6 +78,7 @@ Inspector:
 
 - shows the selected target id and whether the target is object, airbox, or part fallback;
 - provides toggles for shader, wireframe, points, vectors, visibility, and opacity;
+- exposes whether mesh/vector passes sample only boundary surface nodes or the full target volume;
 - auto-applies because these are safe display preferences;
 - includes reset/clear override action.
 
@@ -93,6 +95,8 @@ Viewport:
 - a target setting update dirties only affected display layers;
 - topology rebuilds happen only for topology revisions, not for style toggles;
 - vector glyph visibility can be independent per target when full-domain vector data is available.
+- wireframe display must use the same geometry scope vocabulary as vectors, even when the renderer chooses a bounded fallback for very large full-volume meshes.
+- vector glyph sampling must respect the target geometry scope: boundary-surface nodes for `surface`, the full target node selection for `full`.
 
 ## 5. 2D Extension
 

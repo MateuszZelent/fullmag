@@ -21,9 +21,9 @@ describe("view cube model", () => {
 
     expect(targets.size).toBe(26);
     expect(targets.get("right")?.direction).toEqual([1, 0, 0]);
-    expect(targets.get("top")?.direction).toEqual([0, 1, 0]);
-    expect(targets.get("front")?.direction).toEqual([0, 0, 1]);
-    expect(targets.get("right-top")?.direction).toEqual([1, 1, 0]);
+    expect(targets.get("top")?.direction).toEqual([0, 0, 1]);
+    expect(targets.get("front")?.direction).toEqual([0, 1, 0]);
+    expect(targets.get("right-top")?.direction).toEqual([1, 0, 1]);
     expect(targets.get("right-top-front")?.direction).toEqual([1, 1, 1]);
   });
 
@@ -43,14 +43,14 @@ describe("view cube model", () => {
       kind: "edge",
     });
     expect(topFace?.targets[4]).toMatchObject({
-      direction: [0, 1, 0],
-      kind: "face",
-      label: "Y",
-    });
-    expect(frontFace?.targets[4]).toMatchObject({
       direction: [0, 0, 1],
       kind: "face",
       label: "Z",
+    });
+    expect(frontFace?.targets[4]).toMatchObject({
+      direction: [0, 1, 0],
+      kind: "face",
+      label: "Y",
     });
   });
 

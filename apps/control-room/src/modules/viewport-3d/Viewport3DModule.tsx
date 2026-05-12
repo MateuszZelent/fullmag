@@ -14,6 +14,7 @@ import {
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
+import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import {
   FULL_FIELD_QUERY,
@@ -199,9 +200,22 @@ export default function Viewport3DModule({
       femDomain,
       bounds,
     );
+  // Derive fallback settings only from global (non-airbox) layers so that
+  // airbox-specific API patches cannot inadvertently alter the appearance
+  // of regular mesh objects.
+  const globalLayers = visualizationState.data?.layers;
   const fallbackSettings = useMemo(
     () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
-    [visualizationState.data],
+    // Explicit deps on global layer fields only – airbox sub-fields excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      globalLayers?.surface?.visible,
+      globalLayers?.surface?.opacity,
+      globalLayers?.wireframe?.visible,
+      globalLayers?.points?.visible,
+      globalLayers?.vectors?.visible,
+      visualizationState.data?.vector_glyphs,
+    ],
   );
   const airboxBaseSettings = useMemo(
     () => resolveAirboxBaseVisualizationSettings(visualizationState.data),
@@ -438,6 +452,7 @@ function useViewport3DFieldRenderOptions({
     const fullVectorTargetId = "__full__";
     const magneticVectorTargets: Viewport3DVectorBudgetTarget[] = [];
     const airboxVectorTargets: Viewport3DVectorBudgetTarget[] = [];
+    const partVectorScopes = new Map<string, "surface" | "full">();
     let scalarColorsVisible = false;
     const magneticVectorsAllowed = vectorDomain !== "airbox_only";
     const airboxVectorsAllowed =
@@ -455,9 +470,15 @@ function useViewport3DFieldRenderOptions({
         if (settings.visible && settings.shaderVisible) {
           scalarColorsVisible = true;
         }
+        partVectorScopes.set(partModel.part.id, settings.geometryScope);
         magneticVectorTargets.push({
           id: partModel.part.id,
-          nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
+          nodeCount: resolveNodeSelectionCount(
+            settings.geometryScope === "surface"
+              ? partModel.surfaceNodeSelection ?? partModel.part
+              : partModel.part,
+            topologyRenderModel,
+          ),
           visible,
         });
       }
@@ -475,9 +496,15 @@ function useViewport3DFieldRenderOptions({
     }
 
     for (const partModel of topologyRenderModel.airboxParts) {
+      partVectorScopes.set(partModel.part.id, airboxSettings.geometryScope);
       airboxVectorTargets.push({
         id: partModel.part.id,
-        nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
+        nodeCount: resolveNodeSelectionCount(
+          airboxSettings.geometryScope === "surface"
+            ? partModel.surfaceNodeSelection ?? partModel.part
+            : partModel.part,
+          topologyRenderModel,
+        ),
         visible:
           airboxVectorsAllowed &&
           airboxSettings.visible &&
@@ -499,11 +526,13 @@ function useViewport3DFieldRenderOptions({
     return {
       fullVectorBudget,
       partVectorBudgets: new Map([...magneticBudgets, ...airboxBudgets]),
+      partVectorScopes,
       scalarColorsVisible,
       vectorColorMode,
     };
   }, [
     airboxSettings.vectorsVisible,
+    airboxSettings.geometryScope,
     airboxSettings.visible,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorsVisible,
@@ -563,6 +592,7 @@ function Viewport3DFrame({
             fov: 42,
             near: 1e-12,
             position: DEFAULT_VIEWPORT_3D_CAMERA_STATE.position,
+            up: VIEWPORT_3D_WORLD_UP,
           }}
           className="fm-viewport-3d__canvas"
           frameloop={VIEWPORT_3D_FRAMELOOP}

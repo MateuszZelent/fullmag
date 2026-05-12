@@ -15,6 +15,7 @@ import {
   resolveEffectiveVisualizationSettings,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
+  type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -37,6 +38,14 @@ const RENDER_MODES: Array<{
   { label: "Shader + wire", value: "surface+edges" },
   { label: "Wire", value: "wireframe" },
   { label: "Points", value: "points" },
+];
+
+const GEOMETRY_SCOPES: Array<{
+  label: string;
+  value: VisualizationGeometryScope;
+}> = [
+  { label: "Surface", value: "surface" },
+  { label: "Full", value: "full" },
 ];
 
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
@@ -199,6 +208,27 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
               onClick={() => void patch(renderModePatch(mode.value))}
             >
               {mode.label}
+            </Button>
+          ))}
+        </div>
+      </InspectorSection>
+
+      <InspectorSection title="Geometry Scope">
+        <div className="fm-visualization-segments" role="group" aria-label="Geometry scope">
+          {GEOMETRY_SCOPES.map((scope) => (
+            <Button
+              key={scope.value}
+              size="sm"
+              type="button"
+              disabled={passControlsDisabled}
+              variant={
+                settings.visible && settings.geometryScope === scope.value
+                  ? "primary"
+                  : "secondary"
+              }
+              onClick={() => void patch({ geometryScope: scope.value })}
+            >
+              {scope.label}
             </Button>
           ))}
         </div>

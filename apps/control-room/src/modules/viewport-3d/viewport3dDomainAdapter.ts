@@ -110,7 +110,7 @@ export function adaptFemSharedDomainManifest(
     partsById.set(part.id, part);
     if (part.role === "air") {
       airboxParts.push(part);
-    } else {
+    } else if (isMagneticRenderablePart(part)) {
       magneticParts.push(part);
     }
 
@@ -127,6 +127,14 @@ export function adaptFemSharedDomainManifest(
     objectPartIds,
     partsById,
   };
+}
+
+function isMagneticRenderablePart(part: MeshPart): boolean {
+  return Boolean(
+    part.object_id ||
+      part.role === "magnetic" ||
+      part.role === "magnetic_object",
+  );
 }
 
 export function resolveFemPartSelectionByBoundaryFace(

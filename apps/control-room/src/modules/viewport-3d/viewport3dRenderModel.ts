@@ -43,6 +43,7 @@ export interface Viewport3DTopologyPartRenderModel<
 > {
   part: TPart;
   surfaceIndices: Uint32Array | null;
+  surfaceNodeSelection: Viewport3DNodeSelection | null;
 }
 
 export interface Viewport3DTopologyRenderModel<
@@ -64,6 +65,7 @@ export interface Viewport3DFieldRenderModel {
 export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   partVectorBudgets?: ReadonlyMap<string, number>;
+  partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
   scalarColorsVisible?: boolean;
   vectorColorMode?: string;
 }
@@ -103,12 +105,12 @@ export function buildViewport3DTopologyRenderModel<
   return {
     airboxParts: airboxParts.map((part) => ({
       part,
-      surfaceIndices: buildPartSurfaceIndices(part, topology),
+      ...buildPartTopologyModel(part, topology),
     })),
     fallbackSurfaceIndices: buildTetraSurfaceIndices(topology.indices),
     magneticParts: magneticParts.map((part) => ({
       part,
-      surfaceIndices: buildPartSurfaceIndices(part, topology),
+      ...buildPartTopologyModel(part, topology),
     })),
     nodeCount: topology.nodeCount,
     positions: buildTopologyPositions(topology),
@@ -142,13 +144,18 @@ export function buildViewport3DFieldRenderModel(
     const partBudget = hasPartBudgetPlan
       ? options.partVectorBudgets?.get(partModel.part.id) ?? 0
       : DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
+    const vectorScope = options.partVectorScopes?.get(partModel.part.id) ?? "full";
+    const vectorSelection =
+      vectorScope === "surface"
+        ? partModel.surfaceNodeSelection ?? partModel.part
+        : partModel.part;
     partVectorSegments.set(
       partModel.part.id,
       partBudget > 0
         ? buildVectorLineSegmentsForNodeSelectionFromPositions(
             topology,
             fieldVector,
-            partModel.part,
+            vectorSelection,
             scale,
             partBudget,
           )
@@ -271,6 +278,22 @@ export function buildPartSurfaceIndices(
     part.boundary_face_start,
     part.boundary_face_count,
   );
+}
+
+function buildPartTopologyModel(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): Pick<
+  Viewport3DTopologyPartRenderModel,
+  "surfaceIndices" | "surfaceNodeSelection"
+> {
+  const surfaceIndices = buildPartSurfaceIndices(part, topology);
+  return {
+    surfaceIndices,
+    surfaceNodeSelection: surfaceIndices
+      ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }
+      : null,
+  };
 }
 
 export function resolveDomainBounds(
@@ -637,6 +660,14 @@ function surfaceIndicesFromBoundaryFaceRange(
     (safeStart + safeCount) * 3,
   );
   return source.length ? new Uint32Array(source) : null;
+}
+
+function uniqueSortedIndices(indices: Uint32Array): number[] {
+  const unique = new Set<number>();
+  for (let index = 0; index < indices.length; index += 1) {
+    unique.add(indices[index] ?? 0);
+  }
+  return [...unique].sort((left, right) => left - right);
 }
 
 export function resolveNodeSelectionCount(

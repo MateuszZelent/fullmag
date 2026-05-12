@@ -27,6 +27,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
+  VIEWPORT_3D_WORLD_UP,
   CameraController,
   OrbitCameraControls,
   resolveViewport3DCameraFit,
@@ -193,6 +194,7 @@ export function Viewport3DScene({
           near={cameraFit.near}
           far={cameraFit.far}
           position={cameraState.position}
+          up={VIEWPORT_3D_WORLD_UP}
         />
       )}
       <DomainBoxLayer
@@ -241,6 +243,7 @@ export function Viewport3DScene({
       <group position={gridSpec.center}>
         <gridHelper
           args={[gridSpec.size, gridSpec.divisions, colors.wire, colors.wire]}
+          rotation={[Math.PI / 2, 0, 0]}
         />
         <axesHelper args={[gridSpec.axesLength]} />
       </group>

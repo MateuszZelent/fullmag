@@ -24,6 +24,7 @@ import { ModuleRegistry } from "./module/ModuleRegistry";
 import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
@@ -54,6 +55,9 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
   for (const cmd of GEOMETRY_LIFECYCLE_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of STUDY_RUNTIME_COMMANDS) {
     commands.register(cmd);
   }
 

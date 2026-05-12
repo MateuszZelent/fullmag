@@ -10,6 +10,7 @@ export type VisualizationRenderMode =
   | "surface"
   | "surface+edges"
   | "wireframe";
+export type VisualizationGeometryScope = "surface" | "full";
 
 export interface VisualizationTargetRef {
   id: string;
@@ -19,6 +20,7 @@ export interface VisualizationTargetRef {
 
 export interface VisualizationTargetSettings {
   boundsVisible: boolean;
+  geometryScope: VisualizationGeometryScope;
   opacityPercent: number;
   pointsVisible: boolean;
   renderMode: VisualizationRenderMode;
@@ -52,6 +54,7 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
+  geometryScope: "full",
   opacityPercent: 55,
   pointsVisible: false,
   renderMode: "surface+edges",
@@ -63,6 +66,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 
 export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   boundsVisible: false,
+  geometryScope: "surface",
   opacityPercent: 28,
   pointsVisible: false,
   renderMode: "wireframe",
@@ -339,9 +343,14 @@ export function airboxVisualizationStatePatchFromTargetPatch(
 export function airboxLocalVisualizationPatchFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
-  return patch.boundsVisible === undefined
-    ? {}
-    : { boundsVisible: patch.boundsVisible };
+  return {
+    ...(patch.boundsVisible === undefined
+      ? {}
+      : { boundsVisible: patch.boundsVisible }),
+    ...(patch.geometryScope === undefined
+      ? {}
+      : { geometryScope: patch.geometryScope }),
+  };
 }
 
 export function hasVisualizationStatePatch(
@@ -399,6 +408,10 @@ function normalizeVisualizationSettings(
 ): VisualizationTargetSettings {
   return {
     ...settings,
+    geometryScope:
+      settings.geometryScope === "surface" || settings.geometryScope === "full"
+        ? settings.geometryScope
+        : "full",
     opacityPercent: clampOpacity(settings.opacityPercent),
   };
 }

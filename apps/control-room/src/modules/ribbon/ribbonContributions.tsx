@@ -76,6 +76,7 @@ import {
   resolveVisualizationTargetFromSelection,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
+  type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -240,6 +241,14 @@ const SELECTED_RENDER_ITEMS: Array<{
 const AIRBOX_EXTENT_ITEMS = [
   { value: "surface", label: "Surface" },
   { value: "full",    label: "Full" },
+];
+
+const GEOMETRY_SCOPE_ITEMS: Array<{
+  label: string;
+  value: VisualizationGeometryScope;
+}> = [
+  { value: "surface", label: "Surface only" },
+  { value: "full", label: "Full volume" },
 ];
 
 type FieldComponentPatch = NonNullable<VisualizationStatePatch["field_component"]>;
@@ -1286,6 +1295,7 @@ export const studyTab: RibbonTabContent = {
       subtitle: "runtime",
       tone: "compute",
       actions: [
+        { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study-run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
         { id: "study-pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  disabled: true, iconColor: C.yellow },
         { id: "study-stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   disabled: true, iconColor: C.red },
@@ -2497,6 +2507,16 @@ function buildSelectedVisualizationGroup(
             items: SELECTED_RENDER_ITEMS,
             onValueChange: (value) =>
               patch(renderModePatch(value as VisualizationRenderMode)),
+          },
+          {
+            type: "radio-group",
+            id: "selected:geometry-scope",
+            label: "Geometry scope",
+            value: settings?.geometryScope ?? "full",
+            disabled: !enabled || passControlsDisabled,
+            items: GEOMETRY_SCOPE_ITEMS,
+            onValueChange: (value) =>
+              patch({ geometryScope: value as VisualizationGeometryScope }),
           },
           {
             type: "checkbox",

@@ -19,6 +19,7 @@ import {
 
 import { viewport3dStore } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import { applyViewport3DWorldUp } from "../layers/CameraControls";
 
 import {
   snapCameraToDirection,
@@ -88,24 +89,24 @@ const VIEW_CUBE_FACE_PLACEMENTS: Record<ViewCubeFaceModel["id"], {
     rotation: [0, -Math.PI / 2, 0],
   },
   top: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
-    position: [0, VIEW_CUBE_HALF, 0],
-    rotation: [-Math.PI / 2, 0, 0],
-  },
-  bottom: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
-    position: [0, -VIEW_CUBE_HALF, 0],
-    rotation: [Math.PI / 2, 0, 0],
-  },
-  front: {
     accent: VIEW_CUBE_AXIS_COLORS.z,
     position: [0, 0, VIEW_CUBE_HALF],
     rotation: [0, 0, 0],
   },
-  back: {
+  bottom: {
     accent: VIEW_CUBE_AXIS_COLORS.z,
     position: [0, 0, -VIEW_CUBE_HALF],
     rotation: [0, Math.PI, 0],
+  },
+  front: {
+    accent: VIEW_CUBE_AXIS_COLORS.y,
+    position: [0, VIEW_CUBE_HALF, 0],
+    rotation: [-Math.PI / 2, 0, 0],
+  },
+  back: {
+    accent: VIEW_CUBE_AXIS_COLORS.y,
+    position: [0, -VIEW_CUBE_HALF, 0],
+    rotation: [Math.PI / 2, 0, 0],
   },
 };
 
@@ -143,6 +144,7 @@ export function OrientationHudLayer({
         direction,
       );
 
+      applyViewport3DWorldUp(camera);
       camera.position.set(...nextCamera.position);
       camera.lookAt(...nextCamera.target);
       camera.updateProjectionMatrix();

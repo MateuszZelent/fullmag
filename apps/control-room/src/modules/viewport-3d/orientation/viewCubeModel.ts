@@ -68,54 +68,6 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
   return [
     {
       id: "top",
-      normal: [0, 1, 0],
-      right: [1, 0, 0],
-      targets: buildFaceTargets(
-        [0, 1, 0],
-        [0, 0, 1],
-        [1, 0, 0],
-        trimPositive(axisLabels.y),
-      ),
-      up: [0, 0, 1],
-    },
-    {
-      id: "bottom",
-      normal: [0, -1, 0],
-      right: [-1, 0, 0],
-      targets: buildFaceTargets(
-        [0, -1, 0],
-        [0, 0, 1],
-        [-1, 0, 0],
-        axisLabels.y.replace("+", "-"),
-      ),
-      up: [0, 0, 1],
-    },
-    {
-      id: "right",
-      normal: [1, 0, 0],
-      right: [0, 0, -1],
-      targets: buildFaceTargets(
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 0, -1],
-        trimPositive(axisLabels.x),
-      ),
-      up: [0, 1, 0],
-    },
-    {
-      id: "left",
-      normal: [-1, 0, 0],
-      right: [0, 0, 1],
-      targets: buildFaceTargets(
-        [-1, 0, 0],
-        [0, 1, 0],
-        [0, 0, 1],
-        axisLabels.x.replace("+", "-"),
-      ),
-      up: [0, 1, 0],
-    },
-    {
-      id: "front",
       normal: [0, 0, 1],
       right: [1, 0, 0],
       targets: buildFaceTargets(
@@ -127,7 +79,7 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
       up: [0, 1, 0],
     },
     {
-      id: "back",
+      id: "bottom",
       normal: [0, 0, -1],
       right: [-1, 0, 0],
       targets: buildFaceTargets(
@@ -137,6 +89,54 @@ export function buildViewCubeFaces(): readonly ViewCubeFaceModel[] {
         axisLabels.z.replace("+", "-"),
       ),
       up: [0, 1, 0],
+    },
+    {
+      id: "right",
+      normal: [1, 0, 0],
+      right: [0, -1, 0],
+      targets: buildFaceTargets(
+        [1, 0, 0],
+        [0, 0, 1],
+        [0, -1, 0],
+        trimPositive(axisLabels.x),
+      ),
+      up: [0, 0, 1],
+    },
+    {
+      id: "left",
+      normal: [-1, 0, 0],
+      right: [0, 1, 0],
+      targets: buildFaceTargets(
+        [-1, 0, 0],
+        [0, 0, 1],
+        [0, 1, 0],
+        axisLabels.x.replace("+", "-"),
+      ),
+      up: [0, 0, 1],
+    },
+    {
+      id: "front",
+      normal: [0, 1, 0],
+      right: [1, 0, 0],
+      targets: buildFaceTargets(
+        [0, 1, 0],
+        [0, 0, 1],
+        [1, 0, 0],
+        trimPositive(axisLabels.y),
+      ),
+      up: [0, 0, 1],
+    },
+    {
+      id: "back",
+      normal: [0, -1, 0],
+      right: [-1, 0, 0],
+      targets: buildFaceTargets(
+        [0, -1, 0],
+        [0, 0, 1],
+        [-1, 0, 0],
+        axisLabels.y.replace("+", "-"),
+      ),
+      up: [0, 0, 1],
     },
   ];
 }
@@ -222,8 +222,8 @@ function trimPositive(label: string): string {
 function viewCubeTargetId(x: number, y: number, z: number): string {
   return [
     x < 0 ? "left" : x > 0 ? "right" : null,
-    y < 0 ? "bottom" : y > 0 ? "top" : null,
-    z < 0 ? "back" : z > 0 ? "front" : null,
+    z < 0 ? "bottom" : z > 0 ? "top" : null,
+    y < 0 ? "back" : y > 0 ? "front" : null,
   ]
     .filter((part): part is string => part !== null)
     .join("-");

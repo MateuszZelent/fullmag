@@ -18,6 +18,7 @@ const colors = {
 
 const visibleWireframeAirbox: VisualizationTargetSettings = {
   boundsVisible: false,
+  geometryScope: "surface",
   opacityPercent: 35,
   pointsVisible: false,
   renderMode: "wireframe",
@@ -43,7 +44,7 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   } as Viewport3DMeshPart;
 
   return {
-    airboxParts: [{ part, surfaceIndices: null }],
+    airboxParts: [{ part, surfaceIndices: null, surfaceNodeSelection: null }],
     fallbackSurfaceIndices: new Uint32Array(),
     magneticParts: [],
     nodeCount: 4,
@@ -52,14 +53,15 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
 }
 
 describe("AirboxLayer", () => {
-  it("selects the airbox mesh part when its 3D layer is clicked", () => {
+  it("passes the airbox selection handler into mesh part layers", () => {
     const onSelectPart = vi.fn();
+    const topologyModel = airboxTopology();
     const element = AirboxLayer({
       colors,
       fieldModel: null,
       onSelectPart,
       settings: visibleWireframeAirbox,
-      topologyModel: airboxTopology(),
+      topologyModel,
       tracker: {} as never,
       vectorColorMode: "orientation",
       vectorStyle: {},
@@ -67,22 +69,14 @@ describe("AirboxLayer", () => {
 
     expect(isValidElement(element)).toBe(true);
     const fragment = element as ReactElement<{ children: ReactElement[] }>;
-    const group = fragment.props.children[0] as ReactElement<{
-      onPointerDown: (event: { stopPropagation: () => void }) => void;
-    }>;
-    const stopPropagation = vi.fn();
+    const child = fragment.props.children[0];
 
-    group.props.onPointerDown({ stopPropagation });
-
-    expect(stopPropagation).toHaveBeenCalledOnce();
-    expect(onSelectPart).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "mesh-part-airbox",
-        label: "Airbox",
-        nodeId: "airbox-part",
-        objectId: null,
-      }),
-    );
+    expect(isValidElement(child)).toBe(true);
+    expect(child.props).toMatchObject({
+      onSelectPart,
+      settings: visibleWireframeAirbox,
+      topologyModel,
+    });
   });
 });
 

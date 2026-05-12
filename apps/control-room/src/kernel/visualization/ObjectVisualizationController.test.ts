@@ -123,6 +123,7 @@ describe("ObjectVisualizationController", () => {
     expect(
       resolveVisualizationSettings(controller.getSnapshot(), target, {
         boundsVisible: false,
+        geometryScope: "full",
         opacityPercent: 80,
         pointsVisible: true,
         renderMode: "points",
@@ -259,9 +260,10 @@ describe("ObjectVisualizationController", () => {
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         boundsVisible: true,
+        geometryScope: "full",
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({ boundsVisible: true });
+    ).toEqual({ boundsVisible: true, geometryScope: "full" });
   });
 });

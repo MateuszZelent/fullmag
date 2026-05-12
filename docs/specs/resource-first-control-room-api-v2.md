@@ -44,6 +44,7 @@ The default frontend base path is `/v2/sessions/current`.
 - `GET /v2/sessions/current/status` stays thin: summary, capabilities, and revision pointers only.
 - Heavy numerical payloads stay on resource data-plane routes, never in `status`.
 - All simulation-control operations go through `POST /v2/sessions/current/simulation/commands`.
+- `compute_fields` is a simulation command, not a preview/display mutation. It evaluates active field quantities for the current magnetization, refreshes `data/fields`, and must not advance time, run LLG/relaxation, or mutate magnetization.
 - Authoring operations that mutate the canonical scene go through the `model` family, not simulation commands.
 - `completion_status` is command outcome, not queue state; public command states are `queued`, `accepted`, `dispatched`, `running`, `completed`, `rejected`, and `failed`.
 - `data/quantities` describes supported quantities and preview capability.

@@ -11,6 +11,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   ObjectVisualizationController,
@@ -782,6 +783,40 @@ describe("ribbon structure", () => {
     expect(buildAction).toMatchObject({
       disabled: true,
       tooltip: "Select a scene object to build its mesh.",
+    });
+  });
+
+  it("exposes compute fields through the Study control group command", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+
+    const content = buildRibbonTabContent("study", {
+      commands,
+      commandContext: {
+        api: { commands: { submit: vi.fn() } } as never,
+        source: "test",
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const computeFieldsAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.compute-fields");
+
+    expect(computeFieldsAction).toMatchObject({
+      disabled: false,
+      label: "Compute Fields",
     });
   });
 

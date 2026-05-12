@@ -186,15 +186,23 @@ function AirboxMeshPartLayer({
         </mesh>
       ) : null}
       {settings.wireframeVisible ? (
-        <mesh geometry={geometry}>
-          <meshBasicMaterial
+        settings.geometryScope === "surface" ? (
+          <mesh geometry={geometry}>
+            <meshBasicMaterial
+              color={colors.wire}
+              opacity={opacity}
+              side={DoubleSide}
+              transparent
+              wireframe
+            />
+          </mesh>
+        ) : (
+          <BoundsBox
+            bounds={resolveMeshPartBounds(part)}
             color={colors.wire}
             opacity={opacity}
-            side={DoubleSide}
-            transparent
-            wireframe
           />
-        </mesh>
+        )
       ) : null}
       {settings.boundsVisible ? (
         <BoundsBox

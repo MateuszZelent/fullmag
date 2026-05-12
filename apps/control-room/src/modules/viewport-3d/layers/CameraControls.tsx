@@ -33,6 +33,11 @@ const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
   radius: 1e-6,
   size: [1e-6, 1e-6, 1e-6],
 };
+export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
+
+export function applyViewport3DWorldUp(camera: Camera): void {
+  camera.up.set(...VIEWPORT_3D_WORLD_UP);
+}
 
 export function resolveViewport3DCameraFit(
   bounds: Viewport3DBounds | null,
@@ -129,6 +134,7 @@ export function CameraController({
 
     const fit = resolveViewport3DCameraFit(bounds);
 
+    applyViewport3DWorldUp(camera);
     camera.position.set(...fit.position);
     camera.lookAt(...fit.target);
     applyCameraClipping(camera, fit.near, fit.far);
@@ -147,6 +153,7 @@ export function CameraController({
   // Initial camera placement (once, on mount)
   useEffect(() => {
     const state = cameraStateRef.current;
+    applyViewport3DWorldUp(camera);
     camera.position.set(...state.position);
     camera.lookAt(...state.target);
     camera.updateProjectionMatrix();
@@ -165,6 +172,12 @@ export function OrbitCameraControls({
   tracker: Viewport3DResourceTracker;
 }) {
   const { camera, invalidate } = useThree();
+
+  useEffect(() => {
+    applyViewport3DWorldUp(camera);
+    invalidate();
+    tracker.recordDirtyFrame("camera-up");
+  }, [camera, invalidate, tracker]);
 
   const recordCameraControlChange = useCallback(() => {
     invalidate();

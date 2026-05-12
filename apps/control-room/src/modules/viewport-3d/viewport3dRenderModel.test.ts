@@ -246,6 +246,47 @@ describe("viewport3dRenderModel", () => {
     expect(fieldModel?.partVectorSegments.get("part-a")).toBeNull();
   });
 
+  it("can restrict per-part vector glyphs to boundary surface nodes", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+
+    const surfaceFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partVectorBudgets: new Map([["part-a", 4]]),
+        partVectorScopes: new Map([["part-a", "surface"]]),
+      },
+    );
+    const fullFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        partVectorBudgets: new Map([["part-a", 4]]),
+        partVectorScopes: new Map([["part-a", "full"]]),
+      },
+    );
+
+    expect(surfaceFieldModel?.partVectorSegments.get("part-a")?.length).toBe(
+      18,
+    );
+    expect(fullFieldModel?.partVectorSegments.get("part-a")?.length).toBe(24);
+  });
+
   it("uses an explicit global vector budget instead of per-part fixed budgets", () => {
     const budgets = distributeVectorGlyphBudget(
       [

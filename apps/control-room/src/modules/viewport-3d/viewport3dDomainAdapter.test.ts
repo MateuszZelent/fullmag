@@ -65,6 +65,30 @@ function manifestFixture(): MeshSharedDomainManifestResource {
         object_id: "object-1",
         role: "magnetic",
       },
+      {
+        boundary_face_count: 0,
+        boundary_face_indices: [30, 31],
+        boundary_face_start: 0,
+        element_count: 0,
+        element_start: 0,
+        id: "part-outer-boundary",
+        label: "Outer Boundary",
+        node_count: 0,
+        node_start: 0,
+        role: "outer_boundary",
+      },
+      {
+        boundary_face_count: 0,
+        boundary_face_start: 0,
+        element_count: 0,
+        element_start: 0,
+        id: "part-interface",
+        label: "Air ↔ Magnet",
+        node_count: 0,
+        node_start: 0,
+        role: "interface",
+        surface_faces: [[0, 1, 2]],
+      },
     ],
     revision: 7,
   };
@@ -93,6 +117,21 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);
     expect(domain.objectPartIds.get("object-1")).toEqual(["part-magnet"]);
     expect(domain.partsById.get("part-air")?.role).toBe("air");
+  });
+
+  it("keeps helper boundary and interface parts out of renderable FEM part lists", () => {
+    const domain = adaptFemSharedDomainManifest(manifestFixture());
+
+    expect(domain.partsById.get("part-outer-boundary")?.role).toBe(
+      "outer_boundary",
+    );
+    expect(domain.partsById.get("part-interface")?.role).toBe("interface");
+    expect(domain.airboxParts.map((part) => part.id)).not.toContain(
+      "part-outer-boundary",
+    );
+    expect(domain.magneticParts.map((part) => part.id)).not.toEqual(
+      expect.arrayContaining(["part-outer-boundary", "part-interface"]),
+    );
   });
 
   it("resolves FEM picking selection from mesh-part boundary faces", () => {
