@@ -1,5 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@radix-ui/react-dialog")>();
+
+  return {
+    ...actual,
+    Portal: ({ children }: { children: ReactNode }) => <>{children}</>,
+  };
+});
 
 import {
   Dialog,

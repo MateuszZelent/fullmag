@@ -129,7 +129,12 @@ function PrimitiveObject({
         </mesh>
       ) : null}
       <Html center distanceFactor={8} position={[0, object.bounds.size[1] / 2, 0]}>
-        <span className="fm-viewport-3d__primitive-label">
+        <span
+          aria-label={`${object.label}: ${object.fallbackLabel}`}
+          className="fm-viewport-3d__primitive-label"
+          data-object-id={object.objectId}
+          data-object-name={object.label}
+        >
           {object.fallbackLabel}
         </span>
       </Html>

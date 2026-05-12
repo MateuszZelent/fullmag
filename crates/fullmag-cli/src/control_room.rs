@@ -151,7 +151,17 @@ pub(crate) struct ControlPlaneReady {
 }
 
 fn browser_control_room_assets(root: &Path, dev_mode: bool) -> (PathBuf, PathBuf, PathBuf, bool) {
-    let web_dir = root.join("apps").join("web");
+    // Prefer apps/control-room (v2 frontend). Fall back to apps/web then apps/legacy_web.
+    let v2_dir = root.join("apps").join("control-room");
+    let legacy_candidates = ["apps/web", "apps/legacy_web"].map(|p| root.join(p));
+    let web_dir = if v2_dir.join("dev-server.mjs").is_file() {
+        v2_dir
+    } else {
+        legacy_candidates
+            .into_iter()
+            .find(|p| p.join("dev-server.mjs").is_file())
+            .unwrap_or_else(|| root.join("apps").join("web"))
+    };
     let repo_local_static_web_root = root.join(".fullmag").join("local").join("web");
     let repo_built_static_web_root = web_dir.join("out");
     let static_web_root = if repo_local_static_web_root.join("index.html").is_file() {
@@ -583,13 +593,21 @@ fn frontend_is_ready_with_timeout(port: u16, timeout: Duration) -> bool {
         return false;
     }
 
+    // Disable redirect following: a 3xx response means the server is up and responding.
+    // Without this, a Next.js dev server that redirects / -> /workspace would cause reqwest
+    // to follow the redirect. The redirect target is compiled lazily and may not be ready
+    // within the timeout, producing a false-negative that triggers an unnecessary restart.
     reqwest::blocking::Client::builder()
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("frontend readiness client should build")
         .get(format!("http://{LOCALHOST_HTTP_HOST}:{port}/"))
         .send()
-        .map(|response| response.status().is_success())
+        .map(|response| {
+            let status = response.status();
+            status.is_success() || status.is_redirection()
+        })
         .unwrap_or(false)
 }
 

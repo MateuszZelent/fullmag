@@ -35,10 +35,12 @@ import {
 import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
+  combineViewport3DBounds,
   distributeVectorGlyphBudget,
   resolveNodeSelectionCount,
   resolveDomainBounds,
   resolveTopologyBounds,
+  resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
   type Viewport3DFieldRenderOptions,
   type Viewport3DTopologyRenderModel,
@@ -56,11 +58,13 @@ import {
   useViewport3DFieldVector,
   useViewport3DScene,
   useViewport3DSharedDomainManifest,
+  useViewport3DUniverse,
   useViewport3DVisualizationState,
 } from "./viewport3dResources";
 import { buildViewport3DResourceFrameKey } from "./viewport3dInvalidation";
 import {
   resolveHslReferenceVisible,
+  DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   useViewport3DCommandState,
   viewport3dStore,
 } from "./viewport3dStore";
@@ -126,6 +130,7 @@ export default function Viewport3DModule({
   );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
+  const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const topology = useViewport3DDomainTopology();
   const fieldVector = useViewport3DFieldVector(quantityId, FULL_FIELD_QUERY);
@@ -137,19 +142,13 @@ export default function Viewport3DModule({
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
   );
-  const bounds =
-    resolveTopologyBounds(topology.data) ?? resolveDomainBounds(domainMeta.data);
-  const vectorScale = Math.max(
-    (bounds?.radius ?? 1) * 0.06 * vectorLengthScale,
-    1e-9,
-  );
   const topologyRenderModel = useMemo(
     () =>
       buildViewport3DTopologyRenderModel(
         topology.data,
         femDomain.magneticParts,
         femDomain.airboxParts,
-    ),
+      ),
     [femDomain.airboxParts, femDomain.magneticParts, topology.data],
   );
   const primitiveModel = useMemo(
@@ -159,6 +158,21 @@ export default function Viewport3DModule({
         sharedDomainManifest.data,
       ),
     [scene.data, sharedDomainManifest.data],
+  );
+  const primitiveBounds = useMemo(
+    () => combineViewport3DBounds(
+      primitiveModel.objects.map((object) => object.bounds),
+    ),
+    [primitiveModel],
+  );
+  const bounds =
+    resolveTopologyBounds(topology.data) ??
+    resolveDomainBounds(domainMeta.data) ??
+    resolveUniverseBounds(universe.data) ??
+    primitiveBounds;
+  const vectorScale = Math.max(
+    (bounds?.radius ?? 1e-6) * 0.06 * vectorLengthScale,
+    1e-12,
   );
   const selectionBounds =
     resolvePrimitiveSelectionBounds(selection, primitiveModel) ??
@@ -228,6 +242,7 @@ export default function Viewport3DModule({
     topology.error?.message ??
     fieldVector.error?.message ??
     scene.error?.message ??
+    universe.error?.message ??
     domainMeta.error?.message ??
     sharedDomainManifest.error?.message ??
     visualizationState.error?.message ??
@@ -278,6 +293,12 @@ export default function Viewport3DModule({
       id: "shared-domain-manifest",
       revision: sharedDomainManifest.revision,
       status: sharedDomainManifest.status,
+    },
+    {
+      error: universe.error?.message,
+      id: "universe",
+      revision: universe.revision,
+      status: universe.status,
     },
     {
       error: visualizationState.error?.message,
@@ -472,7 +493,12 @@ function Viewport3DFrame({
       </div>
       {clientReady && colors ? (
         <Canvas
-          camera={{ fov: 42, position: [2, 1.4, 2] }}
+          camera={{
+            far: 1e-3,
+            fov: 42,
+            near: 1e-12,
+            position: DEFAULT_VIEWPORT_3D_CAMERA_STATE.position,
+          }}
           className="fm-viewport-3d__canvas"
           frameloop={VIEWPORT_3D_FRAMELOOP}
           gl={{

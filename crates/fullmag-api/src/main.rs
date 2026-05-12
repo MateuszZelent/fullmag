@@ -405,6 +405,7 @@ mod realtime_change_tests {
         ));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
         assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
+        assert!(fetches.contains("/v2/sessions/current/model/scene"));
     }
 }
 

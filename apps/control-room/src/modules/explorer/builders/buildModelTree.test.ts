@@ -11,6 +11,13 @@ describe("buildModelTree", () => {
         label: "Universe",
         size: [2e-6, 1e-6, 5e-8],
       },
+      materials: [
+        {
+          id: "mat:free-layer",
+          label: "Free layer material",
+          propertyKeys: ["Aex", "Ms", "alpha"],
+        },
+      ],
       objects: [
         {
           id: "free-layer",
@@ -18,6 +25,14 @@ describe("buildModelTree", () => {
           geometryKind: "thin film",
           material: "Permalloy",
           meshStatus: "stale",
+        },
+      ],
+      physicsInteractions: [
+        {
+          enabledCount: 1,
+          id: "uniaxial_anisotropy",
+          label: "Uniaxial anisotropy",
+          objectCount: 1,
         },
       ],
     });
@@ -37,6 +52,10 @@ describe("buildModelTree", () => {
         "model:object:free-layer:visualization",
         "model:airbox:mesh",
         "model:airbox:visualization",
+        "model:materials",
+        "model:material:mat:free-layer",
+        "model:physics",
+        "model:physics:uniaxial_anisotropy",
       ]),
     );
     expect(
@@ -47,6 +66,13 @@ describe("buildModelTree", () => {
 
   it("projects canonical SceneDocument objects into lifecycle-aware nodes", () => {
     const snapshot = modelTreeSnapshotFromScene({
+      materials: [
+        {
+          id: "mat-1",
+          name: "Material 1",
+          properties: { Aex: 1e-11, Ms: 800000, alpha: 0.02 },
+        },
+      ],
       objects: [
         {
           geometry: {
@@ -56,6 +82,10 @@ describe("buildModelTree", () => {
           id: "box-1",
           material_ref: "mat-1",
           name: "Box 1",
+          physics_stack: [
+            { enabled: true, kind: "exchange" },
+            { enabled: false, kind: "demag" },
+          ],
           tags: ["mesh:dirty"],
         },
       ],
@@ -77,6 +107,21 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:box-1:physics")
         ?.label,
     ).toBe("Physics");
+    expect(flattened.find((node) => node.id === "model:materials")?.badge).toBe(
+      "1",
+    );
+    expect(
+      flattened.find((node) => node.id === "model:material:mat-1")?.label,
+    ).toBe("Material 1");
+    expect(flattened.find((node) => node.id === "model:physics")?.badge).toBe(
+      "2",
+    );
+    expect(
+      flattened.find((node) => node.id === "model:physics:exchange")?.badge,
+    ).toBe("active");
+    expect(
+      flattened.find((node) => node.id === "model:physics:demag")?.badge,
+    ).toBe("disabled");
     expect(
       flattened.find((node) => node.id === "model:object:box-1")
         ?.contextCommands,
@@ -100,6 +145,8 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:free-layer",
     );
+    expect(flattened.map((node) => node.id)).not.toContain("model:materials");
+    expect(flattened.map((node) => node.id)).not.toContain("model:physics");
   });
 
   it("does not synthesize demo objects when the scene snapshot is missing", () => {
@@ -113,6 +160,18 @@ describe("buildModelTree", () => {
     );
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:reference-layer",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:material:permalloy",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:material:cofeb",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:physics:exchange",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:physics:demag",
     );
     expect(flattened.find((node) => node.id === "model:objects")?.badge).toBe(
       "0",

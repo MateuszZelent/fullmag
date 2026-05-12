@@ -9,9 +9,11 @@ import {
   buildTetraSurfaceIndices,
   buildVectorLineSegments,
   buildVectorLineSegmentsForNodeSelection,
+  combineViewport3DBounds,
   distributeVectorGlyphBudget,
   resolveNodeSelectionCount,
   resolveTopologyBounds,
+  resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
 } from "./viewport3dRenderModel";
 
@@ -62,6 +64,51 @@ describe("viewport3dRenderModel", () => {
     expect(bounds?.center).toEqual([0.5, 0.5, 0.5]);
     expect(bounds?.size).toEqual([1, 1, 1]);
     expect(bounds?.radius).toBeCloseTo(Math.sqrt(3) / 2);
+  });
+
+  it("resolves nanoscale authoring universe bounds from size and center", () => {
+    const bounds = resolveUniverseBounds({
+      mesh_dirty: false,
+      object_bounds_max: null,
+      object_bounds_min: null,
+      scene_revision: 7,
+      study_universe_mesh: null,
+      universe: {
+        center: [1e-7, 2e-7, 0],
+        mode: "box",
+        size: [2e-7, 4e-7, 1e-8],
+      } as never,
+    });
+
+    expect(bounds?.center).toEqual([1e-7, 2e-7, 0]);
+    expect(bounds?.size).toEqual([2e-7, 4e-7, 1e-8]);
+    expect(bounds?.radius).toBeCloseTo(
+      Math.hypot(2e-7, 4e-7, 1e-8) / 2,
+    );
+  });
+
+  it("falls back to realized object bounds when universe size is absent", () => {
+    const bounds = resolveUniverseBounds({
+      mesh_dirty: false,
+      object_bounds_max: [3e-7, 4e-7, 5e-8],
+      object_bounds_min: [-1e-7, -2e-7, -5e-8],
+      scene_revision: 8,
+      study_universe_mesh: null,
+      universe: null,
+    });
+
+    expect(bounds?.center).toEqual([1e-7, 1e-7, 0]);
+    expect(bounds?.size).toEqual([4e-7, 6e-7, 1e-7]);
+  });
+
+  it("combines primitive and domain bounds without assuming meter scale", () => {
+    const bounds = combineViewport3DBounds([
+      { center: [0, 0, 0], radius: 5e-8, size: [1e-7, 1e-7, 1e-8] },
+      { center: [2e-7, 0, 0], radius: 5e-8, size: [1e-7, 1e-7, 1e-8] },
+    ]);
+
+    expect(bounds?.center).toEqual([1e-7, 0, 0]);
+    expect(bounds?.size).toEqual([3e-7, 1e-7, 1e-8]);
   });
 
   it("builds sampled normalized vector line segments", () => {

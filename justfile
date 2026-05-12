@@ -143,10 +143,12 @@ run-arch-waveguide-interactive fem_execution="cpu":
     bash -euo pipefail -c 'mode="{{fem_execution}}"; case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; 1|true|TRUE|on|ON|yes|YES|y|Y) echo "run-arch-waveguide-interactive argument selects FEM execution mode, not build cpu_only; use cpu or gpu." >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; just run-arch-waveguide-interactive-managed "$mode"'
 
 # Run arch waveguide interactive with the new v2 control room (apps/control-room).
-# Starts the v2 Next.js dev server on :3100, then launches the simulation.
+# Starts the v2 Next.js dev server on :3100, then launches the simulation against it.
 run-arch-waveguide-interactive-v2 fem_execution="cpu":
     bash -euo pipefail -c '\
       mode="{{fem_execution}}"; \
+      api_url="http://localhost:8081"; \
+      web_url="http://localhost:3100"; \
       case "$mode" in \
         0|cpu|CPU) mode="cpu" ;; \
         gpu|GPU) mode="gpu" ;; \
@@ -163,25 +165,29 @@ run-arch-waveguide-interactive-v2 fem_execution="cpu":
       rm -rf apps/control-room/.next/dev; \
       mkdir -p .fullmag/logs; \
       echo "Starting v2 control room on :3100 ..." >&2; \
-      NEXT_PUBLIC_FULLMAG_API_URL="http://localhost:8081" \
-      FULLMAG_API_URL="http://localhost:8081" \
-      FULLMAG_API_PROXY_TARGET="http://localhost:8081" \
+      NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL="$api_url" \
+      NEXT_PUBLIC_RUNTIME_HTTP_BASE="$api_url" \
+      NEXT_PUBLIC_API_URL="$api_url" \
+      NEXT_PUBLIC_FULLMAG_API_URL="$api_url" \
+      FULLMAG_API_URL="$api_url" \
+      FULLMAG_API_PROXY_TARGET="$api_url" \
       $PNPM_CMD --dir apps/control-room dev --hostname 0.0.0.0 --port 3100 \
         >.fullmag/logs/control-room-v2.log 2>&1 & \
-      printf "http://localhost:3100\n" > .fullmag/control-room-url.txt; \
+      printf "%s\n" "$web_url" > .fullmag/control-room-url.txt; \
+      printf "%s\n" "$web_url" > .fullmag/control-room-v2-url.txt; \
       printf "dev\n" > .fullmag/control-room-mode.txt; \
-      echo "Waiting for v2 frontend on :3100 (up to 120s) ..." >&2; \
+      echo "Waiting for v2 frontend (/workspace) on :3100 (up to 120s) ..." >&2; \
       for i in $(seq 1 600); do \
-        curl -fsS http://localhost:3100 >/dev/null 2>&1 && break; \
+        curl -fsS http://localhost:3100/workspace >/dev/null 2>&1 && break; \
         sleep 0.2; \
       done; \
-      if ! curl -fsS http://localhost:3100 >/dev/null 2>&1; then \
+      if ! curl -fsS http://localhost:3100/workspace >/dev/null 2>&1; then \
         echo "v2 frontend did not become ready on :3100" >&2; \
         echo "Log: $(pwd)/.fullmag/logs/control-room-v2.log" >&2; \
         exit 1; \
       fi; \
-      echo "v2 frontend ready on http://localhost:3100 — launching simulation ..." >&2; \
-      just run-arch-waveguide-interactive-managed "$mode"'
+      echo "v2 frontend ready on ${web_url}/workspace - launching simulation ..." >&2; \
+      FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" auto 3100'
 
 
 
@@ -224,13 +230,15 @@ run-stno-interactive-managed fem_execution="gpu" cpu_threads="auto":
         FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/stno_vortex_mtj_workflow.py; \
     fi
 
-run-arch-waveguide-interactive-managed fem_execution="gpu" cpu_threads="auto":
+run-arch-waveguide-interactive-managed fem_execution="gpu" cpu_threads="auto" web_port="":
     just ensure-python
     just ensure-managed-fem-runtime
+    web_port_arg=""; \
+    if [ -n "{{web_port}}" ]; then web_port_arg="--web-port {{web_port}}"; fi; \
     if [ "{{cpu_threads}}" = "auto" ]; then \
-        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev -i examples/arch_waveguide_relax_50nm.py; \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS=auto '{{gpu_runtime_bin}}' --dev $web_port_arg -i examples/arch_waveguide_relax_50nm.py; \
     else \
-        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev -i examples/arch_waveguide_relax_50nm.py; \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="{{fem_execution}}" FULLMAG_CPU_THREADS="{{cpu_threads}}" '{{gpu_runtime_bin}}' --dev $web_port_arg -i examples/arch_waveguide_relax_50nm.py; \
     fi
 
 run-nanoflower-quadro-gpu-headless:

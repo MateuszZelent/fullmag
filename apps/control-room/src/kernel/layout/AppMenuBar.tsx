@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -302,10 +302,7 @@ export function AppMenuBar() {
   const { theme, setTheme } = useTheme();
   const sessionStatus = useSessionStatus();
   const sessionDisplay = resolveHeaderSessionDisplay(sessionStatus);
-  const [apiDialogOpen, setApiDialogOpen] = useState(false);
-  const [lastAutoOpenedError, setLastAutoOpenedError] = useState<string | null>(
-    null,
-  );
+  const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const apiErrorDetails = useMemo(() => {
     if (!sessionStatus.error) return null;
 
@@ -318,20 +315,16 @@ export function AppMenuBar() {
       ),
     });
   }, [kernel, sessionStatus.error]);
-  const apiErrorSignature = apiErrorDetails
-    ? `${apiErrorDetails.errorName}:${apiErrorDetails.errorMessage}`
-    : null;
-
-  useEffect(() => {
-    if (!apiErrorSignature) {
-      setLastAutoOpenedError(null);
-      return;
-    }
-
-    if (lastAutoOpenedError === apiErrorSignature) return;
-    setApiDialogOpen(true);
-    setLastAutoOpenedError(apiErrorSignature);
-  }, [apiErrorSignature, lastAutoOpenedError]);
+  const apiDialogOpen = Boolean(
+    apiErrorDetails && apiDialogError === sessionStatus.error,
+  );
+  const openApiDialog = () => {
+    if (sessionStatus.error) setApiDialogError(sessionStatus.error);
+  };
+  const onApiDialogOpenChange = (open: boolean) => {
+    if (open) openApiDialog();
+    else setApiDialogError(null);
+  };
 
   return (
     <header className="fm-header">
@@ -390,9 +383,10 @@ export function AppMenuBar() {
         className="fm-header__session-indicator"
         data-clickable={sessionStatus.error ? "true" : undefined}
         type="button"
-        onClick={() => {
-          if (sessionStatus.error) setApiDialogOpen(true);
-        }}
+        onClick={openApiDialog}
+        onFocus={openApiDialog}
+        onPointerEnter={openApiDialog}
+        aria-expanded={apiDialogOpen ? true : undefined}
         aria-haspopup={sessionStatus.error ? "dialog" : undefined}
         title={
           sessionStatus.error
@@ -413,7 +407,7 @@ export function AppMenuBar() {
 
       <ApiConnectionErrorDialog
         details={apiErrorDetails}
-        onOpenChange={setApiDialogOpen}
+        onOpenChange={onApiDialogOpenChange}
         onRetry={sessionStatus.refetch}
         open={apiDialogOpen}
       />

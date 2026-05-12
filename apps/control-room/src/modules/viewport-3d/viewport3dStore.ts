@@ -24,10 +24,14 @@ export interface Viewport3DWidgetState {
   viewCubeVisible: boolean;
 }
 
+export const DEFAULT_VIEWPORT_3D_CAMERA_STATE: Viewport3DCameraState = {
+  position: [2e-6, 1.4e-6, 2e-6],
+  target: [0, 0, 0],
+};
+
 const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   camera: {
-    position: [2, 1.4, 2],
-    target: [0, 0, 0],
+    ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
   fitRevision: 0,
   resetCameraRevision: 0,

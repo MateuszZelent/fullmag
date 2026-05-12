@@ -21,6 +21,7 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/layout.css";',
         '@import "../src/design/styles/slots.css";',
         '@import "../src/design/styles/dropdown.css";',
+        '@import "../src/design/styles/dialog.css";',
         '@import "../src/design/styles/context-menu.css";',
         '@import "../src/design/styles/tabs.css";',
         '@import "../src/design/styles/command.css";',

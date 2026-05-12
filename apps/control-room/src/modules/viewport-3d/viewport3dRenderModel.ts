@@ -1,4 +1,7 @@
-import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  UniverseResource,
+} from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
   DecodedTopology,
@@ -279,6 +282,21 @@ export function resolveDomainBounds(
   );
 }
 
+export function resolveUniverseBounds(
+  universe: UniverseResource | null | undefined,
+): Viewport3DBounds | null {
+  if (!universe) return null;
+
+  return (
+    boundsFromUniverseConfig(universe.universe) ??
+    boundsFromUniverseConfig(universe.study_universe_mesh) ??
+    boundsFromOptionalMinMax(
+      universe.object_bounds_min,
+      universe.object_bounds_max,
+    )
+  );
+}
+
 export function resolveTopologyBounds(
   topology: DecodedTopology | null | undefined,
 ): Viewport3DBounds | null {
@@ -300,6 +318,34 @@ export function resolveTopologyBounds(
     max[1] = Math.max(max[1], y);
     max[2] = Math.max(max[2], z);
   }
+
+  return boundsFromMinMax(min, max);
+}
+
+export function combineViewport3DBounds(
+  boundsList: Array<Viewport3DBounds | null | undefined>,
+): Viewport3DBounds | null {
+  const validBounds = boundsList.filter(
+    (entry): entry is Viewport3DBounds => Boolean(entry),
+  );
+  if (!validBounds.length) return null;
+
+  const min = validBounds.reduce<[number, number, number]>(
+    (current, bounds) => [
+      Math.min(current[0], bounds.center[0] - bounds.size[0] / 2),
+      Math.min(current[1], bounds.center[1] - bounds.size[1] / 2),
+      Math.min(current[2], bounds.center[2] - bounds.size[2] / 2),
+    ],
+    [Infinity, Infinity, Infinity],
+  );
+  const max = validBounds.reduce<[number, number, number]>(
+    (current, bounds) => [
+      Math.max(current[0], bounds.center[0] + bounds.size[0] / 2),
+      Math.max(current[1], bounds.center[1] + bounds.size[1] / 2),
+      Math.max(current[2], bounds.center[2] + bounds.size[2] / 2),
+    ],
+    [-Infinity, -Infinity, -Infinity],
+  );
 
   return boundsFromMinMax(min, max);
 }
@@ -466,6 +512,73 @@ function boundsFromMinMax(
     radius,
     size,
   };
+}
+
+function boundsFromOptionalMinMax(
+  min: readonly number[] | null | undefined,
+  max: readonly number[] | null | undefined,
+): Viewport3DBounds | null {
+  if (!min || !max || min.length < 3 || max.length < 3) {
+    return null;
+  }
+
+  return boundsFromMinMax(
+    [min[0] ?? 0, min[1] ?? 0, min[2] ?? 0],
+    [max[0] ?? 0, max[1] ?? 0, max[2] ?? 0],
+  );
+}
+
+function boundsFromUniverseConfig(value: unknown): Viewport3DBounds | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const explicitBounds = boundsFromOptionalMinMax(
+    asVec3(record.bounds_min) ?? asVec3(record.min),
+    asVec3(record.bounds_max) ?? asVec3(record.max),
+  );
+  if (explicitBounds) return explicitBounds;
+
+  const size = asVec3(record.size);
+  if (!size) return null;
+
+  const center = asVec3(record.center) ?? [0, 0, 0];
+  const half: [number, number, number] = [
+    size[0] / 2,
+    size[1] / 2,
+    size[2] / 2,
+  ];
+
+  return boundsFromMinMax(
+    [
+      center[0] - half[0],
+      center[1] - half[1],
+      center[2] - half[2],
+    ],
+    [
+      center[0] + half[0],
+      center[1] + half[1],
+      center[2] + half[2],
+    ],
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asVec3(value: unknown): [number, number, number] | null {
+  if (
+    Array.isArray(value) &&
+    value.length >= 3 &&
+    value.slice(0, 3).every((entry) =>
+      typeof entry === "number" && Number.isFinite(entry),
+    )
+  ) {
+    return [value[0], value[1], value[2]];
+  }
+  return null;
 }
 
 function flattenSurfaceFaces(

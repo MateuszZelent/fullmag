@@ -9,7 +9,12 @@ const apiBase =
   null;
 const allowMissingSession =
   process.env.CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION === "1";
+const requireGeometryFlow =
+  !allowMissingSession && process.env.CONTROL_ROOM_SMOKE_GEOMETRY_FLOW !== "0";
+const keepGeometrySmokeObjects =
+  process.env.CONTROL_ROOM_SMOKE_KEEP_OBJECTS === "1";
 const CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX = 48;
+const GEOMETRY_FLOW_TIMEOUT_MS = 20_000;
 
 async function loadPlaywright() {
   try {
@@ -36,6 +41,9 @@ const page = await browser.newPage({
   viewport: { height: 900, width: 1440 },
 });
 const errors = [];
+const sceneResponses = [];
+const realtimeMessages = [];
+let sceneResponseSequence = 0;
 
 if (apiBase) {
   await page.addInitScript((baseUrl) => {
@@ -58,8 +66,44 @@ page.on("console", (message) => {
 page.on("pageerror", (error) => {
   errors.push(error.message);
 });
+page.on("websocket", (websocket) => {
+  if (!isRealtimeWebsocketUrl(websocket.url())) {
+    return;
+  }
+
+  websocket.on("framereceived", (event) => {
+    const text = framePayloadText(event.payload);
+    const parsed = parseJsonOrNull(text);
+    realtimeMessages.push({
+      parsed,
+      text,
+      timestamp: Date.now(),
+      url: websocket.url(),
+    });
+  });
+});
 page.on("response", (response) => {
   const status = response.status();
+  if (isModelSceneUrl(response.url()) && status < 400) {
+    const sequence = sceneResponseSequence;
+    const timestamp = Date.now();
+    sceneResponseSequence += 1;
+    void response
+      .json()
+      .then((body) => {
+        sceneResponses.push({
+          body,
+          sequence,
+          status,
+          timestamp,
+          url: response.url(),
+        });
+      })
+      .catch((error) => {
+        errors.push(`Failed to parse model/scene response: ${error.message}`);
+      });
+  }
+
   if (status < 400 || isAllowedMissingSessionResponse(response.url(), status)) {
     return;
   }
@@ -124,10 +168,314 @@ try {
   if (errors.length > 0) {
     throw new Error(`Browser console errors:\n${errors.join("\n")}`);
   }
+  if (requireGeometryFlow) {
+    await verifyGeometryAuthoringFlow({
+      page,
+      realtimeMessages,
+      sceneResponses,
+    });
+  }
 
   console.log(`Viewport 3D smoke passed at ${url}.`);
 } finally {
   await browser.close();
+}
+
+async function verifyGeometryAuthoringFlow({
+  page,
+  realtimeMessages,
+  sceneResponses,
+}) {
+  const initialScene = await waitForSceneResponse(
+    sceneResponses,
+    (record) => Array.isArray(sceneObjects(record.body)),
+    "initial GET /v2/sessions/current/model/scene",
+  );
+  const knownObjectIds = new Set(
+    sceneObjects(initialScene.body).map(sceneObjectId).filter(Boolean),
+  );
+  const objectName = `Smoke Box ${Date.now().toString(36)}`;
+  const sceneSequenceBeforeCommit = sceneResponseSequence;
+
+  await page.getByRole("tab", { name: "Geometry" }).click();
+  const addBox = page.locator('[data-action-id="geometry.add-box"]');
+  await addBox.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await addBox.click();
+
+  const draftName = page.locator('.fm-inspector-panel input[aria-label="Name"]').first();
+  await draftName.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await draftName.fill(objectName);
+
+  const transactionResponsePromise = page.waitForResponse(
+    (response) =>
+      isModelTransactionUrl(response.url()) &&
+      response.request().method() === "POST" &&
+      response.status() < 400,
+    { timeout: GEOMETRY_FLOW_TIMEOUT_MS },
+  );
+  await page.getByRole("button", { name: "Apply Draft" }).click();
+
+  const transactionResponse = await transactionResponsePromise;
+  const transaction = await transactionResponse.json();
+  const committedScene = transaction.committed_scene ?? null;
+  let createdObject = findCreatedObject(
+    sceneObjects(committedScene),
+    knownObjectIds,
+    objectName,
+  );
+
+  if (!createdObject) {
+    const sceneWithCreatedObject = await waitForSceneResponse(
+      sceneResponses,
+      (record) =>
+        record.sequence >= sceneSequenceBeforeCommit &&
+        sceneObjects(record.body).some((object) => sceneObjectName(object) === objectName),
+      "model/scene refetch containing the committed smoke object",
+    );
+    createdObject = sceneObjects(sceneWithCreatedObject.body).find(
+      (object) => sceneObjectName(object) === objectName,
+    );
+  }
+
+  const objectId = sceneObjectId(createdObject);
+  if (!objectId) {
+    throw new Error("Committed geometry object has no id in SceneDocument.");
+  }
+
+  const uiScene = await waitForSceneResponse(
+    sceneResponses,
+    (record) =>
+      record.sequence >= sceneSequenceBeforeCommit &&
+      sceneObjects(record.body).some((object) => sceneObjectId(object) === objectId),
+    "GET /v2/sessions/current/model/scene refetch after UI object commit",
+  );
+  await verifyObjectInExplorerViewportAndInspector(page, objectId, objectName);
+
+  const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
+  const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
+  const externalBaseRevision =
+    sceneRevision(uiScene.body) ?? transaction.scene_revision ?? null;
+  if (typeof externalBaseRevision !== "number") {
+    throw new Error(
+      "Cannot run websocket refetch check: current SceneDocument revision is missing.",
+    );
+  }
+
+  const realtimeMessageStartIndex = realtimeMessages.length;
+  const sceneSequenceBeforeExternalCommit = sceneResponseSequence;
+  await commitExternalObjectTransaction(page, {
+    baseRevision: externalBaseRevision,
+    objectId: externalObjectId,
+    objectName: externalObjectName,
+  });
+  const realtimeSceneChange = await waitForRealtimeBatchChanged(
+    realtimeMessages,
+    "/v2/sessions/current/model/scene",
+    "resource.batch_changed for externally committed model/scene",
+    realtimeMessageStartIndex,
+  );
+  const externalScene = await waitForSceneResponse(
+    sceneResponses,
+    (record) =>
+      record.sequence >= sceneSequenceBeforeExternalCommit &&
+      record.timestamp >= realtimeSceneChange.timestamp &&
+      sceneObjects(record.body).some(
+        (object) => sceneObjectId(object) === externalObjectId,
+      ),
+    "GET /v2/sessions/current/model/scene refetch after websocket invalidation",
+  );
+  await verifyObjectInExplorerViewportAndInspector(
+    page,
+    externalObjectId,
+    externalObjectName,
+  );
+  if (!keepGeometrySmokeObjects) {
+    await cleanupGeometrySmokeObjects(page, {
+      baseRevision: sceneRevision(externalScene.body),
+      objectIds: [externalObjectId, objectId],
+    });
+  }
+  logGeometryFlowSuccess(transaction, objectId, externalObjectId);
+}
+
+async function verifyObjectInExplorerViewportAndInspector(
+  page,
+  objectId,
+  objectName,
+) {
+  const explorerRow = page.locator(
+    `[data-node-id="${cssAttributeValue(`model:object:${objectId}`)}"]`,
+  );
+  await explorerRow.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+
+  const primitiveLabel = page
+    .locator(
+      [
+        ".fm-viewport-3d__primitive-label",
+        `[data-object-id="${cssAttributeValue(objectId)}"]`,
+        `[data-object-name="${cssAttributeValue(objectName)}"]`,
+      ].join(""),
+    )
+    .first();
+  await primitiveLabel
+    .waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await waitForLocatorText(
+    primitiveLabel,
+    "primitive",
+    "Viewport primitive status label",
+  );
+
+  await explorerRow.click();
+  const inspector = page.locator(".fm-inspector");
+  await waitForLocatorText(inspector, objectId, "Inspector object id");
+  await waitForLocatorText(inspector, "SceneDocument", "Inspector source");
+}
+
+function logGeometryFlowSuccess(transaction, objectId, externalObjectId) {
+  console.log(
+    [
+      "Geometry flow smoke passed:",
+      `object=${objectId}`,
+      `websocket_object=${externalObjectId}`,
+      `scene_revision=${transaction.scene_revision ?? "unknown"}`,
+      "model/scene=refetched",
+      "realtime=resource.batch_changed",
+      "explorer=selected",
+      "viewport=primitive-object-label",
+      "inspector=SceneDocument",
+    ].join(" "),
+  );
+}
+
+async function commitExternalObjectTransaction(
+  page,
+  { baseRevision, objectId, objectName },
+) {
+  return commitExternalModelTransaction(page, {
+    baseRevision,
+    geometry: {
+      geometry_kind: "Box",
+      geometry_params: { size: [8e-8, 8e-8, 8e-9] },
+    },
+    kind: "create_object",
+    name: objectName,
+    object_id: objectId,
+    transform: {
+      pivot: [0, 0, 0],
+      rotation_quat: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+      translation: [0, 0, 0],
+    },
+  });
+}
+
+async function cleanupGeometrySmokeObjects(page, { baseRevision, objectIds }) {
+  let revision = baseRevision;
+  if (typeof revision !== "number") {
+    throw new Error("Cannot clean up smoke objects: scene revision is missing.");
+  }
+
+  for (const objectId of objectIds) {
+    const response = await commitExternalModelTransaction(page, {
+      baseRevision: revision,
+      kind: "delete_object",
+      object_id: objectId,
+    });
+    if (typeof response.scene_revision !== "number") {
+      throw new Error(
+        `Smoke object cleanup for ${objectId} did not return a scene_revision.`,
+      );
+    }
+    revision = response.scene_revision;
+  }
+}
+
+async function commitExternalModelTransaction(page, request) {
+  return page.evaluate(
+    async ({ apiBase, request }) => {
+      const config = window.__FULLMAG_CONFIG__ ?? {};
+      const configuredBase =
+        apiBase ??
+        config.controlRoomApiBase ??
+        config.runtimeHttpBase ??
+        config.apiBase ??
+        (["localhost", "127.0.0.1"].includes(window.location.hostname)
+          ? `${window.location.protocol}//${window.location.hostname}:8081`
+          : window.location.origin);
+      const base = String(configuredBase)
+        .replace(/\/+$/, "")
+        .replace(/\/v2$/, "");
+      const response = await fetch(
+        `${base}/v2/sessions/current/model/transactions`,
+        {
+          body: JSON.stringify({
+            ...request,
+            base_revision: request.baseRevision,
+            baseRevision: undefined,
+          }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `External geometry transaction failed: ${response.status} ${await response.text()}`,
+        );
+      }
+
+      return response.json();
+    },
+    { apiBase, request },
+  );
+}
+
+async function waitForSceneResponse(records, predicate, label) {
+  return waitForCondition(label, () => records.find(predicate) ?? null);
+}
+
+async function waitForRealtimeBatchChanged(
+  messages,
+  recommendedFetch,
+  label,
+  startIndex = 0,
+) {
+  return waitForCondition(label, () => {
+    return (
+      messages.slice(startIndex).find((message) =>
+        realtimeBatchChangedMatches(message.parsed, recommendedFetch),
+      ) ?? null
+    );
+  });
+}
+
+async function waitForLocatorText(locator, expectedText, label) {
+  await waitForCondition(label, async () => {
+    const text = await locator.textContent().catch(() => "");
+    return text?.includes(expectedText) ? text : null;
+  });
+}
+
+async function waitForCondition(label, predicate) {
+  const deadline = Date.now() + GEOMETRY_FLOW_TIMEOUT_MS;
+  let lastError = null;
+
+  while (Date.now() <= deadline) {
+    try {
+      const result = await predicate();
+      if (result) return result;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(100);
+  }
+
+  const suffix = lastError ? ` Last error: ${lastError.message}` : "";
+  throw new Error(`${label} timed out after ${GEOMETRY_FLOW_TIMEOUT_MS}ms.${suffix}`);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function sampleCanvasComposite(page, canvas) {
@@ -192,6 +540,83 @@ async function sampleCanvasComposite(page, canvas) {
     sampledPixels,
     variedPixels,
   };
+}
+
+function isModelSceneUrl(responseUrl) {
+  return pathnameFromUrl(responseUrl) === "/v2/sessions/current/model/scene";
+}
+
+function isModelTransactionUrl(responseUrl) {
+  return pathnameFromUrl(responseUrl) === "/v2/sessions/current/model/transactions";
+}
+
+function isRealtimeWebsocketUrl(websocketUrl) {
+  return pathnameFromUrl(websocketUrl) === "/v2/sessions/current/events/ws";
+}
+
+function pathnameFromUrl(rawUrl) {
+  try {
+    return new URL(rawUrl).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function framePayloadText(payload) {
+  if (typeof payload === "string") return payload;
+  if (payload instanceof Buffer) return payload.toString("utf8");
+  if (payload && typeof payload.toString === "function") return payload.toString();
+  return "";
+}
+
+function parseJsonOrNull(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function sceneObjects(scene) {
+  return Array.isArray(scene?.objects) ? scene.objects : [];
+}
+
+function sceneRevision(scene) {
+  const revision = scene?.revision ?? scene?.scene_revision;
+  return typeof revision === "number" ? revision : null;
+}
+
+function sceneObjectId(object) {
+  return typeof object?.id === "string" && object.id.length > 0 ? object.id : null;
+}
+
+function sceneObjectName(object) {
+  return typeof object?.name === "string" && object.name.length > 0
+    ? object.name
+    : null;
+}
+
+function findCreatedObject(objects, knownObjectIds, objectName) {
+  const byName = objects.find((object) => sceneObjectName(object) === objectName);
+  if (byName) return byName;
+
+  return (
+    objects.find((object) => {
+      const objectId = sceneObjectId(object);
+      return objectId && !knownObjectIds.has(objectId);
+    }) ?? null
+  );
+}
+
+function realtimeBatchChangedMatches(event, recommendedFetch) {
+  if (!event || event.type !== "resource.batch_changed") return false;
+  const changes = Array.isArray(event.payload?.changes) ? event.payload.changes : [];
+
+  return changes.some((change) => change?.recommended_fetch === recommendedFetch);
+}
+
+function cssAttributeValue(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function parsePng(buffer) {

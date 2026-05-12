@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@/design/theme/ThemeProvider";
+import { SESSION_STATUS_PATH } from "@/kernel/api/apiPaths";
 import { KernelProvider } from "@/kernel/KernelProvider";
 
 import {
@@ -63,7 +64,7 @@ describe("AppMenuBar", () => {
           durationMs: 12,
           method: "GET",
           outcome: "error",
-          path: "/v2/sessions/current/status",
+          path: SESSION_STATUS_PATH,
           requestId: "fm-test",
           status: 200,
         },

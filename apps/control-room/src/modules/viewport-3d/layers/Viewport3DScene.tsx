@@ -2,7 +2,7 @@
 
 import { OrthographicCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -27,6 +27,7 @@ import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
   CameraController,
   OrbitCameraControls,
+  resolveViewport3DCameraFit,
 } from "./CameraControls";
 import { CanvasLifecycleProbe } from "./CanvasLifecycleProbe";
 import {
@@ -63,6 +64,69 @@ interface Viewport3DSceneProps {
   viewCubeVisible: boolean;
 }
 
+interface Viewport3DGridSpec {
+  axesLength: number;
+  center: [number, number, number];
+  divisions: number;
+  size: number;
+}
+
+const FALLBACK_GRID_SIZE = 1e-6;
+
+export function resolveViewport3DGridSpec(
+  bounds: Viewport3DBounds | null,
+): Viewport3DGridSpec {
+  if (!bounds) {
+    return {
+      axesLength: FALLBACK_GRID_SIZE / 2,
+      center: [0, 0, 0],
+      divisions: 10,
+      size: FALLBACK_GRID_SIZE,
+    };
+  }
+
+  const maxSpan = Math.max(...bounds.size, bounds.radius * 2, 1e-12);
+  const paddedSize = maxSpan * 1.25;
+  const targetCellSize = niceGridStep(paddedSize / 12);
+  const divisions = clamp(Math.round(paddedSize / targetCellSize), 4, 64);
+  const size = targetCellSize * divisions;
+
+  return {
+    axesLength: size / 2,
+    center: bounds.center,
+    divisions,
+    size,
+  };
+}
+
+export function resolveViewport3DOrthographicZoom(
+  bounds: Viewport3DBounds | null,
+): number {
+  const span = bounds
+    ? Math.max(...bounds.size, bounds.radius * 2, 1e-12)
+    : FALLBACK_GRID_SIZE;
+  return clamp(2 / (span * 1.6), 1e-3, 1e12);
+}
+
+function niceGridStep(value: number): number {
+  const exponent = Math.floor(Math.log10(Math.max(value, 1e-18)));
+  const base = 10 ** exponent;
+  const normalized = value / base;
+  let multiplier = 10;
+  if (normalized <= 1) {
+    multiplier = 1;
+  } else if (normalized <= 2) {
+    multiplier = 2;
+  } else if (normalized <= 5) {
+    multiplier = 5;
+  }
+  return multiplier * base;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 export function Viewport3DScene({
   bounds,
   cameraProjection,
@@ -89,6 +153,12 @@ export function Viewport3DScene({
   viewCubeVisible,
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
+  const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
+  const cameraFit = useMemo(() => resolveViewport3DCameraFit(bounds), [bounds]);
+  const orthographicZoom = useMemo(
+    () => resolveViewport3DOrthographicZoom(bounds),
+    [bounds],
+  );
 
   // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {
@@ -112,9 +182,9 @@ export function Viewport3DScene({
       {cameraProjection === "orthographic" && (
         <OrthographicCamera
           makeDefault
-          zoom={80}
-          near={0.01}
-          far={1000}
+          zoom={orthographicZoom}
+          near={cameraFit.near}
+          far={cameraFit.far}
           position={cameraState.position}
         />
       )}
@@ -152,8 +222,12 @@ export function Viewport3DScene({
         vectorColorMode={vectorColorMode}
       />
       <SelectionHighlightLayer bounds={selectionBounds} colors={colors} />
-      <gridHelper args={[2, 16, colors.wire, colors.wire]} />
-      <axesHelper args={[1]} />
+      <group position={gridSpec.center}>
+        <gridHelper
+          args={[gridSpec.size, gridSpec.divisions, colors.wire, colors.wire]}
+        />
+        <axesHelper args={[gridSpec.axesLength]} />
+      </group>
       <OrbitCameraControls tracker={tracker} />
       <OrientationHudLayer
         colors={colors}

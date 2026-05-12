@@ -3,6 +3,7 @@
 import { OrbitControls } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
+import type { Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
@@ -17,6 +18,59 @@ interface OrbitControlsEndEvent {
       toArray: () => number[];
     };
   };
+}
+
+interface Viewport3DCameraFit {
+  far: number;
+  near: number;
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
+const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
+  center: [0, 0, 0],
+  radius: 1e-6,
+  size: [1e-6, 1e-6, 1e-6],
+};
+
+export function resolveViewport3DCameraFit(
+  bounds: Viewport3DBounds | null,
+): Viewport3DCameraFit {
+  const activeBounds = bounds ?? FALLBACK_CAMERA_BOUNDS;
+  const [x, y, z] = activeBounds.center;
+  const radius = Math.max(activeBounds.radius, 1e-12);
+  const distance = radius * 2.8;
+  const near = Math.max(distance / 10_000, 1e-12);
+  const far = Math.max(distance * 10_000, near * 1_000, 1e-3);
+
+  return {
+    far,
+    near,
+    position: [
+      x + distance,
+      y + distance * 0.72,
+      z + distance,
+    ],
+    target: [
+      activeBounds.center[0],
+      activeBounds.center[1],
+      activeBounds.center[2],
+    ],
+  };
+}
+
+function boundsSignature(bounds: Viewport3DBounds | null): string | null {
+  if (!bounds) return null;
+  return [
+    ...bounds.center,
+    ...bounds.size,
+  ].map((value) => value.toExponential(6)).join(":");
+}
+
+function applyCameraClipping(camera: Camera, near: number, far: number) {
+  const clippedCamera = camera as Camera & { near: number; far: number };
+  clippedCamera.near = near;
+  clippedCamera.far = far;
 }
 
 export function CameraController({
@@ -35,6 +89,7 @@ export function CameraController({
   const { camera, invalidate } = useThree();
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
+  const autoFittedBoundsRef = useRef<string | null>(null);
   // Store cameraState in a ref so the fit/reset effect doesn't re-fire
   // when OrbitControls updates the store (which it does on every drag-end).
   const cameraStateRef = useRef(cameraState);
@@ -46,33 +101,25 @@ export function CameraController({
   // Only runs when bounds change or a fit/reset command is issued.
   // Does NOT depend on cameraState to avoid the store write → re-render loop.
   useEffect(() => {
+    const nextBoundsSignature = boundsSignature(bounds);
     const shouldFit =
       handledFitRevisionRef.current !== fitRevision ||
-      handledResetCameraRevisionRef.current !== resetCameraRevision;
+      handledResetCameraRevisionRef.current !== resetCameraRevision ||
+      (nextBoundsSignature !== null && autoFittedBoundsRef.current === null);
     if (!shouldFit) return;
 
-    const activeBounds = bounds ?? {
-      center: [0, 0, 0] as [number, number, number],
-      radius: 1,
-      size: [1, 1, 1] as [number, number, number],
-    };
-    const [x, y, z] = activeBounds.center;
-    const distance = activeBounds.radius * 2.8;
-    const nextPosition: [number, number, number] = [
-      x + distance,
-      y + distance * 0.72,
-      z + distance,
-    ];
-    const nextTarget: [number, number, number] = activeBounds.center;
+    const fit = resolveViewport3DCameraFit(bounds);
 
-    camera.position.set(...nextPosition);
-    camera.lookAt(...nextTarget);
+    camera.position.set(...fit.position);
+    camera.lookAt(...fit.target);
+    applyCameraClipping(camera, fit.near, fit.far);
     camera.updateProjectionMatrix();
     handledFitRevisionRef.current = fitRevision;
     handledResetCameraRevisionRef.current = resetCameraRevision;
+    autoFittedBoundsRef.current = nextBoundsSignature;
     viewport3dStore.setCamera({
-      position: nextPosition,
-      target: nextTarget,
+      position: fit.position,
+      target: fit.target,
     });
     invalidate();
     tracker.recordDirtyFrame("camera-fit");

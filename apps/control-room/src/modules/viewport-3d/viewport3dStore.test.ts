@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   resolveHslReferenceVisible,
   viewport3dStore,
 } from "./viewport3dStore";
@@ -30,10 +31,9 @@ describe("viewport3dStore", () => {
 
     viewport3dStore.resetCamera();
 
-    expect(viewport3dStore.getSnapshot().camera).toEqual({
-      position: [2, 1.4, 2],
-      target: [0, 0, 0],
-    });
+    expect(viewport3dStore.getSnapshot().camera).toEqual(
+      DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+    );
   });
 
   it("defaults orientation widget preferences for the v2 viewport", () => {

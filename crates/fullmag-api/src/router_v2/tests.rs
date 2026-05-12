@@ -1105,7 +1105,7 @@ async fn contract_version_header_present() {
 
 #[tokio::test]
 async fn contract_version_header_is_exposed_to_browser_clients() {
-    let app = test_router();
+    let app = test_router().layer(super::middleware::cors::cors_layer());
     let response = app
         .oneshot(
             Request::builder()
@@ -1136,6 +1136,55 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
     assert!(
         exposed_headers.contains("etag"),
         "browser clients must be able to read etag, got {exposed_headers}"
+    );
+}
+
+#[tokio::test]
+async fn browser_clients_can_preflight_authoring_transactions() {
+    let app = test_router().layer(super::middleware::cors::cors_layer());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/v2/sessions/current/model/transactions")
+                .header(header::ORIGIN, "http://localhost:3100")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_some(),
+        "preflight response must allow the browser origin"
+    );
+    let allowed_methods = response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+        .expect("access-control-allow-methods should be present")
+        .to_str()
+        .unwrap()
+        .to_ascii_uppercase();
+    assert!(
+        allowed_methods == "*" || allowed_methods.contains("POST"),
+        "authoring transaction preflight must allow POST, got {allowed_methods}"
+    );
+    let allowed_headers = response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+        .expect("access-control-allow-headers should be present")
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(
+        allowed_headers == "*" || allowed_headers.contains("content-type"),
+        "authoring transaction preflight must allow content-type, got {allowed_headers}"
     );
 }
 

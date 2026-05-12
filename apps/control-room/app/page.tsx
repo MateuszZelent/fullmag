@@ -1,11 +1,15 @@
-import { redirect } from "next/navigation";
-import type { Metadata } from "next";
+"use client";
 
-export const metadata: Metadata = {
-  title: "Fullmag Control Room",
-  description: "Fullmag modeling and simulation control workspace.",
-};
+// Return HTTP 200 on GET / so that health-check probes (reqwest in the Rust binary)
+// see a success status without following a server-side 307 redirect that may time out.
+// The client-side navigation to /workspace is identical from the user's perspective.
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
 export default function HomePage() {
-  redirect("/workspace");
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/workspace");
+  }, [router]);
+  return null;
 }
