@@ -5,6 +5,7 @@ const API_BASE_ENV_KEYS = [
   "NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL",
   "NEXT_PUBLIC_RUNTIME_HTTP_BASE",
   "NEXT_PUBLIC_API_URL",
+  "NEXT_PUBLIC_FULLMAG_API_URL",
 ] as const;
 
 interface BrowserFullmagConfig {
@@ -35,7 +36,19 @@ function normalizeApiBase(value: unknown): string | null {
     return null;
   }
 
-  return trimmed.replace(/\/+$/, "");
+  const withoutTrailingSlash = trimmed.replace(/\/+$/, "");
+
+  try {
+    const url = new URL(withoutTrailingSlash);
+    if (url.pathname === "/v2" || url.pathname.endsWith("/v2")) {
+      url.pathname = url.pathname.slice(0, -"/v2".length) || "/";
+      return url.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    return withoutTrailingSlash;
+  }
+
+  return withoutTrailingSlash;
 }
 
 function defaultRuntimeSource(): ControlRoomApiRuntimeSource {
@@ -50,6 +63,7 @@ function defaultRuntimeSource(): ControlRoomApiRuntimeSource {
       NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
       NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL:
         process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL,
+      NEXT_PUBLIC_FULLMAG_API_URL: process.env.NEXT_PUBLIC_FULLMAG_API_URL,
       NEXT_PUBLIC_RUNTIME_HTTP_BASE: process.env.NEXT_PUBLIC_RUNTIME_HTTP_BASE,
     },
     windowConfig: maybeWindow?.__FULLMAG_CONFIG__,
@@ -94,6 +108,31 @@ function configuredDevelopmentBase(
   return env?.NODE_ENV === "development" ? DEFAULT_DEVELOPMENT_API_BASE : null;
 }
 
+function configuredLocalStandaloneFrontendBase(
+  location: WindowLocationLike | undefined,
+): string | null {
+  if (!location) {
+    return null;
+  }
+
+  try {
+    const url = new URL(location.origin);
+    if (!localHostnames.has(url.hostname)) {
+      return null;
+    }
+    if (!url.port || localApiPorts.has(url.port)) {
+      return null;
+    }
+
+    return `${url.protocol}//${url.hostname}:8081`;
+  } catch {
+    return null;
+  }
+}
+
+const localHostnames = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const localApiPorts = new Set(["8081", "8181"]);
+
 export function resolveControlRoomApiBase(
   source: ControlRoomApiRuntimeSource = defaultRuntimeSource(),
 ): string {
@@ -101,6 +140,7 @@ export function resolveControlRoomApiBase(
     configuredBaseFromEnv(source.env) ??
     configuredBaseFromWindow(source.windowConfig) ??
     configuredDevelopmentBase(source.env) ??
+    configuredLocalStandaloneFrontendBase(source.windowLocation) ??
     normalizeApiBase(source.windowLocation?.origin) ??
     DEFAULT_NODE_API_BASE
   );

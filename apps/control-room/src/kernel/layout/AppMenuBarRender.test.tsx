@@ -2,14 +2,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@/design/theme/ThemeProvider";
+import { KernelProvider } from "@/kernel/KernelProvider";
 
-import { AppMenuBar } from "./AppMenuBar";
+import {
+  AppMenuBar,
+  resolveApiConnectionErrorDetails,
+  resolveHeaderSessionDisplay,
+} from "./AppMenuBar";
 
 describe("AppMenuBar", () => {
   it("renders header controls through shared shadcn-style button primitives", () => {
     const html = renderToStaticMarkup(
       <ThemeProvider>
-        <AppMenuBar />
+        <KernelProvider>
+          <AppMenuBar />
+        </KernelProvider>
       </ThemeProvider>,
     );
 
@@ -20,5 +27,56 @@ describe("AppMenuBar", () => {
     expect(html).toContain("Command search");
     expect(html).toContain("Runtime controls");
     expect(html).toContain('aria-label="Switch to light theme"');
+  });
+
+  it("derives the header title and runtime badge from session status", () => {
+    expect(
+      resolveHeaderSessionDisplay({
+        data: {
+          session: {
+            name: "Spin-torque run",
+          },
+          solver: { state: "running" },
+        },
+        status: "ready",
+      }),
+    ).toEqual({
+      connectionLabel: "Local API",
+      indicatorLabel: "Session connected",
+      indicatorStatus: "connected",
+      sessionBadge: "running",
+      subtitle: "Spin-torque run",
+    });
+  });
+
+  it("builds exact API error details for the status modal", () => {
+    const error = Object.assign(
+      new Error("API contract version mismatch: expected 1.0.0, got missing"),
+      { status: 0 },
+    );
+
+    expect(
+      resolveApiConnectionErrorDetails({
+        apiBase: "http://localhost:8081",
+        error,
+        latestRequest: {
+          durationMs: 12,
+          method: "GET",
+          outcome: "error",
+          path: "/v2/sessions/current/status",
+          requestId: "fm-test",
+          status: 200,
+        },
+      }),
+    ).toMatchObject({
+      apiBase: "http://localhost:8081",
+      errorMessage:
+        "API contract version mismatch: expected 1.0.0, got missing",
+      errorName: "Error",
+      expectedContractVersion: "1.0.0",
+      httpStatus: 0,
+      requestUrl: "http://localhost:8081/v2/sessions/current/status",
+      resourceKey: "session:status",
+    });
   });
 });

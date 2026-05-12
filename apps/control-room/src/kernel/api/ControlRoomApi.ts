@@ -7,6 +7,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
@@ -14,6 +15,7 @@ import {
   MESHING_PART_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
+  MESHING_UNIVERSE_POLICY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTIC_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -21,6 +23,7 @@ import {
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_OBJECT_GEOMETRY_PATH,
+  MODEL_OBJECT_INTERACTION_PATH,
   MODEL_OBJECT_PATH,
   MODEL_OBJECTS_PATH,
   MODEL_SCENE_PATH,
@@ -50,12 +53,19 @@ import type {
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
   MeshLastSuccessfulBuildResource,
+  MeshObjectConfigReplaceRequest,
+  MeshObjectConfigResource,
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshObjectSizeFieldResource,
   MeshSharedDomainManifestResource,
+  MeshUniverseConfigReplaceRequest,
+  MeshUniverseConfigResource,
   ObjectCreateRequest,
   ObjectGeometryPatchRequest,
+  ObjectInteractionKind,
+  ObjectInteractionPatchRequest,
+  ObjectInteractionResource,
   ObjectPatchRequest,
   RequestOptions,
   SceneResource,
@@ -172,6 +182,14 @@ export class ControlRoomApi {
           options,
         ),
     },
+    objectPolicy: (objectId: string, options?: RequestOptions) =>
+      this.requestJson<MeshObjectConfigResource>(
+        MESHING_OBJECT_POLICY_PATH,
+        options,
+        {
+          path: { object_id: objectId },
+        },
+      ),
     objectQuality: (objectId: string, options?: RequestOptions) =>
       this.requestJson<MeshObjectQualityResource>(
         MESHING_OBJECT_QUALITY_PATH,
@@ -208,6 +226,19 @@ export class ControlRoomApi {
         options,
         { part_id: partId },
       ),
+    replaceObjectPolicy: (
+      objectId: string,
+      request: MeshObjectConfigReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<MeshObjectConfigResource, MeshObjectConfigReplaceRequest>(
+        MESHING_OBJECT_POLICY_PATH,
+        request,
+        options,
+        {
+          path: { object_id: objectId },
+        },
+      ),
     sharedDomain: {
       manifest: (options?: RequestOptions) =>
         this.requestOptionalJson<MeshSharedDomainManifestResource>(
@@ -224,6 +255,20 @@ export class ControlRoomApi {
       ),
     sharedDomainTopology: (options?: BinaryRequestOptions) =>
       this.requestTopology(MESHING_SHARED_DOMAIN_TOPOLOGY_PATH, options),
+    universePolicy: (options?: RequestOptions) =>
+      this.requestJson<MeshUniverseConfigResource>(
+        MESHING_UNIVERSE_POLICY_PATH,
+        options,
+      ),
+    replaceUniversePolicy: (
+      request: MeshUniverseConfigReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<MeshUniverseConfigResource, MeshUniverseConfigReplaceRequest>(
+        MESHING_UNIVERSE_POLICY_PATH,
+        request,
+        options,
+      ),
   };
 
   readonly model = {
@@ -301,6 +346,28 @@ export class ControlRoomApi {
         patch,
         options,
         { path: { object_id: objectId } },
+      ),
+    objectInteraction: (
+      objectId: string,
+      interactionKind: ObjectInteractionKind,
+      options?: RequestOptions,
+    ) =>
+      this.requestJson<ObjectInteractionResource>(
+        MODEL_OBJECT_INTERACTION_PATH,
+        options,
+        { path: { object_id: objectId, interaction_kind: interactionKind } },
+      ),
+    patchObjectInteraction: (
+      objectId: string,
+      interactionKind: ObjectInteractionKind,
+      patch: ObjectInteractionPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<ObjectInteractionResource, ObjectInteractionPatchRequest>(
+        MODEL_OBJECT_INTERACTION_PATH,
+        patch,
+        options,
+        { path: { object_id: objectId, interaction_kind: interactionKind } },
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
@@ -403,6 +470,21 @@ export class ControlRoomApi {
     params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.PATCH(path as never, {
+      body,
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private async putJson<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const result = await this.transport.PUT(path as never, {
       body,
       cache: "no-store",
       params,

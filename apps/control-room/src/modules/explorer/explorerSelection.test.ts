@@ -73,4 +73,29 @@ describe("selectExplorerNode", () => {
       },
     ]);
   });
+
+  it("selects Airbox mesh policy nodes as inspector-only airbox selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:airbox:mesh",
+      kind: "airbox.mesh",
+      label: "Airbox Mesh Policy",
+      parentId: "model:universe",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.mesh",
+      label: "Airbox Mesh Policy",
+      nodeId: "model:airbox:mesh",
+      objectId: null,
+      ref: {
+        kind: "airbox.mesh",
+        nodeId: "model:airbox:mesh",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+  });
 });

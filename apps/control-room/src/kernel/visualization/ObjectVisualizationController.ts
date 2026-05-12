@@ -1,3 +1,7 @@
+import type {
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "../api/apiTypes";
 import type { Selection } from "../selection/selectionTypes";
 
 export type VisualizationTargetKind = "airbox" | "object" | "part";
@@ -29,6 +33,12 @@ export interface ObjectVisualizationSnapshot {
   overrides: Record<string, VisualizationTargetPatch>;
   version: number;
 }
+
+type AirboxVisualizationStateLike = {
+  layers?: {
+    airbox?: VisualizationStateResource["layers"]["airbox"] | null;
+  } | null;
+};
 
 type ObjectVisualizationListener = () => void;
 
@@ -186,6 +196,68 @@ export function resolveVisualizationSettings(
   });
 }
 
+export function resolveAirboxVisualizationSettingsFromState(
+  state: AirboxVisualizationStateLike | null | undefined,
+): VisualizationTargetSettings {
+  const airbox = state?.layers?.airbox;
+  const shaderVisible =
+    airbox?.surface?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.shaderVisible;
+  const wireframeVisible =
+    airbox?.wireframe?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible;
+  const pointsVisible =
+    airbox?.points?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.pointsVisible;
+
+  return {
+    ...DEFAULT_AIRBOX_VISUALIZATION,
+    opacityPercent: layerOpacityToPercent(
+      airbox?.opacity ?? DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
+    ),
+    pointsVisible,
+    renderMode: resolveRenderMode({
+      pointsVisible,
+      shaderVisible,
+      wireframeVisible,
+    }),
+    shaderVisible,
+    vectorsVisible:
+      airbox?.vectors?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
+    visible: airbox?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.visible,
+    wireframeVisible,
+  };
+}
+
+export function airboxVisualizationStatePatchFromTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationStatePatch {
+  return {
+    layers: {
+      airbox: {
+        ...(patch.opacityPercent === undefined
+          ? {}
+          : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
+        ...(patch.pointsVisible === undefined
+          ? {}
+          : { points: { visible: patch.pointsVisible } }),
+        ...(patch.shaderVisible === undefined
+          ? {}
+          : { surface: { visible: patch.shaderVisible } }),
+        ...(patch.vectorsVisible === undefined
+          ? {}
+          : {
+              vectors: {
+                domain: "airbox_only",
+                visible: patch.vectorsVisible,
+              },
+            }),
+        ...(patch.visible === undefined ? {} : { visible: patch.visible }),
+        ...(patch.wireframeVisible === undefined
+          ? {}
+          : { wireframe: { visible: patch.wireframeVisible } }),
+      },
+    },
+  };
+}
+
 export function resolveVisualizationTargetFromSelection(
   selection: Pick<Selection, "kind" | "label" | "nodeId" | "objectId">,
 ): VisualizationTargetRef | null {
@@ -241,6 +313,24 @@ function normalizeVisualizationSettings(
 
 function clampOpacity(value: number): number {
   return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function layerOpacityToPercent(value: number): number {
+  return clampOpacity(value * 100);
+}
+
+function resolveRenderMode({
+  pointsVisible,
+  shaderVisible,
+  wireframeVisible,
+}: Pick<
+  VisualizationTargetSettings,
+  "pointsVisible" | "shaderVisible" | "wireframeVisible"
+>): VisualizationRenderMode {
+  if (pointsVisible) return "points";
+  if (shaderVisible && wireframeVisible) return "surface+edges";
+  if (shaderVisible) return "surface";
+  return "wireframe";
 }
 
 function samePatch(

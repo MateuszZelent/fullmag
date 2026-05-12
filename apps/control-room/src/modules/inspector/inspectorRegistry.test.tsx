@@ -12,6 +12,24 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves object physics selections to the physics interaction panel", () => {
+    expect(resolveInspectorPanel({ kind: "object.physics" })?.id).toBe(
+      "physics-interaction",
+    );
+  });
+
+  it("resolves object material selections to the material assignment panel", () => {
+    expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
+      "object-material",
+    );
+  });
+
+  it("resolves object mesh selections to the object mesh policy panel", () => {
+    expect(resolveInspectorPanel({ kind: "object.mesh" })?.id).toBe(
+      "object-mesh-policy",
+    );
+  });
+
   it("falls back to the placeholder panel for known but unsupported selections", () => {
     expect(resolveInspectorPanel({ kind: "results.field_quantity" })?.id).toBe(
       "placeholder",
@@ -24,6 +42,12 @@ describe("inspectorRegistry", () => {
     );
     expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
       "object-visualization",
+    );
+  });
+
+  it("resolves Airbox mesh policy selections to the Airbox mesh policy panel", () => {
+    expect(resolveInspectorPanel({ kind: "airbox.mesh" })?.id).toBe(
+      "airbox-mesh-policy",
     );
   });
 

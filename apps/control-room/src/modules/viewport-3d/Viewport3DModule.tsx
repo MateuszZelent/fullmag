@@ -1,13 +1,14 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, type ComponentProps } from "react";
 
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveVisualizationSettings,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 
@@ -34,8 +35,14 @@ import {
 import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
+  distributeVectorGlyphBudget,
+  resolveNodeSelectionCount,
   resolveDomainBounds,
   resolveTopologyBounds,
+  resolveViewport3DMaxVectorGlyphs,
+  type Viewport3DFieldRenderOptions,
+  type Viewport3DTopologyRenderModel,
+  type Viewport3DVectorBudgetTarget,
 } from "./viewport3dRenderModel";
 import {
   buildViewport3DPrimitiveRenderModel,
@@ -51,11 +58,29 @@ import {
   useViewport3DSharedDomainManifest,
   useViewport3DVisualizationState,
 } from "./viewport3dResources";
+import { buildViewport3DResourceFrameKey } from "./viewport3dInvalidation";
 import {
   resolveHslReferenceVisible,
   useViewport3DCommandState,
+  viewport3dStore,
 } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
+
+type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+
+interface Viewport3DFrameProps
+  extends Omit<Viewport3DSceneProps, "colors"> {
+  clientReady: boolean;
+  colors: Viewport3DSceneProps["colors"] | null;
+  diagnostics: string;
+  domainSummary: string;
+  kernel: ModuleProps["kernel"];
+  onClearSelection: () => void;
+  quantityId: string;
+  selectedLabel: string;
+  slotId: ModuleProps["slotId"];
+  status: string;
+}
 
 export default function Viewport3DModule({
   kernel,
@@ -69,10 +94,36 @@ export default function Viewport3DModule({
   const tracker = useViewport3DResourceTracker();
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
+
+  // Register the projection toggle command so the ribbon can reflect its state.
+  useEffect(() => {
+    kernel.commands.register({
+      id: "view-projection",
+      title: "Toggle projection",
+      group: "viewport",
+      category: "viewport",
+      scope: "viewport",
+      isActive: () =>
+        viewport3dStore.getSnapshot().widgets.cameraProjection === "orthographic",
+      run: () => {
+        viewport3dStore.toggleCameraProjection();
+        return Promise.resolve({ status: "completed" as const });
+      },
+    });
+    return () => {
+      kernel.commands.unregister("view-projection");
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const visualizationState = useViewport3DVisualizationState();
   const quantityId = visualizationState.data?.active_quantity_id ?? "m";
   const vectorColorMode =
     visualizationState.data?.vector_style.color_mode ?? "orientation";
+  const vectorLengthScale =
+    visualizationState.data?.vector_style.length_scale ?? 1;
+  const maxVectorGlyphs = resolveViewport3DMaxVectorGlyphs(
+    visualizationState.data,
+  );
   const domainMeta = useViewport3DDomainMeta();
   const scene = useViewport3DScene();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
@@ -88,24 +139,18 @@ export default function Viewport3DModule({
   );
   const bounds =
     resolveTopologyBounds(topology.data) ?? resolveDomainBounds(domainMeta.data);
-  const vectorScale = Math.max((bounds?.radius ?? 1) * 0.06, 1e-9);
+  const vectorScale = Math.max(
+    (bounds?.radius ?? 1) * 0.06 * vectorLengthScale,
+    1e-9,
+  );
   const topologyRenderModel = useMemo(
     () =>
       buildViewport3DTopologyRenderModel(
         topology.data,
         femDomain.magneticParts,
         femDomain.airboxParts,
-      ),
+    ),
     [femDomain.airboxParts, femDomain.magneticParts, topology.data],
-  );
-  const fieldRenderModel = useMemo(
-    () =>
-      buildViewport3DFieldRenderModel(
-        topologyRenderModel,
-        fieldVector.data,
-        vectorScale,
-      ),
-    [fieldVector.data, topologyRenderModel, vectorScale],
   );
   const primitiveModel = useMemo(
     () =>
@@ -161,6 +206,23 @@ export default function Viewport3DModule({
       ),
     [fallbackSettings, objectVisualizationSnapshot],
   );
+  const fieldRenderOptions = useViewport3DFieldRenderOptions({
+    airboxSettings,
+    fallbackSettings,
+    getPartSettings,
+    maxVectorGlyphs,
+    topologyRenderModel,
+  });
+  const fieldRenderModel = useMemo(
+    () =>
+      buildViewport3DFieldRenderModel(
+        topologyRenderModel,
+        fieldVector.data,
+        vectorScale,
+        fieldRenderOptions,
+      ),
+    [fieldRenderOptions, fieldVector.data, topologyRenderModel, vectorScale],
+  );
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
@@ -186,6 +248,44 @@ export default function Viewport3DModule({
     commandState.widgets.hslReferenceMode,
     vectorColorMode,
   );
+  const resourceFrameKey = buildViewport3DResourceFrameKey([
+    {
+      error: topology.error?.message,
+      id: "topology",
+      revision: topology.revision,
+      status: topology.status,
+    },
+    {
+      error: fieldVector.error?.message,
+      id: "field-vector",
+      revision: fieldVector.revision,
+      status: fieldVector.status,
+    },
+    {
+      error: scene.error?.message,
+      id: "scene",
+      revision: scene.revision,
+      status: scene.status,
+    },
+    {
+      error: domainMeta.error?.message,
+      id: "domain-meta",
+      revision: domainMeta.revision,
+      status: domainMeta.status,
+    },
+    {
+      error: sharedDomainManifest.error?.message,
+      id: "shared-domain-manifest",
+      revision: sharedDomainManifest.revision,
+      status: sharedDomainManifest.status,
+    },
+    {
+      error: visualizationState.error?.message,
+      id: "visualization-state",
+      revision: visualizationState.revision,
+      status: visualizationState.status,
+    },
+  ]);
 
   const onSelectDomain = useCallback(() => {
     select({
@@ -226,6 +326,138 @@ export default function Viewport3DModule({
   );
 
   return (
+    <Viewport3DFrame
+      airboxSettings={airboxSettings}
+      bounds={bounds}
+      cameraProjection={commandState.widgets.cameraProjection}
+      cameraState={commandState.camera}
+      clientReady={clientReady}
+      colors={colors}
+      diagnostics={diagnostics}
+      domainSummary={domainSummary}
+      fallbackSettings={fallbackSettings}
+      femDomain={femDomain}
+      fieldModel={fieldRenderModel}
+      fitRevision={commandState.fitRevision}
+      getObjectSettings={getObjectSettings}
+      getPartSettings={getPartSettings}
+      hslReferenceVisible={hslReferenceVisible}
+      kernel={kernel}
+      onClearSelection={clear}
+      onSelectDomain={onSelectDomain}
+      onSelectObject={onSelectObject}
+      onSelectPart={onSelectPart}
+      primitiveModel={primitiveModel}
+      quantityId={quantityId}
+      resetCameraRevision={commandState.resetCameraRevision}
+      resourceFrameKey={resourceFrameKey}
+      selectedLabel={selectedLabel}
+      selectionBounds={selectionBounds}
+      slotId={slotId}
+      status={status}
+      topologyModel={topologyRenderModel}
+      tracker={tracker}
+      vectorColorMode={vectorColorMode}
+      viewCubeVisible={commandState.widgets.viewCubeVisible}
+    />
+  );
+}
+
+function useViewport3DFieldRenderOptions({
+  airboxSettings,
+  fallbackSettings,
+  getPartSettings,
+  maxVectorGlyphs,
+  topologyRenderModel,
+}: {
+  airboxSettings: VisualizationTargetSettings;
+  fallbackSettings: VisualizationTargetSettings;
+  getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  maxVectorGlyphs: number;
+  topologyRenderModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+}): Viewport3DFieldRenderOptions {
+  return useMemo(() => {
+    if (!topologyRenderModel) {
+      return {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: false,
+      };
+    }
+
+    const fullVectorTargetId = "__full__";
+    const vectorTargets: Viewport3DVectorBudgetTarget[] = [];
+    let scalarColorsVisible = false;
+
+    if (topologyRenderModel.magneticParts.length > 0) {
+      for (const partModel of topologyRenderModel.magneticParts) {
+        const settings = getPartSettings(partModel.part);
+        const visible = settings.visible && settings.vectorsVisible;
+        if (settings.visible && settings.shaderVisible) {
+          scalarColorsVisible = true;
+        }
+        vectorTargets.push({
+          id: partModel.part.id,
+          nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
+          visible,
+        });
+      }
+    } else {
+      scalarColorsVisible =
+        fallbackSettings.visible && fallbackSettings.shaderVisible;
+      vectorTargets.push({
+        id: fullVectorTargetId,
+        nodeCount: topologyRenderModel.nodeCount,
+        visible: fallbackSettings.visible && fallbackSettings.vectorsVisible,
+      });
+    }
+
+    for (const partModel of topologyRenderModel.airboxParts) {
+      vectorTargets.push({
+        id: partModel.part.id,
+        nodeCount: resolveNodeSelectionCount(partModel.part, topologyRenderModel),
+        visible: airboxSettings.visible && airboxSettings.vectorsVisible,
+      });
+    }
+
+    const budgets = distributeVectorGlyphBudget(
+      vectorTargets,
+      maxVectorGlyphs,
+    );
+    const fullVectorBudget = budgets.get(fullVectorTargetId) ?? 0;
+    budgets.delete(fullVectorTargetId);
+
+    return {
+      fullVectorBudget,
+      partVectorBudgets: budgets,
+      scalarColorsVisible,
+    };
+  }, [
+    airboxSettings.vectorsVisible,
+    airboxSettings.visible,
+    fallbackSettings.shaderVisible,
+    fallbackSettings.vectorsVisible,
+    fallbackSettings.visible,
+    getPartSettings,
+    maxVectorGlyphs,
+    topologyRenderModel,
+  ]);
+}
+
+function Viewport3DFrame({
+  clientReady,
+  colors,
+  diagnostics,
+  domainSummary,
+  kernel,
+  onClearSelection,
+  quantityId,
+  selectedLabel,
+  slotId,
+  status,
+  ...sceneProps
+}: Viewport3DFrameProps) {
+  return (
     <section
       aria-label="3D viewport"
       className="fm-viewport-3d"
@@ -248,30 +480,11 @@ export default function Viewport3DModule({
             antialias: true,
             powerPreference: "high-performance",
           }}
-          onPointerMissed={() => clear()}
+          onPointerMissed={onClearSelection}
         >
           <Viewport3DScene
-            airboxSettings={airboxSettings}
-            bounds={bounds}
-            cameraState={commandState.camera}
+            {...sceneProps}
             colors={colors}
-            fallbackSettings={fallbackSettings}
-            femDomain={femDomain}
-            fieldModel={fieldRenderModel}
-            fitRevision={commandState.fitRevision}
-            getObjectSettings={getObjectSettings}
-            getPartSettings={getPartSettings}
-            hslReferenceVisible={hslReferenceVisible}
-            onSelectObject={onSelectObject}
-            onSelectDomain={onSelectDomain}
-            onSelectPart={onSelectPart}
-            primitiveModel={primitiveModel}
-            resetCameraRevision={commandState.resetCameraRevision}
-            selectionBounds={selectionBounds}
-            topologyModel={topologyRenderModel}
-            tracker={tracker}
-            vectorColorMode={vectorColorMode}
-            viewCubeVisible={commandState.widgets.viewCubeVisible}
           />
         </Canvas>
       ) : (

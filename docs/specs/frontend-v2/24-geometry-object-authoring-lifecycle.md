@@ -108,9 +108,9 @@ Required sections:
 - identity: object id, name, region name;
 - primitive geometry: type-specific dimensions and SI units;
 - transform: position, rotation, scale where supported;
-- material/magnetization references;
+- material reference: the backend-backed `object.material` inspector patches `material_ref` through `/v2/sessions/current/model/objects/{object_id}`; magnetization reference editing remains pending;
 - mesh status: primitive-only, stale, building, ready, failed;
-- mesh policy link: jump to object mesh settings when available;
+- mesh policy link: jump to the backend-backed `object.mesh` inspector, which reads and writes `/v2/sessions/current/meshing/policies/objects/{object_id}`;
 - diagnostics: geometry validation, realization blockers, mesh build errors;
 - provenance: scene revision and last mesh build source scene revision when available.
 

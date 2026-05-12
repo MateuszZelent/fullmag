@@ -183,13 +183,32 @@
 }
 
 .fm-header__session-indicator {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
   display: flex;
   align-items: center;
   gap: var(--fm-space-1);
   margin-left: auto;
   color: var(--fm-text-muted);
+  font: inherit;
   font-size: var(--fm-font-size-sm);
   white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.fm-header__session-indicator[data-clickable="true"] {
+  cursor: pointer;
+}
+
+.fm-header__session-indicator[data-clickable="true"]:hover {
+  color: var(--fm-text-primary);
+}
+
+.fm-header__session-indicator:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
 }
 
 .fm-header__session-dot {

@@ -5,6 +5,15 @@ export type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
 
+export const OBJECT_INTERACTION_KINDS = [
+  "exchange",
+  "demag",
+  "interfacial_dmi",
+  "uniaxial_anisotropy",
+] as const;
+
+export type ObjectInteractionKind = (typeof OBJECT_INTERACTION_KINDS)[number];
+
 interface BaseAuthoringTransaction {
   base_revision?: number | null;
 }
@@ -34,6 +43,21 @@ export type MeshObjectReportResource =
   components["schemas"]["MeshObjectReportResource"];
 export type MeshObjectSizeFieldResource =
   components["schemas"]["MeshObjectSizeFieldResource"];
+export interface MeshObjectConfigReplaceRequest {
+  config?: JsonObject | null;
+}
+export interface MeshObjectConfigResource {
+  config?: JsonObject | null;
+  object_id: string;
+  revision: number;
+}
+export interface MeshUniverseConfigReplaceRequest {
+  config?: JsonObject | null;
+}
+export interface MeshUniverseConfigResource {
+  config?: JsonObject | null;
+  revision: number;
+}
 export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
 export type AuthoringTransactionRequest =
@@ -87,6 +111,18 @@ export interface ObjectGeometryPatchRequest extends BaseAuthoringTransaction {
   geometry: JsonObject;
   transform?: JsonObject | null;
 }
+export interface ObjectInteractionPatchRequest {
+  enabled?: boolean | null;
+  params?: JsonObject;
+  present?: boolean | null;
+}
+export interface ObjectInteractionResource {
+  enabled: boolean;
+  interaction_kind: ObjectInteractionKind | string;
+  object_id: string;
+  params: JsonObject;
+  present: boolean;
+}
 export interface ObjectPatchRequest extends BaseAuthoringTransaction {
   geometry?: JsonObject | null;
   magnetization_ref?: string | null;
@@ -128,4 +164,10 @@ export interface RequestOptions {
 
 export interface BinaryRequestOptions extends RequestOptions {
   etag?: string | null;
+}
+
+export function isOptionalObjectInteractionKind(
+  kind: ObjectInteractionKind,
+): boolean {
+  return kind === "interfacial_dmi" || kind === "uniaxial_anisotropy";
 }

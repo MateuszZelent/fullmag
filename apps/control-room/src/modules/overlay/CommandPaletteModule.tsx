@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type {
@@ -88,6 +88,13 @@ export function CommandPaletteView({
   onQueryChange,
   query,
 }: CommandPaletteViewProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    inputRef.current?.focus();
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const filteredCommands = filterPaletteCommands(commands, query);
@@ -100,7 +107,7 @@ export function CommandPaletteView({
       <Dialog.Content className="fm-command-palette" aria-label="Command palette">
         <Command shouldFilter={false}>
           <CommandInput
-            autoFocus
+            ref={inputRef}
             value={query}
             onValueChange={onQueryChange}
             placeholder="Search commands"

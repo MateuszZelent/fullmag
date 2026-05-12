@@ -1,15 +1,25 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
+import { useMemo, useState } from "react";
 
+import { useKernel } from "@/kernel/KernelContext";
 import {
+  airboxVisualizationStatePatchFromTargetPatch,
+  DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
   renderModePatch,
+  resolveAirboxVisualizationSettingsFromState,
+  resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import {
+  VISUALIZATION_STATE_RESOURCE_KEY,
+  useVisualizationStateResource,
+} from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -28,13 +38,69 @@ const RENDER_MODES: Array<{
 
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const target = resolveVisualizationTargetFromSelection(selection);
+  const { api, resources } = useKernel();
   const { snapshot, visualization } = useObjectVisualizationRegistry();
-  const settings = target ? visualization.getSettings(target) : null;
-  const revision = snapshot.version;
+  const visualizationState = useVisualizationStateResource();
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const airboxBaseSettings = useMemo(
+    () => resolveAirboxVisualizationSettingsFromState(visualizationState.data),
+    [visualizationState.data],
+  );
+  const settings = target
+    ? target.kind === "airbox"
+      ? resolveVisualizationSettings(snapshot, target, airboxBaseSettings)
+      : visualization.getSettings(target)
+    : null;
+  const revision =
+    target?.kind === "airbox"
+      ? visualizationState.revision ?? visualizationState.status
+      : snapshot.version;
 
-  function patch(patchValue: VisualizationTargetPatch): void {
+  async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
+    if (target.kind === "airbox") {
+      setPending(true);
+      try {
+        const next = await api.visualization.patch(
+          airboxVisualizationStatePatchFromTargetPatch(patchValue),
+        );
+        resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
+        visualization.patchTarget(target, patchValue);
+        setFeedback(null);
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
+
     visualization.patchTarget(target, patchValue);
+  }
+
+  async function resetTarget(): Promise<void> {
+    if (!target) return;
+    if (target.kind === "airbox") {
+      setPending(true);
+      try {
+        const next = await api.visualization.patch(
+          airboxVisualizationStatePatchFromTargetPatch(
+            DEFAULT_AIRBOX_VISUALIZATION,
+          ),
+        );
+        resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
+        visualization.clearTarget(target);
+        setFeedback(null);
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : String(error));
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
+
+    visualization.clearTarget(target);
   }
 
   if (!target || !settings) {
@@ -61,28 +127,35 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         <div className="fm-visualization-toggle-grid">
           <ToggleButton
             active={settings.visible}
+            disabled={pending}
             label="Visible"
-            onClick={() => patch({ visible: !settings.visible })}
+            onClick={() => void patch({ visible: !settings.visible })}
           />
           <ToggleButton
             active={settings.shaderVisible}
+            disabled={pending}
             label="Shader"
-            onClick={() => patch({ shaderVisible: !settings.shaderVisible })}
+            onClick={() => void patch({ shaderVisible: !settings.shaderVisible })}
           />
           <ToggleButton
             active={settings.wireframeVisible}
+            disabled={pending}
             label="Wireframe"
-            onClick={() => patch({ wireframeVisible: !settings.wireframeVisible })}
+            onClick={() =>
+              void patch({ wireframeVisible: !settings.wireframeVisible })
+            }
           />
           <ToggleButton
             active={settings.pointsVisible}
+            disabled={pending}
             label="Points"
-            onClick={() => patch({ pointsVisible: !settings.pointsVisible })}
+            onClick={() => void patch({ pointsVisible: !settings.pointsVisible })}
           />
           <ToggleButton
             active={settings.vectorsVisible}
+            disabled={pending}
             label="Vectors"
-            onClick={() => patch({ vectorsVisible: !settings.vectorsVisible })}
+            onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })}
           />
         </div>
       </InspectorSection>
@@ -94,8 +167,9 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
               key={mode.value}
               size="sm"
               type="button"
+              disabled={pending}
               variant={settings.renderMode === mode.value ? "primary" : "secondary"}
-              onClick={() => patch(renderModePatch(mode.value))}
+              onClick={() => void patch(renderModePatch(mode.value))}
             >
               {mode.label}
             </Button>
@@ -113,7 +187,9 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
             step={1}
             type="range"
             value={settings.opacityPercent}
-            onChange={(event) => patch({ opacityPercent: Number(event.target.value) })}
+            onChange={(event) =>
+              void patch({ opacityPercent: Number(event.target.value) })
+            }
           />
         </label>
       </InspectorSection>
@@ -122,23 +198,34 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         <Button
           size="sm"
           type="button"
+          disabled={pending}
           variant="ghost"
-          onClick={() => visualization.clearTarget(target)}
+          onClick={() => void resetTarget()}
         >
           <RotateCcw size={14} />
           Reset target display
         </Button>
       </InspectorSection>
+
+      {feedback ? (
+        <InspectorSection title="Diagnostics">
+          <p className="fm-inspector-validation-message" data-kind="error">
+            {feedback}
+          </p>
+        </InspectorSection>
+      ) : null}
     </div>
   );
 }
 
 function ToggleButton({
   active,
+  disabled = false,
   label,
   onClick,
 }: {
   active: boolean;
+  disabled?: boolean;
   label: string;
   onClick: () => void;
 }) {
@@ -146,6 +233,7 @@ function ToggleButton({
     <Button
       className="fm-visualization-toggle"
       data-active={active}
+      disabled={disabled}
       size="sm"
       type="button"
       variant={active ? "primary" : "secondary"}

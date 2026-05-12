@@ -4,8 +4,11 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
+  MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_UNIVERSE_POLICY_PATH,
+  MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -19,11 +22,14 @@ import {
   GEOMETRY_VALIDATION_RESOURCE_KEY,
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
+  MESH_UNIVERSE_POLICY_RESOURCE_KEY,
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
   resolveObjectMeshQualityResourceKey,
+  resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshReportResourceKey,
+  resolveObjectInteractionResourceKey,
   resolveObjectTopologyResourceKey,
   resolveSceneResourceRevision,
   resolveVisualizationStateRevision,
@@ -45,6 +51,9 @@ describe("geometry lifecycle resources", () => {
     expect(MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY).toBe(
       MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
     );
+    expect(MESH_UNIVERSE_POLICY_RESOURCE_KEY).toBe(
+      MESHING_UNIVERSE_POLICY_PATH,
+    );
     expect(VISUALIZATION_STATE_RESOURCE_KEY).toBe(VISUALIZATION_STATE_PATH);
     expect(resolveObjectTopologyResourceKey("box 1")).toBe(
       MESHING_OBJECT_TOPOLOGY_PATH.replace("{object_id}", "box%201"),
@@ -54,6 +63,15 @@ describe("geometry lifecycle resources", () => {
     );
     expect(resolveObjectMeshQualityResourceKey("box 1")).toBe(
       MESHING_OBJECT_QUALITY_PATH.replace("{object_id}", "box%201"),
+    );
+    expect(resolveObjectMeshPolicyResourceKey("box 1")).toBe(
+      MESHING_OBJECT_POLICY_PATH.replace("{object_id}", "box%201"),
+    );
+    expect(resolveObjectInteractionResourceKey("box 1", "interfacial_dmi")).toBe(
+      MODEL_OBJECT_INTERACTION_PATH.replace("{object_id}", "box%201").replace(
+        "{interaction_kind}",
+        "interfacial_dmi",
+      ),
     );
   });
 

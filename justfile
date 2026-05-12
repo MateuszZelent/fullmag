@@ -143,7 +143,7 @@ run-arch-waveguide-interactive fem_execution="cpu":
     bash -euo pipefail -c 'mode="{{fem_execution}}"; case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; 1|true|TRUE|on|ON|yes|YES|y|Y) echo "run-arch-waveguide-interactive argument selects FEM execution mode, not build cpu_only; use cpu or gpu." >&2; exit 2 ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; just run-arch-waveguide-interactive-managed "$mode"'
 
 # Run arch waveguide interactive with the new v2 control room (apps/control-room).
-# Starts the v2 Next.js dev server on :3000, then launches the simulation.
+# Starts the v2 Next.js dev server on :3100, then launches the simulation.
 run-arch-waveguide-interactive-v2 fem_execution="cpu":
     bash -euo pipefail -c '\
       mode="{{fem_execution}}"; \
@@ -156,32 +156,31 @@ run-arch-waveguide-interactive-v2 fem_execution="cpu":
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
-      echo "Stopping existing control room processes on :3000 ..." >&2; \
-      pkill -f "dev-server.mjs" 2>/dev/null || true; \
-      pkill -f "next.*dev.*apps" 2>/dev/null || true; \
-      fuser -k 3000/tcp 2>/dev/null || true; \
-      sleep 0.6; \
+      echo "Freeing ports 3100 and 8081 ..." >&2; \
+      fuser -k 3100/tcp 2>/dev/null || true; \
+      fuser -k 8081/tcp 2>/dev/null || true; \
+      pkill -f "/[f]ullmag-fem-gpu-bin --dev -i examples/arch_waveguide_relax_50nm.py" >/dev/null 2>&1 || true; \
       rm -rf apps/control-room/.next/dev; \
       mkdir -p .fullmag/logs; \
-      echo "Starting v2 control room on :3000 ..." >&2; \
+      echo "Starting v2 control room on :3100 ..." >&2; \
       NEXT_PUBLIC_FULLMAG_API_URL="http://localhost:8081" \
       FULLMAG_API_URL="http://localhost:8081" \
       FULLMAG_API_PROXY_TARGET="http://localhost:8081" \
-      $PNPM_CMD --dir apps/control-room dev --hostname 0.0.0.0 --port 3000 \
+      $PNPM_CMD --dir apps/control-room dev --hostname 0.0.0.0 --port 3100 \
         >.fullmag/logs/control-room-v2.log 2>&1 & \
-      printf "http://localhost:3000\n" > .fullmag/control-room-url.txt; \
+      printf "http://localhost:3100\n" > .fullmag/control-room-url.txt; \
       printf "dev\n" > .fullmag/control-room-mode.txt; \
-      echo "Waiting for v2 frontend on :3000 (up to 120s) ..." >&2; \
+      echo "Waiting for v2 frontend on :3100 (up to 120s) ..." >&2; \
       for i in $(seq 1 600); do \
-        curl -fsS http://localhost:3000 >/dev/null 2>&1 && break; \
+        curl -fsS http://localhost:3100 >/dev/null 2>&1 && break; \
         sleep 0.2; \
       done; \
-      if ! curl -fsS http://localhost:3000 >/dev/null 2>&1; then \
-        echo "v2 frontend did not become ready on :3000" >&2; \
+      if ! curl -fsS http://localhost:3100 >/dev/null 2>&1; then \
+        echo "v2 frontend did not become ready on :3100" >&2; \
         echo "Log: $(pwd)/.fullmag/logs/control-room-v2.log" >&2; \
         exit 1; \
       fi; \
-      echo "v2 frontend ready — launching simulation ..." >&2; \
+      echo "v2 frontend ready on http://localhost:3100 — launching simulation ..." >&2; \
       just run-arch-waveguide-interactive-managed "$mode"'
 
 

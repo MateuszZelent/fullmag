@@ -238,6 +238,11 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  function revertDraft(): void {
+    setDraftState({ draft: baseDraft, key: draftKey });
+    setFeedback(null);
+  }
+
   return (
     <div className="fm-inspector-panel">
       <InspectorSection title="Geometry Object">
@@ -330,83 +335,128 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
           />
         </InspectorSection>
       ) : null}
-      <InspectorSection title="Transactions">
-        <div className="fm-inspector-actions">
-          {draft.mode === "draft-new" ? (
+      <GeometryObjectTransactions
+        draftMode={draft.mode}
+        pending={pending}
+        onApplyCreateDraft={applyCreateDraft}
+        onApplyGeometryPatch={applyGeometryPatch}
+        onApplyTransformPatch={applyTransformPatch}
+        onDeleteObject={deleteObject}
+        onRevertDraft={revertDraft}
+      />
+      <GeometryObjectDiagnostics
+        feedback={feedback}
+        validationMessages={validationMessages}
+        validationStatus={validation.status}
+      />
+    </div>
+  );
+}
+
+function GeometryObjectTransactions({
+  draftMode,
+  onApplyCreateDraft,
+  onApplyGeometryPatch,
+  onApplyTransformPatch,
+  onDeleteObject,
+  onRevertDraft,
+  pending,
+}: {
+  draftMode: GeometryObjectDraft["mode"];
+  onApplyCreateDraft: () => Promise<void>;
+  onApplyGeometryPatch: () => Promise<void>;
+  onApplyTransformPatch: () => Promise<void>;
+  onDeleteObject: () => Promise<void>;
+  onRevertDraft: () => void;
+  pending: boolean;
+}) {
+  return (
+    <InspectorSection title="Transactions">
+      <div className="fm-inspector-actions">
+        {draftMode === "draft-new" ? (
+          <Button
+            disabled={pending}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={() => void onApplyCreateDraft()}
+          >
+            Apply Draft
+          </Button>
+        ) : (
+          <>
+            <Button
+              disabled={pending || draftMode !== "committed"}
+              size="sm"
+              type="button"
+              variant="primary"
+              onClick={() => void onApplyGeometryPatch()}
+            >
+              Apply Geometry
+            </Button>
+            <Button
+              disabled={pending || draftMode !== "committed"}
+              size="sm"
+              type="button"
+              onClick={() => void onApplyTransformPatch()}
+            >
+              Apply Transform
+            </Button>
             <Button
               disabled={pending}
               size="sm"
               type="button"
-              variant="primary"
-              onClick={() => void applyCreateDraft()}
+              variant="ghost"
+              onClick={onRevertDraft}
             >
-              Apply Draft
+              Revert Draft
             </Button>
-          ) : (
-            <>
-              <Button
-                disabled={pending || draft.mode !== "committed"}
-                size="sm"
-                type="button"
-                variant="primary"
-                onClick={() => void applyGeometryPatch()}
-              >
-                Apply Geometry
-              </Button>
-              <Button
-                disabled={pending || draft.mode !== "committed"}
-                size="sm"
-                type="button"
-                onClick={() => void applyTransformPatch()}
-              >
-                Apply Transform
-              </Button>
-              <Button
-                disabled={pending}
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setDraftState({ draft: baseDraft, key: draftKey });
-                  setFeedback(null);
-                }}
-              >
-                Revert Draft
-              </Button>
-              <Button
-                disabled={pending || draft.mode !== "committed"}
-                size="sm"
-                type="button"
-                variant="danger"
-                onClick={() => void deleteObject()}
-              >
-                Delete Object
-              </Button>
-            </>
-          )}
-        </div>
-      </InspectorSection>
-      <InspectorSection title="Diagnostics">
-        <FieldRow label="Validation fetch" value={validation.status} />
-        {feedback ? (
-          <p
-            className="fm-inspector-validation-message"
-            data-kind={feedback.kind}
-          >
-            {feedback.message}
-          </p>
-        ) : null}
-        {validationMessages.length > 0 ? (
-          <ul className="fm-inspector-validation-list">
-            {validationMessages.map((message) => (
-              <li key={message}>{message}</li>
-            ))}
-          </ul>
-        ) : (
-          <FieldRow label="Backend validation" value="no object issues" />
+            <Button
+              disabled={pending || draftMode !== "committed"}
+              size="sm"
+              type="button"
+              variant="danger"
+              onClick={() => void onDeleteObject()}
+            >
+              Delete Object
+            </Button>
+          </>
         )}
-      </InspectorSection>
-    </div>
+      </div>
+    </InspectorSection>
+  );
+}
+
+function GeometryObjectDiagnostics({
+  feedback,
+  validationMessages,
+  validationStatus,
+}: {
+  feedback: Feedback | null;
+  validationMessages: string[];
+  validationStatus: string;
+}) {
+  return (
+    <InspectorSection title="Diagnostics">
+      <FieldRow label="Validation fetch" value={validationStatus} />
+      {feedback ? (
+        <p
+          className="fm-inspector-validation-message"
+          data-kind={feedback.kind}
+        >
+          {feedback.message}
+        </p>
+      ) : null}
+      {validationMessages.length > 0 ? (
+        <ul className="fm-inspector-validation-list">
+          {validationMessages.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+        </ul>
+      ) : (
+        <FieldRow label="Backend validation" value="no object issues" />
+      )}
+    </InspectorSection>
   );
 }
 

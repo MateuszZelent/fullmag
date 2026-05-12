@@ -3,35 +3,52 @@ export function magnetizationHslRgb(
   my: number,
   mz: number,
 ): [number, number, number] {
-  const length = Math.hypot(mx, my, mz);
-  if (length === 0) {
-    return [0.5, 0.5, 0.5];
+  const magnitude = Math.hypot(mx, my, mz);
+  if (magnitude <= 1e-30) {
+    return [0.6, 0.6, 0.6];
   }
 
-  const hue = normalizedHue(Math.atan2(my, mx) / (Math.PI * 2));
-  const saturation = Math.min(1, Math.hypot(mx / length, my / length));
-  const lightness = (clamp(mz / length, -1, 1) + 1) / 2;
-  return hslToRgb(hue, saturation, lightness);
+  const nx = mx / magnitude;
+  const ny = my / magnitude;
+  const nz = mz / magnitude;
+  const hueRadians = Math.atan2(ny, nx);
+  const saturation = clamp(Math.hypot(nx, ny), 0, 1);
+  const value = clamp(nz * 0.5 + 0.5, 0, 1);
+  return orientationHsvToRgb(hueRadians, saturation, value);
 }
+
+export function magnetizationHslRgbForSceneVector(
+  sceneX: number,
+  sceneY: number,
+  sceneZ: number,
+): [number, number, number] {
+  return magnetizationHslRgb(sceneX, sceneZ, sceneY);
+}
+
+const AXIS_RGB = {
+  x: [1, 0, 0],
+  y: [0x50 / 255, 0xc8 / 255, 0x50 / 255],
+  z: [0x50 / 255, 0x90 / 255, 0xe6 / 255],
+} satisfies Record<"x" | "y" | "z", [number, number, number]>;
 
 export const HSL_REFERENCE_AXES = [
   {
-    color: [1, 0, 0],
+    color: AXIS_RGB.x,
     direction: [1, 0, 0],
     id: "x",
     label: "+X",
   },
   {
-    color: magnetizationHslRgb(0, 1, 0),
+    color: AXIS_RGB.z,
     direction: [0, 1, 0],
     id: "y",
-    label: "+Y",
+    label: "+Z",
   },
   {
-    color: [1, 1, 1],
+    color: AXIS_RGB.y,
     direction: [0, 0, 1],
     id: "z",
-    label: "+Z",
+    label: "+Y",
   },
 ] satisfies Array<{
   color: [number, number, number];
@@ -40,40 +57,27 @@ export const HSL_REFERENCE_AXES = [
   label: string;
 }>;
 
-function normalizedHue(hue: number): number {
-  return hue < 0 ? hue + 1 : hue;
-}
-
-function hslToRgb(
-  hue: number,
+function orientationHsvToRgb(
+  hueRadians: number,
   saturation: number,
-  lightness: number,
+  value: number,
 ): [number, number, number] {
-  if (saturation === 0) {
-    return [lightness, lightness, lightness];
-  }
+  const h = positiveModulo((hueRadians * 180) / Math.PI / 60, 6);
+  const c = value * saturation;
+  const x = c * (1 - Math.abs(positiveModulo(h, 2) - 1));
+  const m = value - c;
 
-  const q =
-    lightness < 0.5
-      ? lightness * (1 + saturation)
-      : lightness + saturation - lightness * saturation;
-  const p = 2 * lightness - q;
-
-  return [
-    hueChannel(p, q, hue + 1 / 3),
-    hueChannel(p, q, hue),
-    hueChannel(p, q, hue - 1 / 3),
-  ];
+  if (h < 1) return [c + m, x + m, m];
+  if (h < 2) return [x + m, c + m, m];
+  if (h < 3) return [m, c + m, x + m];
+  if (h < 4) return [m, x + m, c + m];
+  if (h < 5) return [x + m, m, c + m];
+  return [c + m, m, x + m];
 }
 
-function hueChannel(p: number, q: number, hue: number): number {
-  let t = hue;
-  if (t < 0) t += 1;
-  if (t > 1) t -= 1;
-  if (t < 1 / 6) return p + (q - p) * 6 * t;
-  if (t < 1 / 2) return q;
-  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-  return p;
+function positiveModulo(value: number, modulus: number): number {
+  const result = value % modulus;
+  return result < 0 ? result + modulus : result;
 }
 
 function clamp(value: number, min: number, max: number): number {

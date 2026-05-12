@@ -72,9 +72,16 @@ function contextCommandsForNode(
   kernel: KernelApi,
   node: ExplorerNode,
 ): CommandContribution[] {
-  return (node.contextCommands ?? [])
-    .map((commandId) => kernel.commands.get(commandId))
-    .filter((command): command is CommandContribution => Boolean(command));
+  const commands: CommandContribution[] = [];
+
+  for (const commandId of node.contextCommands ?? []) {
+    const command = kernel.commands.get(commandId);
+    if (command) {
+      commands.push(command);
+    }
+  }
+
+  return commands;
 }
 
 function ExplorerTreeRow({

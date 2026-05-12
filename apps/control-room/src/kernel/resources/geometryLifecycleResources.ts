@@ -6,8 +6,11 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_OBJECT_QUALITY_PATH,
+  MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_UNIVERSE_POLICY_PATH,
+  MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -17,14 +20,22 @@ import type {
   GeometryDiagnosticsResource,
   GeometryCapabilitiesResource,
   GeometryValidationResource,
+  ObjectInteractionKind,
+  ObjectInteractionResource,
   MeshActiveBuildResource,
   MeshLastSuccessfulBuildResource,
+  MeshObjectConfigResource,
   MeshObjectQualityResource,
   MeshObjectReportResource,
+  MeshUniverseConfigResource,
   ResourceRevision,
   SceneResource,
 } from "../api/apiTypes";
+import {
+  isOptionalObjectInteractionKind,
+} from "../api/apiTypes";
 import type { DecodedTopology } from "../api/codecs";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 export {
   VISUALIZATION_STATE_RESOURCE_KEY,
@@ -44,6 +55,8 @@ export const GEOMETRY_DIAGNOSTICS_RESOURCE_KEY =
 export const MESH_BUILD_CURRENT_RESOURCE_KEY = MESHING_BUILDS_CURRENT_PATH;
 export const MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY =
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH;
+export const MESH_UNIVERSE_POLICY_RESOURCE_KEY =
+  MESHING_UNIVERSE_POLICY_PATH;
 
 export function resolveObjectTopologyResourceKey(objectId: string): string {
   return MESHING_OBJECT_TOPOLOGY_PATH.replace(
@@ -64,6 +77,23 @@ export function resolveObjectMeshQualityResourceKey(objectId: string): string {
     "{object_id}",
     encodeURIComponent(objectId),
   );
+}
+
+export function resolveObjectMeshPolicyResourceKey(objectId: string): string {
+  return MESHING_OBJECT_POLICY_PATH.replace(
+    "{object_id}",
+    encodeURIComponent(objectId),
+  );
+}
+
+export function resolveObjectInteractionResourceKey(
+  objectId: string,
+  interactionKind: ObjectInteractionKind,
+): string {
+  return MODEL_OBJECT_INTERACTION_PATH.replace(
+    "{object_id}",
+    encodeURIComponent(objectId),
+  ).replace("{interaction_kind}", interactionKind);
 }
 
 export function resolveSceneResourceRevision(
@@ -234,6 +264,104 @@ export function useObjectMeshQualityResource(
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,
   });
+}
+
+export function useObjectMeshPolicyResource(
+  objectId: string | null | undefined,
+) {
+  const { api } = useKernel();
+  const resourceKey = objectId
+    ? resolveObjectMeshPolicyResourceKey(objectId)
+    : MESHING_OBJECT_POLICY_PATH;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!objectId) return Promise.resolve(defaultObjectMeshPolicyResource(""));
+      return api.meshing.objectPolicy(objectId, { signal });
+    },
+    [api, objectId],
+  );
+
+  return useResource<MeshObjectConfigResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey,
+  });
+}
+
+export function useUniverseMeshPolicyResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.universePolicy({ signal }),
+    [api],
+  );
+
+  return useResource<MeshUniverseConfigResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_UNIVERSE_POLICY_RESOURCE_KEY,
+  });
+}
+
+export function useObjectInteractionResource(
+  objectId: string | null | undefined,
+  interactionKind: ObjectInteractionKind,
+) {
+  const { api } = useKernel();
+  const resourceKey = objectId
+    ? resolveObjectInteractionResourceKey(objectId, interactionKind)
+    : MODEL_OBJECT_INTERACTION_PATH;
+  const load = useCallback(
+    async ({ signal }: { signal: AbortSignal }) => {
+      if (!objectId) {
+        return defaultObjectInteractionResource("", interactionKind);
+      }
+
+      try {
+        return await api.model.objectInteraction(objectId, interactionKind, {
+          signal,
+        });
+      } catch (error) {
+        if (
+          error instanceof ControlRoomApiError &&
+          error.status === 404 &&
+          isOptionalObjectInteractionKind(interactionKind)
+        ) {
+          return defaultObjectInteractionResource(objectId, interactionKind);
+        }
+        throw error;
+      }
+    },
+    [api, interactionKind, objectId],
+  );
+
+  return useResource<ObjectInteractionResource>({
+    load,
+    resourceKey,
+  });
+}
+
+export function defaultObjectMeshPolicyResource(
+  objectId: string,
+): MeshObjectConfigResource {
+  return {
+    config: null,
+    object_id: objectId,
+    revision: 0,
+  };
+}
+
+function defaultObjectInteractionResource(
+  objectId: string,
+  interactionKind: ObjectInteractionKind,
+): ObjectInteractionResource {
+  return {
+    enabled: false,
+    interaction_kind: interactionKind,
+    object_id: objectId,
+    params: {},
+    present: false,
+  };
 }
 
 function resolveRevisionProperty(

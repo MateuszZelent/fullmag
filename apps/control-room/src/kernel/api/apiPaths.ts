@@ -63,6 +63,14 @@ export const MESHING_OBJECT_SIZE_FIELD_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field",
 );
 
+export const MESHING_OBJECT_POLICY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/policies/objects/{object_id}",
+);
+
+export const MESHING_UNIVERSE_POLICY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/policies/universe",
+);
+
 export const MESHING_PART_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
 );
@@ -89,6 +97,10 @@ export const MODEL_OBJECT_PATH = openApiV2Path(
 
 export const MODEL_OBJECT_GEOMETRY_PATH = openApiV2Path(
   "/v2/sessions/current/model/objects/{object_id}/geometry",
+);
+
+export const MODEL_OBJECT_INTERACTION_PATH = openApiV2Path(
+  "/v2/sessions/current/model/objects/{object_id}/interactions/{interaction_kind}",
 );
 
 export const MODEL_GEOMETRY_CAPABILITIES_PATH = openApiV2Path(

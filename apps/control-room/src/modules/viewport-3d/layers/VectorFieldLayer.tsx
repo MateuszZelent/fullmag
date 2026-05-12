@@ -141,8 +141,9 @@ export function VectorFieldLayer({
     head.instanceMatrix.needsUpdate = true;
     if (shaft.instanceColor) shaft.instanceColor.needsUpdate = true;
     if (head.instanceColor) head.instanceColor.needsUpdate = true;
+    tracker.recordDirtyFrame("vector-glyphs");
     invalidate();
-  }, [glyphs, invalidate]);
+  }, [glyphs, invalidate, tracker]);
 
   if (!glyphs || glyphs.count === 0) return null;
 

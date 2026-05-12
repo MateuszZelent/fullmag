@@ -1,6 +1,4 @@
-import type {
-  DomainMetaResource,
-} from "@/kernel/api/apiTypes";
+import type { DomainMetaResource } from "@/kernel/api/apiTypes";
 import type {
   DecodedFieldVector,
   DecodedTopology,
@@ -60,10 +58,30 @@ export interface Viewport3DFieldRenderModel {
   scalarColors: ScalarColorBuffer | null;
 }
 
+export interface Viewport3DFieldRenderOptions {
+  fullVectorBudget?: number;
+  partVectorBudgets?: ReadonlyMap<string, number>;
+  scalarColorsVisible?: boolean;
+}
+
+export interface Viewport3DVectorBudgetTarget {
+  id: string;
+  nodeCount: number;
+  visible: boolean;
+}
+
+interface Viewport3DVectorBudgetState {
+  layers?: { vectors?: { density?: number | null } | null } | null;
+  sampling?: { max_glyphs?: number | null } | null;
+  vector_density?: number | null;
+}
+
 interface Viewport3DPositionSource {
   nodeCount: number;
   positions: ArrayLike<number>;
 }
+
+export const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 
 export function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   return Float32Array.from(topology.positions);
@@ -100,33 +118,106 @@ export function buildViewport3DFieldRenderModel(
     | undefined,
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
+  options: Viewport3DFieldRenderOptions = {},
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
 
-  const scalarColors = buildVertexScalarColors(fieldVector, topology.nodeCount);
+  const scalarColors =
+    options.scalarColorsVisible === false
+      ? null
+      : buildVertexScalarColors(fieldVector, topology.nodeCount);
   const partVectorSegments = new Map<string, Float32Array | null>();
+  const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
 
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
+    const partBudget = hasPartBudgetPlan
+      ? options.partVectorBudgets?.get(partModel.part.id) ?? 0
+      : DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
     partVectorSegments.set(
       partModel.part.id,
-      buildVectorLineSegmentsForNodeSelectionFromPositions(
-        topology,
-        fieldVector,
-        partModel.part,
-        scale,
-      ),
+      partBudget > 0
+        ? buildVectorLineSegmentsForNodeSelectionFromPositions(
+            topology,
+            fieldVector,
+            partModel.part,
+            scale,
+            partBudget,
+          )
+        : null,
     );
   }
 
+  const fullVectorBudget =
+    options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
+
   return {
-    fullVectorSegments: buildVectorLineSegmentsFromPositions(
-      topology,
-      fieldVector,
-      scale,
-    ),
+    fullVectorSegments:
+      fullVectorBudget > 0
+        ? buildVectorLineSegmentsFromPositions(
+            topology,
+            fieldVector,
+            scale,
+            fullVectorBudget,
+          )
+        : null,
     partVectorSegments,
     scalarColors,
   };
+}
+
+export function resolveViewport3DMaxVectorGlyphs(
+  state: Viewport3DVectorBudgetState | null | undefined,
+): number {
+  const maxGlyphs =
+    state?.sampling?.max_glyphs ??
+    state?.layers?.vectors?.density ??
+    state?.vector_density ??
+    DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
+  return Math.max(0, Math.floor(maxGlyphs));
+}
+
+export function distributeVectorGlyphBudget(
+  targets: readonly Viewport3DVectorBudgetTarget[],
+  maxGlyphs: number,
+): Map<string, number> {
+  const budget = Math.max(0, Math.floor(maxGlyphs));
+  const visibleTargets = targets
+    .filter((target) => target.visible && target.nodeCount > 0)
+    .map((target) => ({
+      ...target,
+      nodeCount: Math.max(1, Math.floor(target.nodeCount)),
+    }));
+  const result = new Map<string, number>();
+  if (budget === 0 || visibleTargets.length === 0) return result;
+
+  const totalWeight = visibleTargets.reduce(
+    (sum, target) => sum + target.nodeCount,
+    0,
+  );
+  let allocated = 0;
+
+  for (const target of visibleTargets) {
+    const targetBudget = Math.floor((budget * target.nodeCount) / totalWeight);
+    if (targetBudget > 0) {
+      result.set(target.id, targetBudget);
+      allocated += targetBudget;
+    }
+  }
+
+  let remaining = budget - allocated;
+  const byWeight = [...visibleTargets].sort((left, right) =>
+    right.nodeCount === left.nodeCount
+      ? left.id.localeCompare(right.id)
+      : right.nodeCount - left.nodeCount,
+  );
+
+  for (const target of byWeight) {
+    if (remaining <= 0) break;
+    result.set(target.id, (result.get(target.id) ?? 0) + 1);
+    remaining -= 1;
+  }
+
+  return result;
 }
 
 export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
@@ -429,7 +520,7 @@ function surfaceIndicesFromBoundaryFaceRange(
   return source.length ? new Uint32Array(source) : null;
 }
 
-function resolveNodeSelectionCount(
+export function resolveNodeSelectionCount(
   selection: Viewport3DNodeSelection | null | undefined,
   topology: Pick<Viewport3DPositionSource, "nodeCount">,
 ): number {

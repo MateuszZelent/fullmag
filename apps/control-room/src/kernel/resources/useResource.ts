@@ -23,6 +23,11 @@ interface UseResourceOptions<TData> {
   resourceKey: ResourceKey;
 }
 
+interface UseResourceState<TData> extends ResourceState<TData> {
+  settledExternalRevision: ResourceRevision | null;
+  settledResourceKey: ResourceKey | null;
+}
+
 /** Minimum delay before retrying after a network/fetch error (ms). */
 const ERROR_RETRY_DELAY_MS = 1_000;
 
@@ -55,10 +60,12 @@ export function useResource<TData>({
     getSnapshot,
   );
   const [refreshToken, setRefreshToken] = useState(0);
-  const [state, setState] = useState<ResourceState<TData>>({
+  const [state, setState] = useState<UseResourceState<TData>>({
     data: null,
     error: null,
     revision: externalRevision,
+    settledExternalRevision: null,
+    settledResourceKey: null,
     status: "loading",
   });
 
@@ -77,24 +84,28 @@ export function useResource<TData>({
           if (controller.signal.aborted) return;
           errorCountRef.current = 0;
 
-          setState((current) =>
-            markResourceReady(
+          setState((current) => ({
+            ...markResourceReady(
               current,
               data,
               resolveRevision?.(data) ?? externalRevision,
             ),
-          );
+            settledExternalRevision: externalRevision,
+            settledResourceKey: resourceKey,
+          }));
         })
         .catch((error: unknown) => {
           if (abortError(error) || controller.signal.aborted) return;
           errorCountRef.current += 1;
 
-          setState((current) =>
-            markResourceError(
+          setState((current) => ({
+            ...markResourceError(
               current,
               error instanceof Error ? error : new Error(String(error)),
             ),
-          );
+            settledExternalRevision: externalRevision,
+            settledResourceKey: resourceKey,
+          }));
         });
     }, delay);
 
@@ -109,10 +120,12 @@ export function useResource<TData>({
     setRefreshToken((current) => current + 1);
   }, []);
 
-  const visibleState =
-    externalRevision !== state.revision
-      ? markResourceLoading(state, externalRevision)
-      : state;
+  const settledForCurrentResource =
+    state.settledResourceKey === resourceKey &&
+    state.settledExternalRevision === externalRevision;
+  const visibleState = settledForCurrentResource
+    ? state
+    : markResourceLoading(state, externalRevision);
 
   return { ...visibleState, refetch };
 }

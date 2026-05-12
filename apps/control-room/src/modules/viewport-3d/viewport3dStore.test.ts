@@ -40,8 +40,9 @@ describe("viewport3dStore", () => {
     viewport3dStore.resetForTest();
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
-      viewCubeVisible: true,
+      cameraProjection: "perspective",
       hslReferenceMode: "auto",
+      viewCubeVisible: true,
     });
   });
 
@@ -52,8 +53,9 @@ describe("viewport3dStore", () => {
     viewport3dStore.setHslReferenceMode("off");
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
-      viewCubeVisible: false,
+      cameraProjection: "perspective",
       hslReferenceMode: "off",
+      viewCubeVisible: false,
     });
   });
 

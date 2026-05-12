@@ -27,7 +27,7 @@ describe("vectorGlyphGeometry", () => {
       { colorMode: "orientation" },
     );
 
-    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 0, 0]);
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [0.5, 0, 0]);
   });
 
   it("keeps non-orientation vector coloring on the fixed material color", () => {
@@ -50,7 +50,7 @@ describe("vectorGlyphGeometry", () => {
     expectFloatArrayClose(glyphs.headCenters, [2, 3, 4]);
     expectFloatArrayClose(glyphs.shaftScales, [0, 0, 0]);
     expectFloatArrayClose(glyphs.headScales, [0, 0, 0]);
-    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [0.5, 0.5, 0.5]);
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [0.6, 0.6, 0.6]);
   });
 });
 

@@ -35,6 +35,7 @@ describe("buildModelTree", () => {
         "model:object:free-layer:physics",
         "model:object:free-layer:mesh",
         "model:object:free-layer:visualization",
+        "model:airbox:mesh",
         "model:airbox:visualization",
       ]),
     );
@@ -98,6 +99,23 @@ describe("buildModelTree", () => {
     );
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:free-layer",
+    );
+  });
+
+  it("does not synthesize demo objects when the scene snapshot is missing", () => {
+    const flattened = flattenExplorerNodes(buildModelTree(null));
+
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining(["model:universe", "model:objects"]),
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:free-layer",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:object:reference-layer",
+    );
+    expect(flattened.find((node) => node.id === "model:objects")?.badge).toBe(
+      "0",
     );
   });
 });

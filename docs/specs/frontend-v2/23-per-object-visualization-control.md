@@ -1,6 +1,6 @@
 # Frontend v2 - Per-Object Visualization Control
 
-**Status:** Frontend implementation slice complete; backend persistence and live browser smoke still pending
+**Status:** Airbox backend-backed; per-object backend persistence and live browser smoke still pending
 **Date:** 2026-05-11
 
 ## 1. Goal
@@ -30,7 +30,7 @@ When a new object is committed but no current mesh exists yet, the target id sti
 
 ## 3. State Ownership
 
-The long-term owner is the v2 visualization resource. Until the backend exposes per-target fields, the frontend uses a kernel visualization controller as a temporary client-owned display-preference registry. Modules consume it through kernel hooks/controllers, not through cross-module imports.
+The long-term owner is the v2 visualization resource. Airbox display now reads and writes `visualization/state.layers.airbox` through the typed v2 facade. Until the backend exposes full per-target object/part fields beyond narrow overrides, object and part display details still use a kernel visualization controller as a temporary client-owned display-preference registry. Modules consume it through kernel hooks/controllers, not through cross-module imports.
 
 The registry stores only small display preferences:
 

@@ -44,6 +44,28 @@ export interface Viewport3DResourceOptions {
   quantityId: string;
 }
 
+function resolveDomainMetaRevision(meta: { generation_id: number }) {
+  return meta.generation_id;
+}
+
+function resolveVisualizationStateRevision(state: { revision: number }) {
+  return state.revision;
+}
+
+function resolveSharedDomainManifestRevision(
+  manifest: { revision?: number | string | null } | null,
+) {
+  return manifest?.revision ?? null;
+}
+
+function resolveTopologyRevision() {
+  return topologyCache.peek(VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY)?.etag ?? null;
+}
+
+function resolveUniverseRevision(universe: { scene_revision: number }) {
+  return universe.scene_revision;
+}
+
 export function getViewport3DCacheStats() {
   const topologyStats = topologyCache.stats();
   const fieldVectorStats = fieldVectorCache.stats();
@@ -107,7 +129,7 @@ export function useViewport3DDomainMeta() {
 
   return useResource({
     load,
-    resolveRevision: (meta) => meta.generation_id,
+    resolveRevision: resolveDomainMetaRevision,
     resourceKey: VIEWPORT_3D_DOMAIN_META_RESOURCE_KEY,
   });
 }
@@ -126,6 +148,7 @@ export function useViewport3DDomainTopology() {
 
   return useResource({
     load,
+    resolveRevision: resolveTopologyRevision,
     resourceKey: VIEWPORT_3D_DOMAIN_TOPOLOGY_RESOURCE_KEY,
   });
 }
@@ -157,9 +180,14 @@ export function useViewport3DFieldVector(
       ),
     [api, quantityId, query, resourceKey],
   );
+  const resolveRevision = useCallback(
+    () => fieldVectorCache.peek(resourceKey)?.etag ?? null,
+    [resourceKey],
+  );
 
   return useResource({
     load,
+    resolveRevision,
     resourceKey,
   });
 }
@@ -173,6 +201,7 @@ export function useViewport3DVisualizationState() {
 
   return useResource({
     load,
+    resolveRevision: resolveVisualizationStateRevision,
     resourceKey: VIEWPORT_3D_VISUALIZATION_STATE_RESOURCE_KEY,
   });
 }
@@ -187,7 +216,7 @@ export function useViewport3DSharedDomainManifest() {
 
   return useResource({
     load,
-    resolveRevision: (manifest) => manifest?.revision ?? null,
+    resolveRevision: resolveSharedDomainManifestRevision,
     resourceKey: VIEWPORT_3D_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY,
   });
 }
@@ -214,7 +243,7 @@ export function useViewport3DUniverse() {
 
   return useResource({
     load,
-    resolveRevision: (universe) => universe.scene_revision,
+    resolveRevision: resolveUniverseRevision,
     resourceKey: VIEWPORT_3D_UNIVERSE_RESOURCE_KEY,
   });
 }

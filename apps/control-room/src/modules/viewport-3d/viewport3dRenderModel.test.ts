@@ -9,7 +9,10 @@ import {
   buildTetraSurfaceIndices,
   buildVectorLineSegments,
   buildVectorLineSegmentsForNodeSelection,
+  distributeVectorGlyphBudget,
+  resolveNodeSelectionCount,
   resolveTopologyBounds,
+  resolveViewport3DMaxVectorGlyphs,
 } from "./viewport3dRenderModel";
 
 function topologyFixture(): DecodedTopology {
@@ -162,5 +165,83 @@ describe("viewport3dRenderModel", () => {
     expect(firstFieldModel?.fullVectorSegments).not.toBe(
       secondFieldModel?.fullVectorSegments,
     );
+  });
+
+  it("skips hidden field-derived buffers before allocating vector glyph data", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: false,
+      },
+    );
+
+    expect(fieldModel?.scalarColors).toBeNull();
+    expect(fieldModel?.fullVectorSegments).toBeNull();
+    expect(fieldModel?.partVectorSegments.get("part-a")).toBeNull();
+  });
+
+  it("uses an explicit global vector budget instead of per-part fixed budgets", () => {
+    const budgets = distributeVectorGlyphBudget(
+      [
+        { id: "part-a", nodeCount: 90, visible: true },
+        { id: "part-b", nodeCount: 10, visible: true },
+        { id: "part-hidden", nodeCount: 10_000, visible: false },
+      ],
+      10,
+    );
+
+    expect(budgets.get("part-a")).toBe(9);
+    expect(budgets.get("part-b")).toBe(1);
+    expect(budgets.has("part-hidden")).toBe(false);
+    expect(Array.from(budgets.values()).reduce((sum, value) => sum + value, 0))
+      .toBeLessThanOrEqual(10);
+  });
+
+  it("resolves vector glyph budgets from canonical visualization state", () => {
+    expect(
+      resolveViewport3DMaxVectorGlyphs({
+        sampling: { max_glyphs: 384 },
+      }),
+    ).toBe(384);
+    expect(
+      resolveViewport3DMaxVectorGlyphs({
+        layers: { vectors: { density: 256 } },
+      }),
+    ).toBe(256);
+    expect(resolveViewport3DMaxVectorGlyphs({})).toBe(2048);
+  });
+
+  it("counts node selections for budget weighting without expanding indices", () => {
+    expect(
+      resolveNodeSelectionCount(
+        { node_indices: [3, 5, 7] },
+        { nodeCount: 10 },
+      ),
+    ).toBe(3);
+    expect(
+      resolveNodeSelectionCount(
+        { node_count: 12 },
+        { nodeCount: 10 },
+      ),
+    ).toBe(10);
   });
 });

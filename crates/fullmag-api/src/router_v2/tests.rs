@@ -1103,6 +1103,42 @@ async fn contract_version_header_present() {
     );
 }
 
+#[tokio::test]
+async fn contract_version_header_is_exposed_to_browser_clients() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/platform/health")
+                .header(header::ORIGIN, "http://localhost:3100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let exposed_headers = response
+        .headers()
+        .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+        .expect("access-control-expose-headers should be present for browser clients")
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+
+    assert!(
+        exposed_headers.contains("x-api-contract-version"),
+        "browser clients must be able to read x-api-contract-version, got {exposed_headers}"
+    );
+    assert!(
+        exposed_headers.contains("x-request-id"),
+        "browser clients must be able to read x-request-id, got {exposed_headers}"
+    );
+    assert!(
+        exposed_headers.contains("etag"),
+        "browser clients must be able to read etag, got {exposed_headers}"
+    );
+}
+
 // ─── status endpoint ────────────────────────────────────────────────────────
 
 #[tokio::test]

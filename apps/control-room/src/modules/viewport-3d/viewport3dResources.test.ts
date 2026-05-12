@@ -56,4 +56,18 @@ describe("viewport3dResources", () => {
       etag: '"field-1"',
     });
   });
+
+  it("can inspect cached binary etags without refreshing LRU order", () => {
+    const cache = new ResourceCache<string>({ maxBytes: 10 });
+    cache.set("oldest", { byteLength: 4, data: "old", etag: '"old"' });
+    cache.set("middle", { byteLength: 4, data: "mid", etag: '"mid"' });
+
+    expect(cache.peek("oldest")?.etag).toBe('"old"');
+
+    cache.set("newest", { byteLength: 4, data: "new", etag: '"new"' });
+
+    expect(cache.peek("oldest")).toBeNull();
+    expect(cache.peek("middle")?.etag).toBe('"mid"');
+    expect(cache.peek("newest")?.etag).toBe('"new"');
+  });
 });

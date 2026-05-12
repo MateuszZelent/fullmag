@@ -17,6 +17,7 @@ export type ExplorerNodeKind =
   | "object.physics"
   | "object.mesh"
   | "object.visualization"
+  | "airbox.mesh"
   | "airbox.visualization"
   | "materials.root"
   | "material.entry"
@@ -91,11 +92,26 @@ export interface ModelTreeObjectSnapshot {
   meshStatus?: ExplorerNodeStatus;
 }
 
+export interface ModelTreeMaterialSnapshot {
+  id: string;
+  label: string;
+  propertyKeys: readonly string[];
+}
+
+export interface ModelTreePhysicsInteractionSnapshot {
+  enabledCount: number;
+  id: string;
+  label: string;
+  objectCount: number;
+}
+
 export interface ModelTreeSnapshot {
+  materials?: readonly ModelTreeMaterialSnapshot[];
   universe?: {
     id: string;
     label: string;
     size?: readonly [number, number, number] | null;
   } | null;
   objects?: readonly ModelTreeObjectSnapshot[];
+  physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
 }

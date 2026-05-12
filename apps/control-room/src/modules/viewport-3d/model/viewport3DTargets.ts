@@ -4,8 +4,8 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
-  DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
+  resolveAirboxVisualizationSettingsFromState,
   type VisualizationRenderMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
@@ -61,31 +61,7 @@ export function resolveGlobalObjectVisualizationSettings(
 export function resolveAirboxBaseVisualizationSettings(
   state: VisualizationStateResource | null | undefined,
 ): VisualizationTargetSettings {
-  const airbox = state?.layers?.airbox;
-  const surfaceVisible =
-    airbox?.surface?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.shaderVisible;
-  const wireframeVisible =
-    airbox?.wireframe?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible;
-  const pointsVisible =
-    airbox?.points?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.pointsVisible;
-
-  return {
-    ...DEFAULT_AIRBOX_VISUALIZATION,
-    opacityPercent: layerOpacityToPercent(
-      airbox?.opacity ?? DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
-    ),
-    pointsVisible,
-    renderMode: resolveRenderMode({
-      pointsVisible,
-      shaderVisible: surfaceVisible,
-      wireframeVisible,
-    }),
-    shaderVisible: surfaceVisible,
-    vectorsVisible:
-      airbox?.vectors?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
-    visible: airbox?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.visible,
-    wireframeVisible,
-  };
+  return resolveAirboxVisualizationSettingsFromState(state);
 }
 
 export function targetForMeshPart(

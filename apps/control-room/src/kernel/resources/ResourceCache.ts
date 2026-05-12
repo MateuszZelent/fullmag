@@ -51,6 +51,10 @@ export class ResourceCache<TData> {
     return entry;
   }
 
+  peek(key: string): ResourceCacheEntry<TData> | null {
+    return this.entries.get(key) ?? null;
+  }
+
   getOrLoad(
     key: string,
     load: () => Promise<ResourceCacheEntry<TData>>,

@@ -17,7 +17,7 @@ export type SelectionRef =
       visualizationTargetId: `object:${string}`;
     }
   | {
-      kind: "airbox.visualization";
+      kind: "airbox.mesh" | "airbox.visualization";
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox";

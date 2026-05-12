@@ -1,7 +1,10 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
+import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
+import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
+import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import type { InspectorPanelContribution } from "./inspectorTypes";
 
@@ -22,6 +25,30 @@ const PANELS: InspectorPanelContribution[] = [
       "mesh-part",
     ],
     component: ObjectVisualizationPanel,
+  },
+  {
+    id: "physics-interaction",
+    title: "Physics Interaction",
+    selectionKinds: ["object.physics"],
+    component: PhysicsInteractionPanel,
+  },
+  {
+    id: "object-material",
+    title: "Object Material",
+    selectionKinds: ["object.material"],
+    component: ObjectMaterialPanel,
+  },
+  {
+    id: "airbox-mesh-policy",
+    title: "Airbox Mesh Policy",
+    selectionKinds: ["airbox.mesh"],
+    component: PlaceholderPanel,
+  },
+  {
+    id: "object-mesh-policy",
+    title: "Object Mesh Policy",
+    selectionKinds: ["object.mesh"],
+    component: ObjectMeshPolicyPanel,
   },
   {
     id: "placeholder",

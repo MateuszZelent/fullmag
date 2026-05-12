@@ -23,6 +23,11 @@ interface SortableWorkspaceColumnProps {
   column: WorkspaceColumnLayout;
 }
 
+interface WorkspaceDockState {
+  layout: typeof DEFAULT_WORKSPACE_LAYOUT;
+  restored: boolean;
+}
+
 function SortableWorkspaceColumn({
   column,
 }: SortableWorkspaceColumnProps) {
@@ -48,26 +53,26 @@ function SortableWorkspaceColumn({
 
 export function WorkspaceDockLayout() {
   const { layout: kernelLayout } = useLayout();
-  const [layout, setLayout] = useState(DEFAULT_WORKSPACE_LAYOUT);
-  const [hasRestoredLayout, setHasRestoredLayout] = useState(false);
+  const [dockState, setDockState] = useState<WorkspaceDockState>({
+    layout: DEFAULT_WORKSPACE_LAYOUT,
+    restored: false,
+  });
 
   useEffect(() => {
+    let restoredLayout = DEFAULT_WORKSPACE_LAYOUT;
     try {
-      setLayout(
-        restoreWorkspaceLayout(
-          window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY),
-        ),
+      restoredLayout = restoreWorkspaceLayout(
+        window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY),
       );
     } finally {
-      setHasRestoredLayout(true);
+      setDockState({
+        layout: restoredLayout,
+        restored: true,
+      });
     }
   }, []);
 
-  useEffect(() => {
-    if (!hasRestoredLayout) {
-      return;
-    }
-
+  function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
     try {
       window.localStorage.setItem(
         WORKSPACE_LAYOUT_STORAGE_KEY,
@@ -76,21 +81,31 @@ export function WorkspaceDockLayout() {
     } catch {
       return;
     }
-  }, [hasRestoredLayout, layout]);
-
-  function handleMoveColumn(activeId: string, overId: string): void {
-    setLayout((currentLayout) =>
-      moveWorkspaceColumn(currentLayout, activeId, overId),
-    );
   }
 
+  function handleMoveColumn(activeId: string, overId: string): void {
+    setDockState((currentState) => {
+      const nextLayout = moveWorkspaceColumn(
+        currentState.layout,
+        activeId,
+        overId,
+      );
+      persistWorkspaceLayout(nextLayout);
+      return {
+        ...currentState,
+        layout: nextLayout,
+      };
+    });
+  }
+
+  const { layout, restored } = dockState;
   const visibleColumns = layout.columns.filter((column) => {
     if (column.slotId === "panel-left") return kernelLayout.panelVisible.left;
     if (column.slotId === "panel-right") return kernelLayout.panelVisible.right;
     return true;
   });
 
-  if (!hasRestoredLayout) {
+  if (!restored) {
     return (
       <div className="fm-workspace-body" data-dock-hydration-pending="true">
         {kernelLayout.panelVisible.left ? (

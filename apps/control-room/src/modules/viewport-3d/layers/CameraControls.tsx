@@ -100,7 +100,7 @@ export function OrbitCameraControls({
 }) {
   const { camera, invalidate } = useThree();
 
-  const handleChange = useCallback(() => {
+  const recordCameraControlChange = useCallback(() => {
     invalidate();
     tracker.recordDirtyFrame("camera-control");
   }, [invalidate, tracker]);
@@ -123,7 +123,7 @@ export function OrbitCameraControls({
     <OrbitControls
       makeDefault
       enableDamping={false}
-      onChange={handleChange}
+      onChange={recordCameraControlChange}
       onEnd={handleEnd}
     />
   );

@@ -3,7 +3,6 @@
 import {
   useCallback,
   useRef,
-  useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -154,8 +153,7 @@ function renderNode(
 type SliderNode = Extract<RibbonMenuNode, { type: "slider" }>;
 
 function SliderMenuItem({ node }: { node: SliderNode }) {
-  const [val, setVal] = useState(node.value);
-  const pct = ((val - node.min) / (node.max - node.min)) * 100;
+  const pct = ((node.value - node.min) / (node.max - node.min)) * 100;
 
   return (
     <div
@@ -165,7 +163,7 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
       <div className="fm-dropdown-slider__header">
         <span className="fm-dropdown-slider__label">{node.label}</span>
         <span className="fm-dropdown-slider__value">
-          {Number.isInteger(node.step) ? Math.round(val) : val.toFixed(1)}
+          {Number.isInteger(node.step) ? Math.round(node.value) : node.value.toFixed(1)}
           {node.unit ?? ""}
         </span>
       </div>
@@ -175,12 +173,11 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
         min={node.min}
         max={node.max}
         step={node.step}
-        value={val}
+        value={node.value}
         disabled={node.disabled}
         style={{ "--pct": `${pct}%` } as CSSProperties}
         onChange={(e) => {
           const next = Number(e.target.value);
-          setVal(next);
           node.onValueChange?.(next);
         }}
         onClick={(e) => e.stopPropagation()}
@@ -194,7 +191,6 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
 type ColorNode = Extract<RibbonMenuNode, { type: "color" }>;
 
 function ColorMenuItem({ node }: { node: ColorNode }) {
-  const [color, setColor] = useState(node.value);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSwatchClick = useCallback(
@@ -213,7 +209,7 @@ function ColorMenuItem({ node }: { node: ColorNode }) {
       <span className="fm-dropdown-color__label">{node.label}</span>
       <span
         className="fm-dropdown-color__swatch"
-        style={{ background: color }}
+        style={{ background: node.value }}
         onClick={handleSwatchClick}
         role="button"
         aria-label={`Pick color: ${node.label}`}
@@ -226,10 +222,9 @@ function ColorMenuItem({ node }: { node: ColorNode }) {
           ref={inputRef}
           type="color"
           className="fm-dropdown-color__input"
-          value={color}
+          value={node.value}
           disabled={node.disabled}
           tabIndex={-1}
-          onChange={(e) => setColor(e.target.value)}
           onClick={(e) => e.stopPropagation()}
         />
       </span>

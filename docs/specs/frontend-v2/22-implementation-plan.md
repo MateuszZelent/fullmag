@@ -70,6 +70,9 @@ Phase 2 local gate status on 2026-05-11:
 - [x] Add per-object and airbox `Visualization` explorer nodes plus inspector panels backed by the visualization target registry.
 - [ ] Implement draft transaction flow for the first safe property edits.
 - [ ] Implement Geometry object creation lifecycle from `24-geometry-object-authoring-lifecycle.md`: new primitive draft, backend create transaction, post-commit object selection, primitive-only display state, stale mesh badges, and selected-object mesh build command.
+- [x] Add first backend-backed `object.physics` inspector slice for per-object magnetic interactions using `/model/objects/{object_id}/interactions/{interaction_kind}`.
+- [x] Add first backend-backed `object.material` inspector slice for material assignment using `/model/objects/{object_id}`.
+- [x] Add first backend-backed `object.mesh` inspector slice for per-object mesh policies using `/meshing/policies/objects/{object_id}`.
 - [ ] Implement authoring modules alongside inspector panels:
   - [ ] `definitions` — parameters, named quantities.
   - [ ] `materials` — material assignment, tensor/scalar editing.

@@ -1,0 +1,13 @@
+{
+  "ignore": {
+    "overrides": [
+      {
+        "files": [
+          "src/modules/viewport-3d/layers/**/*.tsx",
+          "src/modules/viewport-3d/orientation/OrientationHudLayer.tsx"
+        ],
+        "rules": ["react/no-unknown-property"]
+      }
+    ]
+  }
+}

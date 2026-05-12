@@ -741,6 +741,154 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads and patches object interaction resources through v2 model facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          enabled: true,
+          interaction_kind: "uniaxial_anisotropy",
+          object_id: "free layer",
+          params: { axis: [0, 0, 1], ku1: 1200 },
+          present: true,
+        });
+      },
+    });
+
+    const loaded = await api.model.objectInteraction(
+      "free layer",
+      "uniaxial_anisotropy",
+    );
+    const patched = await api.model.patchObjectInteraction(
+      "free layer",
+      "uniaxial_anisotropy",
+      {
+        enabled: true,
+        params: { axis: [0, 0, 1], ku1: 1200 },
+        present: true,
+      },
+    );
+
+    expect(loaded.interaction_kind).toBe("uniaxial_anisotropy");
+    expect(patched.params).toEqual({ axis: [0, 0, 1], ku1: 1200 });
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/free%20layer/interactions/uniaxial_anisotropy",
+      },
+      {
+        body: {
+          enabled: true,
+          params: { axis: [0, 0, 1], ku1: 1200 },
+          present: true,
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/objects/free%20layer/interactions/uniaxial_anisotropy",
+      },
+    ]);
+  });
+
+  it("loads and replaces per-object mesh policy resources through v2 meshing facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          config: { maximum_element_size: 5e-9 },
+          object_id: "free layer",
+          revision: requests.length,
+        });
+      },
+    });
+
+    const loaded = await api.meshing.objectPolicy("free layer");
+    const replaced = await api.meshing.replaceObjectPolicy("free layer", {
+      config: { maximum_element_size: 5e-9 },
+    });
+
+    expect(loaded.config).toEqual({ maximum_element_size: 5e-9 });
+    expect(replaced.revision).toBe(2);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/objects/free%20layer",
+      },
+      {
+        body: { config: { maximum_element_size: 5e-9 } },
+        method: "PUT",
+        url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/objects/free%20layer",
+      },
+    ]);
+  });
+
+  it("loads and replaces universe mesh policy resources through v2 meshing facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          config: {
+            airbox_grading: "linear",
+            airbox_growth_rate: 1.4,
+            airbox_hmax: 8e-9,
+            airbox_hmin: 2e-9,
+          },
+          revision: requests.length,
+        });
+      },
+    });
+
+    const loaded = await api.meshing.universePolicy();
+    const replaced = await api.meshing.replaceUniversePolicy({
+      config: {
+        airbox_grading: "linear",
+        airbox_growth_rate: 1.4,
+        airbox_hmax: 8e-9,
+        airbox_hmin: 2e-9,
+      },
+    });
+
+    expect(loaded.config?.airbox_hmax).toBe(8e-9);
+    expect(replaced.revision).toBe(2);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/universe",
+      },
+      {
+        body: {
+          config: {
+            airbox_grading: "linear",
+            airbox_growth_rate: 1.4,
+            airbox_hmax: 8e-9,
+            airbox_hmin: 2e-9,
+          },
+        },
+        method: "PUT",
+        url: "http://127.0.0.1:8765/v2/sessions/current/meshing/policies/universe",
+      },
+    ]);
+  });
+
   it("treats an absent shared-domain manifest as not applicable", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>

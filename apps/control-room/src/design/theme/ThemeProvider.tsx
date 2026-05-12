@@ -2,7 +2,7 @@
 
 import {
   createContext,
-  useContext,
+  use,
   useEffect,
   useSyncExternalStore,
   type ReactNode,
@@ -120,7 +120,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 }
 
 export function useTheme(): ThemeContextValue {
-  const themeContext = useContext(ThemeContext);
+  const themeContext = use(ThemeContext);
 
   if (!themeContext) {
     throw new Error("useTheme must be used within ThemeProvider.");

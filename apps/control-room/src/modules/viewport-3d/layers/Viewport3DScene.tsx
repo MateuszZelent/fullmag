@@ -1,5 +1,6 @@
 "use client";
 
+import { OrthographicCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useEffect } from "react";
 
@@ -20,7 +21,7 @@ import type {
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
-import type { Viewport3DCameraState } from "../viewport3dStore";
+import type { Viewport3DCameraProjection, Viewport3DCameraState } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
 import {
@@ -38,6 +39,7 @@ import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
+  cameraProjection: Viewport3DCameraProjection;
   cameraState: Viewport3DCameraState;
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
@@ -52,6 +54,7 @@ interface Viewport3DSceneProps {
   fallbackSettings: VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
+  resourceFrameKey: string;
   selectionBounds: Viewport3DBounds | null;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -62,6 +65,7 @@ interface Viewport3DSceneProps {
 
 export function Viewport3DScene({
   bounds,
+  cameraProjection,
   cameraState,
   colors,
   airboxSettings,
@@ -76,6 +80,7 @@ export function Viewport3DScene({
   onSelectPart,
   primitiveModel,
   resetCameraRevision,
+  resourceFrameKey,
   selectionBounds,
   tracker,
   topologyModel,
@@ -85,11 +90,11 @@ export function Viewport3DScene({
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
 
-  // Guarantee the demand frameloop draws at least one frame on mount.
-  // CameraController also calls invalidate, but it can race with R3F init.
+  // Demand rendering needs an explicit frame when async resources settle.
   useEffect(() => {
+    tracker.recordDirtyFrame("resources-updated");
     invalidate();
-  }, [invalidate]);
+  }, [invalidate, resourceFrameKey, tracker]);
 
   return (
     <>
@@ -104,6 +109,15 @@ export function Viewport3DScene({
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
+      {cameraProjection === "orthographic" && (
+        <OrthographicCamera
+          makeDefault
+          zoom={80}
+          near={0.01}
+          far={1000}
+          position={cameraState.position}
+        />
+      )}
       <DomainBoxLayer
         bounds={bounds}
         colors={colors}

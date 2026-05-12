@@ -95,8 +95,10 @@
 
 .fm-resize-handle--vertical {
   width: 5px;
+  cursor: col-resize;
 }
 
 .fm-resize-handle--horizontal {
   height: 5px;
+  cursor: row-resize;
 }

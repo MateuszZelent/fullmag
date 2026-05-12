@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   AIRBOX_VISUALIZATION_TARGET,
+  airboxVisualizationStatePatchFromTargetPatch,
   ObjectVisualizationController,
   renderModePatch,
+  resolveAirboxVisualizationSettingsFromState,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationTargetKey,
@@ -132,6 +134,53 @@ describe("ObjectVisualizationController", () => {
       shaderVisible: false,
       vectorsVisible: true,
       wireframeVisible: true,
+    });
+  });
+
+  it("maps backend airbox layer state into target visualization settings", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        layers: {
+          airbox: {
+            opacity: 0.31,
+            points: { opacity: 1, visible: true },
+            surface: { opacity: 1, visible: false },
+            vectors: { density: 64, domain: "airbox_only", visible: true },
+            visible: true,
+            wireframe: { opacity: 1, visible: true },
+          },
+        },
+      }),
+    ).toMatchObject({
+      opacityPercent: 31,
+      pointsVisible: true,
+      renderMode: "points",
+      shaderVisible: false,
+      vectorsVisible: true,
+      visible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("builds backend airbox layer patches from target display patches", () => {
+    expect(
+      airboxVisualizationStatePatchFromTargetPatch({
+        opacityPercent: 25,
+        shaderVisible: true,
+        vectorsVisible: true,
+        visible: false,
+        wireframeVisible: false,
+      }),
+    ).toEqual({
+      layers: {
+        airbox: {
+          opacity: 0.25,
+          surface: { visible: true },
+          vectors: { domain: "airbox_only", visible: true },
+          visible: false,
+          wireframe: { visible: false },
+        },
+      },
     });
   });
 });

@@ -1,6 +1,8 @@
 import type {
   ExplorerNodeStatus,
+  ModelTreeMaterialSnapshot,
   ModelTreeObjectSnapshot,
+  ModelTreePhysicsInteractionSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -14,13 +16,76 @@ export function modelTreeSnapshotFromScene(
   scene: SceneLike | null | undefined,
 ): ModelTreeSnapshot {
   return {
+    materials: sceneMaterials(scene?.materials),
     objects: Array.isArray(scene?.objects)
       ? scene.objects
           .map(sceneObjectSnapshot)
           .filter((object): object is ModelTreeObjectSnapshot => Boolean(object))
       : [],
+    physicsInteractions: scenePhysicsInteractions(scene?.objects),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
+}
+
+function sceneMaterials(value: unknown): ModelTreeMaterialSnapshot[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item): ModelTreeMaterialSnapshot | null => {
+      if (!item || typeof item !== "object") return null;
+      const material = item as Record<string, unknown>;
+      const id = stringValue(material.id);
+      if (!id) return null;
+      return {
+        id,
+        label: stringValue(material.name) ?? id,
+        propertyKeys: materialPropertyKeys(material.properties),
+      };
+    })
+    .filter((material): material is ModelTreeMaterialSnapshot =>
+      Boolean(material),
+    );
+}
+
+function materialPropertyKeys(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).sort();
+}
+
+function scenePhysicsInteractions(
+  objects: unknown,
+): ModelTreePhysicsInteractionSnapshot[] {
+  if (!Array.isArray(objects)) return [];
+
+  const byKind = new Map<string, { enabledCount: number; objectCount: number }>();
+
+  for (const object of objects) {
+    if (!object || typeof object !== "object") continue;
+    const stack = (object as Record<string, unknown>).physics_stack;
+    if (!Array.isArray(stack)) continue;
+
+    for (const value of stack) {
+      if (!value || typeof value !== "object") continue;
+      const interaction = value as Record<string, unknown>;
+      const kind = stringValue(interaction.kind);
+      if (!kind) continue;
+      const current = byKind.get(kind) ?? { enabledCount: 0, objectCount: 0 };
+      current.objectCount += 1;
+      if (interaction.enabled !== false) {
+        current.enabledCount += 1;
+      }
+      byKind.set(kind, current);
+    }
+  }
+
+  return Array.from(byKind.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([kind, counts]) => ({
+      enabledCount: counts.enabledCount,
+      id: kind,
+      label: interactionLabel(kind),
+      objectCount: counts.objectCount,
+    }));
 }
 
 function sceneObjectSnapshot(value: unknown): ModelTreeObjectSnapshot | null {
@@ -69,6 +134,19 @@ function meshStatusFromTags(value: unknown): ExplorerNodeStatus {
   if (tags.includes("mesh:dirty")) return "mesh-stale";
   if (tags.includes("mesh:ready")) return "mesh-ready";
   return "primitive-only";
+}
+
+function interactionLabel(kind: string): string {
+  if (kind === "demag") return "Demagnetization";
+  if (kind === "dmi") return "DMI";
+  if (kind === "exchange") return "Exchange";
+  if (kind === "uniaxial_anisotropy") return "Uniaxial anisotropy";
+
+  return kind
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function stringValue(value: unknown): string | null {

@@ -867,6 +867,13 @@ export const viewTab: RibbonTabContent = {
           ],
         },
         {
+          id: "view-projection",
+          icon: icon(Maximize2),
+          label: "Ortho",
+          iconColor: "text-violet-300",
+          tooltip: "Toggle perspective / orthographic projection",
+        },
+        {
           id: "view-object-context",
           icon: icon(Layers3),
           label: "Context",
@@ -885,18 +892,14 @@ export const viewTab: RibbonTabContent = {
           icon: icon(PanelRight),
           label: "Panels",
           menu: [
-            { type: "item",     id: "panels:explorer:restore",  label: "Restore Explorer" },
-            { type: "item",     id: "panels:explorer:hide",     label: "Hide Explorer" },
-            { type: "status",   id: "panels:explorer:status",   label: "Explorer",   value: "Visible" },
-            { type: "item",     id: "panels:inspector:restore", label: "Restore Inspector" },
-            { type: "item",     id: "panels:inspector:hide",    label: "Hide Inspector" },
-            { type: "status",   id: "panels:inspector:status",  label: "Inspector",  value: "Visible" },
-            { type: "item",     id: "panels:telemetry:restore", label: "Restore Telemetry" },
-            { type: "item",     id: "panels:telemetry:hide",    label: "Hide Telemetry" },
-            { type: "status",   id: "panels:telemetry:status",  label: "Telemetry",  value: "Visible" },
-            { type: "checkbox", id: "panels:legend",            label: "Legend",     checked: false },
-            { type: "checkbox", id: "panels:scene-info",        label: "Scene info", checked: false, disabled: true },
-            { type: "checkbox", id: "panels:diagnostics",       label: "Diagnostics",checked: false, disabled: true },
+            { type: "label",    id: "panels:label",              label: "Panel visibility" },
+            { type: "checkbox", id: "panels:explorer:toggle",    label: "Explorer",    checked: true },
+            { type: "checkbox", id: "panels:inspector:toggle",   label: "Inspector",   checked: true },
+            { type: "checkbox", id: "panels:footer:toggle",      label: "Footer",      checked: true },
+            { type: "separator", id: "panels:sep1" },
+            { type: "checkbox", id: "panels:legend",            label: "Legend",       checked: false },
+            { type: "checkbox", id: "panels:scene-info",        label: "Scene info",   checked: false, disabled: true },
+            { type: "checkbox", id: "panels:diagnostics",       label: "Diagnostics",  checked: false, disabled: true },
           ],
         },
         {
@@ -1477,11 +1480,21 @@ function applyCommandStateToMenuNode(
   commandContext: CommandContext,
 ): RibbonMenuNode {
   if (node.type === "item" || node.type === "checkbox") {
+    const cmdId = node.commandId ?? node.id;
+    const command = context.commands?.get(cmdId);
+    const disabledByCommand = isCommandDisabled(node.commandId, context, commandContext);
+
+    if (node.type === "checkbox" && command) {
+      return {
+        ...node,
+        checked: context.commands?.isActive(cmdId, commandContext) ?? node.checked,
+        disabled: node.disabled || disabledByCommand,
+      };
+    }
+
     return {
       ...node,
-      disabled:
-        node.disabled ||
-        isCommandDisabled(node.commandId, context, commandContext),
+      disabled: node.disabled || disabledByCommand,
     };
   }
 

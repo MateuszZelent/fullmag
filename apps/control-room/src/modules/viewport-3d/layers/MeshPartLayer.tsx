@@ -69,8 +69,9 @@ export function MeshPartLayer({
       fieldModel?.scalarColors,
       topologyModel.nodeCount,
     );
+    tracker.recordDirtyFrame("field-colors");
     invalidate();
-  }, [fieldModel?.scalarColors, geometry, invalidate, topologyModel]);
+  }, [fieldModel?.scalarColors, geometry, invalidate, topologyModel, tracker]);
 
   if (!geometry || !settings.visible) return null;
 

@@ -16,8 +16,10 @@ export interface Viewport3DCommandState {
 
 type Viewport3DListener = () => void;
 export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
+export type Viewport3DCameraProjection = "perspective" | "orthographic";
 
 export interface Viewport3DWidgetState {
+  cameraProjection: Viewport3DCameraProjection;
   hslReferenceMode: Viewport3DHslReferenceMode;
   viewCubeVisible: boolean;
 }
@@ -30,6 +32,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   fitRevision: 0,
   resetCameraRevision: 0,
   widgets: {
+    cameraProjection: "perspective",
     hslReferenceMode: "auto",
     viewCubeVisible: true,
   },
@@ -95,6 +98,20 @@ class Viewport3DStore {
   subscribe(listener: Viewport3DListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  toggleCameraProjection(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        cameraProjection:
+          this.snapshot.widgets.cameraProjection === "perspective"
+            ? "orthographic"
+            : "perspective",
+      },
+    };
+    this.notify();
   }
 
   toggleViewCube(): void {

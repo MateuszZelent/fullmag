@@ -2,7 +2,9 @@ import type {
   ExplorerNode,
   ExplorerNodeStatus,
   ExplorerTabId,
+  ModelTreeMaterialSnapshot,
   ModelTreeObjectSnapshot,
+  ModelTreePhysicsInteractionSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -110,22 +112,65 @@ function meshStatusBadge(status: ExplorerNodeStatus): string {
   return "default";
 }
 
-const DEFAULT_OBJECTS: ModelTreeObjectSnapshot[] = [
-  {
-    id: "free-layer",
-    label: "Free layer",
-    geometryKind: "thin film",
-    material: "Permalloy",
-    meshStatus: "ready",
-  },
-  {
-    id: "reference-layer",
-    label: "Reference layer",
-    geometryKind: "ellipse",
-    material: "CoFeB",
-    meshStatus: "ready",
-  },
-];
+function materialBadge(material: ModelTreeMaterialSnapshot): string {
+  if (material.propertyKeys.length === 0) return "properties";
+  return material.propertyKeys.slice(0, 3).join(", ");
+}
+
+function materialNodes(materials: readonly ModelTreeMaterialSnapshot[]): ExplorerNode {
+  return {
+    id: "model:materials",
+    kind: "materials.root",
+    label: "Materials",
+    parentId: "model:session",
+    badge: `${materials.length}`,
+    icon: "magnet",
+    status: "ready",
+    children: materials.map((material) => ({
+      id: `model:material:${material.id}`,
+      kind: "material.entry",
+      label: material.label,
+      parentId: "model:materials",
+      badge: materialBadge(material),
+      icon: "circle",
+      resourceRef: material.id,
+      status: "ready",
+    })),
+  };
+}
+
+function physicsInteractionBadge(
+  interaction: ModelTreePhysicsInteractionSnapshot,
+): string {
+  if (interaction.objectCount === 0) return "inactive";
+  if (interaction.enabledCount === interaction.objectCount) return "active";
+  if (interaction.enabledCount === 0) return "disabled";
+  return `${interaction.enabledCount}/${interaction.objectCount} active`;
+}
+
+function physicsNodes(
+  interactions: readonly ModelTreePhysicsInteractionSnapshot[],
+): ExplorerNode {
+  return {
+    id: "model:physics",
+    kind: "physics.root",
+    label: "Physics",
+    parentId: "model:session",
+    badge: `${interactions.length}`,
+    icon: "sparkles",
+    status: "ready",
+    children: interactions.map((interaction) => ({
+      id: `model:physics:${interaction.id}`,
+      kind: "physics.interaction",
+      label: interaction.label,
+      parentId: "model:physics",
+      badge: physicsInteractionBadge(interaction),
+      icon: "activity",
+      resourceRef: interaction.id,
+      status: interaction.enabledCount > 0 ? "ready" : "degraded",
+    })),
+  };
+}
 
 export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): ExplorerNode[] {
   const universe = snapshot?.universe ?? {
@@ -133,7 +178,101 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
     label: "Universe",
     size: [2e-6, 1e-6, 5e-8] as const,
   };
-  const objects = snapshot?.objects ?? DEFAULT_OBJECTS;
+  const objects = snapshot?.objects ?? [];
+  const materials = snapshot?.materials ?? [];
+  const physicsInteractions = snapshot?.physicsInteractions ?? [];
+  const sessionChildren: ExplorerNode[] = [
+    {
+      id: "model:universe",
+      kind: "universe.root",
+      label: universe.label,
+      parentId: "model:session",
+      badge: formatSize(universe.size),
+      icon: "shield",
+      status: "ready",
+      children: [
+        {
+          id: "model:airbox:mesh",
+          kind: "airbox.mesh",
+          label: "Airbox Mesh Policy",
+          parentId: "model:universe",
+          badge: "mesh policy",
+          icon: "mesh",
+          status: "ready",
+          contextCommands: ["workspace.focus-selection"],
+        },
+        {
+          id: "model:airbox:visualization",
+          kind: "airbox.visualization",
+          label: "Airbox Visualization",
+          parentId: "model:universe",
+          badge: "display",
+          icon: "sparkles",
+          status: "ready",
+          contextCommands: ["workspace.focus-selection"],
+        },
+      ],
+    },
+    {
+      id: "model:objects",
+      kind: "objects.root",
+      label: "Objects",
+      parentId: "model:session",
+      badge: `${objects.length}`,
+      icon: "layers",
+      status: "ready",
+      children: objects.map(objectNodes),
+    },
+  ];
+
+  if (materials.length > 0) {
+    sessionChildren.push(materialNodes(materials));
+  }
+
+  if (physicsInteractions.length > 0) {
+    sessionChildren.push(physicsNodes(physicsInteractions));
+  }
+
+  sessionChildren.push(
+    {
+      id: "model:mesh",
+      kind: "mesh.root",
+      label: "Mesh Policy",
+      parentId: "model:session",
+      badge: "shared domain",
+      icon: "mesh",
+      status: "ready",
+    },
+    {
+      id: "model:study",
+      kind: "study.root",
+      label: "Study",
+      parentId: "model:session",
+      badge: "2 stages",
+      icon: "play",
+      status: "ready",
+      children: [
+        {
+          id: "model:study:relax",
+          kind: "study.stage.relax",
+          label: "Relax",
+          parentId: "model:study",
+          badge: "stop criteria",
+          icon: "play",
+          status: "ready",
+        },
+        {
+          id: "model:study:run",
+          kind: "study.stage.run",
+          label: "Run",
+          parentId: "model:study",
+          badge: "time domain",
+          icon: "play",
+          status: "ready",
+        },
+      ],
+    },
+  );
 
   return [
     {
@@ -145,135 +284,7 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
       icon: "folder",
       status: "ready",
       contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
-      children: [
-        {
-          id: "model:universe",
-          kind: "universe.root",
-          label: universe.label,
-          parentId: "model:session",
-          badge: formatSize(universe.size),
-          icon: "shield",
-          status: "ready",
-          children: [
-            {
-              id: "model:airbox:visualization",
-              kind: "airbox.visualization",
-              label: "Airbox Visualization",
-              parentId: "model:universe",
-              badge: "display",
-              icon: "sparkles",
-              status: "ready",
-              contextCommands: ["workspace.focus-selection"],
-            },
-          ],
-        },
-        {
-          id: "model:objects",
-          kind: "objects.root",
-          label: "Objects",
-          parentId: "model:session",
-          badge: `${objects.length}`,
-          icon: "layers",
-          status: "ready",
-          children: objects.map(objectNodes),
-        },
-        {
-          id: "model:materials",
-          kind: "materials.root",
-          label: "Materials",
-          parentId: "model:session",
-          badge: "2",
-          icon: "magnet",
-          status: "ready",
-          children: [
-            {
-              id: "model:material:permalloy",
-              kind: "material.entry",
-              label: "Permalloy",
-              parentId: "model:materials",
-              badge: "Ms, Aex",
-              icon: "circle",
-              status: "ready",
-            },
-            {
-              id: "model:material:cofeb",
-              kind: "material.entry",
-              label: "CoFeB",
-              parentId: "model:materials",
-              badge: "anisotropy",
-              icon: "circle",
-              status: "ready",
-            },
-          ],
-        },
-        {
-          id: "model:physics",
-          kind: "physics.root",
-          label: "Physics",
-          parentId: "model:session",
-          badge: "LLG",
-          icon: "sparkles",
-          status: "ready",
-          children: [
-            {
-              id: "model:physics:exchange",
-              kind: "physics.interaction",
-              label: "Exchange",
-              parentId: "model:physics",
-              badge: "active",
-              icon: "activity",
-              status: "ready",
-            },
-            {
-              id: "model:physics:demag",
-              kind: "physics.interaction",
-              label: "Demagnetization",
-              parentId: "model:physics",
-              badge: "active",
-              icon: "activity",
-              status: "ready",
-            },
-          ],
-        },
-        {
-          id: "model:mesh",
-          kind: "mesh.root",
-          label: "Mesh Policy",
-          parentId: "model:session",
-          badge: "shared domain",
-          icon: "mesh",
-          status: "ready",
-        },
-        {
-          id: "model:study",
-          kind: "study.root",
-          label: "Study",
-          parentId: "model:session",
-          badge: "2 stages",
-          icon: "play",
-          status: "ready",
-          children: [
-            {
-              id: "model:study:relax",
-              kind: "study.stage.relax",
-              label: "Relax",
-              parentId: "model:study",
-              badge: "stop criteria",
-              icon: "play",
-              status: "ready",
-            },
-            {
-              id: "model:study:run",
-              kind: "study.stage.run",
-              label: "Run",
-              parentId: "model:study",
-              badge: "time domain",
-              icon: "play",
-              status: "ready",
-            },
-          ],
-        },
-      ],
+      children: sessionChildren,
     },
   ];
 }
