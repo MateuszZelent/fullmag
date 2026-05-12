@@ -15,6 +15,7 @@ import {
   resolveTopologyBounds,
   resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
+  viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
 
 function topologyFixture(): DecodedTopology {
@@ -120,8 +121,8 @@ describe("viewport3dRenderModel", () => {
     );
 
     expect(Array.from(segments ?? [])).toEqual([
-      0, 0, 0, 0.5, 0, 0,
-      0, 1, 0, 0, 1, 0.5,
+      0, 0, 0, 0.5, 0, 0, 1,
+      0, 1, 0, 0, 1, 0.5, 1,
     ]);
   });
 
@@ -165,8 +166,8 @@ describe("viewport3dRenderModel", () => {
     );
 
     expect(Array.from(segments ?? [])).toEqual([
-      1, 0, 0, 1, 0.5, 0,
-      0, 1, 0, 0, 1, 0.5,
+      1, 0, 0, 1, 0.5, 0, 1,
+      0, 1, 0, 0, 1, 0.5, 1,
     ]);
   });
 
@@ -246,6 +247,152 @@ describe("viewport3dRenderModel", () => {
     expect(fieldModel?.partVectorSegments.get("part-a")).toBeNull();
   });
 
+  it("reuses scalar color buffers when only per-part vector budgets change", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const firstFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part-a", 2]]),
+        scalarColorsVisible: true,
+      },
+    );
+    const secondFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: true,
+      },
+    );
+
+    expect(secondFieldModel?.scalarColors).toBe(firstFieldModel?.scalarColors);
+  });
+
+  it("builds scalar color buffers for every requested target shader mode", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVectorFixture(),
+      0.5,
+      {
+        scalarColorModes: new Set([
+          "orientation",
+          "magnitude",
+          "monochrome",
+        ]),
+      },
+    );
+
+    expect(model?.scalarColorsByMode.get("orientation")?.colors.length).toBe(12);
+    expect(model?.scalarColorsByMode.get("magnitude")?.colors.length).toBe(12);
+    expect(model?.scalarColorsByMode.has("monochrome")).toBe(false);
+  });
+
+  it("reuses unchanged part vector buffers when another part changes", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 2,
+          nodeStart: 0,
+        },
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-b",
+          label: "Part B",
+          nodeCount: 2,
+          nodeStart: 2,
+        },
+      ],
+      [],
+    );
+    const fieldVector = fieldVectorFixture();
+    const firstFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([
+          ["part-a", 2],
+          ["part-b", 2],
+        ]),
+        scalarColorsVisible: false,
+      },
+    );
+    const secondFieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      fieldVector,
+      0.5,
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([
+          ["part-a", 2],
+          ["part-b", 0],
+        ]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    expect(secondFieldModel?.partVectorSegments.get("part-a")).toBe(
+      firstFieldModel?.partVectorSegments.get("part-a"),
+    );
+    expect(secondFieldModel?.partVectorSegments.get("part-b")).toBeNull();
+  });
+
+  it("detects when field-vector data is not needed by render options", () => {
+    expect(
+      viewport3DFieldRenderOptionsNeedFieldData({
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: false,
+      }),
+    ).toBe(false);
+    expect(
+      viewport3DFieldRenderOptionsNeedFieldData({
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map(),
+        scalarColorsVisible: true,
+      }),
+    ).toBe(true);
+    expect(
+      viewport3DFieldRenderOptionsNeedFieldData({
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([["part-a", 1]]),
+        scalarColorsVisible: false,
+      }),
+    ).toBe(true);
+  });
+
   it("can restrict per-part vector glyphs to boundary surface nodes", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
@@ -282,9 +429,9 @@ describe("viewport3dRenderModel", () => {
     );
 
     expect(surfaceFieldModel?.partVectorSegments.get("part-a")?.length).toBe(
-      18,
+      21,
     );
-    expect(fullFieldModel?.partVectorSegments.get("part-a")?.length).toBe(24);
+    expect(fullFieldModel?.partVectorSegments.get("part-a")?.length).toBe(28);
   });
 
   it("uses an explicit global vector budget instead of per-part fixed budgets", () => {

@@ -1978,8 +1978,9 @@ async fn scalar_history_returns_windowed_columnar_rows() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["revision"], 2);
     assert_eq!(json["total_rows"], 2);
     assert_eq!(json["returned_rows"], 1);
@@ -3111,7 +3112,20 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.scene_document = Some(sample_scene_document());
+        let mut scene = sample_scene_document();
+        let object_mesh = fullmag_authoring::ScriptBuilderPerGeometryMeshState {
+            mode: "custom".to_string(),
+            maximum_element_size: Some("6e-9".to_string()),
+            mesh_strategy: Some("swept_prism".to_string()),
+            order: Some(1),
+            through_thickness_elements: Some(1),
+            through_thickness_distribution: Some("fixed".to_string()),
+            sweep_face_meshing: Some("triangular".to_string()),
+            ..Default::default()
+        };
+        scene.objects[0].object_mesh = Some(object_mesh.clone());
+        scene.objects[0].mesh_override = Some(object_mesh);
+        snapshot.scene_document = Some(scene);
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -3173,6 +3187,42 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .as_ref()
             .and_then(|snapshot| snapshot.scene_document.as_ref())
             .map(|scene| scene.revision)
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("geometry"))
+            .and_then(serde_json::Value::as_str),
+        Some("body")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("maximum_element_size"))
+            .and_then(serde_json::Value::as_str),
+        Some("6e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("mesh_strategy"))
+            .and_then(serde_json::Value::as_str),
+        Some("swept_prism")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("through_thickness_elements"))
+            .and_then(serde_json::Value::as_i64),
+        Some(1)
     );
 }
 
@@ -4767,8 +4817,9 @@ async fn authoring_regions_returns_object_derived_regions() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["scene_revision"], 21);
     assert_eq!(json["geometry_realization_revision"], 21);
     assert_eq!(json["regions"][0]["name"], "free_layer");
@@ -4815,8 +4866,9 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
@@ -4825,6 +4877,230 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
         .unwrap()
         .iter()
         .any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirty() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 23;
+    let object_magnetization_ref = scene.objects[0]
+        .magnetization_ref
+        .clone()
+        .expect("sample object has magnetization ref");
+    let mut region_asset = scene.magnetization_assets[0].clone();
+    region_asset.id = "mag-region".to_string();
+    region_asset.name = "Region override".to_string();
+    region_asset.ui_label = Some("Region override".to_string());
+    scene.magnetization_assets.push(region_asset);
+    scene.objects[0].tags.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/regions/region:body")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "magnetization_ref": "mag-region"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let object = &json["objects"][0];
+    assert_eq!(object["magnetization_ref"], object_magnetization_ref);
+    assert_eq!(
+        object["region_overrides"]["region:body"]["magnetization_ref"],
+        "mag-region"
+    );
+    let mesh_dirty = object["tags"]
+        .as_array()
+        .map(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+        .unwrap_or(false);
+    assert!(!mesh_dirty);
+
+    let regions_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regions_response.status(), StatusCode::OK);
+    let regions = body_json(regions_response).await;
+    assert_eq!(regions["regions"][0]["magnetization_ref"], "mag-region");
+}
+
+#[tokio::test]
+async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 24;
+    let asset_id = scene.magnetization_assets[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let asset_path_id = asset_id.replace(':', "%3A");
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let get_json = body_json(get_response).await;
+    assert_eq!(get_json["asset"]["id"], asset_id);
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 24,
+                        "asset": {
+                            "id": asset_id,
+                            "name": "Edited texture",
+                            "kind": "preset_texture",
+                            "mapping": {
+                                "space": "object",
+                                "projection": "object_local",
+                                "clamp_mode": "none"
+                            },
+                            "texture_transform": {
+                                "translation": [1.0, 2.0, 3.0],
+                                "rotation_quat": [0.0, 0.0, 0.70710678, 0.70710678],
+                                "scale": [2.0, 1.0, 1.0],
+                                "pivot": [0.5, 0.0, 0.0]
+                            },
+                            "preset_kind": "uniform",
+                            "preset_params": { "direction": [0.0, 1.0, 0.0] },
+                            "preset_version": 1,
+                            "ui_label": "Edited texture"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let patch_status = patch_response.status();
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_status, StatusCode::OK, "{patch_json:#}");
+    assert_eq!(patch_json["scene_revision"], 25);
+    assert_eq!(patch_json["asset"]["name"], "Edited texture");
+    assert_eq!(patch_json["asset"]["preset_params"]["direction"][1], 1.0);
+    assert_eq!(
+        patch_json["asset"]["texture_transform"]["translation"],
+        serde_json::json!([1.0, 2.0, 3.0])
+    );
+
+    let get_after_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_after_response.status(), StatusCode::OK);
+    let get_after_json = body_json(get_after_response).await;
+    assert_eq!(get_after_json["asset"]["name"], "Edited texture");
+    assert_eq!(
+        get_after_json["asset"]["texture_transform"]["scale"],
+        serde_json::json!([2.0, 1.0, 1.0])
+    );
+}
+
+#[tokio::test]
+async fn authoring_magnetization_asset_patch_upserts_new_asset() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 26;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/magnetization-assets/mag%3Aribbon")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 26,
+                        "asset": {
+                            "id": "mag:ribbon",
+                            "name": "Ribbon uniform",
+                            "kind": "preset_texture",
+                            "mapping": {
+                                "space": "object",
+                                "projection": "object_local",
+                                "clamp_mode": "none"
+                            },
+                            "texture_transform": {
+                                "translation": [0.0, 0.0, 0.0],
+                                "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                                "scale": [1.0, 1.0, 1.0],
+                                "pivot": [0.0, 0.0, 0.0]
+                            },
+                            "preset_kind": "uniform",
+                            "preset_params": { "direction": [1.0, 0.0, 0.0] },
+                            "preset_version": 1,
+                            "ui_label": "Ribbon uniform"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["scene_revision"], 27);
+    assert_eq!(json["asset"]["id"], "mag:ribbon");
 }
 
 #[tokio::test]

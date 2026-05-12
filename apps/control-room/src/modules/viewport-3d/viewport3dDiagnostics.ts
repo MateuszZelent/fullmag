@@ -77,7 +77,6 @@ export class Viewport3DResourceTracker {
       dirtyReason: reason,
       frames: this.counts.frames + 1,
     };
-    this.notify();
   }
 
   track<TResource extends DisposableResource>(

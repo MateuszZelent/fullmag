@@ -69,6 +69,8 @@ pub struct SceneObject {
     pub region_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magnetization_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub region_overrides: BTreeMap<String, SceneRegionOverride>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub physics_stack: Vec<ScriptBuilderMagneticInteractionEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,6 +83,12 @@ pub struct SceneObject {
     pub locked: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+pub struct SceneRegionOverride {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

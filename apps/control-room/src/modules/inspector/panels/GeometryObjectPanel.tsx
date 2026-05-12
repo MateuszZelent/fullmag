@@ -21,7 +21,9 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildGeometryDraftPatch,
@@ -49,6 +51,13 @@ interface FeedbackState {
 }
 
 type VectorDraftField = "rotation" | "scale" | "size" | "translation";
+type DraftField = "height" | "material" | "name" | "radius" | "region";
+type DraftFieldUpdater = (field: DraftField, value: string) => void;
+type VectorDraftUpdater = (
+  field: VectorDraftField,
+  index: 0 | 1 | 2,
+  value: string,
+) => void;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -111,10 +120,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  function updateField(
-    field: "height" | "material" | "name" | "radius" | "region",
-    value: string,
-  ): void {
+  function updateField(field: DraftField, value: string): void {
     updateDraft((current) => ({ ...current, [field]: value }));
   }
 
@@ -245,98 +251,18 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Geometry Object">
-        <FieldRow label="Name" value={object.name} />
-        <FieldRow label="Object ID" value={object.objectId} />
-        <FieldRow label="Shape" value={object.shape} />
-        <FieldRow label="Dimensions" value={object.dimensions} />
-        <FieldRow label="Material" value={object.material} />
-        <FieldRow label="Region" value={object.region} />
-      </InspectorSection>
-      <InspectorSection title="Resource State">
-        <FieldRow label="Source" value={object.source} />
-        <FieldRow label="Mode" value={object.mode} />
-        <FieldRow label="Mesh" value={object.meshStatus} />
-        <FieldRow
-          label="Scene revision"
-          value={object.revision === null ? "unknown" : String(object.revision)}
-        />
-        <FieldRow label="Fetch state" value={scene.status} />
-      </InspectorSection>
-      <InspectorSection title="Primitive Geometry">
-        <FieldRow label="Kind" value={draft.geometryKind} />
-        {draft.geometryKind.toLowerCase() === "cylinder" ? (
-          <>
-            <DraftNumberField
-              label="Radius"
-              unit="m"
-              value={draft.radius}
-              onChange={(value) => updateField("radius", value)}
-            />
-            <DraftNumberField
-              label="Height"
-              unit="m"
-              value={draft.height}
-              onChange={(value) => updateField("height", value)}
-            />
-          </>
-        ) : draft.geometryKind.toLowerCase() === "sphere" ? (
-          <DraftNumberField
-            label="Radius"
-            unit="m"
-            value={draft.radius}
-            onChange={(value) => updateField("radius", value)}
-          />
-        ) : (
-          <DraftVectorField
-            labels={["X", "Y", "Z"]}
-            unit="m"
-            values={draft.size}
-            onChange={(index, value) => updateVector("size", index, value)}
-          />
-        )}
-      </InspectorSection>
-      <InspectorSection title="Transform">
-        <DraftVectorField
-          labels={["TX", "TY", "TZ"]}
-          unit="m"
-          values={draft.translation}
-          onChange={(index, value) => updateVector("translation", index, value)}
-        />
-        <DraftVectorField
-          labels={["RX", "RY", "RZ"]}
-          unit="rad"
-          values={draft.rotation}
-          onChange={(index, value) => updateVector("rotation", index, value)}
-        />
-        <DraftVectorField
-          labels={["SX", "SY", "SZ"]}
-          unit="x"
-          values={draft.scale}
-          onChange={(index, value) => updateVector("scale", index, value)}
-        />
-      </InspectorSection>
-      {draft.mode === "draft-new" ? (
-        <InspectorSection title="Draft Identity">
-          <DraftTextField
-            label="Name"
-            value={draft.name}
-            onChange={(value) => updateField("name", value)}
-          />
-          <DraftTextField
-            label="Region"
-            value={draft.region}
-            onChange={(value) => updateField("region", value)}
-          />
-          <DraftTextField
-            label="Material"
-            value={draft.material}
-            onChange={(value) => updateField("material", value)}
-          />
-        </InspectorSection>
-      ) : null}
-      <GeometryObjectTransactions
-        draftMode={draft.mode}
+      <GeometryObjectSummarySection object={object} />
+      <GeometryResourceStateSection object={object} sceneStatus={scene.status} />
+      <PrimitiveGeometrySection
+        draft={draft}
+        onFieldChange={updateField}
+        onVectorChange={updateVector}
+      />
+      <TransformSection draft={draft} onVectorChange={updateVector} />
+      <DraftIdentitySection draft={draft} onFieldChange={updateField} />
+      <ActionsSection
+        draft={draft}
+        feedback={feedback}
         pending={pending}
         onApplyCreateDraft={applyCreateDraft}
         onApplyGeometryPatch={applyGeometryPatch}
@@ -344,17 +270,196 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         onDeleteObject={deleteObject}
         onRevertDraft={revertDraft}
       />
-      <GeometryObjectDiagnostics
-        feedback={feedback}
-        validationMessages={validationMessages}
-        validationStatus={validation.status}
+      <ValidationSection
+        messages={validationMessages}
+        status={validation.status}
       />
     </div>
   );
 }
 
-function GeometryObjectTransactions({
-  draftMode,
+function GeometryObjectSummarySection({
+  object,
+}: {
+  object: ReturnType<typeof resolveGeometryObjectPanelModel>;
+}) {
+  return (
+    <InspectorSection title="Geometry Object" collapsible defaultCollapsed={false}>
+      <FieldRow label="Name" value={object.name} />
+      <FieldRow label="Object ID" value={object.objectId} />
+      <FieldRow label="Shape" value={object.shape} />
+      <FieldRow label="Dimensions" value={object.dimensions} />
+      <FieldRow label="Material" value={object.material} />
+      <FieldRow label="Region" value={object.region} />
+    </InspectorSection>
+  );
+}
+
+function GeometryResourceStateSection({
+  object,
+  sceneStatus,
+}: {
+  object: ReturnType<typeof resolveGeometryObjectPanelModel>;
+  sceneStatus: string;
+}) {
+  return (
+    <InspectorSection title="Resource State" collapsible defaultCollapsed={true}>
+      <FieldRow label="Source" value={object.source} />
+      <FieldRow label="Mode" value={object.mode} />
+      <FieldRow label="Mesh" value={object.meshStatus} />
+      <FieldRow
+        label="Scene revision"
+        value={object.revision === null ? "unknown" : String(object.revision)}
+      />
+      <FieldRow label="Fetch state" value={sceneStatus} />
+    </InspectorSection>
+  );
+}
+
+function PrimitiveGeometrySection({
+  draft,
+  onFieldChange,
+  onVectorChange,
+}: {
+  draft: GeometryObjectDraft;
+  onFieldChange: DraftFieldUpdater;
+  onVectorChange: VectorDraftUpdater;
+}) {
+  return (
+    <InspectorSection title="Primitive Geometry">
+      <FieldRow label="Kind" value={draft.geometryKind} />
+      <PrimitiveGeometryFields
+        draft={draft}
+        onFieldChange={onFieldChange}
+        onVectorChange={onVectorChange}
+      />
+    </InspectorSection>
+  );
+}
+
+function PrimitiveGeometryFields({
+  draft,
+  onFieldChange,
+  onVectorChange,
+}: {
+  draft: GeometryObjectDraft;
+  onFieldChange: DraftFieldUpdater;
+  onVectorChange: VectorDraftUpdater;
+}) {
+  const geometryKind = draft.geometryKind.toLowerCase();
+  if (geometryKind === "cylinder") {
+    return (
+      <>
+        <FormField
+          label="Radius"
+          type="number"
+          unit="m"
+          value={draft.radius}
+          onChange={(event) => onFieldChange("radius", event.target.value)}
+        />
+        <FormField
+          label="Height"
+          type="number"
+          unit="m"
+          value={draft.height}
+          onChange={(event) => onFieldChange("height", event.target.value)}
+        />
+      </>
+    );
+  }
+
+  if (geometryKind === "sphere") {
+    return (
+      <FormField
+        label="Radius"
+        type="number"
+        unit="m"
+        value={draft.radius}
+        onChange={(event) => onFieldChange("radius", event.target.value)}
+      />
+    );
+  }
+
+  return (
+    <DraftVectorFormField
+      labels={["X", "Y", "Z"]}
+      unit="m"
+      values={draft.size}
+      onChange={(index, value) => onVectorChange("size", index, value)}
+    />
+  );
+}
+
+function TransformSection({
+  draft,
+  onVectorChange,
+}: {
+  draft: GeometryObjectDraft;
+  onVectorChange: VectorDraftUpdater;
+}) {
+  return (
+    <InspectorSection title="Transform">
+      <DraftVectorFormField
+        labels={["TX", "TY", "TZ"]}
+        unit="m"
+        values={draft.translation}
+        onChange={(index, value) => onVectorChange("translation", index, value)}
+      />
+      <DraftVectorFormField
+        labels={["RX", "RY", "RZ"]}
+        unit="rad"
+        values={draft.rotation}
+        onChange={(index, value) => onVectorChange("rotation", index, value)}
+      />
+      <DraftVectorFormField
+        labels={["SX", "SY", "SZ"]}
+        unit="x"
+        values={draft.scale}
+        onChange={(index, value) => onVectorChange("scale", index, value)}
+      />
+    </InspectorSection>
+  );
+}
+
+function DraftIdentitySection({
+  draft,
+  onFieldChange,
+}: {
+  draft: GeometryObjectDraft;
+  onFieldChange: DraftFieldUpdater;
+}) {
+  if (draft.mode !== "draft-new") return null;
+
+  return (
+    <InspectorSection title="Draft Identity">
+      <FormField
+        label="Name"
+        mono={false}
+        type="text"
+        value={draft.name}
+        onChange={(event) => onFieldChange("name", event.target.value)}
+      />
+      <FormField
+        label="Region"
+        mono={false}
+        type="text"
+        value={draft.region}
+        onChange={(event) => onFieldChange("region", event.target.value)}
+      />
+      <FormField
+        label="Material"
+        mono={false}
+        type="text"
+        value={draft.material}
+        onChange={(event) => onFieldChange("material", event.target.value)}
+      />
+    </InspectorSection>
+  );
+}
+
+function ActionsSection({
+  draft,
+  feedback,
   onApplyCreateDraft,
   onApplyGeometryPatch,
   onApplyTransformPatch,
@@ -362,7 +467,8 @@ function GeometryObjectTransactions({
   onRevertDraft,
   pending,
 }: {
-  draftMode: GeometryObjectDraft["mode"];
+  draft: GeometryObjectDraft;
+  feedback: Feedback | null;
   onApplyCreateDraft: () => Promise<void>;
   onApplyGeometryPatch: () => Promise<void>;
   onApplyTransformPatch: () => Promise<void>;
@@ -371,9 +477,9 @@ function GeometryObjectTransactions({
   pending: boolean;
 }) {
   return (
-    <InspectorSection title="Transactions">
-      <div className="fm-inspector-actions">
-        {draftMode === "draft-new" ? (
+    <InspectorSection title="Actions">
+      <div className="fm-inspector-toolbar">
+        {draft.mode === "draft-new" ? (
           <Button
             disabled={pending}
             size="sm"
@@ -384,72 +490,98 @@ function GeometryObjectTransactions({
             Apply Draft
           </Button>
         ) : (
-          <>
-            <Button
-              disabled={pending || draftMode !== "committed"}
-              size="sm"
-              type="button"
-              variant="primary"
-              onClick={() => void onApplyGeometryPatch()}
-            >
-              Apply Geometry
-            </Button>
-            <Button
-              disabled={pending || draftMode !== "committed"}
-              size="sm"
-              type="button"
-              onClick={() => void onApplyTransformPatch()}
-            >
-              Apply Transform
-            </Button>
-            <Button
-              disabled={pending}
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={onRevertDraft}
-            >
-              Revert Draft
-            </Button>
-            <Button
-              disabled={pending || draftMode !== "committed"}
-              size="sm"
-              type="button"
-              variant="danger"
-              onClick={() => void onDeleteObject()}
-            >
-              Delete Object
-            </Button>
-          </>
+          <CommittedObjectActions
+            draft={draft}
+            pending={pending}
+            onApplyGeometryPatch={onApplyGeometryPatch}
+            onApplyTransformPatch={onApplyTransformPatch}
+            onDeleteObject={onDeleteObject}
+            onRevertDraft={onRevertDraft}
+          />
         )}
       </div>
+      {feedback ? (
+        <FeedbackBanner kind={feedback.kind} message={feedback.message} />
+      ) : null}
     </InspectorSection>
   );
 }
 
-function GeometryObjectDiagnostics({
-  feedback,
-  validationMessages,
-  validationStatus,
+function CommittedObjectActions({
+  draft,
+  onApplyGeometryPatch,
+  onApplyTransformPatch,
+  onDeleteObject,
+  onRevertDraft,
+  pending,
 }: {
-  feedback: Feedback | null;
-  validationMessages: string[];
-  validationStatus: string;
+  draft: GeometryObjectDraft;
+  onApplyGeometryPatch: () => Promise<void>;
+  onApplyTransformPatch: () => Promise<void>;
+  onDeleteObject: () => Promise<void>;
+  onRevertDraft: () => void;
+  pending: boolean;
 }) {
   return (
-    <InspectorSection title="Diagnostics">
-      <FieldRow label="Validation fetch" value={validationStatus} />
-      {feedback ? (
-        <p
-          className="fm-inspector-validation-message"
-          data-kind={feedback.kind}
-        >
-          {feedback.message}
-        </p>
-      ) : null}
-      {validationMessages.length > 0 ? (
+    <>
+      <Button
+        disabled={pending || draft.mode !== "committed"}
+        size="sm"
+        type="button"
+        variant="primary"
+        onClick={() => void onApplyGeometryPatch()}
+      >
+        Apply Geometry
+      </Button>
+      <Button
+        disabled={pending || draft.mode !== "committed"}
+        size="sm"
+        type="button"
+        onClick={() => void onApplyTransformPatch()}
+      >
+        Apply Transform
+      </Button>
+      <Button
+        disabled={pending}
+        size="sm"
+        type="button"
+        variant="ghost"
+        onClick={onRevertDraft}
+      >
+        Revert
+      </Button>
+      <span className="fm-inspector-toolbar__spacer" />
+      <Button
+        disabled={pending || draft.mode !== "committed"}
+        size="sm"
+        type="button"
+        variant="danger"
+        onClick={() => void onDeleteObject()}
+      >
+        Delete
+      </Button>
+    </>
+  );
+}
+
+function ValidationSection({
+  messages,
+  status,
+}: {
+  messages: string[];
+  status: string;
+}) {
+  return (
+    <InspectorSection
+      title="Validation"
+      badge={messages.length > 0 ? String(messages.length) : undefined}
+      collapsible
+      defaultCollapsed={messages.length === 0}
+    >
+      <FieldRow label="Fetch state" value={status} />
+      {messages.length > 0 ? (
         <ul className="fm-inspector-validation-list">
-          {validationMessages.map((message) => (
+          {messages.map((message) => (
             <li key={message}>{message}</li>
           ))}
         </ul>
@@ -460,55 +592,7 @@ function GeometryObjectDiagnostics({
   );
 }
 
-function DraftTextField({
-  label,
-  onChange,
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  value: string;
-}) {
-  return (
-    <label className="fm-inspector-edit-field">
-      <span>{label}</span>
-      <input
-        aria-label={label}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
-  );
-}
-
-function DraftNumberField({
-  label,
-  onChange,
-  unit,
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  unit: string;
-  value: string;
-}) {
-  return (
-    <label className="fm-inspector-edit-field">
-      <span>{label}</span>
-      <span className="fm-inspector-edit-field__control">
-        <input
-          aria-label={label}
-          inputMode="decimal"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        />
-        <small>{unit}</small>
-      </span>
-    </label>
-  );
-}
-
-function DraftVectorField({
+function DraftVectorFormField({
   labels,
   onChange,
   unit,
@@ -520,16 +604,17 @@ function DraftVectorField({
   values: readonly [string, string, string];
 }) {
   return (
-    <div className="fm-inspector-vector-field">
+    <>
       {labels.map((label, index) => (
-        <DraftNumberField
+        <FormField
           key={label}
           label={label}
+          type="number"
           unit={unit}
           value={values[index]}
-          onChange={(value) => onChange(index as 0 | 1 | 2, value)}
+          onChange={(event) => onChange(index as 0 | 1 | 2, event.target.value)}
         />
       ))}
-    </div>
+    </>
   );
 }

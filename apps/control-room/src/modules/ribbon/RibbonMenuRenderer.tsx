@@ -4,6 +4,7 @@ import {
   useCallback,
   useRef,
   type CSSProperties,
+  type MouseEvent,
   type ReactNode,
 } from "react";
 
@@ -195,9 +196,10 @@ type ColorNode = Extract<RibbonMenuNode, { type: "color" }>;
 
 function ColorMenuItem({ node }: { node: ColorNode }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const pickerValue = isColorPickerValue(node.value) ? node.value : "#ffffff";
 
   const handleSwatchClick = useCallback(
-    (e: React.MouseEvent) => {
+    (e: MouseEvent) => {
       e.stopPropagation();
       if (!node.disabled) inputRef.current?.click();
     },
@@ -218,19 +220,29 @@ function ColorMenuItem({ node }: { node: ColorNode }) {
         aria-label={`Pick color: ${node.label}`}
         tabIndex={node.disabled ? -1 : 0}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") handleSwatchClick(e as unknown as React.MouseEvent);
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!node.disabled) inputRef.current?.click();
+          }
         }}
       >
         <input
           ref={inputRef}
           type="color"
           className="fm-dropdown-color__input"
-          value={node.value}
+          value={pickerValue}
           disabled={node.disabled}
+          readOnly={!node.onValueChange}
           tabIndex={-1}
+          onChange={(e) => node.onValueChange?.(e.target.value)}
           onClick={(e) => e.stopPropagation()}
         />
       </span>
     </div>
   );
+}
+
+function isColorPickerValue(value: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(value);
 }

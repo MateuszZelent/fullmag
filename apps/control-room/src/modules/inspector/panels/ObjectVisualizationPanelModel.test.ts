@@ -65,4 +65,27 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(sections.find((section) => section.id === "vectors"))
       .toMatchObject({ disabled: true });
   });
+
+  it("keeps shader vector and wireframe fields addressable by target setting keys", () => {
+    const sections = buildVisualizationPanelSections({
+      effectiveSettings: resolveEffectiveVisualizationSettings(
+        DEFAULT_OBJECT_VISUALIZATION,
+      ),
+      settings: DEFAULT_OBJECT_VISUALIZATION,
+    });
+    const fieldIds = sections.flatMap((section) =>
+      section.fields.map((field) => field.id),
+    );
+
+    expect(fieldIds).toEqual(expect.arrayContaining([
+      "shaderColorMode",
+      "shaderMonoColor",
+      "wireframeColor",
+      "wireframeOpacityPercent",
+      "vectorColorMode",
+      "vectorMonoColor",
+      "vectorAlphaPercent",
+      "vectorThickness",
+    ]));
+  });
 });

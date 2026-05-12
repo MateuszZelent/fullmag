@@ -310,6 +310,15 @@ pub fn build_geometry_workspace(
         };
         let geometry_path = format!("objects/{}/geometry", object.id);
         let body_id = stable_body_id(&object.id, &geometry_path);
+        let region_id = object
+            .region_name
+            .clone()
+            .unwrap_or_else(|| format!("region:{}", object.id));
+        let magnetization_ref = object
+            .region_overrides
+            .get(&region_id)
+            .and_then(|override_entry| override_entry.magnetization_ref.clone())
+            .or_else(|| object.magnetization_ref.clone());
         bodies.push(GeometryBody {
             body_id: body_id.clone(),
             object_id: object.id.clone(),
@@ -320,8 +329,8 @@ pub fn build_geometry_workspace(
             bounds_min,
             bounds_max,
             material_ref: object.material_ref.clone(),
-            magnetization_ref: object.magnetization_ref.clone(),
-            region_hint: object.region_name.clone(),
+            magnetization_ref,
+            region_hint: Some(region_id),
             visible: object.visible,
         });
         provenance.push(GeometryProvenanceEntry {
@@ -1239,6 +1248,7 @@ mod tests {
                 material_ref: "mat:free".to_string(),
                 region_name: None,
                 magnetization_ref: Some("mag:free".to_string()),
+                region_overrides: Default::default(),
                 physics_stack: vec![],
                 object_mesh: None,
                 mesh_override: None,

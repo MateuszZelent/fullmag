@@ -10,8 +10,12 @@ describe("viewport3dDiagnostics", () => {
     const tracker = new Viewport3DResourceTracker();
     const dispose = vi.fn();
     const geometry = { dispose };
+    const listener = vi.fn();
+    tracker.subscribe(listener);
 
     tracker.track("geometry", geometry);
+    expect(listener).toHaveBeenCalledTimes(1);
+
     tracker.recordDirtyFrame("topology");
 
     expect(tracker.getSnapshot()).toMatchObject({
@@ -19,11 +23,13 @@ describe("viewport3dDiagnostics", () => {
       frames: 1,
       geometries: 1,
     });
+    expect(listener).toHaveBeenCalledTimes(1);
 
     tracker.release("geometry", geometry);
 
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(tracker.getSnapshot().geometries).toBe(0);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 
   it("records context loss and restoration diagnostics", () => {

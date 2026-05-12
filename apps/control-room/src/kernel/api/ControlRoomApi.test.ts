@@ -865,6 +865,87 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads and patches magnetization assets through v2 model facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({
+          asset: {
+            id: "mag:free layer",
+            kind: "preset_texture",
+            name: "Free layer texture",
+            preset_kind: "uniform",
+          },
+          scene_revision: requests.length,
+        });
+      },
+    });
+
+    const loaded = await api.model.magnetizationAsset("mag:free layer");
+    const patched = await api.model.patchMagnetizationAsset("mag:free layer", {
+      asset: {
+        id: "mag:free layer",
+        kind: "preset_texture",
+        mapping: {
+          clamp_mode: "none",
+          projection: "object_local",
+          space: "object",
+        },
+        name: "Free layer texture",
+        preset_kind: "uniform",
+        preset_params: { direction: [0, 1, 0] },
+        texture_transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [1, 0, 0],
+        },
+      },
+      base_revision: 7,
+    });
+
+    expect(loaded.asset.id).toBe("mag:free layer");
+    expect(patched.scene_revision).toBe(2);
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/magnetization-assets/mag%3Afree%20layer",
+      },
+      {
+        body: {
+          asset: {
+            id: "mag:free layer",
+            kind: "preset_texture",
+            mapping: {
+              clamp_mode: "none",
+              projection: "object_local",
+              space: "object",
+            },
+            name: "Free layer texture",
+            preset_kind: "uniform",
+            preset_params: { direction: [0, 1, 0] },
+            texture_transform: {
+              pivot: [0, 0, 0],
+              rotation_quat: [0, 0, 0, 1],
+              scale: [1, 1, 1],
+              translation: [1, 0, 0],
+            },
+          },
+          base_revision: 7,
+        },
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/magnetization-assets/mag%3Afree%20layer",
+      },
+    ]);
+  });
+
   it("loads and replaces per-object mesh policy resources through v2 meshing facade methods", async () => {
     const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
     const api = new ControlRoomApi({

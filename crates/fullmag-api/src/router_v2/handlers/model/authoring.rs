@@ -9,7 +9,8 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, GeometryRealizationRequest,
-    MaterialPatchRequest, MaterialPropertiesResource, MaterialResource, NullableF64PatchValue,
+    MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialPatchRequest,
+    MaterialPropertiesResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
     NullableU32PatchValue, ObjectCreateRequest, ObjectGeometryPatchRequest,
     ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
     RegionListResource, RegionPatchRequest, RegionResource, ScenePatchRequest,
@@ -20,7 +21,7 @@ use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSync
 use fullmag_authoring::{
     geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
     MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    SceneRegionOverride, ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
     ScriptBuilderUniverseState, Transform3D,
 };
 
@@ -402,6 +403,7 @@ pub async fn patch_authoring_region(
 ) -> Result<Json<Value>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let object = find_scene_object_for_region_mut(&mut scene, &region_id)?;
+    let mut mesh_dirty = false;
     if let Some(name) = req.name {
         let name = name.trim();
         object.region_name = if name.is_empty() {
@@ -409,11 +411,35 @@ pub async fn patch_authoring_region(
         } else {
             Some(name.to_string())
         };
+        mesh_dirty = true;
     }
     if let Some(enabled) = req.enabled {
         object.visible = enabled;
+        mesh_dirty = true;
     }
-    mark_object_mesh_dirty(object);
+    if let Some(magnetization_ref) = req.magnetization_ref {
+        let region_override_id = canonical_region_id_for_object(object, &region_id);
+        match magnetization_ref {
+            NullableStringPatchValue::Value(value) => {
+                let value = value.trim();
+                if value.is_empty() {
+                    object.region_overrides.remove(&region_override_id);
+                } else {
+                    object
+                        .region_overrides
+                        .entry(region_override_id)
+                        .or_insert_with(SceneRegionOverride::default)
+                        .magnetization_ref = Some(value.to_string());
+                }
+            }
+            NullableStringPatchValue::Null => {
+                object.region_overrides.remove(&region_override_id);
+            }
+        }
+    }
+    if mesh_dirty {
+        mark_object_mesh_dirty(object);
+    }
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     serde_json::to_value(committed)
         .map(Json)
@@ -665,6 +691,76 @@ pub async fn patch_authoring_material(
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
     Ok(Json(build_material_resource(material)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/magnetization-assets/{asset_id}",
+    params(
+        ("asset_id" = String, Path, description = "Canonical magnetization asset id")
+    ),
+    responses(
+        (status = 200, description = "Canonical magnetization asset", body = MagnetizationAssetResource),
+        (status = 404, description = "No active workspace or magnetization asset not found"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_magnetization_asset(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Result<Json<MagnetizationAssetResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let asset = scene
+        .magnetization_assets
+        .iter()
+        .find(|entry| entry.id == asset_id)
+        .ok_or_else(|| {
+            ApiError::not_found(format!("magnetization asset not found: {asset_id}"))
+        })?;
+    build_magnetization_asset_resource(&scene, asset).map(Json)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/magnetization-assets/{asset_id}",
+    params(
+        ("asset_id" = String, Path, description = "Canonical magnetization asset id")
+    ),
+    request_body = MagnetizationAssetPatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical magnetization asset", body = MagnetizationAssetResource),
+        (status = 400, description = "Invalid magnetization asset payload"),
+        (status = 404, description = "No active workspace or magnetization asset not found"),
+        (status = 409, description = "Base scene revision does not match current scene revision"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_magnetization_asset(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+    Json(req): Json<MagnetizationAssetPatchRequest>,
+) -> Result<Json<MagnetizationAssetResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    check_base_scene_revision(&scene, req.base_revision)?;
+    let asset: MagnetizationAsset = serde_json::from_value(req.asset).map_err(|error| {
+        ApiError::bad_request(format!("invalid magnetization asset payload: {error}"))
+    })?;
+    if asset.id != asset_id {
+        return Err(ApiError::bad_request(format!(
+            "magnetization asset id mismatch: path '{asset_id}' payload '{}'",
+            asset.id
+        )));
+    }
+    upsert_magnetization_asset(&mut scene, asset);
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let asset = committed
+        .magnetization_assets
+        .iter()
+        .find(|entry| entry.id == asset_id)
+        .ok_or_else(|| {
+            ApiError::internal(format!("committed magnetization asset missing: {asset_id}"))
+        })?;
+    build_magnetization_asset_resource(&committed, asset).map(Json)
 }
 
 #[utoipa::path(
@@ -1228,6 +1324,7 @@ fn apply_create_object_transaction(
         material_ref,
         region_name: region_name.filter(|value| !value.trim().is_empty()),
         magnetization_ref: magnetization_ref.filter(|value| !value.trim().is_empty()),
+        region_overrides: Default::default(),
         physics_stack: Vec::new(),
         object_mesh: None,
         mesh_override: None,
@@ -1430,6 +1527,23 @@ fn find_scene_object_for_region_mut<'a>(
         .ok_or_else(|| ApiError::not_found(format!("region not found: {region_id}")))
 }
 
+fn canonical_region_id_for_object(object: &SceneObject, requested_region_id: &str) -> String {
+    let object_default_region_id = format!("region:{}", object.id);
+    if object.region_name.as_deref() == Some(requested_region_id) {
+        return requested_region_id.to_string();
+    }
+    if requested_region_id == object.id
+        || requested_region_id == object.name
+        || requested_region_id == object_default_region_id
+    {
+        return object
+            .region_name
+            .clone()
+            .unwrap_or(object_default_region_id);
+    }
+    requested_region_id.to_string()
+}
+
 fn mark_object_mesh_dirty(object: &mut SceneObject) {
     if !object.tags.iter().any(|tag| tag == "mesh:dirty") {
         object.tags.push("mesh:dirty".to_string());
@@ -1462,6 +1576,19 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
             dind: material.properties.dind,
         },
     }
+}
+
+fn build_magnetization_asset_resource(
+    scene: &SceneDocument,
+    asset: &MagnetizationAsset,
+) -> Result<MagnetizationAssetResource, ApiError> {
+    let asset = serde_json::to_value(asset).map_err(|error| {
+        ApiError::internal(format!("failed to serialize magnetization asset: {error}"))
+    })?;
+    Ok(MagnetizationAssetResource {
+        scene_revision: scene.revision,
+        asset,
+    })
 }
 
 fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {

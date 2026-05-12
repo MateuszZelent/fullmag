@@ -60,12 +60,14 @@ export interface Viewport3DFieldRenderModel {
   fullVectorSegments: Float32Array | null;
   partVectorSegments: Map<string, Float32Array | null>;
   scalarColors: ScalarColorBuffer | null;
+  scalarColorsByMode: Map<string, ScalarColorBuffer | null>;
 }
 
 export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   partVectorBudgets?: ReadonlyMap<string, number>;
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
+  scalarColorModes?: ReadonlySet<string>;
   scalarColorsVisible?: boolean;
   vectorColorMode?: string;
 }
@@ -88,6 +90,19 @@ interface Viewport3DPositionSource {
 }
 
 export const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
+
+const scalarColorCache = new WeakMap<
+  DecodedFieldVector,
+  Map<string, ScalarColorBuffer | null>
+>();
+const fullVectorSegmentCache = new WeakMap<
+  Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
+>();
+const partVectorSegmentCache = new WeakMap<
+  Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
+>();
 
 export function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   return Float32Array.from(topology.positions);
@@ -128,15 +143,28 @@ export function buildViewport3DFieldRenderModel(
 ): Viewport3DFieldRenderModel | null {
   if (!topology) return null;
 
-  const scalarColors =
+  const requestedScalarColorModes = new Set(
+    options.scalarColorModes && options.scalarColorModes.size > 0
+      ? [...options.scalarColorModes]
+      : [],
+  );
+  requestedScalarColorModes.add(options.vectorColorMode ?? "magnitude");
+  requestedScalarColorModes.delete("monochrome");
+  const scalarColorsByMode =
     options.scalarColorsVisible === false
-      ? null
-      : buildVertexScalarColors(
-          fieldVector,
-          topology.nodeCount,
-          undefined,
-          options.vectorColorMode,
+      ? new Map<string, ScalarColorBuffer | null>()
+      : new Map(
+          [...requestedScalarColorModes].map((colorMode) => [
+            colorMode,
+            buildCachedVertexScalarColors(
+              fieldVector,
+              topology.nodeCount,
+              colorMode,
+            ),
+          ]),
         );
+  const scalarColors =
+    scalarColorsByMode.get(options.vectorColorMode ?? "magnitude") ?? null;
   const partVectorSegments = new Map<string, Float32Array | null>();
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
 
@@ -151,15 +179,15 @@ export function buildViewport3DFieldRenderModel(
         : partModel.part;
     partVectorSegments.set(
       partModel.part.id,
-      partBudget > 0
-        ? buildVectorLineSegmentsForNodeSelectionFromPositions(
-            topology,
-            fieldVector,
-            vectorSelection,
-            scale,
-            partBudget,
-          )
-        : null,
+      buildCachedPartVectorSegments(
+        partModel,
+        topology,
+        fieldVector,
+        vectorSelection,
+        vectorScope,
+        scale,
+        partBudget,
+      ),
     );
   }
 
@@ -167,18 +195,145 @@ export function buildViewport3DFieldRenderModel(
     options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
 
   return {
-    fullVectorSegments:
-      fullVectorBudget > 0
-        ? buildVectorLineSegmentsFromPositions(
-            topology,
-            fieldVector,
-            scale,
-            fullVectorBudget,
-          )
-        : null,
+    fullVectorSegments: buildCachedFullVectorSegments(
+      topology,
+      fieldVector,
+      scale,
+      fullVectorBudget,
+    ),
     partVectorSegments,
     scalarColors,
+    scalarColorsByMode,
   };
+}
+
+function buildCachedVertexScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  vertexCount: number,
+  colorMode: string | undefined,
+): ScalarColorBuffer | null {
+  if (!fieldVector) return null;
+
+  return getCachedValue(
+    scalarColorCache,
+    fieldVector,
+    `${vertexCount}:${colorMode ?? "magnitude"}`,
+    () =>
+      buildVertexScalarColors(
+        fieldVector,
+        vertexCount,
+        undefined,
+        colorMode,
+      ),
+  );
+}
+
+function buildCachedFullVectorSegments(
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  scale: number,
+  budget: number,
+): Float32Array | null {
+  if (!fieldVector || budget <= 0) return null;
+
+  return getCachedNestedFieldValue(
+    fullVectorSegmentCache,
+    topology,
+    fieldVector,
+    `${scale}:${budget}`,
+    () =>
+      buildVectorLineSegmentsFromPositions(
+        topology,
+        fieldVector,
+        scale,
+        budget,
+      ),
+  );
+}
+
+function buildCachedPartVectorSegments(
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DRenderablePart>,
+  topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
+  fieldVector: DecodedFieldVector | null | undefined,
+  vectorSelection: Viewport3DNodeSelection,
+  vectorScope: "surface" | "full",
+  scale: number,
+  budget: number,
+): Float32Array | null {
+  if (!fieldVector || budget <= 0) return null;
+
+  return getCachedNestedFieldValue(
+    partVectorSegmentCache,
+    partModel,
+    fieldVector,
+    `${vectorScope}:${scale}:${budget}`,
+    () =>
+      buildVectorLineSegmentsForNodeSelectionFromPositions(
+        topology,
+        fieldVector,
+        vectorSelection,
+        scale,
+        budget,
+      ),
+  );
+}
+
+function getCachedValue<TKey extends object, TValue>(
+  cache: WeakMap<TKey, Map<string, TValue>>,
+  owner: TKey,
+  key: string,
+  build: () => TValue,
+): TValue {
+  let entries = cache.get(owner);
+  if (!entries) {
+    entries = new Map<string, TValue>();
+    cache.set(owner, entries);
+  }
+
+  if (entries.has(key)) {
+    return entries.get(key) as TValue;
+  }
+
+  const value = build();
+  entries.set(key, value);
+  return value;
+}
+
+function getCachedNestedFieldValue<TOwner extends object, TValue>(
+  cache: WeakMap<
+    TOwner,
+    WeakMap<DecodedFieldVector, Map<string, TValue>>
+  >,
+  owner: TOwner,
+  fieldVector: DecodedFieldVector,
+  key: string,
+  build: () => TValue,
+): TValue {
+  let fieldCache = cache.get(owner);
+  if (!fieldCache) {
+    fieldCache = new WeakMap<DecodedFieldVector, Map<string, TValue>>();
+    cache.set(owner, fieldCache);
+  }
+
+  return getCachedValue(fieldCache, fieldVector, key, build);
+}
+
+export function viewport3DFieldRenderOptionsNeedFieldData(
+  options: Viewport3DFieldRenderOptions = {},
+): boolean {
+  if (options.scalarColorsVisible !== false) return true;
+  if (
+    (options.fullVectorBudget ?? DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET) > 0
+  ) {
+    return true;
+  }
+  if (!options.partVectorBudgets) return true;
+
+  for (const budget of options.partVectorBudgets.values()) {
+    if (budget > 0) return true;
+  }
+
+  return false;
 }
 
 export function resolveViewport3DMaxVectorGlyphs(
@@ -394,6 +549,9 @@ export function buildVectorLineSegments(
   );
 }
 
+/** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
+export const VECTOR_SEGMENT_STRIDE = 7;
+
 export function buildVectorLineSegmentsFromPositions(
   topology: Viewport3DPositionSource,
   fieldVector: DecodedFieldVector | null | undefined,
@@ -418,13 +576,26 @@ export function buildVectorLineSegmentsFromPositions(
     1,
     Math.floor(Math.min(topology.nodeCount, fieldVector.pointCount) / vectorCount),
   );
-  const segments = new Float32Array(vectorCount * 2 * 3);
+
+  // First pass: compute maximum magnitude for relative-magnitude channel.
+  let maxMag = 0;
+  for (let vector = 0; vector < vectorCount; vector += 1) {
+    const valueOffset = vector * stride * fieldVector.nComp;
+    const vx = fieldVector.values[valueOffset] ?? 0;
+    const vy = fieldVector.values[valueOffset + 1] ?? 0;
+    const vz = fieldVector.values[valueOffset + 2] ?? 0;
+    const mag = Math.hypot(vx, vy, vz);
+    if (mag > maxMag) maxMag = mag;
+  }
+  const scaleMag = Math.max(maxMag, 1e-12);
+
+  const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const pointIndex = vector * stride;
     const positionOffset = pointIndex * 3;
     const valueOffset = pointIndex * fieldVector.nComp;
-    const target = vector * 6;
+    const target = vector * VECTOR_SEGMENT_STRIDE;
     const x = topology.positions[positionOffset] ?? 0;
     const y = topology.positions[positionOffset + 1] ?? 0;
     const z = topology.positions[positionOffset + 2] ?? 0;
@@ -439,6 +610,7 @@ export function buildVectorLineSegmentsFromPositions(
     segments[target + 3] = x + (vx / length) * scale;
     segments[target + 4] = y + (vy / length) * scale;
     segments[target + 5] = z + (vz / length) * scale;
+    segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 
   return segments;
@@ -484,7 +656,22 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
 
   const vectorCount = Math.min(totalSelectedNodes, maxVectors);
   const stride = Math.max(1, Math.floor(totalSelectedNodes / vectorCount));
-  const segments = new Float32Array(vectorCount * 2 * 3);
+
+  // First pass: compute maximum magnitude for relative-magnitude channel.
+  let maxMag = 0;
+  for (let vector = 0; vector < vectorCount; vector += 1) {
+    const pointIndex = resolveNodeSelectionIndex(nodeSelection, vector * stride);
+    if (pointIndex === null || pointIndex >= fieldVector.pointCount) continue;
+    const valueOffset = pointIndex * fieldVector.nComp;
+    const vx = fieldVector.values[valueOffset] ?? 0;
+    const vy = fieldVector.values[valueOffset + 1] ?? 0;
+    const vz = fieldVector.values[valueOffset + 2] ?? 0;
+    const mag = Math.hypot(vx, vy, vz);
+    if (mag > maxMag) maxMag = mag;
+  }
+  const scaleMag = Math.max(maxMag, 1e-12);
+
+  const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const pointIndex = resolveNodeSelectionIndex(
@@ -501,7 +688,7 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
 
     const positionOffset = pointIndex * 3;
     const valueOffset = pointIndex * fieldVector.nComp;
-    const target = vector * 6;
+    const target = vector * VECTOR_SEGMENT_STRIDE;
     const x = topology.positions[positionOffset] ?? 0;
     const y = topology.positions[positionOffset + 1] ?? 0;
     const z = topology.positions[positionOffset + 2] ?? 0;
@@ -516,6 +703,7 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
     segments[target + 3] = x + (vx / length) * scale;
     segments[target + 4] = y + (vy / length) * scale;
     segments[target + 5] = z + (vz / length) * scale;
+    segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 
   return segments;

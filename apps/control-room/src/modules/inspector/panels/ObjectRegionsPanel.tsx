@@ -20,7 +20,9 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildObjectRegionPatch,
@@ -111,7 +113,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Object Regions">
+      <InspectorSection title="Object Regions" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={model.objectId} />
         <FieldRow label="Region ID" value={model.regionId} />
         <FieldRow label="Source" value={model.source} />
@@ -122,26 +124,23 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
       </InspectorSection>
 
       <InspectorSection title="Region State">
-        <label className="fm-inspector-edit-field">
-          <span>Region name</span>
-          <input
-            aria-label="Region name"
-            value={draft.name}
-            onChange={(event) => updateDraft({ name: event.target.value })}
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>Enabled</span>
-          <input
-            checked={draft.enabled}
-            type="checkbox"
-            onChange={(event) => updateDraft({ enabled: event.target.checked })}
-          />
-        </label>
+        <FormField
+          label="Region name"
+          mono={false}
+          type="text"
+          value={draft.name}
+          onChange={(event) => updateDraft({ name: event.target.value })}
+        />
+        <FormField
+          label="Enabled"
+          type="checkbox"
+          checked={draft.enabled}
+          onChange={(event) => updateDraft({ enabled: event.target.checked })}
+        />
       </InspectorSection>
 
-      <InspectorSection title="Transactions">
-        <div className="fm-inspector-actions">
+      <InspectorSection title="Actions">
+        <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || model.mode !== "committed"}
             size="sm"
@@ -161,21 +160,11 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
               setFeedback(null);
             }}
           >
-            Revert Draft
+            Revert
           </Button>
         </div>
+        {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
-
-      {feedback ? (
-        <InspectorSection title="Diagnostics">
-          <p
-            className="fm-inspector-validation-message"
-            data-kind={feedback.kind}
-          >
-            {feedback.message}
-          </p>
-        </InspectorSection>
-      ) : null}
     </div>
   );
 }

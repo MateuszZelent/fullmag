@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
+import { magnitudeColorRgb } from "../viewport3dVectorColoring";
 
 describe("vectorGlyphGeometry", () => {
   it("builds shaft and head instance transforms from vector segments", () => {
@@ -39,6 +40,21 @@ describe("vectorGlyphGeometry", () => {
     expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 1, 1]);
   });
 
+  it("colors production glyphs in the HUD orientation frame", () => {
+    const glyphs = buildVectorGlyphInstances(
+      new Float32Array([
+        0, 0, 0, 0, 0, -1, 1,
+        0, 0, 0, 1, 0, 0, 1,
+      ]),
+      { colorMode: "orientation", orientationFrame: "hud" },
+    );
+
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [
+      1, 1, 1,
+      0.5, 0, 0,
+    ]);
+  });
+
   it("accepts HSLSPHERE aliases for vector glyph orientation coloring", () => {
     const glyphs = buildVectorGlyphInstances(
       new Float32Array([0, 0, 0, 0, 0, 1]),
@@ -63,13 +79,16 @@ describe("vectorGlyphGeometry", () => {
     ]);
   });
 
-  it("keeps magnitude vector coloring on the fixed material color", () => {
+  it("maps magnitude vector coloring to per-glyph colors", () => {
     const glyphs = buildVectorGlyphInstances(
       new Float32Array([0, 0, 0, 1, 0, 0]),
       { colorMode: "magnitude" },
     );
 
-    expect(glyphs.colors).toBeNull();
+    expectFloatArrayClose(
+      glyphs.colors ?? new Float32Array(),
+      magnitudeColorRgb(1),
+    );
   });
 
   it("keeps monochrome vector coloring on the fixed material color", () => {

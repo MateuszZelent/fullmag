@@ -40,6 +40,12 @@
   border-bottom: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-muted);
   padding-inline: var(--fm-space-2);
+  transition: border-color var(--fm-transition-fast);
+}
+
+.fm-explorer-filter:focus-within {
+  border-bottom-color: var(--fm-accent);
+  color: var(--fm-text-secondary);
 }
 
 .fm-explorer-filter input {
@@ -85,6 +91,8 @@
   border-color: var(--fm-border-subtle);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
 }
 
 .fm-explorer-tree-row[data-active="true"] {
@@ -108,6 +116,25 @@
 
 .fm-explorer-tree-row[data-status="degraded"] {
   color: var(--fm-degraded);
+}
+
+.fm-explorer-tree-row[data-status="mesh-ready"] {
+  color: var(--fm-success);
+}
+
+.fm-explorer-tree-row[data-status="mesh-building"] {
+  color: var(--fm-accent);
+}
+
+.fm-explorer-tree-row[data-status="mesh-stale"],
+.fm-explorer-tree-row[data-status="primitive-only"],
+.fm-explorer-tree-row[data-status="warning"] {
+  color: var(--fm-warning);
+}
+
+.fm-explorer-tree-row[data-status="mesh-failed"],
+.fm-explorer-tree-row[data-status="validation-blocked"] {
+  color: var(--fm-danger);
 }
 
 .fm-explorer-tree-row__branch,

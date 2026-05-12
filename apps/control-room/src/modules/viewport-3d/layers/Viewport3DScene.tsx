@@ -19,6 +19,7 @@ import type {
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
 import type {
+  Viewport3DMagnetizationTexturePreview,
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
@@ -54,6 +55,7 @@ interface Viewport3DSceneProps {
   fitRevision: number;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -146,6 +148,7 @@ export function Viewport3DScene({
   fallbackSettings,
   getObjectSettings,
   getPartSettings,
+  magnetizationTexturePreviews,
   onSelectObject,
   onSelectDomain,
   onSelectPart,
@@ -199,6 +202,7 @@ export function Viewport3DScene({
       )}
       <DomainBoxLayer
         bounds={bounds}
+        boundsVisible={fallbackSettings.boundsVisible}
         colors={colors}
         onSelectDomain={onSelectDomain}
       />
@@ -232,6 +236,7 @@ export function Viewport3DScene({
         femDomain={femDomain}
         fieldModel={fieldModel}
         getPartSettings={getPartSettings}
+        magnetizationTexturePreviews={magnetizationTexturePreviews}
         onSelectDomain={onSelectDomain}
         onSelectPart={onSelectPart}
         tracker={tracker}

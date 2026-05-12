@@ -16,10 +16,10 @@ describe("VectorFieldLayer style mapping", () => {
         },
       }),
     ).toEqual({
-      headRadiusRatio: 0.28,
+      headRadiusRatio: 0.40,
       materialColor: "#ff3366",
       materialOpacity: 0.2,
-      shaftRadiusRatio: 0.09,
+      shaftRadiusRatio: 0.16,
     });
   });
 });

@@ -119,6 +119,7 @@ export type RibbonMenuNode =
       label: string;
       value: string;
       disabled?: boolean;
+      onValueChange?: (value: string) => void;
     };
 
 export const RIBBON_TABS: RibbonTabDef[] = [

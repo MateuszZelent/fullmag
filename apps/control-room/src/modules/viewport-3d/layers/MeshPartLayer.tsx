@@ -17,6 +17,7 @@ import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
+import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyPartRenderModel,
@@ -34,6 +35,7 @@ export function MeshPartLayer({
   fieldModel,
   onSelectPart,
   partModel,
+  magnetizationTexturePreview,
   settings,
   topologyModel,
   tracker,
@@ -44,6 +46,7 @@ export function MeshPartLayer({
   fieldModel: Viewport3DFieldRenderModel | null;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
+  magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
   tracker: Viewport3DResourceTracker;
@@ -81,6 +84,13 @@ export function MeshPartLayer({
   if (!geometry || !settings.visible) return null;
 
   const part = partModel.part;
+  const hasScalarColors = canApplyVertexScalarColorBuffer(
+    fieldModel?.scalarColors,
+    topologyModel?.nodeCount ?? 0,
+  );
+  const meshColor = hasScalarColors
+    ? colors.mesh
+    : (magnetizationTexturePreview?.color ?? colors.mesh);
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
@@ -91,14 +101,11 @@ export function MeshPartLayer({
       {settings.shaderVisible ? (
         <mesh geometry={geometry}>
           <meshStandardMaterial
-            color={colors.mesh}
+            color={meshColor}
             opacity={opacityFromSettings(settings)}
             roughness={0.86}
             transparent
-            vertexColors={canApplyVertexScalarColorBuffer(
-              fieldModel?.scalarColors,
-              topologyModel?.nodeCount ?? 0,
-            )}
+            vertexColors={hasScalarColors}
           />
         </mesh>
       ) : null}

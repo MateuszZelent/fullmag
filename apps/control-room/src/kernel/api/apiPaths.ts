@@ -35,6 +35,18 @@ export const MESHING_SHARED_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/topology",
 );
 
+export const MESHING_SUMMARY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/summary",
+);
+
+export const MESHING_CAPABILITIES_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/capabilities",
+);
+
+export const MESHING_SEMANTICS_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/semantics",
+);
+
 export const MESHING_BUILDS_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/builds",
 );
@@ -63,12 +75,40 @@ export const MESHING_OBJECT_SIZE_FIELD_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/objects/{object_id}/size-field",
 );
 
+export const MESHING_UNIVERSE_REPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/universe/report",
+);
+
+export const MESHING_UNIVERSE_QUALITY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/universe/quality",
+);
+
+export const MESHING_SHARED_DOMAIN_REPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/report",
+);
+
+export const MESHING_SHARED_DOMAIN_QUALITY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/quality",
+);
+
+export const MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+);
+
+export const MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+);
+
 export const MESHING_OBJECT_POLICY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/policies/objects/{object_id}",
 );
 
 export const MESHING_UNIVERSE_POLICY_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/policies/universe",
+);
+
+export const MESHING_SHARED_DOMAIN_POLICY_PATH = openApiV2Path(
+  "/v2/sessions/current/meshing/policies/shared-domain",
 );
 
 export const MESHING_PART_TOPOLOGY_PATH = openApiV2Path(
@@ -81,6 +121,10 @@ export const MODEL_UNIVERSE_PATH = openApiV2Path(
 
 export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
+);
+
+export const MODEL_STUDY_PATH = openApiV2Path(
+  "/v2/sessions/current/model/study",
 );
 
 export const MODEL_TRANSACTIONS_PATH = openApiV2Path(
@@ -105,6 +149,10 @@ export const MODEL_OBJECT_INTERACTION_PATH = openApiV2Path(
 
 export const MODEL_MATERIAL_PATH = openApiV2Path(
   "/v2/sessions/current/model/materials/{material_id}",
+);
+
+export const MODEL_MAGNETIZATION_ASSET_PATH = openApiV2Path(
+  "/v2/sessions/current/model/magnetization-assets/{asset_id}",
 );
 
 export const MODEL_REGIONS_PATH = openApiV2Path(
@@ -149,4 +197,28 @@ export const SIMULATION_COMMANDS_PATH = openApiV2Path(
 
 export const SIMULATION_COMMAND_DETAIL_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands/{command_id}",
+);
+
+export const SIMULATION_RUN_CURRENT_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/runs/current",
+);
+
+export const SIMULATION_RUN_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/runs/{run_id}",
+);
+
+export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/execution",
+);
+
+export const SIMULATION_SOLVER_STATUS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/solver/status",
+);
+
+export const SIMULATION_SOLVER_ENERGIES_CURRENT_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/solver/energies/current",
+);
+
+export const SIMULATION_SOLVER_ENERGIES_HISTORY_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/solver/energies/history",
 );

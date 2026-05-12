@@ -1,7 +1,10 @@
 import { isValidElement, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  DEFAULT_AIRBOX_VISUALIZATION,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import type { Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
@@ -17,6 +20,7 @@ const colors = {
 };
 
 const visibleWireframeAirbox: VisualizationTargetSettings = {
+  ...DEFAULT_AIRBOX_VISUALIZATION,
   boundsVisible: false,
   geometryScope: "surface",
   opacityPercent: 35,

@@ -734,6 +734,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(arch_mesh["maximum_element_size"], 6e-9)
         self.assertEqual(arch_mesh["minimum_element_size"], 1.8e-9)
         self.assertEqual(arch_mesh["maximum_element_growth_rate"], 1.22)
+        self.assertEqual(arch_mesh["mesh_strategy"], "swept_prism")
+        self.assertEqual(arch_mesh["through_thickness_elements"], 1)
+        self.assertEqual(arch_mesh["through_thickness_distribution"], "fixed")
+        self.assertEqual(arch_mesh["sweep_face_meshing"], "triangular")
         size_fields = arch_mesh["size_fields"]
         self.assertEqual(len(size_fields), 1)
         self.assertEqual(size_fields[0]["kind"], "ObjectCoreRelaxation")
@@ -742,6 +746,13 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(params["core_maximum_element_size"], 6e-9)
         self.assertEqual(params["surface_maximum_element_size"], 2e-9)
         self.assertEqual(params["edge_maximum_element_size"], 1.8e-9)
+        draft = export_builder_draft(loaded)
+        scene = build_scene_document_from_builder(draft)
+        object_mesh = scene["objects"][0]["object_mesh"]
+        self.assertEqual(object_mesh["mesh_strategy"], "swept_prism")
+        self.assertEqual(object_mesh["through_thickness_elements"], 1)
+        self.assertEqual(object_mesh["through_thickness_distribution"], "fixed")
+        self.assertEqual(object_mesh["sweep_face_meshing"], "triangular")
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()

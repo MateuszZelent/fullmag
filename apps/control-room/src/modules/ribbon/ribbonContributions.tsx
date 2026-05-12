@@ -55,6 +55,10 @@ import { createElement } from "react";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
+  MeshActiveBuildResource,
+  MeshLastSuccessfulBuildResource,
+  MeshSemanticsResource,
+  MeshSummaryResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -67,6 +71,7 @@ import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
   DEFAULT_AIRBOX_VISUALIZATION,
+  DEFAULT_OBJECT_VISUALIZATION,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   renderModePatch,
@@ -76,6 +81,7 @@ import {
   resolveVisualizationTargetFromSelection,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
+  type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
@@ -204,7 +210,10 @@ const QUANTITY_ITEMS = [
   { value: "energy_density",label: "Energy density" },
 ];
 
-const VECTOR_COLOR_ITEMS = [
+const VECTOR_COLOR_ITEMS: Array<{
+  label: string;
+  value: VisualizationColorMode;
+}> = [
   { value: "orientation", label: "HSLSPHERE orientation" },
   { value: "magnitude",   label: "Magnitude" },
   { value: "x",           label: "X component" },
@@ -1082,8 +1091,9 @@ export const materialsTab: RibbonTabContent = {
       tone: "authoring",
       actions: [
         { id: "mat-texture-inspector", icon: icon(Eye),      label: "Inspector",    iconColor: "text-sky-400",     menu: menu("mat-texture-inspector", "Texture inspector", ["View texture", "Texture history", "Reset texture"]) },
-        { id: "mat-texture-uniform",   icon: icon(Magnet),   label: "Uniform",      iconColor: "text-amber-400",   menu: menu("mat-texture-uniform", "Uniform magnetization", ["Saturation +x", "Saturation +y", "Saturation +z", "Custom direction"]) },
-        { id: "mat-texture-vortex",    icon: icon(Circle),   label: "Vortex",       iconColor: "text-cyan-400" },
+        { id: "magnetization-texture.assign-uniform", icon: icon(Magnet), label: "Uniform", iconColor: "text-amber-400" },
+        { id: "magnetization-texture.assign-random-seeded", icon: icon(Sparkles), label: "Random", iconColor: "text-emerald-400" },
+        { id: "magnetization-texture.assign-vortex", icon: icon(Circle), label: "Vortex", iconColor: "text-cyan-400" },
         { id: "mat-texture-bloch-sky", icon: icon(Disc),     label: "Bloch Sky",    iconColor: "text-violet-400", disabled: true },
         { id: "mat-texture-neel-sky",  icon: icon(Disc),     label: "Néel Sky",     iconColor: "text-purple-300", disabled: true },
       ],
@@ -1250,8 +1260,8 @@ export const studyTab: RibbonTabContent = {
       subtitle: "pipeline",
       tone: "authoring",
       actions: [
-        { id: "add-relax",      icon: icon(Play),     label: "Relax",      iconColor: "text-emerald-400", menu: menu("study-relax",  "Relax stage",      ["Overdamped relax", "LLG relax", "Minimizer", "Stop criteria"]) },
-        { id: "add-run",        icon: icon(Zap),      label: "Run",        iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Time integration", "Pulse response", "RF drive", "Thermal noise"]) },
+        { id: "study.add-relax-stage", icon: icon(Play), label: "Relax", iconColor: "text-emerald-400", menu: menu("study-relax",  "Relax stage",      ["Overdamped relax", "LLG relax", "Minimizer", "Stop criteria"]) },
+        { id: "study.add-run-stage",   icon: icon(Zap),  label: "Run",   iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Time integration", "Pulse response", "RF drive", "Thermal noise"]) },
         { id: "add-eigensolve", icon: icon(Sigma),    label: "Eigensolve", iconColor: "text-violet-400",  disabled: true },
       ],
     },
@@ -1296,10 +1306,11 @@ export const studyTab: RibbonTabContent = {
       tone: "compute",
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
-        { id: "study-run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, disabled: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
-        { id: "study-pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  disabled: true, iconColor: C.yellow },
-        { id: "study-stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   disabled: true, iconColor: C.red },
-        { id: "study-skip",  icon: icon(SkipForward),                           label: "Skip",                   disabled: true, iconColor: C.peach },
+        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
+        { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
+        { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
+        { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
+        { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
       ],
     },
   ],
@@ -1399,6 +1410,10 @@ export interface RibbonBuildContext {
   };
   commandContext?: CommandContext;
   commands?: CommandRegistry;
+  meshBuildCurrent?: MeshActiveBuildResource | null;
+  meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
+  meshSemantics?: MeshSemanticsResource | null;
+  meshSummary?: MeshSummaryResource | null;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
   selection: Selection;
   visualization: ObjectVisualizationController;
@@ -1445,9 +1460,261 @@ export function buildRibbonTabContent(
     };
   }
 
+  if (tabId === "mesh" && context) {
+    resolvedContent = buildMeshTabContent(content, context);
+  }
+
   return context?.commands
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function meshBuildStatus(context: RibbonBuildContext): {
+  label: string;
+  tone: "success" | "warning" | "danger" | "neutral";
+} {
+  const current = context.meshBuildCurrent;
+  const activeStatus =
+    asString(asRecord(current?.active_build)?.status) ??
+    asString(asRecord(current?.mesh_pipeline_status)?.status);
+  if (activeStatus) {
+    return {
+      label: activeStatus,
+      tone:
+        activeStatus === "failed" || activeStatus === "error"
+          ? "danger"
+          : activeStatus === "ready" || activeStatus === "completed"
+            ? "success"
+            : "warning",
+    };
+  }
+  if (current?.last_build_error || context.meshBuildLatest?.last_build_error) {
+    return { label: "failed", tone: "danger" };
+  }
+  if (context.meshBuildLatest?.last_success) {
+    return { label: "ready", tone: "success" };
+  }
+  return { label: "not built", tone: "warning" };
+}
+
+function buildMeshTabContent(
+  content: RibbonTabContent,
+  context: RibbonBuildContext,
+): RibbonTabContent {
+  const status = meshBuildStatus(context);
+  const summary = asRecord(context.meshSummary?.mesh_summary);
+  const solverMesh = context.meshSemantics?.solver_mesh;
+  const nodeCount = summary?.node_count;
+  const elementCount = summary?.element_count;
+  const objectPolicyCount = context.meshSemantics?.object_configs?.length ?? 0;
+
+  return {
+    ...content,
+    groups: content.groups.map((group) => {
+      if (group.id === "build") {
+        return {
+          ...group,
+          subtitle: status.label,
+          actions: group.actions.map((action) => {
+            if (action.id === "mesh.build-selected") {
+              return {
+                ...action,
+                active: status.label === "building" || status.label === "running",
+                menu: [
+                  {
+                    type: "label",
+                    id: "mesh-build-status:header",
+                    label: "Mesh build",
+                    badge: status.label,
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:state",
+                    label: "State",
+                    value: status.label,
+                    tone: status.tone,
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:nodes",
+                    label: "Nodes",
+                    value: String(nodeCount ?? "unknown"),
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-build-status:elements",
+                    label: "Elements",
+                    value: String(elementCount ?? "unknown"),
+                  },
+                  separator("mesh-build-status:sep"),
+                  {
+                    type: "item",
+                    id: "mesh.build-selected:item",
+                    label: "Build selected object mesh",
+                    commandId: "mesh.build-selected",
+                    shortcut: "Ctrl+B",
+                  },
+                  {
+                    type: "item",
+                    id: "mesh.build-shared-domain:item",
+                    label: "Build shared-domain solver mesh",
+                    commandId: "mesh.build-shared-domain",
+                  },
+                  separator("mesh-build-nav:sep"),
+                  {
+                    type: "item",
+                    id: "mesh.open-builds:item",
+                    label: "Open build pipeline",
+                    commandId: "mesh.open-builds",
+                  },
+                ],
+              };
+            }
+            if (action.id === "mesh-stats") {
+              return {
+                ...action,
+                id: "mesh.open-overview",
+                menu: [
+                  {
+                    type: "status",
+                    id: "mesh-stats:mesh",
+                    label: "Solver mesh",
+                    value: solverMesh?.mesh_name ?? "not built",
+                    tone: solverMesh ? "success" : "warning",
+                  },
+                  {
+                    type: "status",
+                    id: "mesh-stats:policies",
+                    label: "Object policies",
+                    value: String(objectPolicyCount),
+                  },
+                  {
+                    type: "item",
+                    id: "mesh.open-overview:item",
+                    label: "Open mesh overview",
+                    commandId: "mesh.open-overview",
+                  },
+                ],
+              };
+            }
+            return action;
+          }),
+        };
+      }
+      if (group.id === "size") {
+        return {
+          ...group,
+          actions: group.actions.map((action) =>
+            action.id === "element-size"
+              ? {
+                  ...action,
+                  id: "mesh.open-size-fields",
+                  menu: [
+                    {
+                      type: "label",
+                      id: "mesh-size:header",
+                      label: "Size semantics",
+                      badge: "resource-first",
+                    },
+                    {
+                      type: "item",
+                      id: "mesh.open-size-fields:item",
+                      label: "Open realized size fields",
+                      commandId: "mesh.open-size-fields",
+                    },
+                    {
+                      type: "item",
+                      id: "mesh.open-overview:size",
+                      label: "Open mesh semantics",
+                      commandId: "mesh.open-overview",
+                    },
+                  ],
+                }
+              : action,
+          ),
+        };
+      }
+      if (group.id === "method") {
+        return {
+          ...group,
+          actions: group.actions.map((action) =>
+            action.id === "quality"
+              ? {
+                  ...action,
+                  id: "mesh.open-quality",
+                  menu: [
+                    {
+                      type: "status",
+                      id: "mesh-quality:status",
+                      label: "Quality",
+                      value: status.label,
+                      tone: status.tone,
+                    },
+                    {
+                      type: "item",
+                      id: "mesh.open-quality:item",
+                      label: "Open quality gates",
+                      commandId: "mesh.open-quality",
+                    },
+                  ],
+                }
+              : action,
+          ),
+        };
+      }
+      if (group.id === "mesh-view") {
+        return {
+          ...group,
+          actions: group.actions.map((action) => {
+            if (action.id === "mesh-inspector") {
+              return {
+                ...action,
+                id: "mesh.open-overview",
+                menu: [
+                  {
+                    type: "item",
+                    id: "mesh.open-shared-domain:item",
+                    label: "Shared-domain mesh",
+                    commandId: "mesh.open-shared-domain",
+                  },
+                  {
+                    type: "item",
+                    id: "mesh.open-regions:item",
+                    label: "Regions and mesh parts",
+                    commandId: "mesh.open-regions",
+                  },
+                  {
+                    type: "item",
+                    id: "mesh.open-quality:item",
+                    label: "Quality gates",
+                    commandId: "mesh.open-quality",
+                  },
+                ],
+              };
+            }
+            if (action.id === "mesh-pipeline") {
+              return {
+                ...action,
+                id: "mesh.open-builds",
+              };
+            }
+            return action;
+          }),
+        };
+      }
+      return group;
+    }),
+  };
 }
 
 function applyCommandState(
@@ -2417,6 +2684,10 @@ function buildSelectedVisualizationGroup(
     ? displayLabelForVisualizationTarget(target)
     : "No selection";
   const targetBadge = target?.kind ?? "none";
+  const targetDefaults =
+    target?.kind === "airbox"
+      ? DEFAULT_AIRBOX_VISUALIZATION
+      : DEFAULT_OBJECT_VISUALIZATION;
   const revision = visualizationSnapshot.version;
   const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
     if (!target) return;
@@ -2461,12 +2732,90 @@ function buildSelectedVisualizationGroup(
             onCheckedChange: (checked) => patch({ shaderVisible: checked }),
           },
           {
+            type: "radio-group",
+            id: "selected-texture:shader-coloring",
+            label: "Shader coloring",
+            value: settings?.shaderColorMode ?? "orientation",
+            items: VECTOR_COLOR_ITEMS,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.shaderVisible,
+            onValueChange: (value) =>
+              patch({ shaderColorMode: value as VisualizationColorMode }),
+          },
+          {
+            type: "color",
+            id: "selected-texture:shader-mono-color",
+            label: "Shader mono color",
+            value: settings?.shaderMonoColor ?? targetDefaults.shaderMonoColor,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.shaderVisible,
+            onValueChange: (value) => patch({ shaderMonoColor: value }),
+          },
+          { type: "separator", id: "selected-texture:vectors-separator" },
+          {
             type: "checkbox",
             id: "selected-texture:vectors",
             label: "Vectors on/off",
             checked: effectiveSettings?.vectorsVisible ?? false,
             disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
+          },
+          {
+            type: "radio-group",
+            id: "selected-texture:vector-coloring",
+            label: "Vector coloring",
+            value: settings?.vectorColorMode ?? "orientation",
+            items: VECTOR_COLOR_ITEMS,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.vectorsVisible,
+            onValueChange: (value) =>
+              patch({ vectorColorMode: value as VisualizationColorMode }),
+          },
+          {
+            type: "color",
+            id: "selected-texture:vector-mono-color",
+            label: "Vector mono color",
+            value: settings?.vectorMonoColor ?? targetDefaults.vectorMonoColor,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.vectorsVisible,
+            onValueChange: (value) => patch({ vectorMonoColor: value }),
+          },
+          {
+            type: "slider",
+            id: "selected-texture:vector-alpha",
+            label: "Vector alpha",
+            value: settings?.vectorAlphaPercent ?? 100,
+            min: 0,
+            max: 100,
+            step: 1,
+            unit: "%",
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.vectorsVisible,
+            onValueChange: (value) => patch({ vectorAlphaPercent: value }),
+          },
+          {
+            type: "slider",
+            id: "selected-texture:vector-thickness",
+            label: "Vector thickness",
+            value: settings?.vectorThickness ?? 1,
+            min: 0.1,
+            max: 8,
+            step: 0.1,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.vectorsVisible,
+            onValueChange: (value) => patch({ vectorThickness: value }),
           },
         ],
       },
@@ -2525,6 +2874,32 @@ function buildSelectedVisualizationGroup(
             checked: effectiveSettings?.wireframeVisible ?? false,
             disabled: !enabled || passControlsDisabled,
             onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+          },
+          {
+            type: "color",
+            id: "selected:wireframe-color",
+            label: "Wireframe color",
+            value: settings?.wireframeColor ?? targetDefaults.wireframeColor,
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.wireframeVisible,
+            onValueChange: (value) => patch({ wireframeColor: value }),
+          },
+          {
+            type: "slider",
+            id: "selected:wireframe-opacity",
+            label: "Wireframe opacity",
+            value: settings?.wireframeOpacityPercent ?? 100,
+            min: 0,
+            max: 100,
+            step: 1,
+            unit: "%",
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.wireframeVisible,
+            onValueChange: (value) => patch({ wireframeOpacityPercent: value }),
           },
           {
             type: "checkbox",

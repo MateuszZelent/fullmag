@@ -88,6 +88,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_material),
         )
         .route(
+            "/v2/sessions/current/model/magnetization-assets/:asset_id",
+            get(handlers::model::get_authoring_magnetization_asset)
+                .patch(handlers::model::patch_authoring_magnetization_asset),
+        )
+        .route(
             "/v2/sessions/current/model/objects",
             post(handlers::model::create_authoring_object),
         )

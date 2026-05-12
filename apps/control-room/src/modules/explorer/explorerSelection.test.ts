@@ -124,4 +124,32 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects region magnetic texture nodes as inspector-only region selections", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer:regions:primary:magnetic-texture",
+      kind: "object.region-magnetic-texture",
+      label: "Magnetic Texture",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:regions:primary",
+      regionId: "region:free-layer",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "object.region-magnetic-texture",
+      label: "Magnetic Texture",
+      nodeId: "model:object:free-layer:regions:primary:magnetic-texture",
+      objectId: "free-layer",
+      ref: {
+        kind: "object.region-magnetic-texture",
+        objectId: "free-layer",
+        regionId: "region:free-layer",
+        type: "scene-object",
+        visualizationTargetId: "object:free-layer",
+      },
+    });
+  });
 });

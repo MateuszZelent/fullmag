@@ -82,7 +82,15 @@ export class ResourceCache<TData> {
 
   set(key: string, entry: ResourceCacheEntry<TData>): boolean {
     if (entry.byteLength > this.options.maxBytes) {
-      return false;
+      this.delete(key);
+      for (const existingKey of Array.from(this.entries.keys())) {
+        if (!this.retained.has(existingKey)) {
+          this.delete(existingKey);
+        }
+      }
+      this.entries.set(key, entry);
+      this.byteLength += entry.byteLength;
+      return true;
     }
 
     this.delete(key);

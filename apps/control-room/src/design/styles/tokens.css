@@ -8,6 +8,7 @@
   --fm-bg-viewport: #11111b;
   --fm-bg-overlay: #313244;
   --fm-bg-selected: #264069;
+  --fm-bg-canvas: #11111b;
 
   /* Borders — Mocha: Surface0 → Surface1 → Surface2 */
   --fm-border-subtle: #313244;
@@ -62,6 +63,7 @@
   --fm-font-size-xs: 11px;
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;
+  --fm-font-size-lg: 15px;
 
   /* Effects */
   --fm-shadow-panel: 0 12px 34px rgb(0 0 0 / 40%);

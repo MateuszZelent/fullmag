@@ -668,6 +668,30 @@ fn mesh_semantics_validation_rejects_duplicate_object_ids() {
 }
 
 #[test]
+fn declared_universe_accepts_scene_box_as_manual_airbox() {
+    let value = serde_json::json!({
+        "mode": "box",
+        "size": [3.2e-6, 2.4e-6, 3.0e-7],
+        "center": [0.0, 0.0, 0.0],
+        "padding": [0.0, 0.0, 0.0],
+        "airbox_hmax": 2.0e-7,
+        "airbox_hmin": 2.0e-8,
+        "airbox_growth_rate": 2.5,
+        "airbox_grading": "geometric"
+    });
+
+    let universe = DeclaredUniverseIR::from_study_universe_value(&value)
+        .expect("scene universe should lower to declared universe");
+
+    assert_eq!(universe.mode, "manual");
+    assert_eq!(universe.size, Some([3.2e-6, 2.4e-6, 3.0e-7]));
+    assert_eq!(universe.airbox_hmax, Some(2.0e-7));
+    assert_eq!(universe.airbox_hmin, Some(2.0e-8));
+    assert_eq!(universe.airbox_growth_rate, Some(2.5));
+    assert_eq!(universe.airbox_grading.as_deref(), Some("geometric"));
+}
+
+#[test]
 fn problem_ir_validation_accepts_valid_mesh_semantics() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.mesh_semantics = Some(MeshSemanticsIR {

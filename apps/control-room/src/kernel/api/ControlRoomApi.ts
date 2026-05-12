@@ -4,9 +4,16 @@ import {
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
+  MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
+  MESHING_SHARED_DOMAIN_POLICY_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SHARED_DOMAIN_REPORT_PATH,
   MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_OBJECT_QUALITY_PATH,
@@ -15,13 +22,17 @@ import {
   MESHING_PART_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_TOPOLOGY_PATH,
+  MESHING_SUMMARY_PATH,
   MESHING_UNIVERSE_POLICY_PATH,
+  MESHING_UNIVERSE_QUALITY_PATH,
+  MESHING_UNIVERSE_REPORT_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTIC_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_PATH,
   MODEL_OBJECT_GEOMETRY_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
@@ -30,11 +41,18 @@ import {
   MODEL_REGION_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_UNIVERSE_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_RUN_PATH,
+  SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
 import type {
@@ -45,6 +63,7 @@ import type {
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
+  CurrentRunResource,
   DomainMetaResource,
   FieldVectorQuery,
   GeometryCapabilitiesResource,
@@ -53,19 +72,32 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   LiveStatusResource,
+  MagnetizationAssetPatchRequest,
+  MagnetizationAssetResource,
   MaterialPatchRequest,
   MaterialResource,
   MeshActiveBuildResource,
   MeshBuildHistoryResource,
+  MeshCapabilitiesResource,
   MeshLastSuccessfulBuildResource,
   MeshObjectConfigReplaceRequest,
   MeshObjectConfigResource,
   MeshObjectQualityResource,
   MeshObjectReportResource,
   MeshObjectSizeFieldResource,
+  MeshQualityGatesResource,
+  MeshRealizedSizeFieldsResource,
+  MeshSemanticsResource,
+  MeshSharedDomainConfigReplaceRequest,
+  MeshSharedDomainConfigResource,
+  MeshSharedDomainQualityResource,
+  MeshSharedDomainReportResource,
   MeshSharedDomainManifestResource,
+  MeshSummaryResource,
   MeshUniverseConfigReplaceRequest,
   MeshUniverseConfigResource,
+  MeshUniverseQualityResource,
+  MeshUniverseReportResource,
   ObjectCreateRequest,
   ObjectGeometryPatchRequest,
   ObjectInteractionKind,
@@ -76,7 +108,13 @@ import type {
   RegionPatchRequest,
   RequestOptions,
   SceneResource,
+  SolverEnergyCurrentResource,
+  SolverEnergyHistoryResource,
+  SolverStatusResource,
+  StageExecutionResource,
   StructuredCommandRequest,
+  StudyRuntimePatchRequest,
+  StudyRuntimeResource,
   UniversePatchRequest,
   UniverseResource,
   VisualizationStatePatch,
@@ -175,6 +213,15 @@ export class ControlRoomApi {
   };
 
   readonly meshing = {
+    capabilities: (options?: RequestOptions) =>
+      this.requestJson<MeshCapabilitiesResource>(
+        MESHING_CAPABILITIES_PATH,
+        options,
+      ),
+    semantics: (options?: RequestOptions) =>
+      this.requestJson<MeshSemanticsResource>(MESHING_SEMANTICS_PATH, options),
+    summary: (options?: RequestOptions) =>
+      this.requestJson<MeshSummaryResource>(MESHING_SUMMARY_PATH, options),
     builds: {
       history: (options?: RequestOptions) =>
         this.requestJson<MeshBuildHistoryResource>(MESHING_BUILDS_PATH, options),
@@ -252,6 +299,39 @@ export class ControlRoomApi {
           MESHING_SHARED_DOMAIN_MANIFEST_PATH,
           options,
         ),
+      policy: (options?: RequestOptions) =>
+        this.requestJson<MeshSharedDomainConfigResource>(
+          MESHING_SHARED_DOMAIN_POLICY_PATH,
+          options,
+        ),
+      quality: (options?: RequestOptions) =>
+        this.requestJson<MeshSharedDomainQualityResource>(
+          MESHING_SHARED_DOMAIN_QUALITY_PATH,
+          options,
+        ),
+      qualityGates: (options?: RequestOptions) =>
+        this.requestJson<MeshQualityGatesResource>(
+          MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+          options,
+        ),
+      realizedSizeFields: (options?: RequestOptions) =>
+        this.requestJson<MeshRealizedSizeFieldsResource>(
+          MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+          options,
+        ),
+      report: (options?: RequestOptions) =>
+        this.requestJson<MeshSharedDomainReportResource>(
+          MESHING_SHARED_DOMAIN_REPORT_PATH,
+          options,
+        ),
+      replacePolicy: (
+        request: MeshSharedDomainConfigReplaceRequest,
+        options?: RequestOptions,
+      ) =>
+        this.putJson<
+          MeshSharedDomainConfigResource,
+          MeshSharedDomainConfigReplaceRequest
+        >(MESHING_SHARED_DOMAIN_POLICY_PATH, request, options),
       topology: (options?: BinaryRequestOptions) =>
         this.requestTopology(MESHING_SHARED_DOMAIN_TOPOLOGY_PATH, options),
     },
@@ -265,6 +345,16 @@ export class ControlRoomApi {
     universePolicy: (options?: RequestOptions) =>
       this.requestJson<MeshUniverseConfigResource>(
         MESHING_UNIVERSE_POLICY_PATH,
+        options,
+      ),
+    universeQuality: (options?: RequestOptions) =>
+      this.requestJson<MeshUniverseQualityResource>(
+        MESHING_UNIVERSE_QUALITY_PATH,
+        options,
+      ),
+    universeReport: (options?: RequestOptions) =>
+      this.requestJson<MeshUniverseReportResource>(
+        MESHING_UNIVERSE_REPORT_PATH,
         options,
       ),
     replaceUniversePolicy: (
@@ -380,6 +470,12 @@ export class ControlRoomApi {
       this.requestJson<MaterialResource>(MODEL_MATERIAL_PATH, options, {
         path: { material_id: materialId },
       }),
+    magnetizationAsset: (assetId: string, options?: RequestOptions) =>
+      this.requestJson<MagnetizationAssetResource>(
+        MODEL_MAGNETIZATION_ASSET_PATH,
+        options,
+        { path: { asset_id: assetId } },
+      ),
     patchMaterial: (
       materialId: string,
       patch: MaterialPatchRequest,
@@ -390,6 +486,17 @@ export class ControlRoomApi {
         patch,
         options,
         { path: { material_id: materialId } },
+      ),
+    patchMagnetizationAsset: (
+      assetId: string,
+      patch: MagnetizationAssetPatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<MagnetizationAssetResource, MagnetizationAssetPatchRequest>(
+        MODEL_MAGNETIZATION_ASSET_PATH,
+        patch,
+        options,
+        { path: { asset_id: assetId } },
       ),
     regions: (options?: RequestOptions) =>
       this.requestJson<RegionListResource>(MODEL_REGIONS_PATH, options),
@@ -406,6 +513,17 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    study: (options?: RequestOptions) =>
+      this.requestJson<StudyRuntimeResource>(MODEL_STUDY_PATH, options),
+    patchStudy: (
+      patch: StudyRuntimePatchRequest,
+      options?: RequestOptions,
+    ) =>
+      this.patchJson<StudyRuntimeResource, StudyRuntimePatchRequest>(
+        MODEL_STUDY_PATH,
+        patch,
+        options,
+      ),
     universe: (options?: RequestOptions) =>
       this.requestJson<UniverseResource>(MODEL_UNIVERSE_PATH, options),
     updateUniverse: (patch: UniversePatchRequest, options?: RequestOptions) =>
@@ -414,6 +532,47 @@ export class ControlRoomApi {
         patch,
         options,
       ),
+  };
+
+  readonly simulation = {
+    currentRun: (options?: RequestOptions) =>
+      this.requestJson<CurrentRunResource>(
+        SIMULATION_RUN_CURRENT_PATH,
+        options,
+      ),
+    run: (runId: string, options?: RequestOptions) =>
+      this.requestJson<CurrentRunResource>(
+        SIMULATION_RUN_PATH,
+        options,
+        { path: { run_id: runId } },
+      ),
+    stages: {
+      execution: (options?: RequestOptions) =>
+        this.requestJson<StageExecutionResource>(
+          SIMULATION_STAGES_EXECUTION_PATH,
+          options,
+        ),
+    },
+    solver: {
+      energies: {
+        current: (options?: RequestOptions) =>
+          this.requestJson<SolverEnergyCurrentResource>(
+            SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+            options,
+          ),
+        history: (limit?: number, options?: RequestOptions) =>
+          this.requestJson<SolverEnergyHistoryResource>(
+            SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
+            options,
+            limit === undefined ? undefined : { query: { limit } },
+          ),
+      },
+      status: (options?: RequestOptions) =>
+        this.requestJson<SolverStatusResource>(
+          SIMULATION_SOLVER_STATUS_PATH,
+          options,
+        ),
+    },
   };
 
   readonly visualization = {

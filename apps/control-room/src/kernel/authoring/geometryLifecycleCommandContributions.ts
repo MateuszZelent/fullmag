@@ -4,6 +4,12 @@ import {
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -239,6 +245,9 @@ function invalidateObjectMeshResources(
   revision: string | number,
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+  context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
   context.resources?.invalidate(
     objectResourceKey(MESHING_OBJECT_TOPOLOGY_PATH, objectId),
     revision,
@@ -251,6 +260,24 @@ function invalidateObjectMeshResources(
     objectResourceKey(MESHING_OBJECT_QUALITY_PATH, objectId),
     revision,
   );
+}
+
+function invalidateSharedDomainMeshResources(
+  context: CommandContext,
+  revision: string | number,
+): void {
+  context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
+  context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_REPORT_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_PATH, revision);
+  context.resources?.invalidate(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH, revision);
+  context.resources?.invalidate(
+    MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+    revision,
+  );
+  context.resources?.invalidate(MODEL_SCENE_PATH, revision);
 }
 
 function openPrimitiveDraft(
@@ -326,6 +353,57 @@ function selectCommittedObject(
     },
     "geometry-authoring",
   );
+}
+
+function selectMeshNode(
+  context: CommandContext,
+  kind:
+    | "mesh.root"
+    | "mesh.shared-domain"
+    | "mesh.builds"
+    | "mesh.quality"
+    | "mesh.size-fields"
+    | "mesh.regions",
+  nodeId: string,
+  label: string,
+): void {
+  context.selection?.set(
+    {
+      kind,
+      label,
+      nodeId,
+      objectId: null,
+      ref: null,
+    },
+    "mesh",
+  );
+  context.layout?.setActiveTab("mesh");
+}
+
+function meshNavigationCommand(
+  id: string,
+  title: string,
+  kind:
+    | "mesh.root"
+    | "mesh.shared-domain"
+    | "mesh.builds"
+    | "mesh.quality"
+    | "mesh.size-fields"
+    | "mesh.regions",
+  nodeId: string,
+  label: string,
+): CommandContribution {
+  return {
+    id,
+    title,
+    category: "Mesh",
+    group: "mesh",
+    scope: "workspace",
+    run: (context) => {
+      selectMeshNode(context, kind, nodeId, label);
+      return { status: "completed" };
+    },
+  };
 }
 
 function primitiveDraftCommand(
@@ -482,11 +560,59 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         mesh_reason: "shared-domain",
         mesh_target: { kind: "study_domain" },
       });
+      if (response.accepted) {
+        invalidateSharedDomainMeshResources(
+          context,
+          response.command_id ?? `mesh-build:${Date.now()}`,
+        );
+      }
       return response.accepted
         ? { status: "completed" }
         : { message: response.error ?? "Mesh build rejected.", status: "failed" };
     },
   },
+  meshNavigationCommand(
+    "mesh.open-overview",
+    "Open Mesh Overview",
+    "mesh.root",
+    "model:mesh",
+    "Mesh",
+  ),
+  meshNavigationCommand(
+    "mesh.open-shared-domain",
+    "Open Shared-Domain Mesh",
+    "mesh.shared-domain",
+    "model:mesh:shared-domain",
+    "Shared-Domain Solver Mesh",
+  ),
+  meshNavigationCommand(
+    "mesh.open-builds",
+    "Open Mesh Build Pipeline",
+    "mesh.builds",
+    "model:mesh:builds",
+    "Mesh Build Pipeline",
+  ),
+  meshNavigationCommand(
+    "mesh.open-quality",
+    "Open Mesh Quality Gates",
+    "mesh.quality",
+    "model:mesh:quality",
+    "Quality Gates",
+  ),
+  meshNavigationCommand(
+    "mesh.open-size-fields",
+    "Open Realized Size Fields",
+    "mesh.size-fields",
+    "model:mesh:size-fields",
+    "Realized Size Fields",
+  ),
+  meshNavigationCommand(
+    "mesh.open-regions",
+    "Open Mesh Regions And Parts",
+    "mesh.regions",
+    "model:mesh:regions",
+    "Regions And Mesh Parts",
+  ),
   {
     id: "mesh.open-object-report",
     title: "Open Object Mesh Report",

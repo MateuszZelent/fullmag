@@ -8,6 +8,7 @@ import {
   fieldTransformNeedsChunking,
   resolveScalarRange,
 } from "./viewport3dFieldMapping";
+import { magnitudeColorRgb } from "./viewport3dVectorColoring";
 
 function vectorField(values: number[], nComp = 3): DecodedFieldVector {
   return {
@@ -32,10 +33,9 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.range).toEqual({ max: 1, min: 0 });
-    expect(Array.from(result?.colors ?? [])).toEqual([
-      0, expect.closeTo(0.38), 1,
-      1, expect.closeTo(0.38), 0,
-    ]);
+    expect(Array.from(result?.colors ?? [])).toEqual(
+      Array.from(Float32Array.from([...magnitudeColorRgb(0), ...magnitudeColorRgb(1)])),
+    );
   });
 
   it("maps orientation mode through canonical physical XYZ", () => {
@@ -92,6 +92,28 @@ describe("viewport3dFieldMapping", () => {
   it("requires chunking above the synchronous color transform threshold", () => {
     expect(fieldTransformNeedsChunking(50_001)).toBe(true);
     expect(buildVertexScalarColors(vectorField([1, 0, 0]), 1, 0)).toBeNull();
+  });
+
+  it("accepts field covering fewer nodes than topology (FEM magnetic-only field)", () => {
+    // fieldVector.pointCount (1) < vertexCount (2): partial coverage is valid.
+    const result = buildVertexScalarColors(
+      vectorField([0, 0, 1]),  // 1 magnetic node with m = [0, 0, 1]
+      2,                       // 2 total topology nodes (magnetic + airbox)
+      undefined,
+      "orientation",
+    );
+
+    expect(result).not.toBeNull();
+    // Node 0 (magnetic): [0,0,1] → HSL sphere top = white [1,1,1].
+    // Node 1 (airbox, no data): black [0,0,0] default fill.
+    expect(result?.colors).toHaveLength(6);
+    expect(Array.from(result?.colors.slice(0, 3) ?? [])).toEqual([1, 1, 1]);
+    expect(Array.from(result?.colors.slice(3, 6) ?? [])).toEqual([0, 0, 0]);
+  });
+
+  it("rejects field with more points than the topology vertex count", () => {
+    // fieldVector.pointCount (2) > vertexCount (1): invalid — cannot map.
+    expect(buildVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 1)).toBeNull();
   });
 
   it("builds colors through a chunked cancellable transform", async () => {

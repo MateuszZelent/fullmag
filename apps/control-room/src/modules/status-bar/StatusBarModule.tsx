@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 
 function readString(value: unknown, fallback: string): string {
@@ -7,21 +9,33 @@ function readString(value: unknown, fallback: string): string {
 }
 
 export default function StatusBarModule() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const status = useSessionStatus();
-  const sessionState = readString(status.data?.solver.state, status.status);
-  const sessionName = readString(status.data?.session.name, "session unavailable");
-  const runtimeVersion = readString(
-    status.data?.runtime_bundle_version,
-    "runtime unavailable",
-  );
+  const sessionState = mounted
+    ? readString(status.data?.solver.state, status.status)
+    : "loading";
+  const sessionName = mounted
+    ? readString(status.data?.session.name, "session unavailable")
+    : "—";
+  const runtimeVersion = mounted
+    ? readString(status.data?.runtime_bundle_version, "runtime unavailable")
+    : "—";
+  const dotStatus = mounted ? status.status : "loading";
 
   return (
-    <div className="fm-slot__module" data-resource-status={status.status}>
-      <span>{sessionState}</span>
-      <span aria-hidden="true">&nbsp;|&nbsp;</span>
-      <span>{sessionName}</span>
-      <span aria-hidden="true">&nbsp;|&nbsp;</span>
-      <span>{runtimeVersion}</span>
+    <div className="fm-status-bar" role="status" aria-label="Session status">
+      <span
+        className="fm-status-bar__dot"
+        data-status={dotStatus}
+        aria-hidden="true"
+      />
+      <span className="fm-status-bar__item">{sessionState}</span>
+      <span className="fm-status-bar__sep" aria-hidden="true" />
+      <span className="fm-status-bar__item">{sessionName}</span>
+      <span className="fm-status-bar__sep" aria-hidden="true" />
+      <span className="fm-status-bar__item">{runtimeVersion}</span>
     </div>
   );
 }

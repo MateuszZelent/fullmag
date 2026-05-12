@@ -9,6 +9,7 @@ import {
   Database,
   File,
   Folder,
+  Gauge,
   Layers,
   Magnet,
   Play,
@@ -18,7 +19,17 @@ import {
   Triangle,
   Waves,
 } from "lucide-react";
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { CommandContribution } from "@/kernel/commands/commandTypes";
@@ -52,6 +63,7 @@ const ICONS: Record<ExplorerIconToken, ReactNode> = {
   database: <Database size={14} />,
   file: <File size={14} />,
   folder: <Folder size={14} />,
+  gauge: <Gauge size={14} />,
   layers: <Layers size={14} />,
   magnet: <Magnet size={14} />,
   mesh: <Triangle size={14} />,
@@ -62,6 +74,10 @@ const ICONS: Record<ExplorerIconToken, ReactNode> = {
   triangle: <Triangle size={14} />,
   wave: <Waves size={14} />,
 };
+
+const EXPLORER_ROW_HEIGHT = 28;
+const EXPLORER_ROW_OVERSCAN = 8;
+const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
 function statusLabel(status: ExplorerNodeStatus | undefined): string {
   if (!status) return "ready";
@@ -84,26 +100,85 @@ function contextCommandsForNode(
   return commands;
 }
 
-function ExplorerTreeRow({
-  activeNodeId,
+interface ExplorerTreeRowModel {
+  depth: number;
+  expanded: boolean;
+  hasChildren: boolean;
+  node: ExplorerNode;
+}
+
+interface ExplorerVisibleRowSlice {
+  bottomPadding: number;
+  rows: ExplorerTreeRowModel[];
+  start: number;
+  topPadding: number;
+}
+
+export function sliceVisibleExplorerRows({
+  overscan,
+  rowHeight,
+  rows,
+  scrollTop,
+  viewportHeight,
+}: {
+  overscan: number;
+  rowHeight: number;
+  rows: readonly ExplorerTreeRowModel[];
+  scrollTop: number;
+  viewportHeight: number;
+}): ExplorerVisibleRowSlice {
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const end = Math.min(rows.length, start + visibleCount);
+
+  return {
+    bottomPadding: Math.max(0, (rows.length - end) * rowHeight),
+    rows: rows.slice(start, end),
+    start,
+    topPadding: start * rowHeight,
+  };
+}
+
+export function flattenVisibleExplorerRows(
+  nodes: readonly ExplorerNode[],
+  expandedIds: ReadonlySet<string>,
+  depth = 0,
+): ExplorerTreeRowModel[] {
+  const rows: ExplorerTreeRowModel[] = [];
+
+  for (const node of nodes) {
+    const hasChildren = Boolean(node.children?.length);
+    const expanded = hasChildren && expandedIds.has(node.id);
+    rows.push({ depth, expanded, hasChildren, node });
+    if (expanded && node.children) {
+      rows.push(
+        ...flattenVisibleExplorerRows(node.children, expandedIds, depth + 1),
+      );
+    }
+  }
+
+  return rows;
+}
+
+const ExplorerTreeRow = memo(function ExplorerTreeRow({
+  active,
   depth,
-  expandedIds,
+  expanded,
+  hasChildren,
   kernel,
   moduleId,
   node,
   tabId,
 }: {
-  activeNodeId: string | null;
+  active: boolean;
   depth: number;
-  expandedIds: ReadonlySet<string>;
+  expanded: boolean;
+  hasChildren: boolean;
   kernel: KernelApi;
   moduleId: ModuleId;
   node: ExplorerNode;
   tabId: ExplorerTabId;
 }) {
-  const hasChildren = Boolean(node.children?.length);
-  const expanded = expandedIds.has(node.id);
-  const active = activeNodeId === node.id;
   const commands = contextCommandsForNode(kernel, node);
 
   function handleSelect(): void {
@@ -175,47 +250,29 @@ function ExplorerTreeRow({
   );
 
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuLabel>{node.label}</ContextMenuLabel>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem>
-          {commands.map((command) => (
-            <ContextMenuItem
-              key={command.id}
-              onSelect={() => {
-                void kernel.commands.execute(
-                  command.id,
-                  createCommandContext("menu", kernel),
-                );
-              }}
-            >
-              {command.title}
-            </ContextMenuItem>
-          ))}
-        </ContextMenuContent>
-      </ContextMenu>
-      {hasChildren && expanded ? (
-        <div role="group">
-          {node.children?.map((child) => (
-            <ExplorerTreeRow
-              key={child.id}
-              activeNodeId={activeNodeId}
-              depth={depth + 1}
-              expandedIds={expandedIds}
-              kernel={kernel}
-              moduleId={moduleId}
-              node={child}
-              tabId={tabId}
-            />
-          ))}
-        </div>
-      ) : null}
-    </>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel>{node.label}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem>
+        {commands.map((command) => (
+          <ContextMenuItem
+            key={command.id}
+            onSelect={() => {
+              void kernel.commands.execute(
+                command.id,
+                createCommandContext("menu", kernel),
+              );
+            }}
+          >
+            {command.title}
+          </ContextMenuItem>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
   );
-}
+});
 
 interface ExplorerTreeViewProps {
   activeNodeId: string | null;
@@ -234,20 +291,92 @@ export function ExplorerTreeView({
   nodes,
   tabId,
 }: ExplorerTreeViewProps) {
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
+  const rows = useMemo(
+    () => flattenVisibleExplorerRows(nodes, expandedIds),
+    [expandedIds, nodes],
+  );
+  const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
+  const visibleRows = useMemo(
+    () =>
+      virtualized
+        ? sliceVisibleExplorerRows({
+            overscan: EXPLORER_ROW_OVERSCAN,
+            rowHeight: EXPLORER_ROW_HEIGHT,
+            rows,
+            scrollTop: viewport.scrollTop,
+            viewportHeight: viewport.height,
+          })
+        : {
+            bottomPadding: 0,
+            rows,
+            start: 0,
+            topPadding: 0,
+          },
+    [rows, viewport.height, viewport.scrollTop, virtualized],
+  );
+
+  useEffect(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+
+    const updateHeight = () => {
+      setViewport((current) => ({
+        ...current,
+        height: tree.clientHeight || current.height,
+      }));
+    };
+    updateHeight();
+
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(tree);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+    setViewport((current) =>
+      current.scrollTop === tree.scrollTop
+        ? current
+        : { ...current, scrollTop: tree.scrollTop },
+    );
+  }, []);
+
   return (
-    <div className="fm-explorer-tree" role="tree" aria-label="Explorer tree">
-      {nodes.map((node) => (
+    <div
+      ref={treeRef}
+      className="fm-explorer-tree"
+      role="tree"
+      aria-label="Explorer tree"
+      onScroll={handleScroll}
+    >
+      {visibleRows.topPadding > 0 ? (
+        <div
+          aria-hidden="true"
+          style={{ height: visibleRows.topPadding }}
+        />
+      ) : null}
+      {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
         <ExplorerTreeRow
           key={node.id}
-          activeNodeId={activeNodeId}
-          depth={0}
-          expandedIds={expandedIds}
+          active={activeNodeId === node.id}
+          depth={depth}
+          expanded={expanded}
+          hasChildren={hasChildren}
           kernel={kernel}
           moduleId={moduleId}
           node={node}
           tabId={tabId}
         />
       ))}
+      {visibleRows.bottomPadding > 0 ? (
+        <div
+          aria-hidden="true"
+          style={{ height: visibleRows.bottomPadding }}
+        />
+      ) : null}
     </div>
   );
 }

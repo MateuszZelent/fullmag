@@ -15,7 +15,9 @@ export function resolveVisualizationStateRevision(
   return state.revision;
 }
 
-export function useVisualizationStateResource() {
+export function useVisualizationStateResource({
+  enabled = true,
+}: { enabled?: boolean } = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.visualization.state({ signal }),
@@ -23,6 +25,7 @@ export function useVisualizationStateResource() {
   );
 
   return useResource({
+    enabled,
     load,
     resolveRevision: resolveVisualizationStateRevision,
     resourceKey: VISUALIZATION_STATE_RESOURCE_KEY,

@@ -17,6 +17,13 @@ pub enum NullableF64PatchValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum NullableStringPatchValue {
+    Value(String),
+    Null,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct StudyRuntimeResource {
     pub backend: Option<String>,
     pub requested_backend: String,
@@ -52,6 +59,21 @@ pub struct MaterialResource {
     pub id: String,
     pub name: String,
     pub properties: MaterialPropertiesResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MagnetizationAssetResource {
+    pub scene_revision: u64,
+    #[schema(value_type = Object)]
+    pub asset: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct MagnetizationAssetPatchRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[schema(value_type = Object)]
+    pub asset: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -232,6 +254,8 @@ pub struct RegionPatchRequest {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable_string_patch_field")]
+    pub magnetization_ref: Option<NullableStringPatchValue>,
 }
 
 fn deserialize_nullable_u32_patch_field<'de, D>(
@@ -271,6 +295,22 @@ where
             .ok_or_else(|| serde::de::Error::custom("expected nullable f64 patch field")),
         _ => Err(serde::de::Error::custom(
             "expected nullable f64 patch field",
+        )),
+    }
+}
+
+fn deserialize_nullable_string_patch_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<NullableStringPatchValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(Some(NullableStringPatchValue::Null)),
+        Value::String(value) => Ok(Some(NullableStringPatchValue::Value(value))),
+        _ => Err(serde::de::Error::custom(
+            "expected nullable string patch field",
         )),
     }
 }

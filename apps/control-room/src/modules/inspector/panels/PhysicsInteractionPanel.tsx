@@ -11,7 +11,9 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildInteractionPatch,
@@ -121,26 +123,24 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel">
       <InspectorSection title="Object Physics">
         <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
-        <label className="fm-inspector-edit-field">
-          <span>Interaction</span>
-          <select
-            aria-label="Interaction"
-            value={interactionKind}
-            onChange={(event) => {
-              setFeedback(null);
-              setInteractionKind(event.target.value as ObjectInteractionKind);
-            }}
-          >
-            {OBJECT_INTERACTION_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {interactionLabel(kind)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField
+          label="Interaction"
+          type="select"
+          value={interactionKind}
+          onChange={(event) => {
+            setFeedback(null);
+            setInteractionKind(event.target.value as ObjectInteractionKind);
+          }}
+        >
+          {OBJECT_INTERACTION_KINDS.map((kind) => (
+            <option key={kind} value={kind}>
+              {interactionLabel(kind)}
+            </option>
+          ))}
+        </FormField>
       </InspectorSection>
 
-      <InspectorSection title="Backend Resource">
+      <InspectorSection title="Backend Resource" collapsible defaultCollapsed={true}>
         <FieldRow label="Fetch state" value={interaction.status} />
         <FieldRow label="Present" value={resource.present ? "yes" : "no"} />
         <FieldRow label="Enabled" value={resource.enabled ? "yes" : "no"} />
@@ -148,40 +148,34 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       </InspectorSection>
 
       <InspectorSection title="Method State">
-        <label className="fm-inspector-edit-field">
-          <span>Present</span>
-          <input
-            checked={draft.present}
-            disabled={required}
-            type="checkbox"
-            onChange={(event) => updateDraft({ present: event.target.checked })}
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>Enabled</span>
-          <input
-            checked={draft.enabled}
-            disabled={!draft.present}
-            type="checkbox"
-            onChange={(event) => updateDraft({ enabled: event.target.checked })}
-          />
-        </label>
+        <FormField
+          label="Present"
+          type="checkbox"
+          disabled={required}
+          checked={draft.present}
+          onChange={(event) => updateDraft({ present: event.target.checked })}
+        />
+        <FormField
+          label="Enabled"
+          type="checkbox"
+          disabled={!draft.present}
+          checked={draft.enabled}
+          onChange={(event) => updateDraft({ enabled: event.target.checked })}
+        />
       </InspectorSection>
 
       <InspectorSection title="Parameters">
-        <label className="fm-inspector-edit-field">
-          <span>JSON</span>
-          <textarea
-            aria-label="Interaction parameters"
-            rows={6}
-            value={draft.paramsText}
-            onChange={(event) => updateDraft({ paramsText: event.target.value })}
-          />
-        </label>
+        <FormField
+          label="JSON"
+          type="textarea"
+          rows={6}
+          value={draft.paramsText}
+          onChange={(event) => updateDraft({ paramsText: event.target.value })}
+        />
       </InspectorSection>
 
-      <InspectorSection title="Transactions">
-        <div className="fm-inspector-actions">
+      <InspectorSection title="Actions">
+        <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || !objectId}
             size="sm"
@@ -201,21 +195,11 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
               setFeedback(null);
             }}
           >
-            Revert Draft
+            Revert
           </Button>
         </div>
+        {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
-
-      {feedback ? (
-        <InspectorSection title="Diagnostics">
-          <p
-            className="fm-inspector-validation-message"
-            data-kind={feedback.kind}
-          >
-            {feedback.message}
-          </p>
-        </InspectorSection>
-      ) : null}
     </div>
   );
 }

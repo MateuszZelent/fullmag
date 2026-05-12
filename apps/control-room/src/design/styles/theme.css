@@ -10,6 +10,7 @@
   --fm-bg-viewport: #11111b;
   --fm-bg-overlay: #313244;
   --fm-bg-selected: #264069;
+  --fm-bg-canvas: #11111b;
 
   --fm-border-subtle: #313244;
   --fm-border-default: #45475a;
@@ -47,6 +48,7 @@
   --fm-bg-viewport: #dce0e8;
   --fm-bg-overlay: #e6e9ef;
   --fm-bg-selected: #c4d7f5;
+  --fm-bg-canvas: #dce0e8;
 
   --fm-border-subtle: #ccd0da;
   --fm-border-default: #bcc0cc;

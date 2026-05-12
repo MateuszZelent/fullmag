@@ -57,6 +57,32 @@ describe("viewport3dResources", () => {
     });
   });
 
+  it("retains oversized binary data as the current entry for future 304 reuse", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 4 });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        byteLength: 8,
+        data: "large-topology",
+        etag: '"large-1"',
+        status: "ready" as const,
+      })
+      .mockResolvedValueOnce({
+        etag: '"large-1"',
+        status: "not-modified" as const,
+      });
+
+    await expect(
+      loadCachedBinaryResource(cache, "topology", request),
+    ).resolves.toBe("large-topology");
+    await expect(
+      loadCachedBinaryResource(cache, "topology", request),
+    ).resolves.toBe("large-topology");
+
+    expect(request).toHaveBeenNthCalledWith(2, '"large-1"');
+    expect(cache.stats()).toEqual({ byteLength: 8, entryCount: 1 });
+  });
+
   it("can inspect cached binary etags without refreshing LRU order", () => {
     const cache = new ResourceCache<string>({ maxBytes: 10 });
     cache.set("oldest", { byteLength: 4, data: "old", etag: '"old"' });

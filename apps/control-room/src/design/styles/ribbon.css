@@ -18,7 +18,7 @@
   align-items: flex-end;
   gap: 2px;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   scrollbar-width: none;
   border-bottom: 1px solid var(--fm-border-subtle);
   padding-inline: var(--fm-space-3);
@@ -63,12 +63,13 @@
 .fm-ribbon__tab[data-active="true"]::after {
   position: absolute;
   right: 4px;
-  bottom: 0;
+  bottom: -1px;
   left: 4px;
   height: 2px;
   border-radius: var(--fm-radius-xs) var(--fm-radius-xs) 0 0;
   background: var(--fm-accent);
   content: "";
+  z-index: 1;
 }
 
 /* ── Groups row ── */

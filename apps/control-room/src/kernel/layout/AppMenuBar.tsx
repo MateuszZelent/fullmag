@@ -8,6 +8,7 @@ import {
   EXPECTED_API_CONTRACT_VERSION,
   SESSION_STATUS_PATH,
 } from "@/kernel/api/apiPaths";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
@@ -146,17 +147,31 @@ export function resolveApiConnectionErrorDetails({
   };
 }
 
-function MenuNode({ node }: { node: AppMenuNode }) {
+function MenuNode({
+  isCommandDisabled,
+  node,
+  onCommand,
+}: {
+  isCommandDisabled: (commandId: string) => boolean;
+  node: AppMenuNode;
+  onCommand: (commandId: string) => void;
+}) {
+  const disabled = node.disabled || isCommandDisabled(node.id);
   if (node.children?.length) {
     return (
       <DropdownMenuSub>
-        <DropdownMenuSubTrigger disabled={node.disabled}>
+        <DropdownMenuSubTrigger disabled={disabled}>
           {node.icon}
           <span>{node.label}</span>
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           {node.children.map((child) => (
-            <MenuNode key={child.id} node={child} />
+            <MenuNode
+              key={child.id}
+              isCommandDisabled={isCommandDisabled}
+              node={child}
+              onCommand={onCommand}
+            />
           ))}
         </DropdownMenuSubContent>
       </DropdownMenuSub>
@@ -164,7 +179,10 @@ function MenuNode({ node }: { node: AppMenuNode }) {
   }
 
   return (
-    <DropdownMenuItem disabled={node.disabled}>
+    <DropdownMenuItem
+      disabled={disabled}
+      onSelect={() => onCommand(node.id)}
+    >
       {node.icon}
       <span>{node.label}</span>
       {node.shortcut ? (
@@ -174,7 +192,15 @@ function MenuNode({ node }: { node: AppMenuNode }) {
   );
 }
 
-function HeaderDropdown({ menu }: { menu: AppMenuNode }) {
+function HeaderDropdown({
+  isCommandDisabled,
+  menu,
+  onCommand,
+}: {
+  isCommandDisabled: (commandId: string) => boolean;
+  menu: AppMenuNode;
+  onCommand: (commandId: string) => void;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -191,7 +217,12 @@ function HeaderDropdown({ menu }: { menu: AppMenuNode }) {
         <DropdownMenuLabel>{menu.label}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {menu.children?.map((node) => (
-          <MenuNode key={node.id} node={node} />
+          <MenuNode
+            key={node.id}
+            isCommandDisabled={isCommandDisabled}
+            node={node}
+            onCommand={onCommand}
+          />
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -325,6 +356,16 @@ export function AppMenuBar() {
     if (open) openApiDialog();
     else setApiDialogError(null);
   };
+  const commandContext = createCommandContext("menu", kernel);
+  const runCommand = (commandId: string) => {
+    if (kernel.commands.get(commandId)) {
+      void kernel.commands.execute(commandId, commandContext);
+    }
+  };
+  const isCommandDisabled = (commandId: string): boolean => {
+    const command = kernel.commands.get(commandId);
+    return command ? !kernel.commands.isEnabled(commandId, commandContext) : false;
+  };
 
   return (
     <header className="fm-header">
@@ -352,14 +393,24 @@ export function AppMenuBar() {
           <DropdownMenuLabel>Application</DropdownMenuLabel>
           <DropdownMenuSeparator />
           {APP_DROPDOWN_ITEMS.map((node) => (
-            <MenuNode key={node.id} node={node} />
+            <MenuNode
+              key={node.id}
+              isCommandDisabled={isCommandDisabled}
+              node={node}
+              onCommand={runCommand}
+            />
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
 
       <nav className="fm-header__nav" aria-label="Main menu">
         {MAIN_MENUS.map((menu) => (
-          <HeaderDropdown key={menu.id} menu={menu} />
+          <HeaderDropdown
+            key={menu.id}
+            isCommandDisabled={isCommandDisabled}
+            menu={menu}
+            onCommand={runCommand}
+          />
         ))}
       </nav>
 
@@ -420,11 +471,14 @@ export function AppMenuBar() {
             key={action.id}
             className="fm-header__run-btn"
             data-run-control={action.id}
-            disabled={action.disabled}
+            disabled={
+              action.disabled || isCommandDisabled(action.id)
+            }
             size="icon"
             title={action.label}
             type="button"
             variant="ghost"
+            onClick={() => runCommand(action.id)}
           >
             {action.icon}
           </Button>

@@ -72,6 +72,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/geometry/realizations",
   "/v2/sessions/current/model/geometry/realizations/current",
   "/v2/sessions/current/model/geometry/validation",
+  "/v2/sessions/current/model/magnetization-assets/{asset_id}",
   "/v2/sessions/current/model/materials/{material_id}",
   "/v2/sessions/current/model/objects",
   "/v2/sessions/current/model/objects/{object_id}",

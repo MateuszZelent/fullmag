@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import { GripVertical } from "lucide-react";
 
 import {
   DEFAULT_WORKSPACE_LAYOUT,
@@ -42,7 +43,7 @@ function SortableWorkspaceColumn({
         >
           <div className="fm-dock-column__handle" {...attributes} {...listeners}>
             <span>{column.label}</span>
-            <span aria-hidden="true">::</span>
+            <GripVertical size={12} aria-hidden="true" />
           </div>
           <SlotHost slotId={column.slotId} />
         </div>
@@ -112,7 +113,7 @@ export function WorkspaceDockLayout() {
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Explorer</span>
-              <span aria-hidden="true">::</span>
+              <GripVertical size={12} aria-hidden="true" />
             </div>
             <SlotHost slotId="panel-left" />
           </div>
@@ -120,7 +121,7 @@ export function WorkspaceDockLayout() {
         <div className="fm-dock-column">
           <div className="fm-dock-column__handle">
             <span>Viewport</span>
-            <span aria-hidden="true">::</span>
+            <GripVertical size={12} aria-hidden="true" />
           </div>
           <SlotHost slotId="viewport-main" />
         </div>
@@ -128,7 +129,7 @@ export function WorkspaceDockLayout() {
           <div className="fm-dock-column">
             <div className="fm-dock-column__handle">
               <span>Inspector</span>
-              <span aria-hidden="true">::</span>
+              <GripVertical size={12} aria-hidden="true" />
             </div>
             <SlotHost slotId="panel-right" />
           </div>

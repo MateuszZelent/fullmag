@@ -33,20 +33,42 @@
   max-width: 12rem;
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-chrome);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 88%, transparent);
   padding: var(--fm-space-1) var(--fm-space-2);
   text-overflow: ellipsis;
   white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+
+/* Empty HUD spans (e.g. undefined status) are hidden */
+.fm-viewport-3d__hud > span:empty {
+  display: none;
+}
+
+@keyframes fm-viewport-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.85; }
 }
 
 .fm-viewport-3d__placeholder {
   display: flex;
   width: 100%;
   height: 100%;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--fm-space-3);
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-sm);
+  animation: fm-viewport-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-viewport-3d__placeholder {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 .fm-viewport-3d__primitive-label {
@@ -54,10 +76,12 @@
   max-width: 9rem;
   align-items: center;
   border: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-chrome);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 88%, transparent);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
   padding: var(--fm-space-1) var(--fm-space-2);
   pointer-events: none;
   white-space: nowrap;
+  backdrop-filter: blur(4px);
 }

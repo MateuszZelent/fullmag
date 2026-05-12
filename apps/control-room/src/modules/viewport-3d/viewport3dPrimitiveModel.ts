@@ -18,9 +18,19 @@ export interface Viewport3DPrimitiveObject {
   geometryKey: string;
   kind: Viewport3DPrimitiveKind;
   label: string;
+  magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshState: Viewport3DPrimitiveMeshState;
   objectId: string;
   sceneRevision: number;
+}
+
+export interface Viewport3DMagnetizationTexturePreview {
+  assetId: string;
+  color: string;
+  label: string;
+  presetKind: string;
+  regionId?: string;
+  source: "object" | "region-override";
 }
 
 export interface Viewport3DPrimitiveRenderModel {
@@ -153,6 +163,77 @@ function objectMeshState(
     : "mesh-stale";
 }
 
+function magnetizationAssetById(scene: JsonRecord, assetId: string | null): JsonRecord | null {
+  if (!assetId || !Array.isArray(scene.magnetization_assets)) return null;
+  return (
+    scene.magnetization_assets
+      .map(asRecord)
+      .find((asset) => asString(asset?.id) === assetId) ?? null
+  );
+}
+
+function firstRegionOverrideMagnetizationRef(
+  object: JsonRecord,
+): { assetId: string; regionId: string } | null {
+  const overrides = asRecord(object.region_overrides);
+  if (!overrides) return null;
+  for (const [regionId, value] of Object.entries(overrides)) {
+    const override = asRecord(value);
+    const assetId = asString(override?.magnetization_ref);
+    if (assetId) return { assetId, regionId };
+  }
+  return null;
+}
+
+function magnetizationPreviewColor(presetKind: string): string {
+  if (presetKind === "vortex") return "#27c4e8";
+  if (presetKind === "random_seeded") return "#43d17a";
+  if (presetKind === "uniform") return "#f0b429";
+  return "#9fb5ff";
+}
+
+function magnetizationTexturePreview(
+  scene: JsonRecord,
+  object: JsonRecord,
+): Viewport3DMagnetizationTexturePreview | null {
+  const regionOverride = firstRegionOverrideMagnetizationRef(object);
+  const assetId = regionOverride?.assetId ?? asString(object.magnetization_ref);
+  const asset = magnetizationAssetById(scene, assetId);
+  if (!assetId || !asset) return null;
+  const presetKind =
+    asString(asset.preset_kind) ?? asString(asset.kind) ?? "texture";
+  return {
+    assetId,
+    color: magnetizationPreviewColor(presetKind),
+    label:
+      asString(asset.ui_label) ??
+      asString(asset.name) ??
+      asString(asset.preset_kind) ??
+      assetId,
+    presetKind,
+    regionId: regionOverride?.regionId,
+    source: regionOverride ? "region-override" : "object",
+  };
+}
+
+export function buildViewport3DMagnetizationTexturePreviewMap(
+  scene: SceneResource | null | undefined,
+): Map<string, Viewport3DMagnetizationTexturePreview> {
+  const sceneRecord = asRecord(scene);
+  const previews = new Map<string, Viewport3DMagnetizationTexturePreview>();
+  if (!sceneRecord || !Array.isArray(sceneRecord.objects)) return previews;
+
+  for (const value of sceneRecord.objects) {
+    const object = asRecord(value);
+    const objectId = asString(object?.id);
+    if (!object || !objectId) continue;
+    const preview = magnetizationTexturePreview(sceneRecord, object);
+    if (preview) previews.set(objectId, preview);
+  }
+
+  return previews;
+}
+
 function fallbackLabel(state: Viewport3DPrimitiveMeshState): string {
   if (state === "mesh-stale") return "stale primitive";
   if (state === "mesh-failed") return "failed primitive";
@@ -199,6 +280,10 @@ export function buildViewport3DPrimitiveRenderModel(
         geometryKey: geometryKey(objectId, geometry, transform),
         kind: lowerGeometryKind(geometry.geometry_kind ?? geometry.kind),
         label: asString(object.name) ?? objectId,
+        magnetizationTexturePreview: magnetizationTexturePreview(
+          sceneRecord,
+          object,
+        ),
         meshState: state,
         objectId,
         sceneRevision,

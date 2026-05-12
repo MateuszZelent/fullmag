@@ -4,6 +4,7 @@ import type {
   ExplorerTabId,
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
+  ModelTreeStudyStageSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -101,6 +102,16 @@ function regionsNode(
   object: ModelTreeObjectSnapshot,
 ): ExplorerNode {
   const regionLabel = object.region ?? object.label;
+  const regionId = object.regionId ?? object.region ?? `region:${object.id}`;
+  const regionTextureBadge =
+    object.regionMagnetizationLabel ??
+    object.regionMagnetizationKind ??
+    object.regionMagnetization ??
+    object.magnetizationLabel ??
+    object.magnetizationKind ??
+    object.magnetization ??
+    "inherits object";
+  const primaryRegionId = `${parentId}:regions:primary`;
   return {
     id: `${parentId}:regions`,
     kind: "object.regions",
@@ -112,14 +123,31 @@ function regionsNode(
     status: "ready",
     children: [
       {
-        id: `${parentId}:regions:primary`,
+        id: primaryRegionId,
         kind: "object.regions",
         label: regionLabel,
         parentId: `${parentId}:regions`,
         badge: object.materialLabel ?? object.material ?? "material",
         icon: "circle",
         objectId: object.id,
+        regionId,
         status: "ready",
+        children: [
+          {
+            id: `${primaryRegionId}:magnetic-texture`,
+            kind: "object.region-magnetic-texture",
+            label: "Magnetic Texture",
+            parentId: primaryRegionId,
+            badge: regionTextureBadge,
+            icon: "wave",
+            objectId: object.id,
+            regionId,
+            status:
+              object.regionMagnetization || object.magnetization
+                ? "ready"
+                : "degraded",
+          },
+        ],
       },
     ],
   };
@@ -219,6 +247,162 @@ function meshStatusBadge(status: ExplorerNodeStatus): string {
   return "default";
 }
 
+function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeStatus {
+  if (mesh?.lastError) return "mesh-failed";
+  if (mesh?.activeBuildStatus === "running" || mesh?.activeBuildStatus === "building") {
+    return "mesh-building";
+  }
+  if (mesh?.meshName) return "mesh-ready";
+  return "mesh-stale";
+}
+
+function meshRootBadge(mesh: ModelTreeSnapshot["mesh"]): string {
+  if (mesh?.lastError) return "failed";
+  if (mesh?.activeBuildStatus) return mesh.activeBuildStatus;
+  if (mesh?.meshName) return mesh.meshName;
+  return "not built";
+}
+
+function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
+  const status = meshRootStatus(mesh);
+  const revision = mesh?.meshRevision ?? mesh?.buildRevision ?? "none";
+  const partCount = mesh?.partCount ?? 0;
+  const objectSegmentCount = mesh?.objectSegmentCount ?? 0;
+  const regionCount = mesh?.regionCount ?? 0;
+  const sizeFieldCount = mesh?.realizedSizeFieldCount ?? 0;
+
+  return {
+    id: "model:mesh",
+    kind: "mesh.root",
+    label: "Mesh",
+    parentId: "model:session",
+    badge: meshRootBadge(mesh),
+    icon: "mesh",
+    status,
+    contextCommands: [
+      "mesh.build-shared-domain",
+      "mesh.open-overview",
+      "mesh.open-builds",
+      "mesh.open-quality",
+    ],
+    children: [
+      {
+        id: "model:mesh:shared-domain",
+        kind: "mesh.shared-domain",
+        label: "Shared-Domain Solver Mesh",
+        parentId: "model:mesh",
+        badge: mesh?.domainMeshMode ?? "solver mesh",
+        icon: "mesh",
+        status,
+        contextCommands: ["mesh.build-shared-domain", "mesh.open-shared-domain"],
+      },
+      {
+        id: "model:mesh:builds",
+        kind: "mesh.builds",
+        label: "Build Pipeline",
+        parentId: "model:mesh",
+        badge: `rev ${revision}`,
+        icon: "activity",
+        status,
+        contextCommands: ["mesh.build-shared-domain", "mesh.open-builds"],
+      },
+      {
+        id: "model:mesh:quality",
+        kind: "mesh.quality",
+        label: "Quality Gates",
+        parentId: "model:mesh",
+        badge: mesh?.qualityStatus ?? "quality",
+        icon: "gauge",
+        status: mesh?.qualityStatus === "failed" ? "failed" : "ready",
+        contextCommands: ["mesh.open-quality"],
+      },
+      {
+        id: "model:mesh:size-fields",
+        kind: "mesh.size-fields",
+        label: "Realized Size Fields",
+        parentId: "model:mesh",
+        badge: `${sizeFieldCount}`,
+        icon: "settings",
+        status: sizeFieldCount > 0 ? "ready" : "stale",
+        contextCommands: ["mesh.open-size-fields"],
+      },
+      {
+        id: "model:mesh:regions",
+        kind: "mesh.regions",
+        label: "Regions And Mesh Parts",
+        parentId: "model:mesh",
+        badge: `${regionCount} regions / ${partCount} parts`,
+        icon: "layers",
+        status: partCount > 0 || objectSegmentCount > 0 ? "ready" : "stale",
+        contextCommands: ["mesh.open-regions"],
+      },
+    ],
+  };
+}
+
+function formatStudyStageKind(kind: string): string {
+  return kind
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function studyStageKind(kind: string): ExplorerNode["kind"] {
+  const normalized = kind.toLowerCase();
+  if (normalized === "relax") return "study.stage.relax";
+  if (normalized === "run") return "study.stage.run";
+  if (normalized === "eigenmodes") return "study.stage.eigenmodes";
+  return "study.stage.action";
+}
+
+function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
+  if (stage.kind === "relax") {
+    if (stage.torqueTolerance != null) return `tol ${stage.torqueTolerance}`;
+    if (stage.maxSteps != null) return `${stage.maxSteps} steps`;
+    return "relax";
+  }
+  if (stage.kind === "run") {
+    if (stage.untilSeconds != null) return `${stage.untilSeconds} s`;
+    if (stage.maxSteps != null) return `${stage.maxSteps} steps`;
+    return "time domain";
+  }
+  return stage.artifactName ?? stage.kind;
+}
+
+function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
+  const displayKind = formatStudyStageKind(stage.kind);
+  return {
+    id: `model:study:stage:${stage.index}`,
+    kind: studyStageKind(stage.kind),
+    label: `${displayKind} ${stage.index + 1}`,
+    parentId: "model:study",
+    badge: studyStageBadge(stage),
+    icon: stage.kind === "relax" || stage.kind === "run" ? "play" : "activity",
+    status: "ready",
+  };
+}
+
+function studyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode {
+  const stages = study?.stages ?? [];
+  return {
+    id: "model:study",
+    kind: "study.root",
+    label: "Study",
+    parentId: "model:session",
+    badge: `${stages.length} ${stages.length === 1 ? "stage" : "stages"}`,
+    icon: "play",
+    status: "ready",
+    contextCommands: [
+      "study.add-relax-stage",
+      "study.add-run-stage",
+      "study.run",
+      "study.compute-fields",
+    ],
+    children: stages.map(studyStageNode),
+  };
+}
+
 function physicsInteractionBadge(
   interaction: ModelTreePhysicsInteractionSnapshot,
 ): string {
@@ -280,44 +464,8 @@ export function buildModelTree(snapshot: ModelTreeSnapshot | null = null): Explo
   ];
 
   sessionChildren.push(
-    {
-      id: "model:mesh",
-      kind: "mesh.root",
-      label: "Mesh Policy",
-      parentId: "model:session",
-      badge: "shared domain",
-      icon: "mesh",
-      status: "ready",
-    },
-    {
-      id: "model:study",
-      kind: "study.root",
-      label: "Study",
-      parentId: "model:session",
-      badge: "2 stages",
-      icon: "play",
-      status: "ready",
-      children: [
-        {
-          id: "model:study:relax",
-          kind: "study.stage.relax",
-          label: "Relax",
-          parentId: "model:study",
-          badge: "stop criteria",
-          icon: "play",
-          status: "ready",
-        },
-        {
-          id: "model:study:run",
-          kind: "study.stage.run",
-          label: "Run",
-          parentId: "model:study",
-          badge: "time domain",
-          icon: "play",
-          status: "ready",
-        },
-      ],
-    },
+    meshPolicyNodes(snapshot?.mesh ?? null),
+    studyNodes(snapshot?.study ?? null),
   );
 
   return [

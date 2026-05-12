@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+
+import type { ExplorerNode } from "./explorerTypes";
+import {
+  flattenVisibleExplorerRows,
+  sliceVisibleExplorerRows,
+} from "./ExplorerTreeView";
+
+describe("flattenVisibleExplorerRows", () => {
+  it("keeps collapsed descendants out of the rendered row list", () => {
+    const nodes: ExplorerNode[] = [
+      {
+        id: "root",
+        kind: "session.root",
+        label: "Root",
+        parentId: null,
+        children: [
+          {
+            id: "child",
+            kind: "objects.root",
+            label: "Child",
+            parentId: "root",
+            children: [
+              {
+                id: "grandchild",
+                kind: "object.root",
+                label: "Grandchild",
+                parentId: "child",
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    expect(
+      flattenVisibleExplorerRows(nodes, new Set()).map((row) => row.node.id),
+    ).toEqual(["root"]);
+    expect(
+      flattenVisibleExplorerRows(nodes, new Set(["root"])).map(
+        (row) => row.node.id,
+      ),
+    ).toEqual(["root", "child"]);
+    expect(
+      flattenVisibleExplorerRows(nodes, new Set(["root", "child"])).map(
+        (row) => row.node.id,
+      ),
+    ).toEqual(["root", "child", "grandchild"]);
+  });
+
+  it("windows large visible row lists with overscan", () => {
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+      depth: 0,
+      expanded: false,
+      hasChildren: false,
+      node: {
+        id: `node-${index}`,
+        kind: "object.root" as const,
+        label: `Node ${index}`,
+        parentId: null,
+      },
+    }));
+
+    expect(
+      sliceVisibleExplorerRows({
+        overscan: 1,
+        rowHeight: 10,
+        rows,
+        scrollTop: 250,
+        viewportHeight: 30,
+      }),
+    ).toMatchObject({
+      bottomPadding: 710,
+      start: 24,
+      topPadding: 240,
+    });
+  });
+});

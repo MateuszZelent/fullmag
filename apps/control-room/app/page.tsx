@@ -1,15 +1,16 @@
-"use client";
+import { KernelProvider } from "@/kernel/KernelProvider";
+import { WorkspaceShell } from "@/kernel/layout/WorkspaceShell";
+import type { Metadata } from "next";
 
-// Return HTTP 200 on GET / so that health-check probes (reqwest in the Rust binary)
-// see a success status without following a server-side 307 redirect that may time out.
-// The client-side navigation to /workspace is identical from the user's perspective.
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+export const metadata: Metadata = {
+  title: "Fullmag Control Room",
+  description: "Interactive Fullmag workspace for geometry, solver, and viewport workflows.",
+};
 
 export default function HomePage() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace("/workspace");
-  }, [router]);
-  return null;
+  return (
+    <KernelProvider>
+      <WorkspaceShell />
+    </KernelProvider>
+  );
 }

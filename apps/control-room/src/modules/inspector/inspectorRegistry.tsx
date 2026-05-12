@@ -1,6 +1,8 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
+import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
@@ -8,6 +10,7 @@ import { ObjectRegionsPanel } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
+import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import type { InspectorPanelContribution } from "./inspectorTypes";
 
 const PANELS: InspectorPanelContribution[] = [
@@ -49,20 +52,46 @@ const PANELS: InspectorPanelContribution[] = [
   {
     id: "object-magnetic-texture",
     title: "Magnetic Texture",
-    selectionKinds: ["object.magnetic-texture"],
+    selectionKinds: ["object.magnetic-texture", "object.region-magnetic-texture"],
     component: ObjectMagneticTexturePanel,
   },
   {
     id: "airbox-mesh-policy",
     title: "Airbox Mesh Policy",
     selectionKinds: ["airbox.mesh"],
-    component: PlaceholderPanel,
+    component: AirboxMeshPolicyPanel,
   },
   {
     id: "object-mesh-policy",
     title: "Object Mesh Policy",
     selectionKinds: ["object.mesh"],
     component: ObjectMeshPolicyPanel,
+  },
+  {
+    id: "mesh-details",
+    title: "Mesh Details",
+    selectionKinds: [
+      "mesh.root",
+      "mesh.shared-domain",
+      "mesh.builds",
+      "mesh.quality",
+      "mesh.size-fields",
+      "mesh.regions",
+      "resources.mesh",
+    ],
+    component: MeshDetailsPanel,
+  },
+  {
+    id: "study-runtime",
+    title: "Study",
+    selectionKinds: [
+      "study.root",
+      "study.stage.action",
+      "study.stage.eigenmodes",
+      "study.stage.relax",
+      "study.stage.run",
+    ],
+    component: StudyInspectorPanel,
   },
   {
     id: "placeholder",

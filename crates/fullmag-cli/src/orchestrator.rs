@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR, ExecutionPlanIR, FemHintsIR,
-    ProblemIR, RelaxationAlgorithmIR, StudyIR,
+    GeometryEntryIR, MagnetIR, MaterialIR, ProblemIR, RegionIR, RelaxationAlgorithmIR, StudyIR,
 };
 use std::ffi::OsString;
 use std::fs;
@@ -636,6 +636,52 @@ fn default_domain_region_markers(
             marker: (index + 1) as u32,
         })
         .collect()
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SceneProblemPatch {
+    #[serde(default)]
+    geometry_entries: Vec<GeometryEntryIR>,
+    #[serde(default)]
+    magnets: Vec<MagnetIR>,
+    #[serde(default)]
+    materials: Vec<MaterialIR>,
+    #[serde(default)]
+    regions: Vec<RegionIR>,
+    #[serde(default)]
+    universe: Option<serde_json::Value>,
+}
+
+fn scene_problem_patch_from_mesh_options(
+    mesh_options: &serde_json::Value,
+) -> Result<Option<SceneProblemPatch>> {
+    let Some(value) = mesh_options.get("scene_problem_patch") else {
+        return Ok(None);
+    };
+    let patch = serde_json::from_value::<SceneProblemPatch>(value.clone())
+        .context("failed to parse scene_problem_patch from mesh build command")?;
+    if patch.geometry_entries.is_empty()
+        || patch.magnets.is_empty()
+        || patch.materials.is_empty()
+        || patch.regions.is_empty()
+    {
+        bail!("scene_problem_patch must include geometry_entries, regions, materials, and magnets");
+    }
+    Ok(Some(patch))
+}
+
+fn apply_scene_problem_patch(problem: &mut ProblemIR, patch: &SceneProblemPatch) {
+    problem.geometry.entries = patch.geometry_entries.clone();
+    problem.regions = patch.regions.clone();
+    problem.materials = patch.materials.clone();
+    problem.magnets = patch.magnets.clone();
+    if let Some(universe) = patch.universe.as_ref() {
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("study_universe".to_string(), universe.clone());
+        problem.problem_meta.runtime_metadata.remove("domain_frame");
+    }
 }
 
 fn current_fem_mesh_workspace(
@@ -1464,6 +1510,11 @@ fn execute_manual_interactive_remesh(
         .mesh_options
         .clone()
         .unwrap_or(serde_json::json!({}));
+    let scene_problem_patch = scene_problem_patch_from_mesh_options(&opts)?;
+    let mut remesh_problem_source = problem.clone();
+    if let Some(patch) = scene_problem_patch.as_ref() {
+        apply_scene_problem_patch(&mut remesh_problem_source, patch);
+    }
     let mesh_reason = command
         .mesh_reason
         .as_deref()
@@ -1495,7 +1546,7 @@ fn execute_manual_interactive_remesh(
         );
     }
 
-    let adaptive_mesh_runtime = problem
+    let adaptive_mesh_runtime = remesh_problem_source
         .problem_meta
         .runtime_metadata
         .get("adaptive_mesh")
@@ -1510,8 +1561,8 @@ fn execute_manual_interactive_remesh(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir
         );
-        let declared_universe = fem_declared_universe(problem);
-        let geometry_entry = problem.geometry.entries.first().cloned();
+        let declared_universe = fem_declared_universe(&remesh_problem_source);
+        let geometry_entry = remesh_problem_source.geometry.entries.first().cloned();
         let hmax = opts
             .get("hmax")
             .and_then(|v| v.as_f64())
@@ -1697,7 +1748,7 @@ fn execute_manual_interactive_remesh(
             let declared_universe_value = serde_json::to_value(&declared_universe)
                 .context("failed to serialize declared universe for shared-domain remesh")?;
             invoke_shared_domain_remesh_full(
-                &problem.geometry.entries,
+                &remesh_problem_source.geometry.entries,
                 &declared_universe_value,
                 hmax,
                 plan.fe_order,
@@ -1724,7 +1775,7 @@ fn execute_manual_interactive_remesh(
                     plan.mesh_source.clone()
                 };
                 let (live_mesh_payload, remeshed_magnetization) = {
-                    let mut remeshed_problem = problem.clone();
+                    let mut remeshed_problem = remesh_problem_source.clone();
                     apply_current_fem_overrides(
                         &mut remeshed_problem,
                         Some(&new_mesh),
@@ -1825,7 +1876,7 @@ fn execute_manual_interactive_remesh(
                     state.live_state.latest_step.magnetization =
                         Some(flatten_magnetization(&remeshed_magnetization));
                     let mut workspace = current_fem_mesh_workspace(
-                        problem,
+                        &remesh_problem_source,
                         &new_mesh,
                         remeshed_mesh_source.as_deref(),
                         plan.fe_order,

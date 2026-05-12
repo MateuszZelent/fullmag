@@ -11,6 +11,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.material" ||
       node.kind === "object.physics" ||
       node.kind === "object.regions" ||
+      node.kind === "object.region-magnetic-texture" ||
       node.kind === "object.magnetic-parameters" ||
       node.kind === "object.magnetic-texture" ||
       node.kind === "object.mesh" ||
@@ -20,6 +21,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       kind: node.kind,
       nodeId: node.id,
       objectId: node.objectId,
+      ...(node.regionId ? { regionId: node.regionId } : {}),
       type: "scene-object",
       visualizationTargetId: `object:${node.objectId}`,
     };

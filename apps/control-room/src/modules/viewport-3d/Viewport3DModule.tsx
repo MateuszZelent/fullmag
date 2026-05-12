@@ -44,11 +44,13 @@ import {
   resolveTopologyBounds,
   resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
+  viewport3DFieldRenderOptionsNeedFieldData,
   type Viewport3DFieldRenderOptions,
   type Viewport3DTopologyRenderModel,
   type Viewport3DVectorBudgetTarget,
 } from "./viewport3dRenderModel";
 import {
+  buildViewport3DMagnetizationTexturePreviewMap,
   buildViewport3DPrimitiveRenderModel,
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
@@ -100,10 +102,47 @@ export default function Viewport3DModule({
   const tracker = useViewport3DResourceTracker();
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
+  const { domainId, ...sceneModel } = useViewport3DSceneModel({
+    commandState,
+    objectVisualizationSnapshot,
+    resourceCounts,
+    selection,
+  });
+  const { onSelectDomain, onSelectObject, onSelectPart } =
+    useViewport3DSelectionHandlers({
+      domainId,
+      select,
+    });
 
-  // Register the projection toggle command so the ribbon can reflect its state.
+  useRegisterViewportProjectionCommand(kernel);
+
+  return (
+    <Viewport3DFrame
+      {...sceneModel}
+      cameraProjection={commandState.widgets.cameraProjection}
+      cameraState={commandState.camera}
+      clientReady={clientReady}
+      colors={colors}
+      fitRevision={commandState.fitRevision}
+      kernel={kernel}
+      onClearSelection={clear}
+      onSelectDomain={onSelectDomain}
+      onSelectObject={onSelectObject}
+      onSelectPart={onSelectPart}
+      resetCameraRevision={commandState.resetCameraRevision}
+      slotId={slotId}
+      tracker={tracker}
+      viewCubeVisible={commandState.widgets.viewCubeVisible}
+    />
+  );
+}
+
+function useRegisterViewportProjectionCommand(
+  kernel: ModuleProps["kernel"],
+): void {
   useEffect(() => {
-    kernel.commands.register({
+    const { commands } = kernel;
+    commands.register({
       id: "view-projection",
       title: "Toggle projection",
       group: "viewport",
@@ -117,10 +156,22 @@ export default function Viewport3DModule({
       },
     });
     return () => {
-      kernel.commands.unregister("view-projection");
+      commands.unregister("view-projection");
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [kernel]);
+}
+
+function useViewport3DSceneModel({
+  commandState,
+  objectVisualizationSnapshot,
+  resourceCounts,
+  selection,
+}: {
+  commandState: ReturnType<typeof useViewport3DCommandState>;
+  objectVisualizationSnapshot: ReturnType<typeof useObjectVisualizationRegistry>["snapshot"];
+  resourceCounts: ReturnType<typeof useViewport3DResourceCounts>;
+  selection: ReturnType<typeof useSelection>["selection"];
+}) {
   const visualizationState = useViewport3DVisualizationState();
   const quantityId = visualizationState.data?.active_quantity_id ?? "m";
   const vectorColorMode =
@@ -152,7 +203,6 @@ export default function Viewport3DModule({
   const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
   const topology = useViewport3DDomainTopology();
-  const fieldVector = useViewport3DFieldVector(quantityId, FULL_FIELD_QUERY);
   const fdmDomain = useMemo(
     () => adaptFdmDomainMeta(domainMeta.data, 120_000),
     [domainMeta.data],
@@ -178,6 +228,10 @@ export default function Viewport3DModule({
       ),
     [scene.data, sharedDomainManifest.data],
   );
+  const magnetizationTexturePreviews = useMemo(
+    () => buildViewport3DMagnetizationTexturePreviewMap(scene.data),
+    [scene.data],
+  );
   const primitiveBounds = useMemo(
     () => combineViewport3DBounds(
       primitiveModel.objects.map((object) => object.bounds),
@@ -190,7 +244,7 @@ export default function Viewport3DModule({
     resolveUniverseBounds(universe.data) ??
     primitiveBounds;
   const vectorScale = Math.max(
-    (bounds?.radius ?? 1e-6) * 0.06 * vectorLengthScale,
+    Math.max(...(bounds?.size ?? [1e-6, 1e-6, 1e-6])) * 0.035 * vectorLengthScale,
     1e-12,
   );
   const selectionBounds =
@@ -204,8 +258,15 @@ export default function Viewport3DModule({
   // airbox-specific API patches cannot inadvertently alter the appearance
   // of regular mesh objects.
   const globalLayers = visualizationState.data?.layers;
+  const objectKindDefaults = objectVisualizationSnapshot.defaults.object;
   const fallbackSettings = useMemo(
-    () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
+    () => ({
+      ...resolveGlobalObjectVisualizationSettings(visualizationState.data),
+      // Overlay local per-kind defaults (e.g. boundsVisible from the ribbon's
+      // "Object frame" toggle) so that DomainBoxLayer and other consumers that
+      // read fallbackSettings directly get the correct frame visibility.
+      ...(objectKindDefaults ?? {}),
+    }),
     // Explicit deps on global layer fields only – airbox sub-fields excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -214,6 +275,7 @@ export default function Viewport3DModule({
       globalLayers?.wireframe?.visible,
       globalLayers?.points?.visible,
       globalLayers?.vectors?.visible,
+      objectKindDefaults,
       visualizationState.data?.vector_glyphs,
     ],
   );
@@ -262,6 +324,13 @@ export default function Viewport3DModule({
     vectorColorMode,
     vectorDomain,
   });
+  const fieldVectorEnabled =
+    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
+  const fieldVector = useViewport3DFieldVector(
+    quantityId,
+    FULL_FIELD_QUERY,
+    fieldVectorEnabled,
+  );
   const fieldRenderModel = useMemo(
     () =>
       buildViewport3DFieldRenderModel(
@@ -343,14 +412,47 @@ export default function Viewport3DModule({
     },
   ]);
 
+  return {
+    airboxSettings,
+    bounds,
+    diagnostics,
+    domainId: domainMeta.data?.domain_id,
+    domainSummary,
+    fallbackSettings,
+    fdmDomain,
+    femDomain,
+    fieldModel: fieldRenderModel,
+    getObjectSettings,
+    getPartSettings,
+    hslReferenceVisible,
+    magnetizationTexturePreviews,
+    primitiveModel,
+    quantityId,
+    resourceFrameKey,
+    selectedLabel,
+    selectionBounds,
+    status,
+    topologyModel: topologyRenderModel,
+    vectorColorMode,
+    vectorStyle,
+  };
+}
+
+function useViewport3DSelectionHandlers({
+  domainId,
+  select,
+}: {
+  domainId: string | null | undefined;
+  select: ReturnType<typeof useSelection>["select"];
+}) {
   const onSelectDomain = useCallback(() => {
     select({
       kind: "domain",
-      label: domainMeta.data?.domain_id ?? "Domain",
+      label: domainId ?? "Domain",
       nodeId: "domain",
-      objectId: domainMeta.data?.domain_id ?? null,
+      objectId: domainId ?? null,
     });
-  }, [domainMeta.data?.domain_id, select]);
+  }, [domainId, select]);
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
       select({
@@ -381,44 +483,7 @@ export default function Viewport3DModule({
     [select],
   );
 
-  return (
-    <Viewport3DFrame
-      airboxSettings={airboxSettings}
-      bounds={bounds}
-      cameraProjection={commandState.widgets.cameraProjection}
-      cameraState={commandState.camera}
-      clientReady={clientReady}
-      colors={colors}
-      diagnostics={diagnostics}
-      domainSummary={domainSummary}
-      fallbackSettings={fallbackSettings}
-      fdmDomain={fdmDomain}
-      femDomain={femDomain}
-      fieldModel={fieldRenderModel}
-      fitRevision={commandState.fitRevision}
-      getObjectSettings={getObjectSettings}
-      getPartSettings={getPartSettings}
-      hslReferenceVisible={hslReferenceVisible}
-      kernel={kernel}
-      onClearSelection={clear}
-      onSelectDomain={onSelectDomain}
-      onSelectObject={onSelectObject}
-      onSelectPart={onSelectPart}
-      primitiveModel={primitiveModel}
-      quantityId={quantityId}
-      resetCameraRevision={commandState.resetCameraRevision}
-      resourceFrameKey={resourceFrameKey}
-      selectedLabel={selectedLabel}
-      selectionBounds={selectionBounds}
-      slotId={slotId}
-      status={status}
-      topologyModel={topologyRenderModel}
-      tracker={tracker}
-      vectorColorMode={vectorColorMode}
-      vectorStyle={vectorStyle}
-      viewCubeVisible={commandState.widgets.viewCubeVisible}
-    />
-  );
+  return { onSelectDomain, onSelectObject, onSelectPart };
 }
 
 function useViewport3DFieldRenderOptions({

@@ -8,6 +8,7 @@ import type {
   Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
@@ -24,6 +25,7 @@ export function TopologyMeshLayer({
   femDomain,
   fieldModel,
   getPartSettings,
+  magnetizationTexturePreviews,
   onSelectDomain,
   onSelectPart,
   tracker,
@@ -36,6 +38,7 @@ export function TopologyMeshLayer({
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
@@ -50,6 +53,11 @@ export function TopologyMeshLayer({
             colors={colors}
             fieldModel={fieldModel}
             key={partModel.part.id}
+            magnetizationTexturePreview={
+              partModel.part.object_id
+                ? (magnetizationTexturePreviews.get(partModel.part.object_id) ?? null)
+                : null
+            }
             onSelectPart={onSelectPart}
             partModel={partModel}
             settings={getPartSettings(partModel.part)}

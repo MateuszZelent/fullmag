@@ -29,6 +29,7 @@ import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
 import { ALL_MODULES } from "@/modules";
+import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/modules/magnetization-texture/commands";
 
 interface KernelProviderProps {
   children: ReactNode;
@@ -58,6 +59,9 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
   for (const cmd of STUDY_RUNTIME_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of MAGNETIZATION_TEXTURE_COMMANDS) {
     commands.register(cmd);
   }
 

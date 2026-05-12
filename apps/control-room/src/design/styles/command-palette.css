@@ -1,8 +1,26 @@
+@keyframes fm-palette-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+}
+
+@keyframes fm-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .fm-command-palette__overlay {
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
   z-index: 90;
+  animation: fm-overlay-in 100ms ease-out both;
 }
 
 .fm-command-palette {
@@ -18,6 +36,14 @@
   box-shadow: var(--fm-shadow-panel);
   transform: translateX(-50%);
   z-index: 100;
+  animation: fm-palette-in 150ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-command-palette,
+  .fm-command-palette__overlay {
+    animation: none;
+  }
 }
 
 .fm-command-palette__item-title {

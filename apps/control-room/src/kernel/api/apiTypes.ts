@@ -22,6 +22,7 @@ export type CommandDetailResource = components["schemas"]["CommandDetailResource
 export type CommandQueueStatusResource =
   components["schemas"]["CommandQueueStatusResource"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
+export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type GeometryCapabilitiesResource = JsonValue;
@@ -34,10 +35,19 @@ export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
 export type MaterialResource = components["schemas"]["MaterialResource"];
+export interface MagnetizationAssetPatchRequest extends BaseAuthoringTransaction {
+  asset: JsonObject;
+}
+export interface MagnetizationAssetResource {
+  asset: JsonObject;
+  scene_revision: number;
+}
 export type MeshActiveBuildResource =
   components["schemas"]["MeshActiveBuildResource"];
 export type MeshBuildHistoryResource =
   components["schemas"]["MeshBuildHistoryResource"];
+export type MeshCapabilitiesResource =
+  components["schemas"]["MeshCapabilitiesResource"];
 export type MeshLastSuccessfulBuildResource =
   components["schemas"]["MeshLastSuccessfulBuildResource"];
 export type MeshObjectQualityResource =
@@ -46,6 +56,24 @@ export type MeshObjectReportResource =
   components["schemas"]["MeshObjectReportResource"];
 export type MeshObjectSizeFieldResource =
   components["schemas"]["MeshObjectSizeFieldResource"];
+export type MeshQualityGatesResource =
+  components["schemas"]["MeshQualityGatesResource"];
+export type MeshRealizedSizeFieldsResource =
+  components["schemas"]["MeshRealizedSizeFieldsResource"];
+export type MeshSemanticsResource =
+  components["schemas"]["MeshSemanticsResource"];
+export type MeshSharedDomainConfigResource =
+  components["schemas"]["MeshSharedDomainConfigResource"];
+export type MeshSharedDomainQualityResource =
+  components["schemas"]["MeshSharedDomainQualityResource"];
+export type MeshSharedDomainReportResource =
+  components["schemas"]["MeshSharedDomainReportResource"];
+export type MeshSummaryResource =
+  components["schemas"]["MeshSummaryResource"];
+export type MeshUniverseQualityResource =
+  components["schemas"]["MeshUniverseQualityResource"];
+export type MeshUniverseReportResource =
+  components["schemas"]["MeshUniverseReportResource"];
 export interface MeshObjectConfigReplaceRequest {
   config?: JsonObject | null;
 }
@@ -61,10 +89,28 @@ export interface MeshUniverseConfigResource {
   config?: JsonObject | null;
   revision: number;
 }
+export interface MeshSharedDomainConfigReplaceRequest {
+  config: JsonObject;
+}
 export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
-export type RegionPatchRequest = components["schemas"]["RegionPatchRequest"];
+export interface RegionPatchRequest {
+  enabled?: boolean | null;
+  magnetization_ref?: string | null;
+  name?: string | null;
+}
+export type SolverEnergyCurrentResource =
+  components["schemas"]["SolverEnergyCurrentResource"];
+export type SolverEnergyHistoryResource =
+  components["schemas"]["SolverEnergyHistoryResource"];
+export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
+export type StageExecutionResource =
+  components["schemas"]["StageExecutionResource"];
+export type StudyRuntimePatchRequest =
+  components["schemas"]["StudyRuntimePatchRequest"];
+export type StudyRuntimeResource =
+  components["schemas"]["StudyRuntimeResource"];
 export type AuthoringTransactionRequest =
   | { kind: "replace_scene"; scene: JsonObject }
   | { kind: "merge_patch"; merge_patch: JsonObject }

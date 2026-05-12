@@ -98,8 +98,22 @@ describe("ribbon structure", () => {
     const selectedGroup = content?.groups.find(
       (group) => group.id === "view-selected-display",
     );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
     const renderAction = selectedGroup?.actions.find(
       (action) => action.id === "view-selected-render",
+    );
+    const shaderColoringNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" &&
+        node.id === "selected-texture:shader-coloring",
+    );
+    const shaderMonoColorNode = textureAction?.menu?.find(
+      (node) => node.type === "color" && node.id === "selected-texture:shader-mono-color",
+    );
+    const vectorAlphaNode = textureAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "selected-texture:vector-alpha",
     );
     const visibilityNode = renderAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "selected:visible",
@@ -107,8 +121,21 @@ describe("ribbon structure", () => {
     const frameNode = renderAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "selected:frame",
     );
+    const wireframeOpacityNode = renderAction?.menu?.find(
+      (node) => node.type === "slider" && node.id === "selected:wireframe-opacity",
+    );
 
+    expect(textureAction?.disabled).toBe(false);
     expect(renderAction?.disabled).toBe(false);
+    expect(shaderColoringNode).toMatchObject({
+      disabled: false,
+      value: "orientation",
+    });
+    expect(shaderMonoColorNode).toMatchObject({
+      disabled: false,
+      value: "var(--fm-surface-magnetic)",
+    });
+    expect(vectorAlphaNode).toMatchObject({ value: 100 });
     expect(visibilityNode).toMatchObject({
       checked: true,
       disabled: false,
@@ -118,14 +145,126 @@ describe("ribbon structure", () => {
       disabled: false,
     });
 
-    if (frameNode?.type !== "checkbox") {
-      throw new Error("Expected selected frame checkbox control");
+    if (
+      frameNode?.type !== "checkbox" ||
+      shaderColoringNode?.type !== "radio-group" ||
+      shaderMonoColorNode?.type !== "color" ||
+      vectorAlphaNode?.type !== "slider" ||
+      wireframeOpacityNode?.type !== "slider"
+    ) {
+      throw new Error("Expected selected display style controls");
     }
 
     frameNode.onCheckedChange?.(true);
+    shaderColoringNode.onValueChange?.("monochrome");
+    shaderMonoColorNode.onValueChange?.("#ff0000");
+    vectorAlphaNode.onValueChange?.(48);
+    wireframeOpacityNode.onValueChange?.(64);
 
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
-      .toMatchObject({ boundsVisible: true });
+      .toMatchObject({
+        boundsVisible: true,
+        shaderColorMode: "monochrome",
+        shaderMonoColor: "#ff0000",
+        vectorAlphaPercent: 48,
+        wireframeOpacityPercent: 64,
+      });
+  });
+
+  it("keeps selected airbox style controls local while visibility patches canonical state", async () => {
+    const { context, invalidations, patches } =
+      createVisualizationRibbonContext({
+        layers: {
+          airbox: {
+            opacity: 0.28,
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: true },
+            vectors: { density: 128, domain: "airbox_only", visible: true },
+            visible: true,
+            wireframe: { opacity: 1, visible: true },
+          },
+        },
+        revision: 7,
+      });
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection: {
+        kind: "airbox.visualization",
+        label: "Airbox Visualization",
+        moduleSource: "test",
+        nodeId: "model:airbox:visualization",
+        objectId: null,
+        ref: null,
+      },
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const renderAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-render",
+    );
+    const shaderColoringNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" &&
+        node.id === "selected-texture:shader-coloring",
+    );
+    const vectorThicknessNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "slider" &&
+        node.id === "selected-texture:vector-thickness",
+    );
+    const wireframeColorNode = renderAction?.menu?.find(
+      (node) => node.type === "color" && node.id === "selected:wireframe-color",
+    );
+    const visibleNode = renderAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected:visible",
+    );
+
+    expect(shaderColoringNode).toMatchObject({
+      disabled: false,
+      value: "monochrome",
+    });
+    expect(vectorThicknessNode).toMatchObject({ disabled: false, value: 1 });
+    expect(wireframeColorNode).toMatchObject({
+      disabled: false,
+      value: "var(--fm-airbox-wire)",
+    });
+
+    if (
+      shaderColoringNode?.type !== "radio-group" ||
+      vectorThicknessNode?.type !== "slider" ||
+      wireframeColorNode?.type !== "color" ||
+      visibleNode?.type !== "checkbox"
+    ) {
+      throw new Error("Expected selected airbox style controls");
+    }
+
+    shaderColoringNode.onValueChange?.("x");
+    vectorThicknessNode.onValueChange?.(2.4);
+    wireframeColorNode.onValueChange?.("#ffffff");
+    visibleNode.onCheckedChange?.(false);
+
+    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
+      .toMatchObject({
+        shaderColorMode: "x",
+        vectorThickness: 2.4,
+        wireframeColor: "#ffffff",
+      });
+    expect(patches).toEqual([
+      {
+        layers: {
+          airbox: {
+            visible: false,
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
   });
 
   it("wires the global Airbox ribbon menu to the airbox visualization target", () => {

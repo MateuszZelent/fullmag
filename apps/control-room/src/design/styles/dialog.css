@@ -98,6 +98,21 @@
   white-space: pre-wrap;
 }
 
+.fm-dialog__mesh-log {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.45;
+  padding: var(--fm-space-3);
+  white-space: pre-wrap;
+}
+
 .fm-dialog__footer {
   display: flex;
   justify-content: flex-end;

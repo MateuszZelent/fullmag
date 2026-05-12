@@ -58,6 +58,7 @@ describe("buildModelTree", () => {
         "model:object:free-layer:geometry",
         "model:object:free-layer:regions",
         "model:object:free-layer:regions:primary",
+        "model:object:free-layer:regions:primary:magnetic-texture",
         "model:object:free-layer:magnetic-parameters",
         "model:object:free-layer:magnetic-parameters:material",
         "model:object:free-layer:magnetic-parameters:uniaxial_anisotropy",
@@ -175,6 +176,18 @@ describe("buildModelTree", () => {
         (node) => node.id === "model:object:box-1:magnetic-texture:asset",
       )?.label,
     ).toBe("Vortex texture");
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:box-1:regions:primary:magnetic-texture",
+      ),
+    ).toMatchObject({
+      badge: "Vortex texture",
+      kind: "object.region-magnetic-texture",
+      label: "Magnetic Texture",
+      objectId: "box-1",
+      regionId: "region:box-1",
+    });
     expect(flattened.map((node) => node.id)).toContain(
       "model:object:box-1:magnetic-texture:transform",
     );
@@ -231,6 +244,70 @@ describe("buildModelTree", () => {
     );
     expect(flattened.find((node) => node.id === "model:objects")?.badge).toBe(
       "0",
+    );
+  });
+
+  it("builds study stages from the canonical scene instead of hardcoded demo stages", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        demag_realization: "poisson_robin",
+        stages: [
+          {
+            kind: "relax",
+            max_steps: "2000",
+            torque_tolerance: "1e-4",
+          },
+          {
+            kind: "run",
+            until_seconds: "5e-9",
+          },
+          {
+            artifact_name: "m-relaxed",
+            kind: "save_state",
+          },
+        ],
+      },
+    });
+
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(flattened.find((node) => node.id === "model:study")?.badge).toBe(
+      "3 stages",
+    );
+    expect(flattened.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        "model:study:stage:0",
+        "model:study:stage:1",
+        "model:study:stage:2",
+      ]),
+    );
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:0"),
+    ).toMatchObject({
+      badge: "tol 1e-4",
+      kind: "study.stage.relax",
+      label: "Relax 1",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:1"),
+    ).toMatchObject({
+      badge: "5e-9 s",
+      kind: "study.stage.run",
+      label: "Run 2",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:2"),
+    ).toMatchObject({
+      badge: "m-relaxed",
+      kind: "study.stage.action",
+      label: "Save State 3",
+    });
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:study:relax",
+    );
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:study:run",
     );
   });
 });

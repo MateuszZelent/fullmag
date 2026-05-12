@@ -11,6 +11,7 @@ interface SceneLike {
   magnetization_assets?: unknown;
   materials?: unknown;
   objects?: unknown;
+  study?: unknown;
   universe?: unknown;
 }
 
@@ -37,6 +38,7 @@ export function modelTreeSnapshotFromScene(
           .filter((object): object is ModelTreeObjectSnapshot => Boolean(object))
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
+    study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
 }
@@ -157,6 +159,14 @@ function sceneObjectSnapshot(
   const magnetization = magnetizationRef
     ? magnetizationById.get(magnetizationRef)
     : undefined;
+  const regionId = stringValue(object.region_name) ?? `region:${id}`;
+  const regionMagnetizationRef = regionOverrideMagnetizationRef(
+    object.region_overrides,
+    regionId,
+  );
+  const regionMagnetization = regionMagnetizationRef
+    ? magnetizationById.get(regionMagnetizationRef)
+    : undefined;
 
   return {
     geometryKind: geometryKind(object.geometry),
@@ -174,9 +184,27 @@ function sceneObjectSnapshot(
       materialHasDind(material),
     ),
     region: stringValue(object.region_name),
+    regionId,
+    regionMagnetization: regionMagnetizationRef,
+    regionMagnetizationKind: regionMagnetization?.kind,
+    regionMagnetizationLabel: regionMagnetization?.label,
     textureTransformAvailable:
       magnetization?.textureTransformAvailable ?? false,
   };
+}
+
+function regionOverrideMagnetizationRef(
+  overrides: unknown,
+  regionId: string,
+): string | null {
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return null;
+  }
+  const override = (overrides as Record<string, unknown>)[regionId];
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    return null;
+  }
+  return stringValue((override as Record<string, unknown>).magnetization_ref);
 }
 
 function sceneObjectPhysicsInteractions(
@@ -243,6 +271,44 @@ function sceneUniverseSnapshot(value: unknown): ModelTreeSnapshot["universe"] {
   };
 }
 
+function sceneStudySnapshot(value: unknown): ModelTreeSnapshot["study"] {
+  const study = value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+
+  return {
+    demagRealization: stringValue(study.demag_realization),
+    externalField: vector3(study.external_field),
+    requestedBackend: stringValue(study.requested_backend),
+    requestedDevice: stringValue(study.requested_device),
+    requestedMode: stringValue(study.requested_mode),
+    requestedPrecision: stringValue(study.requested_precision),
+    stages: Array.isArray(study.stages)
+      ? study.stages.map(sceneStudyStageSnapshot)
+      : [],
+  };
+}
+
+function sceneStudyStageSnapshot(
+  value: unknown,
+  index: number,
+): NonNullable<ModelTreeSnapshot["study"]>["stages"][number] {
+  const stage = value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+  const kind = stringValue(stage.kind) ?? "run";
+
+  return {
+    artifactName: stringValue(stage.artifact_name),
+    energyTolerance: scalarText(stage.energy_tolerance),
+    index,
+    kind,
+    maxSteps: scalarText(stage.max_steps),
+    torqueTolerance: scalarText(stage.torque_tolerance),
+    untilSeconds: scalarText(stage.until_seconds),
+  };
+}
+
 function geometryKind(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const geometry = value as Record<string, unknown>;
@@ -279,6 +345,10 @@ function interactionLabel(kind: string): string {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function scalarText(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
 }
 
 function vector3(value: unknown): [number, number, number] | null {

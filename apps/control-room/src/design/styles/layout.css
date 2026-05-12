@@ -22,6 +22,8 @@
 }
 
 .fm-workspace-body {
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
@@ -65,7 +67,7 @@
   cursor: grab;
   font-size: var(--fm-font-size-xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   padding-inline: var(--fm-space-3);
   text-transform: uppercase;
   touch-action: none;

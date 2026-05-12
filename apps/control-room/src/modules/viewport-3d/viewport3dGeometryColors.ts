@@ -16,8 +16,10 @@ export function canApplyVertexScalarColors(
 ): boolean {
   return Boolean(
     fieldVector &&
-      fieldVector.pointCount === vertexCount &&
       fieldVector.pointCount > 0 &&
+      // Field may cover a subset of topology nodes (e.g. magnetic domain only).
+      // Allow partial coverage: pointCount <= vertexCount.
+      fieldVector.pointCount <= vertexCount &&
       !fieldTransformNeedsChunking(
         fieldVector.pointCount,
         maxSynchronousPoints,

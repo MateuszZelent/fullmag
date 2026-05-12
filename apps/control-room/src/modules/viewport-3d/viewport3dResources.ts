@@ -156,6 +156,7 @@ export function useViewport3DDomainTopology() {
 export function useViewport3DFieldVector(
   quantityId: string,
   fieldQuery: FieldVectorQuery = {},
+  enabled = true,
 ) {
   const { api } = useKernel();
   const component = fieldQuery.component ?? "full";
@@ -186,6 +187,7 @@ export function useViewport3DFieldVector(
   );
 
   return useResource({
+    enabled,
     load,
     resolveRevision,
     resourceKey,

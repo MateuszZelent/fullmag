@@ -46,7 +46,9 @@ export function buildVertexScalarColors(
   );
   if (
     !fieldVector ||
-    fieldVector.pointCount !== vertexCount ||
+    // Field may cover a subset of nodes (e.g. magnetic domain only, no airbox).
+    // Allow pointCount < vertexCount; reject only when field has MORE points than topology.
+    fieldVector.pointCount > vertexCount ||
     fieldVector.pointCount === 0 ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)
@@ -54,7 +56,7 @@ export function buildVertexScalarColors(
     return null;
   }
 
-  return buildVertexScalarColorsUnchecked(fieldVector, resolvedColorMode);
+  return buildVertexScalarColorsUnchecked(fieldVector, vertexCount, resolvedColorMode);
 }
 
 export async function buildVertexScalarColorsChunked(
@@ -109,10 +111,14 @@ export function resolveScalarRange(
 
 function buildVertexScalarColorsUnchecked(
   fieldVector: DecodedFieldVector,
+  vertexCount: number,
   colorMode: Viewport3DVectorColorMode,
 ): ScalarColorBuffer {
   const range = resolveScalarRange(fieldVector, colorMode);
-  const colors = new Float32Array(fieldVector.pointCount * 3);
+  // Allocate for the full topology vertex count (may be larger than the field
+  // point count when the field covers only part of the domain, e.g. magnetic
+  // nodes only).  Extra vertices default to 0 (black).
+  const colors = new Float32Array(vertexCount * 3);
   writeScalarColors(
     fieldVector,
     colors,
@@ -149,23 +155,31 @@ function colorAt(
 ): [number, number, number] {
   const offset = pointIndex * fieldVector.nComp;
   if (fieldVector.nComp === 1) {
+    const value = fieldVector.values[offset] ?? 0;
     return resolveViewport3DVectorColorRgb(
       "magnitude",
-      fieldVector.values[offset] ?? 0,
+      value,
       0,
       0,
       range,
+      normalizeScalarValue(value, range),
     ) ?? [1, 1, 1];
   }
 
   const x = fieldVector.values[offset] ?? 0;
   const y = fieldVector.values[offset + 1] ?? 0;
   const z = fieldVector.values[offset + 2] ?? 0;
-  return resolveViewport3DVectorColorRgb(colorMode, x, y, z, range) ?? [
-    1,
-    1,
-    1,
-  ];
+  const scalar = resolveViewport3DVectorColorScalar(colorMode, x, y, z);
+  return (
+    resolveViewport3DVectorColorRgb(
+      colorMode,
+      x,
+      y,
+      z,
+      range,
+      normalizeScalarValue(scalar, range),
+    ) ?? [1, 1, 1]
+  );
 }
 
 function scalarAt(
@@ -188,4 +202,12 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new DOMException("Field transform aborted", "AbortError");
   }
+}
+
+function normalizeScalarValue(
+  value: number,
+  range: Viewport3DScalarColorRange,
+): number {
+  const span = Math.max(range.max - range.min, 1e-12);
+  return Math.min(Math.max((value - range.min) / span, 0), 1);
 }

@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useKernel } from "@/kernel/KernelContext";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
@@ -10,13 +12,25 @@ import {
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshReportResourceKey,
   useObjectMeshPolicyResource,
+  useObjectMeshQualityResource,
+  useObjectMeshReportResource,
+  useObjectMeshSizeFieldResource,
+  useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useKernel } from "@/kernel/KernelContext";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
+import {
+  asRecord,
+  formatCount,
+  JsonResourceSection,
+  MeshResourceFields,
+  recordField,
+} from "./MeshResourceView";
 import {
   buildObjectMeshPolicyReplaceRequest,
   defaultObjectMeshPolicyResource,
@@ -43,8 +57,13 @@ function errorMessage(error: unknown): string {
 
 export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const objectId = selection.objectId;
-  const { api, resources } = useKernel();
+  const kernel = useKernel();
+  const { api, commands, resources } = kernel;
   const policy = useObjectMeshPolicyResource(objectId);
+  const report = useObjectMeshReportResource(objectId);
+  const quality = useObjectMeshQualityResource(objectId);
+  const sizeField = useObjectMeshSizeFieldResource(objectId);
+  const topology = useObjectTopologyResource(objectId);
   const resource = policy.data ?? defaultObjectMeshPolicyResource(objectId ?? "");
   const baseDraft = useMemo(
     () => draftFromObjectMeshPolicyResource(resource),
@@ -58,6 +77,13 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [pending, setPending] = useState(false);
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
+  const reportRecord = asRecord(report.data?.report);
+  const effectiveTarget = asRecord(recordField(reportRecord, "effective_target"));
+  const qualityRecord = asRecord(quality.data?.quality);
+  const commandContext = useMemo(
+    () => createCommandContext("ribbon", kernel),
+    [kernel],
+  );
 
   function updateDraft(patch: Partial<ObjectMeshPolicyDraft>): void {
     setDraftState((current) => ({
@@ -104,39 +130,288 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Object Mesh Policy">
+      <InspectorSection title="Object Mesh Policy" badge={policy.status}>
         <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
-        <FieldRow label="Fetch state" value={policy.status} />
         <FieldRow label="Revision" value={String(resource.revision)} />
-        <FieldRow label="Policy" value={resource.config ? "object override" : "inherited"} />
+        <FieldRow
+          label="Policy"
+          value={resource.config ? "object override" : "inherited"}
+        />
+        <FieldRow label="Report state" value={report.status} />
+        <FieldRow label="Quality state" value={quality.status} />
       </InspectorSection>
 
-      <InspectorSection title="Policy State">
-        <label className="fm-inspector-edit-field">
-          <span>Use object policy</span>
-          <input
-            checked={draft.present}
-            type="checkbox"
-            onChange={(event) => updateDraft({ present: event.target.checked })}
-          />
-        </label>
+      <InspectorSection title="Override">
+        <FormField
+          checked={draft.present}
+          label="Use object policy"
+          type="checkbox"
+          onChange={(event) => updateDraft({ present: event.target.checked })}
+        />
       </InspectorSection>
 
-      <InspectorSection title="Config">
-        <label className="fm-inspector-edit-field">
-          <span>JSON</span>
-          <textarea
-            aria-label="Object mesh policy config"
-            disabled={!draft.present}
-            rows={7}
-            value={draft.configText}
-            onChange={(event) => updateDraft({ configText: event.target.value })}
-          />
-        </label>
+      <InspectorSection title="COMSOL-Style Size Semantics" badge="solver policy">
+        <FormField
+          disabled={!draft.present}
+          label="Maximum element size"
+          type="number"
+          unit="m"
+          value={draft.maximumElementSize}
+          onChange={(event) => updateDraft({ maximumElementSize: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Minimum element size"
+          type="number"
+          unit="m"
+          value={draft.minimumElementSize}
+          onChange={(event) => updateDraft({ minimumElementSize: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Maximum growth rate"
+          type="number"
+          value={draft.maximumElementGrowthRate}
+          onChange={(event) =>
+            updateDraft({ maximumElementGrowthRate: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Curvature factor"
+          type="number"
+          value={draft.curvatureFactor}
+          onChange={(event) => updateDraft({ curvatureFactor: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Narrow region resolution"
+          type="number"
+          value={draft.narrowRegionResolution}
+          onChange={(event) =>
+            updateDraft({ narrowRegionResolution: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="FEM order"
+          type="number"
+          value={draft.order}
+          onChange={(event) => updateDraft({ order: event.target.value })}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Thin-Film Sweep Strategy" collapsible>
+        <FormField
+          disabled={!draft.present}
+          label="Mesh strategy"
+          type="select"
+          value={draft.meshStrategy}
+          onChange={(event) => updateDraft({ meshStrategy: event.target.value })}
+        >
+          <option value="">Inherited</option>
+          <option value="auto">Auto</option>
+          <option value="free_tetrahedral">Free tetrahedral</option>
+          <option value="swept_prism">Swept prism</option>
+          <option value="swept_hex">Swept hex</option>
+        </FormField>
+        <FormField
+          disabled={!draft.present}
+          label="Through-thickness elements"
+          type="number"
+          value={draft.throughThicknessElements}
+          onChange={(event) =>
+            updateDraft({ throughThicknessElements: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Thickness distribution"
+          type="select"
+          value={draft.throughThicknessDistribution}
+          onChange={(event) =>
+            updateDraft({ throughThicknessDistribution: event.target.value })
+          }
+        >
+          <option value="">Inherited</option>
+          <option value="fixed">Fixed</option>
+          <option value="linear">Linear</option>
+          <option value="exponential">Exponential</option>
+        </FormField>
+        <FormField
+          disabled={!draft.present}
+          label="Thickness element ratio"
+          type="number"
+          value={draft.throughThicknessElementRatio}
+          onChange={(event) =>
+            updateDraft({ throughThicknessElementRatio: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Symmetric thickness"
+          type="select"
+          value={draft.throughThicknessSymmetric}
+          onChange={(event) =>
+            updateDraft({ throughThicknessSymmetric: event.target.value })
+          }
+        >
+          <option value="">Inherited</option>
+          <option value="true">Enabled</option>
+          <option value="false">Disabled</option>
+        </FormField>
+        <FormField
+          disabled={!draft.present}
+          label="Sweep face meshing"
+          type="select"
+          value={draft.sweepFaceMeshing}
+          onChange={(event) => updateDraft({ sweepFaceMeshing: event.target.value })}
+        >
+          <option value="">Inherited</option>
+          <option value="triangular">Triangular</option>
+          <option value="quadrilateral">Quadrilateral</option>
+        </FormField>
+      </InspectorSection>
+
+      <InspectorSection title="Interface And Transition Refinement" collapsible>
+        <FormField
+          disabled={!draft.present}
+          label="Interface hmax"
+          type="number"
+          unit="m"
+          value={draft.interfaceMaximumElementSize}
+          onChange={(event) =>
+            updateDraft({ interfaceMaximumElementSize: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Interface thickness"
+          type="number"
+          unit="m"
+          value={draft.interfaceThickness}
+          onChange={(event) => updateDraft({ interfaceThickness: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Transition distance"
+          type="number"
+          unit="m"
+          value={draft.transitionDistance}
+          onChange={(event) => updateDraft({ transitionDistance: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Transition growth"
+          type="number"
+          value={draft.transitionGrowth}
+          onChange={(event) => updateDraft({ transitionGrowth: event.target.value })}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Edge And Corner Refinement" collapsible defaultCollapsed>
+        <FormField
+          disabled={!draft.present}
+          label="Edge hmax"
+          type="number"
+          unit="m"
+          value={draft.edgeMaximumElementSize}
+          onChange={(event) =>
+            updateDraft({ edgeMaximumElementSize: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Edge thickness"
+          type="number"
+          unit="m"
+          value={draft.edgeThickness}
+          onChange={(event) => updateDraft({ edgeThickness: event.target.value })}
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Corner hmax"
+          type="number"
+          unit="m"
+          value={draft.cornerMaximumElementSize}
+          onChange={(event) =>
+            updateDraft({ cornerMaximumElementSize: event.target.value })
+          }
+        />
+        <FormField
+          disabled={!draft.present}
+          label="Corner extent"
+          type="number"
+          unit="m"
+          value={draft.cornerExtent}
+          onChange={(event) => updateDraft({ cornerExtent: event.target.value })}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Effective Target" badge={report.status}>
+        <MeshResourceFields
+          fields={[
+            {
+              label: "Maximum element",
+              value: String(
+                recordField(effectiveTarget, "maximum_element_size") ?? "unset",
+              ),
+            },
+            {
+              label: "Minimum element",
+              value: String(
+                recordField(effectiveTarget, "minimum_element_size") ?? "unset",
+              ),
+            },
+            {
+              label: "Source",
+              value: String(recordField(effectiveTarget, "source") ?? "not resolved"),
+            },
+            {
+              label: "Transition realization",
+              value: String(
+                recordField(effectiveTarget, "transition_realization") ?? "none",
+              ),
+            },
+          ]}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Topology And Quality" badge={topology.status}>
+        <MeshResourceFields
+          fields={[
+            { label: "Topology fetch", value: topology.status },
+            { label: "Nodes", value: formatCount(topology.data?.nodeCount) },
+            { label: "Elements", value: formatCount(topology.data?.elementCount) },
+            {
+              label: "Boundary faces",
+              value: formatCount(topology.data?.boundaryFaceCount),
+            },
+            {
+              label: "Quality revision",
+              value: String(quality.data?.revision ?? "unknown"),
+            },
+            {
+              label: "Quality status",
+              value: String(recordField(qualityRecord, "status") ?? quality.status),
+            },
+          ]}
+        />
+      </InspectorSection>
+
+      <InspectorSection title="Advanced JSON" collapsible defaultCollapsed>
+        <FormField
+          disabled={!draft.present}
+          label="Policy JSON"
+          rows={8}
+          type="textarea"
+          value={draft.configText}
+          onChange={(event) => updateDraft({ configText: event.target.value })}
+        />
       </InspectorSection>
 
       <InspectorSection title="Transactions">
-        <div className="fm-inspector-actions">
+        <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || !objectId}
             size="sm"
@@ -144,7 +419,16 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             variant="primary"
             onClick={() => void applyPolicy()}
           >
-            Apply Mesh Policy
+            Apply Policy
+          </Button>
+          <Button
+            disabled={pending || !objectId}
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => void commands.execute("mesh.build-selected", commandContext)}
+          >
+            Build Mesh
           </Button>
           <Button
             disabled={pending}
@@ -156,21 +440,17 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
               setFeedback(null);
             }}
           >
-            Revert Draft
+            Revert
           </Button>
         </div>
+        {feedback ? (
+          <FeedbackBanner kind={feedback.kind} message={feedback.message} />
+        ) : null}
       </InspectorSection>
 
-      {feedback ? (
-        <InspectorSection title="Diagnostics">
-          <p
-            className="fm-inspector-validation-message"
-            data-kind={feedback.kind}
-          >
-            {feedback.message}
-          </p>
-        </InspectorSection>
-      ) : null}
+      <JsonResourceSection title="Object Mesh Report JSON" value={report.data} />
+      <JsonResourceSection title="Object Mesh Quality JSON" value={quality.data} />
+      <JsonResourceSection title="Object Size Field JSON" value={sizeField.data} />
     </div>
   );
 }

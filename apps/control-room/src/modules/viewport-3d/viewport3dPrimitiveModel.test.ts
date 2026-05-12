@@ -4,6 +4,7 @@ import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import {
+  buildViewport3DMagnetizationTexturePreviewMap,
   buildViewport3DPrimitiveRenderModel,
   resolvePrimitiveSelectionBounds,
 } from "./viewport3dPrimitiveModel";
@@ -41,6 +42,92 @@ describe("viewport3dPrimitiveModel", () => {
     });
     expect(model.objects[0]?.bounds.center).toEqual([4, 5, 6]);
     expect(model.objects[0]?.bounds.size).toEqual([1, 2, 3]);
+  });
+
+  it("attaches committed magnetization texture preview metadata", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        magnetization_assets: [
+          {
+            id: "mag-vortex",
+            kind: "preset_texture",
+            preset_kind: "vortex",
+            ui_label: "Vortex",
+          },
+        ],
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "box",
+            magnetization_ref: "mag-vortex",
+            name: "Box",
+          },
+        ],
+        revision: 7,
+      },
+      null,
+    );
+
+    expect(model.objects[0]?.magnetizationTexturePreview).toEqual({
+      assetId: "mag-vortex",
+      color: "#27c4e8",
+      label: "Vortex",
+      presetKind: "vortex",
+      source: "object",
+    });
+  });
+
+  it("prefers region override magnetization texture metadata for preview", () => {
+    const scene = {
+      magnetization_assets: [
+        {
+          id: "mag-object",
+          kind: "preset_texture",
+          preset_kind: "uniform",
+          ui_label: "Uniform object",
+        },
+        {
+          id: "mag-region",
+          kind: "preset_texture",
+          preset_kind: "random_seeded",
+          ui_label: "Random region",
+        },
+      ],
+      objects: [
+        {
+          geometry: {
+            geometry_kind: "Box",
+            geometry_params: { size: [1, 1, 1] },
+          },
+          id: "box",
+          magnetization_ref: "mag-object",
+          name: "Box",
+          region_overrides: {
+            "region:box": { magnetization_ref: "mag-region" },
+          },
+        },
+      ],
+      revision: 7,
+    };
+
+    const model = buildViewport3DPrimitiveRenderModel(scene, null);
+    const previewMap = buildViewport3DMagnetizationTexturePreviewMap(scene);
+
+    expect(model.objects[0]?.magnetizationTexturePreview).toMatchObject({
+      assetId: "mag-region",
+      color: "#43d17a",
+      label: "Random region",
+      presetKind: "random_seeded",
+      regionId: "region:box",
+      source: "region-override",
+    });
+    expect(previewMap.get("box")).toMatchObject({
+      assetId: "mag-region",
+      source: "region-override",
+    });
   });
 
   it("marks previous object mesh as stale when manifest provenance lags scene", () => {

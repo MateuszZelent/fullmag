@@ -18,7 +18,9 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import { resolveGeometryObjectDraft } from "./geometryObjectPanelModel";
 import {
@@ -186,7 +188,7 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Magnetic Parameters">
+      <InspectorSection title="Magnetic Parameters" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={object.objectId} />
         <FieldRow label="Current material" value={object.material} />
         <FieldRow
@@ -198,73 +200,64 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
           label="Scene revision"
           value={object.baseRevision === null ? "unknown" : String(object.baseRevision)}
         />
-        <FieldRow label="Fetch state" value={scene.status} />
+        <FieldRow label="Scene fetch" value={scene.status} />
         <FieldRow label="Material fetch" value={material.status} />
       </InspectorSection>
 
       <InspectorSection title="Assignment">
-        <label className="fm-inspector-edit-field">
-          <span>Material ref</span>
-          <input
-            aria-label="Material ref"
-            value={draft.materialRef}
-            onChange={(event) => updateDraft({ materialRef: event.target.value })}
-          />
-        </label>
+        <FormField
+          label="Material ref"
+          mono={false}
+          type="text"
+          value={draft.materialRef}
+          onChange={(event) => updateDraft({ materialRef: event.target.value })}
+        />
       </InspectorSection>
 
-      <InspectorSection title="Material Asset Parameters">
-        <label className="fm-inspector-edit-field">
-          <span>Material name</span>
-          <input
-            aria-label="Material name"
-            disabled={!material.data}
-            value={draft.materialName}
-            onChange={(event) =>
-              updateDraft({ materialName: event.target.value })
-            }
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>Ms</span>
-          <input
-            aria-label="Ms"
-            disabled={!material.data}
-            value={draft.ms}
-            onChange={(event) => updateDraft({ ms: event.target.value })}
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>Aex</span>
-          <input
-            aria-label="Aex"
-            disabled={!material.data}
-            value={draft.aex}
-            onChange={(event) => updateDraft({ aex: event.target.value })}
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>alpha</span>
-          <input
-            aria-label="alpha"
-            disabled={!material.data}
-            value={draft.alpha}
-            onChange={(event) => updateDraft({ alpha: event.target.value })}
-          />
-        </label>
-        <label className="fm-inspector-edit-field">
-          <span>Dind</span>
-          <input
-            aria-label="Dind"
-            disabled={!material.data}
-            value={draft.dind}
-            onChange={(event) => updateDraft({ dind: event.target.value })}
-          />
-        </label>
+      <InspectorSection title="Material Parameters">
+        <FormField
+          label="Name"
+          mono={false}
+          type="text"
+          disabled={!material.data}
+          value={draft.materialName}
+          onChange={(event) => updateDraft({ materialName: event.target.value })}
+        />
+        <FormField
+          label="Ms"
+          type="number"
+          unit="A/m"
+          disabled={!material.data}
+          value={draft.ms}
+          onChange={(event) => updateDraft({ ms: event.target.value })}
+        />
+        <FormField
+          label="Aex"
+          type="number"
+          unit="J/m"
+          disabled={!material.data}
+          value={draft.aex}
+          onChange={(event) => updateDraft({ aex: event.target.value })}
+        />
+        <FormField
+          label="alpha"
+          type="number"
+          disabled={!material.data}
+          value={draft.alpha}
+          onChange={(event) => updateDraft({ alpha: event.target.value })}
+        />
+        <FormField
+          label="Dind"
+          type="number"
+          unit="J/m²"
+          disabled={!material.data}
+          value={draft.dind}
+          onChange={(event) => updateDraft({ dind: event.target.value })}
+        />
       </InspectorSection>
 
-      <InspectorSection title="Transactions">
-        <div className="fm-inspector-actions">
+      <InspectorSection title="Actions">
+        <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || object.mode !== "committed"}
             size="sm"
@@ -293,21 +286,11 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
               setFeedback(null);
             }}
           >
-            Revert Draft
+            Revert
           </Button>
         </div>
+        {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
-
-      {feedback ? (
-        <InspectorSection title="Diagnostics">
-          <p
-            className="fm-inspector-validation-message"
-            data-kind={feedback.kind}
-          >
-            {feedback.message}
-          </p>
-        </InspectorSection>
-      ) : null}
     </div>
   );
 }

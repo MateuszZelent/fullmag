@@ -3,13 +3,25 @@
 import { useCallback } from "react";
 
 import {
+  MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_POLICY_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SHARED_DOMAIN_REPORT_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_POLICY_PATH,
   MESHING_OBJECT_REPORT_PATH,
+  MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_SUMMARY_PATH,
   MESHING_UNIVERSE_POLICY_PATH,
+  MESHING_UNIVERSE_QUALITY_PATH,
+  MESHING_UNIVERSE_REPORT_PATH,
   MODEL_MATERIAL_PATH,
   MODEL_OBJECT_INTERACTION_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
@@ -26,11 +38,23 @@ import type {
   ObjectInteractionKind,
   ObjectInteractionResource,
   MeshActiveBuildResource,
+  MeshCapabilitiesResource,
   MeshLastSuccessfulBuildResource,
   MeshObjectConfigResource,
   MeshObjectQualityResource,
   MeshObjectReportResource,
+  MeshObjectSizeFieldResource,
+  MeshQualityGatesResource,
+  MeshRealizedSizeFieldsResource,
+  MeshSemanticsResource,
+  MeshSharedDomainConfigResource,
+  MeshSharedDomainManifestResource,
+  MeshSharedDomainQualityResource,
+  MeshSharedDomainReportResource,
+  MeshSummaryResource,
   MeshUniverseConfigResource,
+  MeshUniverseQualityResource,
+  MeshUniverseReportResource,
   RegionListResource,
   ResourceRevision,
   SceneResource,
@@ -49,6 +73,10 @@ export {
 
 import { useResource } from "./useResource";
 
+interface ResourceHookOptions {
+  enabled?: boolean;
+}
+
 export const SCENE_RESOURCE_KEY = MODEL_SCENE_PATH;
 export const GEOMETRY_CAPABILITIES_RESOURCE_KEY =
   MODEL_GEOMETRY_CAPABILITIES_PATH;
@@ -59,8 +87,27 @@ export const GEOMETRY_DIAGNOSTICS_RESOURCE_KEY =
 export const MESH_BUILD_CURRENT_RESOURCE_KEY = MESHING_BUILDS_CURRENT_PATH;
 export const MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY =
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH;
+export const MESH_SUMMARY_RESOURCE_KEY = MESHING_SUMMARY_PATH;
+export const MESH_CAPABILITIES_RESOURCE_KEY = MESHING_CAPABILITIES_PATH;
+export const MESH_SEMANTICS_RESOURCE_KEY = MESHING_SEMANTICS_PATH;
 export const MESH_UNIVERSE_POLICY_RESOURCE_KEY =
   MESHING_UNIVERSE_POLICY_PATH;
+export const MESH_UNIVERSE_REPORT_RESOURCE_KEY =
+  MESHING_UNIVERSE_REPORT_PATH;
+export const MESH_UNIVERSE_QUALITY_RESOURCE_KEY =
+  MESHING_UNIVERSE_QUALITY_PATH;
+export const MESH_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH;
+export const MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_POLICY_PATH;
+export const MESH_SHARED_DOMAIN_REPORT_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_REPORT_PATH;
+export const MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_QUALITY_PATH;
+export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
+export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
 export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
 
 export function resolveObjectTopologyResourceKey(objectId: string): string {
@@ -123,7 +170,7 @@ export function resolveJsonResourceRevision(
   return resolveRevisionProperty(data, "revision");
 }
 
-export function useSceneResource() {
+export function useSceneResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.model.scene({ signal }),
@@ -131,13 +178,16 @@ export function useSceneResource() {
   );
 
   return useResource<SceneResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveSceneResourceRevision,
     resourceKey: SCENE_RESOURCE_KEY,
   });
 }
 
-export function useGeometryDiagnosticsResource() {
+export function useGeometryDiagnosticsResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -146,13 +196,16 @@ export function useGeometryDiagnosticsResource() {
   );
 
   return useResource<GeometryDiagnosticsResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: GEOMETRY_DIAGNOSTICS_RESOURCE_KEY,
   });
 }
 
-export function useGeometryCapabilitiesResource() {
+export function useGeometryCapabilitiesResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -161,13 +214,16 @@ export function useGeometryCapabilitiesResource() {
   );
 
   return useResource<GeometryCapabilitiesResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: GEOMETRY_CAPABILITIES_RESOURCE_KEY,
   });
 }
 
-export function useGeometryValidationResource() {
+export function useGeometryValidationResource(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -176,6 +232,7 @@ export function useGeometryValidationResource() {
   );
 
   return useResource<GeometryValidationResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: GEOMETRY_VALIDATION_RESOURCE_KEY,
@@ -217,7 +274,7 @@ export function useModelRegionsResource() {
   });
 }
 
-export function useMeshBuildCurrent() {
+export function useMeshBuildCurrent(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -226,13 +283,16 @@ export function useMeshBuildCurrent() {
   );
 
   return useResource<MeshActiveBuildResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_BUILD_CURRENT_RESOURCE_KEY,
   });
 }
 
-export function useMeshBuildLatestSuccessful() {
+export function useMeshBuildLatestSuccessful(
+  options: ResourceHookOptions = {},
+) {
   const { api } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
@@ -241,9 +301,185 @@ export function useMeshBuildLatestSuccessful() {
   );
 
   return useResource<MeshLastSuccessfulBuildResource>({
+    enabled: options.enabled,
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSummaryResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.meshing.summary({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSummaryResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SUMMARY_RESOURCE_KEY,
+  });
+}
+
+export function useMeshCapabilitiesResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.capabilities({ signal }),
+    [api],
+  );
+
+  return useResource<MeshCapabilitiesResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_CAPABILITIES_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSemanticsResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.semantics({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSemanticsResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SEMANTICS_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainManifestResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.manifest({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSharedDomainManifestResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainPolicyResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.policy({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSharedDomainConfigResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainReportResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.report({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSharedDomainReportResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_REPORT_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainQualityResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.quality({ signal }),
+    [api],
+  );
+
+  return useResource<MeshSharedDomainQualityResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainQualityGatesResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.qualityGates({ signal }),
+    [api],
+  );
+
+  return useResource<MeshQualityGatesResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainRealizedSizeFieldsResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.realizedSizeFields({ signal }),
+    [api],
+  );
+
+  return useResource<MeshRealizedSizeFieldsResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY,
+  });
+}
+
+export function useMeshUniverseReportResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.universeReport({ signal }),
+    [api],
+  );
+
+  return useResource<MeshUniverseReportResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_UNIVERSE_REPORT_RESOURCE_KEY,
+  });
+}
+
+export function useMeshUniverseQualityResource() {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.universeQuality({ signal }),
+    [api],
+  );
+
+  return useResource<MeshUniverseQualityResource>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_UNIVERSE_QUALITY_RESOURCE_KEY,
   });
 }
 
@@ -307,6 +543,31 @@ export function useObjectMeshQualityResource(
   );
 
   return useResource<MeshObjectQualityResource | null>({
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey,
+  });
+}
+
+export function useObjectMeshSizeFieldResource(
+  objectId: string | null | undefined,
+) {
+  const { api } = useKernel();
+  const resourceKey = objectId
+    ? MESHING_OBJECT_SIZE_FIELD_PATH.replace(
+        "{object_id}",
+        encodeURIComponent(objectId),
+      )
+    : MESHING_OBJECT_SIZE_FIELD_PATH;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => {
+      if (!objectId) return Promise.resolve(null);
+      return api.meshing.objectSizeField(objectId, { signal });
+    },
+    [api, objectId],
+  );
+
+  return useResource<MeshObjectSizeFieldResource | null>({
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey,

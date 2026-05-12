@@ -2,7 +2,7 @@
 
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
-import { BufferAttribute, BufferGeometry, DoubleSide } from "three";
+import { BackSide, BufferAttribute, BufferGeometry, DoubleSide } from "three";
 import type { ColorRepresentation } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
@@ -180,7 +180,7 @@ function AirboxMeshPartLayer({
             color={colors.mesh}
             opacity={opacity}
             roughness={0.86}
-            side={DoubleSide}
+            side={BackSide}
             transparent
           />
         </mesh>
@@ -238,14 +238,16 @@ function AirboxMeshPartLayer({
 
 export function DomainBoxLayer({
   bounds,
+  boundsVisible = true,
   colors,
   onSelectDomain,
 }: {
   bounds: Viewport3DBounds | null;
+  boundsVisible?: boolean;
   colors: Viewport3DColors;
   onSelectDomain: () => void;
 }) {
-  if (!bounds) return null;
+  if (!bounds || !boundsVisible) return null;
 
   return (
     <mesh

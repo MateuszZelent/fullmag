@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
@@ -14,6 +14,9 @@ import {
   useGeometryCapabilitiesResource,
   useGeometryValidationResource,
   useMeshBuildCurrent,
+  useMeshBuildLatestSuccessful,
+  useMeshSemanticsResource,
+  useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSelection } from "@/kernel/selection/useSelection";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
@@ -29,36 +32,86 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const { selection } = useSelection(moduleId);
   const { snapshot: visualizationSnapshot, visualization } =
     useObjectVisualizationRegistry();
-  const visualizationState = useVisualizationStateResource();
-  const geometryCapabilities = useGeometryCapabilitiesResource();
-  const geometryValidation = useGeometryValidationResource();
-  const meshBuildCurrent = useMeshBuildCurrent();
   const activeTab = layout.activeModuleTab;
+  const needsGeometryResources =
+    activeTab === "geometry" || activeTab === "mesh";
+  const needsMeshResources = activeTab === "mesh";
+  const needsVisualizationResources = activeTab === "view";
+  const visualizationState = useVisualizationStateResource({
+    enabled: needsVisualizationResources,
+  });
+  const geometryCapabilities = useGeometryCapabilitiesResource({
+    enabled: needsGeometryResources,
+  });
+  const geometryValidation = useGeometryValidationResource({
+    enabled: needsGeometryResources,
+  });
+  const meshBuildCurrent = useMeshBuildCurrent({ enabled: needsMeshResources });
+  const meshBuildLatest = useMeshBuildLatestSuccessful({
+    enabled: needsMeshResources,
+  });
+  const meshSummary = useMeshSummaryResource({ enabled: needsMeshResources });
+  const meshSemantics = useMeshSemanticsResource({
+    enabled: needsMeshResources,
+  });
   const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
     () => kernel.commands.getVersion(),
     () => kernel.commands.getVersion(),
   );
 
-  const commandContext = createCommandContext("ribbon", kernel, {
-    resourceData: {
-      [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
-      [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
-      [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
-    },
-  });
+  const commandContext = useMemo(
+    () =>
+      createCommandContext("ribbon", kernel, {
+        resourceData: {
+          [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+          [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
+          [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+        },
+      }),
+    [
+      geometryCapabilities.data,
+      geometryValidation.data,
+      kernel,
+      meshBuildCurrent.data,
+    ],
+  );
 
-  const tabContent = buildRibbonTabContent(activeTab, {
-    api: kernel.api,
-    commandContext,
-    commands: kernel.commands,
-    resources: kernel.resources,
-    selection,
-    visualization,
-    visualizationSnapshot,
-    visualizationState: visualizationState.data,
-  });
-  void commandVersion;
+  const tabContent = useMemo(
+    () => {
+      void commandVersion;
+      return buildRibbonTabContent(activeTab, {
+        api: kernel.api,
+        commandContext,
+        commands: kernel.commands,
+        meshBuildCurrent: meshBuildCurrent.data,
+        meshBuildLatest: meshBuildLatest.data,
+        meshSemantics: meshSemantics.data,
+        meshSummary: meshSummary.data,
+        resources: kernel.resources,
+        selection,
+        visualization,
+        visualizationSnapshot,
+        visualizationState: visualizationState.data,
+      });
+    },
+    [
+      activeTab,
+      commandContext,
+      commandVersion,
+      kernel.api,
+      kernel.commands,
+      kernel.resources,
+      meshBuildCurrent.data,
+      meshBuildLatest.data,
+      meshSemantics.data,
+      meshSummary.data,
+      selection,
+      visualization,
+      visualizationSnapshot,
+      visualizationState.data,
+    ],
+  );
   const groups = tabContent?.groups ?? [];
 
   function handleAction(actionId: string): void {

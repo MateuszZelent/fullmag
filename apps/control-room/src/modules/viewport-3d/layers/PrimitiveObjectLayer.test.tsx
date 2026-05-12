@@ -22,6 +22,7 @@ function primitiveObject(
     geometryKey: `object:${kind}`,
     kind,
     label: "Object",
+    magnetizationTexturePreview: null,
     meshState: "primitive-only",
     objectId: `object-${kind}`,
     sceneRevision: 1,

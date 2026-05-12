@@ -87,10 +87,11 @@ export const MAIN_MENUS: AppMenuNode[] = [
     id: "simulation",
     label: "Simulation",
     children: [
-      { id: "run", label: "Run", icon: <Play size={14} />, shortcut: "F5", disabled: true },
-      { id: "pause", label: "Pause", icon: <Pause size={14} />, disabled: true },
-      { id: "stop", label: "Stop", icon: <Square size={14} />, disabled: true },
-      { id: "skip", label: "Skip Stage", icon: <SkipForward size={14} />, disabled: true },
+      { id: "study.run", label: "Compute Study", icon: <Play size={14} />, shortcut: "F5" },
+      { id: "study.pause", label: "Pause", icon: <Pause size={14} /> },
+      { id: "study.resume", label: "Resume", icon: <Play size={14} /> },
+      { id: "study.stop", label: "Stop", icon: <Square size={14} /> },
+      { id: "study.skip", label: "Skip Stage", icon: <SkipForward size={14} /> },
       {
         id: "execution",
         label: "Execution Target",
@@ -130,8 +131,8 @@ export const QUICK_ACTIONS: HeaderQuickAction[] = [
 ];
 
 export const RUN_CONTROLS: HeaderQuickAction[] = [
-  { id: "run", label: "Run", icon: <Play size={12} fill="currentColor" />, disabled: true },
-  { id: "pause", label: "Pause", icon: <Pause size={12} fill="currentColor" />, disabled: true },
-  { id: "stop", label: "Stop", icon: <Square size={12} fill="currentColor" />, disabled: true },
-  { id: "skip", label: "Skip", icon: <SkipForward size={12} />, disabled: true },
+  { id: "study.run", label: "Compute Study", icon: <Play size={12} fill="currentColor" /> },
+  { id: "study.pause", label: "Pause", icon: <Pause size={12} fill="currentColor" /> },
+  { id: "study.stop", label: "Stop", icon: <Square size={12} fill="currentColor" /> },
+  { id: "study.skip", label: "Skip", icon: <SkipForward size={12} /> },
 ];

@@ -161,7 +161,7 @@ run-arch-waveguide-interactive-v2 fem_execution="cpu":
       echo "Freeing ports 3100 and 8081 ..." >&2; \
       fuser -k 3100/tcp 2>/dev/null || true; \
       fuser -k 8081/tcp 2>/dev/null || true; \
-      pkill -f "/[f]ullmag-fem-gpu-bin --dev -i examples/arch_waveguide_relax_50nm.py" >/dev/null 2>&1 || true; \
+      pkill -f "/[f]ullmag-fem-gpu-bin --dev .*examples/arch_waveguide_relax_50nm.py" >/dev/null 2>&1 || true; \
       rm -rf apps/control-room/.next/dev; \
       mkdir -p .fullmag/logs; \
       echo "Starting v2 control room on :3100 ..." >&2; \
@@ -210,7 +210,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-cli crates/fullmag-runner crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
+    stale_source="$(find crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine packages/fullmag-py/src native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \

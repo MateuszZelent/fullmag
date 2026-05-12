@@ -6,6 +6,7 @@ export type ObjectSelectionKind =
   | "object.material"
   | "object.physics"
   | "object.regions"
+  | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
   | "object.mesh"
@@ -16,6 +17,7 @@ export type SelectionRef =
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
+      regionId?: string;
       type: "scene-object";
       visualizationTargetId: `object:${string}`;
     }

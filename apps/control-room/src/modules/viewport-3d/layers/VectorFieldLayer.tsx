@@ -18,8 +18,9 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
 
 const UNIT_Y = new Vector3(0, 1, 0);
-const DEFAULT_HEAD_RADIUS_RATIO = 0.14;
-const DEFAULT_SHAFT_RADIUS_RATIO = 0.045;
+// V1-matched proportions for better visual quality.
+const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
+const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
 
 export interface VectorFieldLayerVectorStyle {
   alpha?: number | null;
@@ -80,6 +81,7 @@ export function VectorFieldLayer({
         ? buildVectorGlyphInstances(segments, {
             colorMode,
             headRadiusRatio: resolvedStyle.headRadiusRatio,
+            orientationFrame: "hud",
             shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
           })
         : null,
@@ -92,11 +94,11 @@ export function VectorFieldLayer({
   );
   const useInstanceColors = Boolean(glyphs?.colors);
   const shaftGeometry = useMemo(
-    () => tracker.track("geometry", new CylinderGeometry(1, 1, 1, 8, 1)),
+    () => tracker.track("geometry", new CylinderGeometry(1, 1, 1, 12, 1)),
     [tracker],
   );
   const headGeometry = useMemo(
-    () => tracker.track("geometry", new ConeGeometry(1, 1, 8, 1)),
+    () => tracker.track("geometry", new ConeGeometry(1, 1, 12, 1)),
     [tracker],
   );
   const material = useMemo(
@@ -105,9 +107,10 @@ export function VectorFieldLayer({
         "material",
         new MeshBasicMaterial({
           color: useInstanceColors ? "white" : resolvedStyle.materialColor,
+          depthWrite: resolvedStyle.materialOpacity >= 0.99,
           opacity: resolvedStyle.materialOpacity,
           toneMapped: false,
-          transparent: resolvedStyle.materialOpacity < 1,
+          transparent: resolvedStyle.materialOpacity < 0.99,
           vertexColors: useInstanceColors,
         }),
       ),

@@ -34,6 +34,9 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "object.magnetic-texture" })?.id).toBe(
       "object-magnetic-texture",
     );
+    expect(
+      resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
+    ).toBe("object-magnetic-texture");
   });
 
   it("resolves object mesh selections to the object mesh policy panel", () => {

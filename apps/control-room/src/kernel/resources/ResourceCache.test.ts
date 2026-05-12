@@ -41,15 +41,23 @@ describe("ResourceCache", () => {
     expect(cache.get("field:m")?.etag).toBe('"loaded"');
   });
 
-  it("rejects oversized entries without evicting useful cached data", () => {
+  it("keeps one oversized current entry instead of silently dropping it", () => {
     const cache = new ResourceCache<string>({ maxBytes: 4 });
+    const disposeSmall = vi.fn();
     cache.set("small", { byteLength: 2, data: "small" });
+    cache.set("small-disposable", {
+      byteLength: 1,
+      data: "small-disposable",
+      dispose: disposeSmall,
+    });
 
-    expect(cache.set("large", { byteLength: 5, data: "large" })).toBe(false);
+    expect(cache.set("large", { byteLength: 5, data: "large" })).toBe(true);
 
-    expect(cache.get("small")?.data).toBe("small");
-    expect(cache.get("large")).toBeNull();
-    expect(cache.stats()).toEqual({ byteLength: 2, entryCount: 1 });
+    expect(cache.get("small")).toBeNull();
+    expect(cache.get("small-disposable")).toBeNull();
+    expect(cache.get("large")?.data).toBe("large");
+    expect(disposeSmall).toHaveBeenCalledTimes(1);
+    expect(cache.stats()).toEqual({ byteLength: 5, entryCount: 1 });
   });
 
   it("keeps retained entries out of LRU eviction until released", () => {

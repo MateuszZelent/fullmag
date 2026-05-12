@@ -20,6 +20,7 @@ import {
   CommandList,
 } from "@/shared/ui/Command";
 
+import { MeshBuildDialog } from "./MeshBuildDialog";
 import { useCommandPalette } from "./useCommandPalette";
 
 export function filterPaletteCommands(
@@ -168,19 +169,22 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
   }, [close, kernel.bus]);
 
   return (
-    <CommandPaletteView
-      commands={commands}
-      isOpen={isOpen}
-      query={query}
-      onClose={close}
-      onExecute={(commandId) => {
-        void executePaletteCommand(
-          kernel.commands,
-          commandId,
-          createCommandContext("palette", kernel),
-        );
-      }}
-      onQueryChange={setQuery}
-    />
+    <>
+      <CommandPaletteView
+        commands={commands}
+        isOpen={isOpen}
+        query={query}
+        onClose={close}
+        onExecute={(commandId) => {
+          void executePaletteCommand(
+            kernel.commands,
+            commandId,
+            createCommandContext("palette", kernel),
+          );
+        }}
+        onQueryChange={setQuery}
+      />
+      <MeshBuildDialog kernel={kernel} />
+    </>
   );
 }

@@ -16,6 +16,7 @@ export type ExplorerNodeKind =
   | "object.material"
   | "object.physics"
   | "object.regions"
+  | "object.region-magnetic-texture"
   | "object.magnetic-parameters"
   | "object.magnetic-texture"
   | "object.mesh"
@@ -23,7 +24,14 @@ export type ExplorerNodeKind =
   | "airbox.mesh"
   | "airbox.visualization"
   | "mesh.root"
+  | "mesh.shared-domain"
+  | "mesh.builds"
+  | "mesh.quality"
+  | "mesh.size-fields"
+  | "mesh.regions"
   | "study.root"
+  | "study.stage.action"
+  | "study.stage.eigenmodes"
   | "study.stage.relax"
   | "study.stage.run"
   | "results.root"
@@ -48,6 +56,7 @@ export type ExplorerNodeStatus =
   | "running"
   | "failed"
   | "degraded"
+  | "warning"
   | "unsupported";
 
 export type ExplorerIconToken =
@@ -58,6 +67,7 @@ export type ExplorerIconToken =
   | "database"
   | "file"
   | "folder"
+  | "gauge"
   | "layers"
   | "magnet"
   | "mesh"
@@ -78,6 +88,7 @@ export interface ExplorerNode {
   contextCommands?: CommandId[];
   icon?: ExplorerIconToken;
   objectId?: string;
+  regionId?: string;
   resourceRef?: string;
   status?: ExplorerNodeStatus;
 }
@@ -95,6 +106,10 @@ export interface ModelTreeObjectSnapshot {
   meshStatus?: ExplorerNodeStatus;
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   region?: string | null;
+  regionId?: string | null;
+  regionMagnetization?: string | null;
+  regionMagnetizationKind?: string | null;
+  regionMagnetizationLabel?: string | null;
   textureTransformAvailable?: boolean;
 }
 
@@ -113,6 +128,7 @@ export interface ModelTreePhysicsInteractionSnapshot {
 
 export interface ModelTreeSnapshot {
   materials?: readonly ModelTreeMaterialSnapshot[];
+  mesh?: ModelTreeMeshSnapshot | null;
   universe?: {
     id: string;
     label: string;
@@ -120,4 +136,40 @@ export interface ModelTreeSnapshot {
   } | null;
   objects?: readonly ModelTreeObjectSnapshot[];
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
+  study?: ModelTreeStudySnapshot | null;
+}
+
+export interface ModelTreeStudySnapshot {
+  demagRealization?: string | null;
+  externalField?: readonly [number, number, number] | null;
+  requestedBackend?: string | null;
+  requestedDevice?: string | null;
+  requestedMode?: string | null;
+  requestedPrecision?: string | null;
+  stages: readonly ModelTreeStudyStageSnapshot[];
+}
+
+export interface ModelTreeStudyStageSnapshot {
+  artifactName?: string | null;
+  energyTolerance?: string | number | null;
+  index: number;
+  kind: string;
+  maxSteps?: string | number | null;
+  torqueTolerance?: string | number | null;
+  untilSeconds?: string | number | null;
+}
+
+export interface ModelTreeMeshSnapshot {
+  activeBuildStatus?: string | null;
+  buildRevision?: number | string | null;
+  domainMeshMode?: string | null;
+  generationId?: string | null;
+  lastError?: string | null;
+  meshName?: string | null;
+  meshRevision?: number | string | null;
+  objectSegmentCount?: number | null;
+  partCount?: number | null;
+  qualityStatus?: string | null;
+  realizedSizeFieldCount?: number | null;
+  regionCount?: number | null;
 }

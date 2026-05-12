@@ -10,6 +10,7 @@ export interface VectorGlyphInstanceOptions {
   colorMode?: string;
   headLengthRatio?: number;
   headRadiusRatio?: number;
+  orientationFrame?: "physical" | "hud";
   shaftRadiusRatio?: number;
 }
 
@@ -23,28 +24,50 @@ export interface VectorGlyphInstances {
   shaftScales: Float32Array;
 }
 
-const DEFAULT_HEAD_LENGTH_RATIO = 0.28;
-const DEFAULT_HEAD_RADIUS_RATIO = 0.14;
-const DEFAULT_SHAFT_RADIUS_RATIO = 0.045;
-const FLOATS_PER_SEGMENT = 6;
+// V1-matched proportions: larger head, thicker shaft for better visibility.
+const DEFAULT_HEAD_LENGTH_RATIO = 0.35;
+const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
+const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
+
+/**
+ * Number of floats per segment in the production format:
+ * [sx, sy, sz, ex, ey, ez, relMag].
+ *
+ * Legacy 6-float segments (no magnitude channel) are still accepted — the
+ * glyph geometry will be built correctly and magnitude colouring will fall
+ * back to relMag = 1 (full brightness).
+ */
+const FLOATS_PER_SEGMENT = 7;
 
 export function buildVectorGlyphInstances(
   segments: Float32Array,
   options: VectorGlyphInstanceOptions = {},
 ): VectorGlyphInstances {
-  const count = Math.floor(segments.length / FLOATS_PER_SEGMENT);
+  // Support both 7-channel (production) and 6-channel (legacy / test) formats.
+  const segmentStride =
+    segments.length > 0 && segments.length % FLOATS_PER_SEGMENT === 0
+      ? FLOATS_PER_SEGMENT
+      : 6;
+  const count = Math.floor(segments.length / segmentStride);
   const colorMode = normalizeViewport3DVectorColorMode(options.colorMode);
+  const orientationFrame = options.orientationFrame ?? "physical";
   const headLengthRatio =
     options.headLengthRatio ?? DEFAULT_HEAD_LENGTH_RATIO;
   const headRadiusRatio = options.headRadiusRatio ?? DEFAULT_HEAD_RADIUS_RATIO;
   const shaftRadiusRatio =
     options.shaftRadiusRatio ?? DEFAULT_SHAFT_RADIUS_RATIO;
   const colors =
-    colorMode !== "monochrome" && colorMode !== "magnitude"
+    colorMode !== "monochrome"
       ? new Float32Array(count * 3)
       : null;
   const colorRange = colors
-    ? resolveSegmentColorRange(segments, count, colorMode)
+    ? resolveSegmentColorRange(
+        segments,
+        count,
+        segmentStride,
+        colorMode,
+        orientationFrame,
+      )
     : null;
   const directions = new Float32Array(count * 3);
   const headCenters = new Float32Array(count * 3);
@@ -53,7 +76,7 @@ export function buildVectorGlyphInstances(
   const shaftScales = new Float32Array(count * 3);
 
   for (let vector = 0; vector < count; vector += 1) {
-    const source = vector * FLOATS_PER_SEGMENT;
+    const source = vector * segmentStride;
     const target = vector * 3;
     const sx = segments[source] ?? 0;
     const sy = segments[source + 1] ?? 0;
@@ -61,9 +84,16 @@ export function buildVectorGlyphInstances(
     const ex = segments[source + 3] ?? sx;
     const ey = segments[source + 4] ?? sy;
     const ez = segments[source + 5] ?? sz;
+    const relMag = segmentStride >= 7 ? (segments[source + 6] ?? 1) : 1;
     const dx = ex - sx;
     const dy = ey - sy;
     const dz = ez - sz;
+    const [colorDx, colorDy, colorDz] = resolveOrientationFrameVector(
+      dx,
+      dy,
+      dz,
+      orientationFrame,
+    );
     const length = Math.hypot(dx, dy, dz);
     const ux = length > 0 ? dx / length : 0;
     const uy = length > 0 ? dy / length : 1;
@@ -96,10 +126,11 @@ export function buildVectorGlyphInstances(
     if (colors && colorRange) {
       const rgb = resolveViewport3DVectorColorRgb(
         colorMode,
-        dx,
-        dy,
-        dz,
+        colorDx,
+        colorDy,
+        colorDz,
         colorRange,
+        relMag,
       );
       if (rgb) colors.set(rgb, target);
     }
@@ -119,32 +150,54 @@ export function buildVectorGlyphInstances(
 function resolveSegmentColorRange(
   segments: Float32Array,
   count: number,
+  segmentStride: number,
   colorMode: Viewport3DVectorColorMode,
+  orientationFrame: NonNullable<VectorGlyphInstanceOptions["orientationFrame"]>,
 ): Viewport3DScalarColorRange {
-  let min = Infinity;
-  let max = -Infinity;
-
-  for (let vector = 0; vector < count; vector += 1) {
-    const source = vector * FLOATS_PER_SEGMENT;
-    const sx = segments[source] ?? 0;
-    const sy = segments[source + 1] ?? 0;
-    const sz = segments[source + 2] ?? 0;
-    const ex = segments[source + 3] ?? sx;
-    const ey = segments[source + 4] ?? sy;
-    const ez = segments[source + 5] ?? sz;
-    const value = resolveViewport3DVectorColorScalar(
-      colorMode,
-      ex - sx,
-      ey - sy,
-      ez - sz,
-    );
-    min = Math.min(min, value);
-    max = Math.max(max, value);
+  // Magnitude coloring uses the pre-normalised relMag channel directly
+  // (range is always [0, 1]).
+  if (colorMode === "magnitude") {
+    return { min: 0, max: 1 };
   }
 
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    return { max: 0, min: 0 };
+  // x / y / z: symmetric range so that 0 maps to the neutral colour.
+  if (colorMode === "x" || colorMode === "y" || colorMode === "z") {
+    let maxAbs = 0;
+    for (let vector = 0; vector < count; vector += 1) {
+      const source = vector * segmentStride;
+      const dx = (segments[source + 3] ?? 0) - (segments[source] ?? 0);
+      const dy = (segments[source + 4] ?? 0) - (segments[source + 1] ?? 0);
+      const dz = (segments[source + 5] ?? 0) - (segments[source + 2] ?? 0);
+      const [colorDx, colorDy, colorDz] = resolveOrientationFrameVector(
+        dx,
+        dy,
+        dz,
+        orientationFrame,
+      );
+      const value = Math.abs(
+        resolveViewport3DVectorColorScalar(
+          colorMode,
+          colorDx,
+          colorDy,
+          colorDz,
+        ),
+      );
+      if (value > maxAbs) maxAbs = value;
+    }
+    const range = Math.max(maxAbs, 1e-12);
+    return { min: -range, max: range };
   }
 
-  return { max, min };
+  // orientation: range not used, return identity.
+  return { min: 0, max: 1 };
+}
+
+function resolveOrientationFrameVector(
+  dx: number,
+  dy: number,
+  dz: number,
+  orientationFrame: NonNullable<VectorGlyphInstanceOptions["orientationFrame"]>,
+): [number, number, number] {
+  if (orientationFrame === "hud") return [dx, dy, -dz];
+  return [dx, dy, dz];
 }

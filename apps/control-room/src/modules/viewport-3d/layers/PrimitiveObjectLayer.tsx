@@ -94,6 +94,7 @@ function PrimitiveObject({
     onSelectObject(object);
   };
   const opacity = opacityFromSettings(settings);
+  const shaderColor = object.magnetizationTexturePreview?.color ?? colors.mesh;
 
   return (
     <group
@@ -109,7 +110,7 @@ function PrimitiveObject({
         <mesh>
           <primitive attach="geometry" object={geometry} />
           <meshStandardMaterial
-            color={colors.mesh}
+            color={shaderColor}
             opacity={Math.min(opacity, 0.58)}
             roughness={0.78}
             transparent
