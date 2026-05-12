@@ -444,7 +444,54 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 2: 2D Slice ──────────────────────────────────────────────────
+    // ── Group 2: Orientation widgets ───────────────────────────────────────
+    {
+      id: "view-orientation-tools",
+      title: "Orientation",
+      subtitle: "3D box and HSL",
+      tone: "neutral",
+      actions: [
+        {
+          id: "viewport-3d.toggle-viewcube",
+          icon: icon(Box),
+          label: "3D Box",
+          iconColor: "text-sky-300",
+        },
+        {
+          id: "view-hsl-reference",
+          icon: icon(Target),
+          label: "HSL Sphere",
+          iconColor: "text-fuchsia-300",
+          menu: [
+            {
+              type: "radio-group",
+              id: "orientation:hsl-reference",
+              label: "Visibility",
+              value: "auto",
+              items: [
+                {
+                  commandId: "viewport-3d.hsl-reference-auto",
+                  label: "Auto",
+                  value: "auto",
+                },
+                {
+                  commandId: "viewport-3d.hsl-reference-on",
+                  label: "On",
+                  value: "on",
+                },
+                {
+                  commandId: "viewport-3d.hsl-reference-off",
+                  label: "Off",
+                  value: "off",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+
+    // ── Group 3: 2D Slice ──────────────────────────────────────────────────
     {
       id: "view-slice-2d",
       title: "2D Slice",
@@ -612,7 +659,7 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 3: Selected Display (per-object overrides) ───────────────────
+    // ── Group 4: Selected Display (per-object overrides) ───────────────────
     {
       id: "view-selected-display",
       title: "Selected Display",
@@ -685,7 +732,7 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 4: Manipulate (camera/gizmo/transform) ───────────────────────
+    // ── Group 5: Manipulate (camera/gizmo/transform) ───────────────────────
     {
       id: "view-manipulate",
       title: "Manipulate",
@@ -746,7 +793,7 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 5: Snapshot / Export ─────────────────────────────────────────
+    // ── Group 6: Snapshot / Export ─────────────────────────────────────────
     {
       id: "view-snapshot-export",
       title: "Snapshot / Export",
@@ -779,7 +826,7 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 6: Display (mode, camera, panels, axes) ──────────────────────
+    // ── Group 7: Display (mode, camera, panels, axes) ──────────────────────
     {
       id: "view-display",
       title: "Display",
@@ -1366,11 +1413,11 @@ export function buildRibbonTabContent(
       groups: content.groups.map((group) =>
         group.id === "view-global-display"
           ? buildViewGlobalDisplayGroup(group, context)
+          : group.id === "view-orientation-tools"
+            ? buildViewOrientationGroup(group, context)
           : group.id === "view-selected-display"
             ? buildSelectedVisualizationGroup(context)
-            : group.id === "view-display"
-              ? buildViewDisplayGroup(group, context)
-              : group,
+            : group,
       ),
     };
   }
@@ -1478,20 +1525,21 @@ function buildViewGlobalDisplayGroup(
   };
 }
 
-function buildViewDisplayGroup(
+function buildViewOrientationGroup(
   group: RibbonTabContent["groups"][number],
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number] {
   return {
     ...group,
-    actions: [
-      ...group.actions.filter((action) => action.id !== "view-orientation"),
-      buildOrientationAction(context),
-    ],
+    actions: group.actions.map((action) =>
+      action.id === "view-hsl-reference"
+        ? buildHslReferenceAction(context)
+        : action,
+    ),
   };
 }
 
-function buildOrientationAction({
+function buildHslReferenceAction({
   commandContext = { source: "ribbon" },
   commands,
 }: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
@@ -1503,24 +1551,16 @@ function buildOrientationAction({
     ]) ?? "auto";
 
   return {
-    id: "view-orientation",
+    id: "view-hsl-reference",
     icon: icon(Target),
-    label: "Orientation",
-    iconColor: "text-sky-300",
+    label: "HSL Sphere",
+    active: hslReferenceValue !== "off",
+    iconColor: "text-fuchsia-300",
     menu: [
-      {
-        type: "checkbox",
-        id: "orientation:viewcube",
-        label: "View cube",
-        checked:
-          commands?.isActive("viewport-3d.toggle-viewcube", commandContext) ??
-          true,
-        commandId: "viewport-3d.toggle-viewcube",
-      },
       {
         type: "radio-group",
         id: "orientation:hsl-reference",
-        label: "HSL reference",
+        label: "Visibility",
         value: hslReferenceValue,
         items: [
           {

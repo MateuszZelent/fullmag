@@ -2,9 +2,17 @@
 
 import { Html } from "@react-three/drei";
 import type { ThreeEvent } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
+import {
+  BoxGeometry,
+  BufferGeometry,
+  CylinderGeometry,
+  SphereGeometry,
+} from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
+import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
@@ -12,16 +20,32 @@ import type {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { opacityFromSettings } from "./viewport3DLayerSettings";
 
+export function trackPrimitiveObjectGeometry(
+  tracker: Viewport3DResourceTracker,
+  object: Viewport3DPrimitiveObject,
+): BufferGeometry {
+  return tracker.track("geometry", createPrimitiveObjectGeometry(object));
+}
+
+export function releasePrimitiveObjectGeometry(
+  tracker: Viewport3DResourceTracker,
+  geometry: BufferGeometry,
+): void {
+  tracker.release("geometry", geometry);
+}
+
 export function PrimitiveObjectLayer({
   colors,
   getObjectSettings,
   onSelectObject,
   primitiveModel,
+  tracker,
 }: {
   colors: Viewport3DColors;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
+  tracker: Viewport3DResourceTracker;
 }) {
   if (!primitiveModel?.objects.length) return null;
 
@@ -34,6 +58,7 @@ export function PrimitiveObjectLayer({
           object={object}
           onSelectObject={onSelectObject}
           settings={getObjectSettings(object)}
+          tracker={tracker}
         />
       ))}
     </>
@@ -45,12 +70,24 @@ function PrimitiveObject({
   object,
   onSelectObject,
   settings,
+  tracker,
 }: {
   colors: Viewport3DColors;
   object: Viewport3DPrimitiveObject;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   settings: VisualizationTargetSettings;
+  tracker: Viewport3DResourceTracker;
 }) {
+  const geometry = useMemo(
+    () => trackPrimitiveObjectGeometry(tracker, object),
+    [object, tracker],
+  );
+
+  useEffect(
+    () => () => releasePrimitiveObjectGeometry(tracker, geometry),
+    [geometry, tracker],
+  );
+
   if (!settings.visible) return null;
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -71,7 +108,7 @@ function PrimitiveObject({
     >
       {settings.shaderVisible ? (
         <mesh>
-          <PrimitiveGeometry object={object} />
+          <primitive attach="geometry" object={geometry} />
           <meshStandardMaterial
             color={colors.mesh}
             opacity={Math.min(opacity, 0.58)}
@@ -82,7 +119,7 @@ function PrimitiveObject({
       ) : null}
       {settings.wireframeVisible ? (
         <mesh>
-          <PrimitiveGeometry object={object} />
+          <primitive attach="geometry" object={geometry} />
           <meshBasicMaterial
             color={colors.wire}
             opacity={Math.max(opacity, 0.68)}
@@ -100,13 +137,15 @@ function PrimitiveObject({
   );
 }
 
-function PrimitiveGeometry({ object }: { object: Viewport3DPrimitiveObject }) {
+export function createPrimitiveObjectGeometry(
+  object: Viewport3DPrimitiveObject,
+): BufferGeometry {
   const [x, y, z] = object.bounds.size;
   if (object.kind === "sphere") {
-    return <sphereGeometry args={[Math.max(x, y, z) / 2, 32, 16]} />;
+    return new SphereGeometry(Math.max(x, y, z) / 2, 32, 16);
   }
   if (object.kind === "cylinder") {
-    return <cylinderGeometry args={[x / 2, x / 2, y, 32, 1]} />;
+    return new CylinderGeometry(x / 2, x / 2, y, 32, 1);
   }
-  return <boxGeometry args={[x, y, z]} />;
+  return new BoxGeometry(x, y, z);
 }

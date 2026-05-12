@@ -250,7 +250,7 @@ Rules:
 - [x] Implement primitive shaded and simplified wireframe layers.
 - [x] Add fallback labels for primitive-only and mesh-stale states.
 - [x] Keep topology rebuilds tied to topology revisions only; primitive parameter changes rebuild only the affected primitive geometry. Current coverage includes topology render memo isolation from scene changes plus stable per-object primitive geometry keys across unrelated scene revisions.
-- [ ] Add viewport tests for new object primitive display, fallback wireframe without topology, mesh-ready switch, stale previous mesh labeling, selection highlight, and layer disposal. Current coverage includes primitive-only display, stale previous mesh labeling, mesh-ready fallback suppression, primitive selection bounds, and selection highlight rendering; layer disposal remains open for primitive/fallback layers.
+- [x] Add viewport tests for new object primitive display, fallback wireframe without topology, mesh-ready switch, stale previous mesh labeling, selection highlight, and layer disposal. Current coverage includes primitive-only display, stale previous mesh labeling, mesh-ready fallback suppression, primitive selection bounds, selection highlight rendering, and primitive geometry tracking/disposal through the viewport resource tracker.
 
 ### Phase E - Mesh Build Integration
 

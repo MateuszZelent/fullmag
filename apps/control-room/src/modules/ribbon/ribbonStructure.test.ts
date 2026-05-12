@@ -398,21 +398,28 @@ describe("ribbon structure", () => {
       visualization: new ObjectVisualizationController(),
       visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
     });
-    const orientationAction = content?.groups
-      .find((group) => group.id === "view-display")
-      ?.actions.find((action) => action.id === "view-orientation");
-    const viewCubeNode = orientationAction?.menu?.find(
-      (node) => node.type === "checkbox" && node.id === "orientation:viewcube",
+    const orientationGroup = content?.groups.find(
+      (group) => group.id === "view-orientation-tools",
     );
-    const hslNode = orientationAction?.menu?.find(
+    const viewCubeAction = orientationGroup?.actions.find(
+      (action) => action.id === "viewport-3d.toggle-viewcube",
+    );
+    const hslAction = orientationGroup?.actions.find(
+      (action) => action.id === "view-hsl-reference",
+    );
+    const hslNode = hslAction?.menu?.find(
       (node) => node.type === "radio-group" && node.id === "orientation:hsl-reference",
     );
 
-    expect(viewCubeNode).toMatchObject({
-      checked: true,
-      commandId: "viewport-3d.toggle-viewcube",
+    expect(viewCubeAction).toMatchObject({
+      active: true,
+      id: "viewport-3d.toggle-viewcube",
+      label: "3D Box",
     });
-    expect(viewCubeNode).not.toHaveProperty("onCheckedChange");
+    expect(hslAction).toMatchObject({
+      active: true,
+      label: "HSL Sphere",
+    });
     expect(hslNode).toMatchObject({
       value: "auto",
       items: [

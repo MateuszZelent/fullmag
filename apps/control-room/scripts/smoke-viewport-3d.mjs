@@ -9,6 +9,7 @@ const apiBase =
   null;
 const allowMissingSession =
   process.env.CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION === "1";
+const CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX = 48;
 
 async function loadPlaywright() {
   try {
@@ -97,10 +98,23 @@ try {
     const context = canvasNode.getContext("webgl2") ?? canvasNode.getContext("webgl");
     return Boolean(context);
   });
+  const drawingBuffer = await canvas.evaluate((node) => {
+    const canvasNode = node;
+    const context = canvasNode.getContext("webgl2") ?? canvasNode.getContext("webgl");
+    return {
+      height: context?.drawingBufferHeight ?? 0,
+      width: context?.drawingBufferWidth ?? 0,
+    };
+  });
   const pixelSample = await sampleCanvasComposite(page, canvas);
 
   if (!hasContext) {
     throw new Error("3D viewport canvas has no WebGL context.");
+  }
+  if (drawingBuffer.width <= 0 || drawingBuffer.height <= 0) {
+    throw new Error(
+      `3D viewport WebGL drawing buffer is empty: ${drawingBuffer.width}x${drawingBuffer.height}.`,
+    );
   }
   if (!pixelSample.nonBlank) {
     throw new Error(
@@ -139,10 +153,13 @@ async function sampleCanvasComposite(page, canvas) {
   const backgroundRgb = parseCssRgb(background);
   const png = await page.screenshot({
     clip: {
-      height: Math.max(1, Math.floor(box.height)),
+      height: Math.max(
+        1,
+        Math.floor(box.height - CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX),
+      ),
       width: Math.max(1, Math.floor(box.width)),
       x: Math.max(0, Math.floor(box.x)),
-      y: Math.max(0, Math.floor(box.y)),
+      y: Math.max(0, Math.floor(box.y + CANVAS_SMOKE_TOP_OVERLAY_EXCLUSION_PX)),
     },
   });
   const bitmap = parsePng(png);

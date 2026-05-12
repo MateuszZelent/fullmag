@@ -3,7 +3,6 @@
 import {
   GizmoViewcube,
   Line,
-  Text,
 } from "@react-three/drei";
 import {
   useFrame,
@@ -13,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import {
   BufferAttribute,
+  CanvasTexture,
   SphereGeometry,
   Vector3,
   type BufferGeometry,
@@ -293,23 +293,51 @@ function HslReferenceAxes({ colors }: { colors: Viewport3DColors }) {
                 toneMapped={false}
               />
             </mesh>
-            <Text
-              anchorX="center"
-              anchorY="middle"
+            <AxisLabelSprite
               color={axisColor}
-              depthOffset={-10}
-              fontSize={0.18}
+              label={axis.label}
               outlineColor={String(colors.wire)}
-              outlineWidth={0.012}
               position={label}
-              renderOrder={WIDGET_RENDER_ORDER + 5}
-            >
-              {axis.label}
-            </Text>
+            />
           </group>
         );
       })}
     </group>
+  );
+}
+
+function AxisLabelSprite({
+  color,
+  label,
+  outlineColor,
+  position,
+}: {
+  color: string;
+  label: string;
+  outlineColor: string;
+  position: [number, number, number];
+}) {
+  const texture = useMemo(
+    () => buildAxisLabelTexture(label, color, outlineColor),
+    [color, label, outlineColor],
+  );
+
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  return (
+    <sprite
+      position={position}
+      renderOrder={WIDGET_RENDER_ORDER + 5}
+      scale={[0.46, 0.22, 1]}
+    >
+      <spriteMaterial
+        depthTest={false}
+        depthWrite={false}
+        map={texture}
+        toneMapped={false}
+        transparent
+      />
+    </sprite>
   );
 }
 
@@ -332,6 +360,32 @@ function buildHslSphereGeometry(): BufferGeometry {
 
   geometry.setAttribute("color", new BufferAttribute(colors, 3));
   return geometry;
+}
+
+function buildAxisLabelTexture(
+  label: string,
+  color: string,
+  outlineColor: string,
+): CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.font = "700 32px Inter, Arial, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.lineJoin = "round";
+    context.lineWidth = 7;
+    context.strokeStyle = outlineColor;
+    context.fillStyle = color;
+    context.strokeText(label, 64, 34);
+    context.fillText(label, 64, 34);
+  }
+  const texture = new CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
 }
 
 function updateScreenAnchor(

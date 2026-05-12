@@ -123,6 +123,7 @@ export function Viewport3DScene({
         getObjectSettings={getObjectSettings}
         onSelectObject={onSelectObject}
         primitiveModel={primitiveModel}
+        tracker={tracker}
       />
       <TopologyMeshLayer
         colors={colors}
