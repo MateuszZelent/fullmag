@@ -6,6 +6,7 @@ import { useCallback, useMemo, type ComponentProps } from "react";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import { VISUALIZATION_STATE_RESOURCE_KEY } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
@@ -56,6 +57,7 @@ import {
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
+import { resolveViewport3DTopologyFreshness } from "./viewport3dTopologyStaleness";
 import {
   getViewport3DCacheStats,
   useViewport3DDomainMeta,
@@ -116,6 +118,19 @@ export default function Viewport3DModule({
       domainId,
       select,
     });
+  const saveCameraState = useCallback(
+    async (camera: { position: [number, number, number]; target: [number, number, number] }) => {
+      const next = await kernel.api.visualization.patch({
+        camera: {
+          position: camera.position,
+          target: camera.target,
+          up: VIEWPORT_3D_WORLD_UP,
+        },
+      });
+      kernel.resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
+    },
+    [kernel.api, kernel.resources],
+  );
 
   return (
     <Viewport3DFrame
@@ -128,6 +143,7 @@ export default function Viewport3DModule({
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
+      onCameraChange={saveCameraState}
       resetCameraRevision={commandState.resetCameraRevision}
       slotId={slotId}
       tracker={tracker}
@@ -208,6 +224,16 @@ function useViewport3DSceneModel({
       ),
     [scene.data, sharedDomainManifest.data],
   );
+  const topologyFreshness = useMemo(
+    () =>
+      resolveViewport3DTopologyFreshness(
+        scene.data,
+        sharedDomainManifest.data,
+      ),
+    [scene.data, sharedDomainManifest.data],
+  );
+  const currentTopologyRenderModel =
+    topologyFreshness === "stale" ? null : topologyRenderModel;
   const magnetizationTexturePreviews = useMemo(
     () => buildViewport3DMagnetizationTexturePreviewMap(scene.data),
     [scene.data],
@@ -218,8 +244,11 @@ function useViewport3DSceneModel({
     ),
     [primitiveModel],
   );
+  const topologyBounds =
+    topologyFreshness === "stale" ? null : resolveTopologyBounds(topology.data);
   const bounds =
-    resolveTopologyBounds(topology.data) ??
+    topologyBounds ??
+    (topologyFreshness === "stale" ? primitiveBounds : null) ??
     resolveDomainBounds(domainMeta.data) ??
     resolveUniverseBounds(universe.data) ??
     primitiveBounds;
@@ -301,7 +330,7 @@ function useViewport3DSceneModel({
     getPartSettings,
     maxAirboxVectorGlyphs,
     maxVectorGlyphs,
-    topologyRenderModel,
+    topologyRenderModel: currentTopologyRenderModel,
     vectorColorMode,
     vectorDomain,
   });
@@ -315,12 +344,17 @@ function useViewport3DSceneModel({
   const fieldRenderModel = useMemo(
     () =>
       buildViewport3DFieldRenderModel(
-        topologyRenderModel,
+        currentTopologyRenderModel,
         fieldVector.data,
         vectorScale,
         fieldRenderOptions,
       ),
-    [fieldRenderOptions, fieldVector.data, topologyRenderModel, vectorScale],
+    [
+      currentTopologyRenderModel,
+      fieldRenderOptions,
+      fieldVector.data,
+      vectorScale,
+    ],
   );
   const selectedLabel = selection.label ?? "No selection";
   const status =
@@ -415,6 +449,7 @@ function useViewport3DSceneModel({
     selectedLabel,
     selectionBounds,
     status,
+    topologyFreshness,
     topologyModel: topologyRenderModel,
     vectorColorMode,
     vectorStyle,

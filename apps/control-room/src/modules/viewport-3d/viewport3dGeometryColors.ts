@@ -17,9 +17,7 @@ export function canApplyVertexScalarColors(
   return Boolean(
     fieldVector &&
       fieldVector.pointCount > 0 &&
-      // Field may cover a subset of topology nodes (e.g. magnetic domain only).
-      // Allow partial coverage: pointCount <= vertexCount.
-      fieldVector.pointCount <= vertexCount &&
+      fieldVector.pointCount === vertexCount &&
       !fieldTransformNeedsChunking(
         fieldVector.pointCount,
         maxSynchronousPoints,
@@ -59,13 +57,13 @@ export function applyVertexScalarColorBuffer(
   if (!colorBuffer) {
     // When the existing buffer matches the current topology, zero-fill it
     // instead of deleting it.  The material's `vertexColors` flag controls
-    // whether the buffer is actually sampled — this avoids intermediate blank
-    // frames during HSL→monochrome transitions.
+    // whether the buffer is actually sampled. This avoids intermediate blank
+    // frames during HSL-to-monochrome transitions.
     if (hasCompatibleBuffer) {
       (existing.array as Float32Array).fill(0);
       existing.needsUpdate = true;
     } else if (geometry.hasAttribute("color")) {
-      // Buffer size doesn't match the current topology — stale data from a
+      // Buffer size does not match the current topology: stale data from a
       // previous mesh.  Remove it.
       geometry.deleteAttribute("color");
     }
@@ -82,7 +80,7 @@ export function applyVertexScalarColorBuffer(
     return true;
   }
 
-  // First-time allocation — create a persistent buffer that will be reused.
+  // First-time allocation creates a persistent buffer that will be reused.
   geometry.setAttribute("color", new BufferAttribute(colorBuffer.colors, 3));
   return true;
 }

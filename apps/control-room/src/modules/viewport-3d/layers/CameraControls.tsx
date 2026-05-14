@@ -103,12 +103,14 @@ export function CameraController({
   bounds,
   cameraState,
   fitRevision,
+  onCameraChange,
   resetCameraRevision,
   tracker,
 }: {
   bounds: Viewport3DBounds | null;
   cameraState: Viewport3DCameraState;
   fitRevision: number;
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   resetCameraRevision: number;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -153,9 +155,23 @@ export function CameraController({
       position: fit.position,
       target: fit.target,
     });
+    void Promise.resolve(
+      onCameraChange({
+        position: fit.position,
+        target: fit.target,
+      }),
+    ).catch(() => undefined);
     invalidate();
     tracker.recordDirtyFrame("camera-fit");
-  }, [bounds, camera, fitRevision, invalidate, resetCameraRevision, tracker]);
+  }, [
+    bounds,
+    camera,
+    fitRevision,
+    invalidate,
+    onCameraChange,
+    resetCameraRevision,
+    tracker,
+  ]);
 
   // Initial camera placement (once, on mount)
   useEffect(() => {
@@ -188,9 +204,11 @@ export function CameraController({
 
 export function OrbitCameraControls({
   cameraState,
+  onCameraChange,
   tracker,
 }: {
   cameraState: Viewport3DCameraState;
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   tracker: Viewport3DResourceTracker;
 }) {
   const { camera, invalidate } = useThree();
@@ -212,12 +230,19 @@ export function OrbitCameraControls({
       const target = controls?.target?.target?.toArray();
       if (!target || target.length < 3) return;
 
-      viewport3dStore.setCamera({
+      const nextTarget: [number, number, number] = [
+        target[0] ?? 0,
+        target[1] ?? 0,
+        target[2] ?? 0,
+      ];
+      const nextCamera = {
         position: camera.position.toArray() as [number, number, number],
-        target: [target[0] ?? 0, target[1] ?? 0, target[2] ?? 0],
-      });
+        target: nextTarget,
+      };
+      viewport3dStore.setCamera(nextCamera);
+      void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
     },
-    [camera],
+    [camera, onCameraChange],
   );
 
   return (

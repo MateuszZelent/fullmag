@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
 import {
@@ -72,6 +72,31 @@ interface ApiConnectionErrorDetails {
   lastRequest: RequestDiagnosticEntry | null;
   requestUrl: string;
   resourceKey: string;
+}
+
+const HYDRATING_HEADER_SESSION_SOURCE: HeaderSessionSource = {
+  data: null,
+  error: null,
+  status: "loading",
+};
+
+function subscribeToHydration(): () => void {
+  return () => {};
+}
+
+function clientHydratedSnapshot(): boolean {
+  return true;
+}
+
+function serverHydratedSnapshot(): boolean {
+  return false;
+}
+
+export function resolveHydrationSafeHeaderSessionSource(
+  status: HeaderSessionSource,
+  hydrated: boolean,
+): HeaderSessionSource {
+  return hydrated ? status : HYDRATING_HEADER_SESSION_SOURCE;
 }
 
 function readString(value: unknown, fallback: string): string {
@@ -340,11 +365,20 @@ function ApiConnectionErrorDialog({
 export function AppMenuBar() {
   const kernel = useKernel();
   const { theme, setTheme } = useTheme();
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    clientHydratedSnapshot,
+    serverHydratedSnapshot,
+  );
   const sessionStatus = useSessionStatus();
-  const sessionDisplay = resolveHeaderSessionDisplay(sessionStatus);
+  const visibleSessionStatus = resolveHydrationSafeHeaderSessionSource(
+    sessionStatus,
+    hydrated,
+  );
+  const sessionDisplay = resolveHeaderSessionDisplay(visibleSessionStatus);
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
   const apiErrorDetails = useMemo(() => {
-    if (!sessionStatus.error) return null;
+    if (!hydrated || !sessionStatus.error) return null;
 
     return resolveApiConnectionErrorDetails({
       apiBase: kernel.api.getBaseUrl(),
@@ -354,12 +388,12 @@ export function AppMenuBar() {
         SESSION_STATUS_PATH,
       ),
     });
-  }, [kernel, sessionStatus.error]);
+  }, [hydrated, kernel, sessionStatus.error]);
   const apiDialogOpen = Boolean(
     apiErrorDetails && apiDialogError === sessionStatus.error,
   );
   const openApiDialog = () => {
-    if (sessionStatus.error) setApiDialogError(sessionStatus.error);
+    if (hydrated && sessionStatus.error) setApiDialogError(sessionStatus.error);
   };
   const onApiDialogOpenChange = (open: boolean) => {
     if (open) openApiDialog();
@@ -446,15 +480,15 @@ export function AppMenuBar() {
 
       <button
         className="fm-header__session-indicator"
-        data-clickable={sessionStatus.error ? "true" : undefined}
+        data-clickable={visibleSessionStatus.error ? "true" : undefined}
         type="button"
         onClick={openApiDialog}
         onFocus={openApiDialog}
         onPointerEnter={openApiDialog}
         aria-expanded={apiDialogOpen ? true : undefined}
-        aria-haspopup={sessionStatus.error ? "dialog" : undefined}
+        aria-haspopup={visibleSessionStatus.error ? "dialog" : undefined}
         title={
-          sessionStatus.error
+          visibleSessionStatus.error
             ? "Open API error details"
             : sessionDisplay.indicatorLabel
         }

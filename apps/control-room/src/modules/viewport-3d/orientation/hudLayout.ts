@@ -5,7 +5,7 @@ interface OrientationHudViewport {
   width: number;
 }
 
-export const ORIENTATION_VIEW_CUBE_MARGIN_PX = 86;
+export const ORIENTATION_VIEW_CUBE_MARGIN_PX = 104;
 export const HSL_REFERENCE_MARGIN_PX = 96;
 
 export function resolveOrientationHudAnchors({

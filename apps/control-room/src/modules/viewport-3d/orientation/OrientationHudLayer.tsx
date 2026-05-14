@@ -1,6 +1,6 @@
 "use client";
 
-import { Line } from "@react-three/drei";
+import { Line, Text } from "@react-three/drei";
 import {
   useFrame,
   useThree,
@@ -63,7 +63,7 @@ const VIEW_CUBE_HALF = 31;
 const VIEW_CUBE_FACE_SIZE = VIEW_CUBE_HALF * 2;
 const VIEW_CUBE_EDGE_SIZE = 10;
 const VIEW_CUBE_LABEL_DISTANCE = 49;
-const VIEW_CUBE_EDGE_POINTS = buildViewCubeEdgePoints(VIEW_CUBE_HALF);
+const VIEW_CUBE_EDGE_LINES = buildViewCubeEdgeLines(VIEW_CUBE_HALF);
 const VIEW_CUBE_FACE_GRID_POINTS = buildViewCubeFaceGridPoints(
   VIEW_CUBE_HALF,
   VIEW_CUBE_EDGE_SIZE,
@@ -255,16 +255,16 @@ export function ViewCube3DBox({
       <mesh renderOrder={WIDGET_RENDER_ORDER}>
         <boxGeometry
           args={[
-            VIEW_CUBE_FACE_SIZE,
-            VIEW_CUBE_FACE_SIZE,
-            VIEW_CUBE_FACE_SIZE,
+            VIEW_CUBE_FACE_SIZE - 0.2,
+            VIEW_CUBE_FACE_SIZE - 0.2,
+            VIEW_CUBE_FACE_SIZE - 0.2,
           ]}
         />
         <meshBasicMaterial
-          color={colors.background}
+          color={colors.panelRaised ?? colors.mesh}
           depthTest={false}
           depthWrite={false}
-          opacity={0.64}
+          opacity={0.95}
           toneMapped={false}
           transparent
         />
@@ -283,15 +283,15 @@ export function ViewCube3DBox({
           />
         );
       })}
-      {/* Bright cube edges */}
-      {VIEW_CUBE_EDGE_POINTS.map((edge) => (
+      {/* Bright colored cube edges based on axis */}
+      {VIEW_CUBE_EDGE_LINES.map((edge) => (
         <Line
-          key={viewCubeSegmentKey(edge)}
-          color={String(colors.wire)}
+          key={viewCubeSegmentKey(edge.points)}
+          color={axisColors[edge.axis]}
           depthTest={false}
-          lineWidth={3.2}
-          opacity={0.88}
-          points={edge}
+          lineWidth={2.5}
+          opacity={0.65}
+          points={edge.points}
           renderOrder={WIDGET_RENDER_ORDER + 2}
           transparent
         />
@@ -362,18 +362,7 @@ function ViewCubeFacePanel({
 
   return (
     <group position={placement.position} rotation={placement.rotation}>
-      {/* Recessed volumetric panel behind the visible 3x3 target grid. */}
-      <mesh renderOrder={WIDGET_RENDER_ORDER + 1}>
-        <planeGeometry args={[VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE]} />
-        <meshBasicMaterial
-          color={colors.panel ?? colors.mesh}
-          depthTest={false}
-          depthWrite={false}
-          opacity={faceHovered ? 0.86 : 0.68}
-          toneMapped={false}
-          transparent
-        />
-      </mesh>
+      {/* Recessed volumetric panel removed in favor of crisp borders */}
       {/* V1-style visible face / edge / corner target grid. */}
       {face.targets.map((target, index) => {
         const cell = resolveViewCubeTargetCell(
@@ -429,13 +418,56 @@ function ViewCubeFacePanel({
           key={viewCubeSegmentKey(line)}
           color={String(colors.wire)}
           depthTest={false}
-          lineWidth={1.15}
-          opacity={faceHovered ? 0.58 : 0.36}
+          lineWidth={1.0}
+          opacity={faceHovered ? 0.3 : 0.15}
           points={line}
           renderOrder={WIDGET_RENDER_ORDER + 4}
           transparent
         />
       ))}
+      <AutoOrientText
+        color={faceHovered ? "#ffffff" : String(colors.textPrimary ?? colors.wire)}
+        label={label}
+      />
+    </group>
+  );
+}
+
+function AutoOrientText({
+  color,
+  label,
+}: {
+  color: string;
+  label: string;
+}) {
+  const ref = useRef<Group>(null);
+
+  useFrame(({ camera }) => {
+    if (!ref.current || !ref.current.parent) return;
+
+    const cameraUp = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    const m = ref.current.parent.matrixWorld.clone().invert();
+    cameraUp.transformDirection(m);
+
+    const angle = Math.atan2(cameraUp.y, cameraUp.x);
+    const rot = angle - Math.PI / 2;
+    const snapped = Math.round(rot / (Math.PI / 2)) * (Math.PI / 2);
+    ref.current.rotation.z = snapped;
+  });
+
+  return (
+    <group position={[0, 0, 0.28]} ref={ref}>
+      <Text
+        anchorX="center"
+        anchorY="middle"
+        color={color}
+        material-depthTest={false}
+        fontSize={13}
+        fontWeight={700}
+        renderOrder={WIDGET_RENDER_ORDER + 5}
+      >
+        {label}
+      </Text>
     </group>
   );
 }
@@ -447,30 +479,23 @@ function viewCubeCellMaterial(
   accent: string,
   colors: Viewport3DColors,
 ): { color: string; opacity: number } {
+  if (kind === "face") {
+    return {
+      color: "#ffffff",
+      opacity: hovered ? 1 : (faceHovered ? 0.95 : 0.85),
+    };
+  }
+
   if (hovered) {
     return {
       color: accent,
-      opacity: kind === "face" ? 1 : kind === "edge" ? 0.9 : 0.96,
-    };
-  }
-
-  if (kind === "face") {
-    return {
-      color: String(colors.textPrimary ?? "white"),
-      opacity: faceHovered ? 0.98 : 0.9,
-    };
-  }
-
-  if (kind === "edge") {
-    return {
-      color: String(colors.panelRaised ?? colors.mesh),
-      opacity: faceHovered ? 0.76 : 0.58,
+      opacity: kind === "edge" ? 0.8 : 0.9,
     };
   }
 
   return {
-    color: String(colors.panel ?? colors.background),
-    opacity: faceHovered ? 0.84 : 0.66,
+    color: String(colors.panelRaised ?? colors.mesh),
+    opacity: faceHovered ? 0.3 : 0.05,
   };
 }
 
@@ -616,34 +641,34 @@ function trimPositiveAxisLabel(label: string): string {
   return label.startsWith("+") ? label.slice(1) : label;
 }
 
-function buildViewCubeEdgePoints(
+function buildViewCubeEdgeLines(
   half: number,
-): Array<[[number, number, number], [number, number, number]]> {
+): Array<{ points: [[number, number, number], [number, number, number]]; axis: "x" | "y" | "z" }> {
   const lows = [-half, half] as const;
-  const edges: Array<[[number, number, number], [number, number, number]]> = [];
+  const edges: Array<{ points: [[number, number, number], [number, number, number]]; axis: "x" | "y" | "z" }> = [];
 
   for (const y of lows) {
     for (const z of lows) {
-      edges.push([
-        [-half, y, z],
-        [half, y, z],
-      ]);
+      edges.push({
+        axis: "x",
+        points: [[-half, y, z], [half, y, z]],
+      });
     }
   }
   for (const x of lows) {
     for (const z of lows) {
-      edges.push([
-        [x, -half, z],
-        [x, half, z],
-      ]);
+      edges.push({
+        axis: "y",
+        points: [[x, -half, z], [x, half, z]],
+      });
     }
   }
   for (const x of lows) {
     for (const y of lows) {
-      edges.push([
-        [x, y, -half],
-        [x, y, half],
-      ]);
+      edges.push({
+        axis: "z",
+        points: [[x, y, -half], [x, y, half]],
+      });
     }
   }
 
@@ -743,54 +768,34 @@ function buildViewCubeFaceTexture(
   const ctx = canvas.getContext("2d");
   if (ctx) {
     ctx.clearRect(0, 0, size, size);
-    const bw = hovered ? 7 : 4;
-    const margin = bw / 2 + 3;
-    const r = 20;
-    const gradient = ctx.createLinearGradient(0, 0, size, size);
-    const gradientStart = hovered
-      ? colors.panelRaised ?? colors.mesh
-      : colors.panel ?? colors.mesh;
-    gradient.addColorStop(0, String(gradientStart));
-    gradient.addColorStop(1, String(colors.background));
 
-    ctx.beginPath();
-    ctx.moveTo(margin + r, margin);
-    ctx.lineTo(size - margin - r, margin);
-    ctx.quadraticCurveTo(size - margin, margin, size - margin, margin + r);
-    ctx.lineTo(size - margin, size - margin - r);
-    ctx.quadraticCurveTo(size - margin, size - margin, size - margin - r, size - margin);
-    ctx.lineTo(margin + r, size - margin);
-    ctx.quadraticCurveTo(margin, size - margin, margin, size - margin - r);
-    ctx.lineTo(margin, margin + r);
-    ctx.quadraticCurveTo(margin, margin, margin + r, margin);
-    ctx.closePath();
-    ctx.fillStyle = gradient;
-    ctx.fill();
-    ctx.strokeStyle = accentColor;
-    ctx.lineWidth = bw;
-    ctx.globalAlpha = hovered ? 0.98 : 0.62;
-    ctx.stroke();
-    ctx.globalAlpha = 1.0;
+    if (hovered) {
+      // Glow fill
+      ctx.fillStyle = accentColor;
+      ctx.globalAlpha = 0.25;
+      ctx.fillRect(0, 0, size, size);
 
-    const fontSize = hovered ? 48 : 42;
-    ctx.font = `700 ${fontSize}px Inter, Arial, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = String(colors.background);
-    ctx.globalAlpha = 0.72;
-    ctx.strokeText(label, size / 2, size / 2);
-    ctx.globalAlpha = hovered ? 1 : 0.88;
-    ctx.fillStyle = String(
-      hovered
-        ? colors.textPrimary ?? colors.accent
-        : colors.textSecondary ?? colors.wire,
-    );
-    ctx.fillText(label, size / 2, size / 2);
-    ctx.globalAlpha = 1.0;
+      // Neon border
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = accentColor;
+      ctx.lineWidth = 12;
+      ctx.strokeRect(6, 6, size - 12, size - 12);
+    } else {
+      // Subtle background
+      ctx.fillStyle = String(colors.panel ?? colors.background);
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(0, 0, size, size);
+
+      // Subtle border
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = String(colors.wire);
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, size - 4, size - 4);
+    }
   }
   const texture = new CanvasTexture(canvas);
   texture.needsUpdate = true;
+  texture.anisotropy = 4;
   return texture;
 }
 

@@ -78,15 +78,13 @@ describe("viewport3dGeometryColors", () => {
     expect(canApplyVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 1)).toBe(false);
   });
 
-  it("accepts partial field coverage (field covers fewer nodes than topology)", () => {
+  it("rejects partial field coverage without a node-index mapping contract", () => {
     const geometry = new BufferGeometry();
 
-    // Field has 1 point (magnetic domain), topology has 2 vertices (magnetic + airbox).
-    // This is the primary use-case for FEM meshes with an airbox.
     expect(
       applyVertexScalarColors(geometry, vectorField([1, 0, 0]), 2),
-    ).toBe(true);
-    expect(geometry.hasAttribute("color")).toBe(true);
-    expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(true);
+    ).toBe(false);
+    expect(geometry.hasAttribute("color")).toBe(false);
+    expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(false);
   });
 });

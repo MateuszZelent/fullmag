@@ -862,11 +862,23 @@ describe("ribbon structure", () => {
           },
         },
       },
+      {
+        layers: {
+          airbox: {
+            bounds: {
+              visible: true,
+            },
+          },
+        },
+      },
     ]);
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
-      .toMatchObject({ boundsVisible: true });
+      .toMatchObject({ boundsVisible: false });
     await vi.waitFor(() =>
-      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+      expect(invalidations).toEqual([
+        [VISUALIZATION_STATE_PATH, 41],
+        [VISUALIZATION_STATE_PATH, 42],
+      ]),
     );
   });
 

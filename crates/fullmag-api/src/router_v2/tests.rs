@@ -1917,6 +1917,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                 "visible": true,
                                 "display": {
                                     "visible": true,
+                                    "bounds": { "visible": true },
                                     "surface": { "visible": true },
                                     "wireframe": { "visible": true, "opacity": 0.65 },
                                     "points": { "visible": false },
@@ -1968,6 +1969,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["camera"]["orthographic_scale"], 2.5e-6);
     assert_eq!(json["overrides"][0]["scope"], "object");
     assert_eq!(json["overrides"][0]["scope_id"], "free-layer");
+    assert_eq!(json["overrides"][0]["display"]["bounds"]["visible"], true);
     assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
     assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
     assert_eq!(
@@ -2394,6 +2396,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                 .body(Body::from(
                     serde_json::json!({
                         "layers": {
+                            "bounds": { "visible": true },
                             "surface": { "visible": false, "opacity": 0.42 },
                             "wireframe": { "visible": true },
                             "points": { "visible": true },
@@ -2401,6 +2404,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                             "airbox": {
                                 "visible": true,
                                 "opacity": 0.25,
+                                "bounds": { "visible": true },
                                 "wireframe": { "visible": true },
                                 "vectors": { "visible": true, "domain": "airbox_only" }
                             }
@@ -2447,10 +2451,12 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
 
     assert_eq!(patched.status(), StatusCode::OK);
     let patched_json = body_json(patched).await;
+    assert_eq!(patched_json["layers"]["bounds"]["visible"], true);
     assert_eq!(patched_json["layers"]["surface"]["visible"], false);
     assert_eq!(patched_json["layers"]["wireframe"]["visible"], true);
     assert_eq!(patched_json["layers"]["points"]["visible"], true);
     assert_eq!(patched_json["layers"]["airbox"]["visible"], true);
+    assert_eq!(patched_json["layers"]["airbox"]["bounds"]["visible"], true);
     assert_eq!(patched_json["sampling"]["max_points"], 4096);
     assert_eq!(patched_json["sampling"]["max_glyphs"], 512);
     assert_eq!(patched_json["fem"]["topology_mode"], "volume");
@@ -2474,8 +2480,10 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
 
     assert_eq!(fetched.status(), StatusCode::OK);
     let fetched_json = body_json(fetched).await;
+    assert_eq!(fetched_json["layers"]["bounds"]["visible"], true);
     assert_eq!(fetched_json["layers"]["surface"]["visible"], false);
     assert_eq!(fetched_json["layers"]["surface"]["opacity"], 0.42);
+    assert_eq!(fetched_json["layers"]["airbox"]["bounds"]["visible"], true);
     assert_eq!(fetched_json["layers"]["airbox"]["opacity"], 0.25);
     assert_eq!(fetched_json["layers"]["vectors"]["visible"], true);
     assert_eq!(fetched_json["layers"]["vectors"]["density"], 8);
@@ -8582,6 +8590,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
     }
     for required in [
         "visible",
+        "bounds",
         "surface",
         "wireframe",
         "points",

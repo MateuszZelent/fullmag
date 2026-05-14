@@ -3,6 +3,16 @@
     "schemas": {
       "AirboxLayerPatch": {
         "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
           "opacity": {
             "format": "double",
             "type": [
@@ -61,6 +71,9 @@
       },
       "AirboxLayerState": {
         "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/BasicLayerState"
+          },
           "opacity": {
             "format": "double",
             "type": "number"
@@ -7784,6 +7797,16 @@
               }
             ]
           },
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
           "points": {
             "oneOf": [
               {
@@ -7861,6 +7884,9 @@
         "properties": {
           "airbox": {
             "$ref": "#/components/schemas/AirboxLayerState"
+          },
+          "bounds": {
+            "$ref": "#/components/schemas/BasicLayerState"
           },
           "points": {
             "$ref": "#/components/schemas/BasicLayerState"
@@ -8350,6 +8376,16 @@
       },
       "VisualizationTargetDisplayOverride": {
         "properties": {
+          "bounds": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
           "geometry_scope": {
             "oneOf": [
               {

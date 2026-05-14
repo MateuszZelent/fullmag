@@ -18,6 +18,11 @@ import {
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
+import {
+  resolveStaleTopologyVisualizationSettings,
+  type Viewport3DTopologyFreshness,
+} from "../viewport3dTopologyStaleness";
 import type {
   Viewport3DBounds,
   Viewport3DFieldRenderModel,
@@ -100,6 +105,7 @@ function AirboxMeshPartLayer({
   partModel,
   settings,
   topologyModel,
+  topologyFreshness,
   tracker,
   vectorColorMode,
   vectorStyle,
@@ -110,10 +116,15 @@ function AirboxMeshPartLayer({
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart>;
+  topologyFreshness: Viewport3DTopologyFreshness;
   tracker: Viewport3DResourceTracker;
   vectorColorMode: string;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
+  const resolvedSettings =
+    topologyFreshness === "stale"
+      ? resolveStaleTopologyVisualizationSettings(settings)
+      : settings;
   const geometry = useMemo(() => {
     const { surfaceIndices } = partModel;
     if (!surfaceIndices?.length) return null;
@@ -123,10 +134,21 @@ function AirboxMeshPartLayer({
     next.computeVertexNormals();
     return next;
   }, [partModel, topologyModel, tracker]);
+  const edgeGeometry = useMemo(() => {
+    const next = buildSurfaceEdgeGeometry(
+      topologyModel.positions,
+      partModel.surfaceIndices,
+    );
+    return next ? tracker.track("geometry", next) : null;
+  }, [partModel.surfaceIndices, topologyModel.positions, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", edgeGeometry),
+    [edgeGeometry, tracker],
+  );
 
-  const opacity = opacityFromSettings(settings);
+  const opacity = opacityFromSettings(resolvedSettings);
   const part = partModel.part;
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -137,42 +159,42 @@ function AirboxMeshPartLayer({
   if (!geometry) {
     return (
       <group onPointerDown={handlePointerDown}>
-        {settings.shaderVisible ? (
+        {resolvedSettings.shaderVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={shaderColorFromSettings(settings, colors.accent)}
+            color={shaderColorFromSettings(resolvedSettings, colors.accent)}
             opacity={opacity}
             wireframe={false}
           />
         ) : null}
-        {settings.wireframeVisible ? (
+        {resolvedSettings.wireframeVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(settings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(settings)}
+            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(resolvedSettings)}
           />
         ) : null}
-        {settings.boundsVisible ? (
+        {resolvedSettings.boundsVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
             color={colors.accent}
             opacity={Math.max(opacity, 0.35)}
           />
         ) : null}
-        {settings.pointsVisible ? (
+        {resolvedSettings.pointsVisible ? (
           <BoundsPoints
             bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(settings, colors.wire)}
+            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
             opacity={opacity}
           />
         ) : null}
-        {settings.vectorsVisible ? (
+        {resolvedSettings.vectorsVisible ? (
           <VectorFieldLayer
             colors={colors}
-            colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
+            colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
             opacity={opacity}
             segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-            style={vectorStyleFromSettings(settings, vectorStyle)}
+            style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
             tracker={tracker}
           />
         ) : null}
@@ -182,54 +204,53 @@ function AirboxMeshPartLayer({
 
   return (
     <group onPointerDown={handlePointerDown}>
-      {settings.shaderVisible ? (
+      {resolvedSettings.shaderVisible ? (
         <mesh
           geometry={geometry}
           renderOrder={RENDER_POLICIES.airSurface.renderOrder}
         >
           <meshStandardMaterial
-            color={shaderColorFromSettings(settings, colors.mesh)}
+            color={shaderColorFromSettings(resolvedSettings, colors.mesh)}
             opacity={opacity}
             roughness={0.86}
             {...materialPolicyProps("airSurface")}
           />
         </mesh>
       ) : null}
-      {settings.wireframeVisible ? (
-        settings.geometryScope === "surface" ? (
-          <mesh
-            geometry={geometry}
+      {resolvedSettings.wireframeVisible ? (
+        resolvedSettings.geometryScope === "surface" && edgeGeometry ? (
+          <lineSegments
+            geometry={edgeGeometry}
             renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
           >
-            <meshBasicMaterial
-              color={wireframeColorFromSettings(settings, colors.wire)}
-              opacity={wireframeOpacityFromSettings(settings)}
-              wireframe
+            <lineBasicMaterial
+              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+              opacity={wireframeOpacityFromSettings(resolvedSettings)}
               {...materialPolicyProps("featureEdges")}
             />
-          </mesh>
+          </lineSegments>
         ) : (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
-            color={wireframeColorFromSettings(settings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(settings)}
+            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(resolvedSettings)}
           />
         )
       ) : null}
-      {settings.boundsVisible ? (
+      {resolvedSettings.boundsVisible ? (
         <BoundsBox
           bounds={resolveMeshPartBounds(part)}
           color={colors.accent}
           opacity={Math.max(opacity, 0.35)}
         />
       ) : null}
-      {settings.pointsVisible ? (
+      {resolvedSettings.pointsVisible ? (
         <points
           geometry={geometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
-            color={wireframeColorFromSettings(settings, colors.wire)}
+            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
             opacity={opacity}
             sizeAttenuation={false}
             size={3}
@@ -237,13 +258,13 @@ function AirboxMeshPartLayer({
           />
         </points>
       ) : null}
-      {settings.vectorsVisible ? (
+      {resolvedSettings.vectorsVisible ? (
         <VectorFieldLayer
           colors={colors}
-          colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
+          colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
           opacity={opacity}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
-          style={vectorStyleFromSettings(settings, vectorStyle)}
+          style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
           tracker={tracker}
         />
       ) : null}
@@ -296,6 +317,7 @@ export function AirboxLayer({
   onSelectPart,
   settings,
   topologyModel,
+  topologyFreshness,
   tracker,
   vectorStyle,
 }: {
@@ -305,6 +327,7 @@ export function AirboxLayer({
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  topologyFreshness: Viewport3DTopologyFreshness;
   tracker: Viewport3DResourceTracker;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
@@ -321,6 +344,7 @@ export function AirboxLayer({
           partModel={partModel}
           settings={settings}
           topologyModel={topologyModel}
+          topologyFreshness={topologyFreshness}
           tracker={tracker}
           vectorColorMode={vectorColorMode}
           vectorStyle={vectorStyle}

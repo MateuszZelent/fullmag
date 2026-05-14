@@ -9,6 +9,7 @@ import {
   AppMenuBar,
   resolveApiConnectionErrorDetails,
   resolveHeaderSessionDisplay,
+  resolveHydrationSafeHeaderSessionSource,
 } from "./AppMenuBar";
 
 describe("AppMenuBar", () => {
@@ -47,6 +48,36 @@ describe("AppMenuBar", () => {
       indicatorStatus: "connected",
       sessionBadge: "running",
       subtitle: "Spin-torque run",
+    });
+  });
+
+  it("keeps the first client header render aligned with SSR session fallback", () => {
+    const readyStatus = {
+      data: {
+        session: {
+          name: "arch_waveguide_relax_50nm",
+        },
+        solver: { state: "relaxed" },
+      },
+      status: "ready" as const,
+    };
+
+    expect(
+      resolveHeaderSessionDisplay(
+        resolveHydrationSafeHeaderSessionSource(readyStatus, false),
+      ),
+    ).toMatchObject({
+      sessionBadge: "loading",
+      subtitle: "Loading session",
+    });
+
+    expect(
+      resolveHeaderSessionDisplay(
+        resolveHydrationSafeHeaderSessionSource(readyStatus, true),
+      ),
+    ).toMatchObject({
+      sessionBadge: "relaxed",
+      subtitle: "arch_waveguide_relax_50nm",
     });
   });
 

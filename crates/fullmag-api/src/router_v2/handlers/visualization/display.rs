@@ -480,6 +480,7 @@ fn default_visualization_layers(
     vector_density: u32,
 ) -> VisualizationLayerState {
     VisualizationLayerState {
+        bounds: basic_layer(false, 1.0),
         surface: basic_layer(true, 1.0),
         quantity_overlay: basic_layer(true, 1.0),
         wireframe: basic_layer(false, 1.0),
@@ -493,6 +494,7 @@ fn default_visualization_layers(
         primitives: basic_layer(true, 1.0),
         airbox: AirboxLayerState {
             visible: false,
+            bounds: basic_layer(false, 1.0),
             surface: basic_layer(false, 0.18),
             wireframe: basic_layer(false, 1.0),
             points: basic_layer(false, 1.0),
@@ -770,6 +772,9 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     if let Some(visible) = patch.visible {
         state.visible = visible;
     }
+    if let Some(bounds) = &patch.bounds {
+        apply_basic_layer_patch(&mut state.bounds, bounds);
+    }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
     }
@@ -791,6 +796,9 @@ fn apply_visualization_layer_patch(
     state: &mut VisualizationLayerState,
     patch: &VisualizationLayerPatch,
 ) {
+    if let Some(bounds) = &patch.bounds {
+        apply_basic_layer_patch(&mut state.bounds, bounds);
+    }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
     }

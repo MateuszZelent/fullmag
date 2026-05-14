@@ -18,6 +18,7 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import type { Viewport3DTopologyFreshness } from "../viewport3dTopologyStaleness";
 import type {
   Viewport3DMagnetizationTexturePreview,
   Viewport3DPrimitiveObject,
@@ -56,6 +57,7 @@ interface Viewport3DSceneProps {
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -65,6 +67,7 @@ interface Viewport3DSceneProps {
   resourceFrameKey: string;
   selectionBounds: Viewport3DBounds | null;
   tracker: Viewport3DResourceTracker;
+  topologyFreshness: Viewport3DTopologyFreshness;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
   vectorStyle: VectorFieldLayerVectorStyle;
@@ -171,6 +174,7 @@ export function Viewport3DScene({
   getObjectSettings,
   getPartSettings,
   magnetizationTexturePreviews,
+  onCameraChange,
   onSelectObject,
   onSelectDomain,
   onSelectPart,
@@ -179,6 +183,7 @@ export function Viewport3DScene({
   resourceFrameKey,
   selectionBounds,
   tracker,
+  topologyFreshness,
   topologyModel,
   vectorColorMode,
   vectorStyle,
@@ -209,6 +214,7 @@ export function Viewport3DScene({
         bounds={bounds}
         cameraState={cameraState}
         fitRevision={fitRevision}
+        onCameraChange={onCameraChange}
         resetCameraRevision={resetCameraRevision}
         tracker={tracker}
       />
@@ -241,6 +247,7 @@ export function Viewport3DScene({
         onSelectPart={onSelectPart}
         settings={airboxSettings}
         topologyModel={topologyModel}
+        topologyFreshness={topologyFreshness}
         tracker={tracker}
         vectorColorMode={vectorColorMode}
         vectorStyle={vectorStyle}
@@ -262,6 +269,7 @@ export function Viewport3DScene({
         onSelectDomain={onSelectDomain}
         onSelectPart={onSelectPart}
         tracker={tracker}
+        topologyFreshness={topologyFreshness}
         topologyModel={topologyModel}
         vectorColorMode={vectorColorMode}
         vectorStyle={vectorStyle}
@@ -274,7 +282,11 @@ export function Viewport3DScene({
         />
         <axesHelper args={[gridSpec.axesLength]} />
       </group>
-      <OrbitCameraControls cameraState={cameraState} tracker={tracker} />
+      <OrbitCameraControls
+        cameraState={cameraState}
+        onCameraChange={onCameraChange}
+        tracker={tracker}
+      />
       <OrientationHudLayer
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}

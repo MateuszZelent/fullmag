@@ -66,6 +66,7 @@ describe("AirboxLayer", () => {
       onSelectPart,
       settings: visibleWireframeAirbox,
       topologyModel,
+      topologyFreshness: "current",
       tracker: {} as never,
       vectorColorMode: "orientation",
       vectorStyle: {},
@@ -80,6 +81,7 @@ describe("AirboxLayer", () => {
       onSelectPart,
       settings: visibleWireframeAirbox,
       topologyModel,
+      topologyFreshness: "current",
     });
   });
 });

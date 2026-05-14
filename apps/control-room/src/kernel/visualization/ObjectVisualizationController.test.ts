@@ -15,6 +15,7 @@ import {
   visualizationStateOverrideFromTargetPatch,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
+  visualizationStatePatchFromDefaultTargetPatch,
   visualizationTargetKey,
 } from "./ObjectVisualizationController";
 
@@ -580,6 +581,7 @@ describe("ObjectVisualizationController", () => {
   it("builds backend airbox layer patches from target display patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
+        boundsVisible: true,
         opacityPercent: 25,
         shaderVisible: true,
         vectorsVisible: true,
@@ -589,6 +591,7 @@ describe("ObjectVisualizationController", () => {
     ).toEqual({
       layers: {
         airbox: {
+          bounds: { visible: true },
           opacity: 0.25,
           surface: { visible: true },
           vectors: { domain: "airbox_only", visible: true },
@@ -599,10 +602,10 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps airbox local-only target fields out of backend state patches", () => {
+  it("keeps only unsupported airbox target fields out of backend state patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
-        boundsVisible: true,
+        geometryScope: "full",
       }),
     ).toEqual({});
     expect(
@@ -612,6 +615,34 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({ boundsVisible: true, geometryScope: "full" });
+    ).toEqual({ geometryScope: "full" });
+  });
+
+  it("builds backend global visualization state patches from default target patches", () => {
+    expect(
+      visualizationStatePatchFromDefaultTargetPatch({
+        boundsVisible: true,
+        opacityPercent: 42,
+        pointsVisible: true,
+        shaderMonoColor: "#00ffaa",
+        surfaceColorSource: "solid",
+        vectorsVisible: true,
+        wireframeOpacityPercent: 65,
+        wireframeVisible: false,
+      }),
+    ).toEqual({
+      layers: {
+        bounds: { visible: true },
+        points: { visible: true },
+        surface: { opacity: 0.42 },
+        vectors: { visible: true },
+        wireframe: { opacity: 0.65, visible: false },
+      },
+      vector_glyphs: true,
+      vector_style: {
+        color_mode: "monochrome",
+        mono_color: "#00ffaa",
+      },
+    });
   });
 });

@@ -18,6 +18,7 @@ import {
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
+import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -74,8 +75,20 @@ export function FallbackTopologyMeshLayer({
     next.computeVertexNormals();
     return next;
   }, [topologyModel, tracker]);
+  const edgeGeometry = useMemo(() => {
+    if (!topologyModel) return null;
+    const next = buildSurfaceEdgeGeometry(
+      topologyModel.positions,
+      topologyModel.fallbackSurfaceIndices,
+    );
+    return next ? tracker.track("geometry", next) : null;
+  }, [topologyModel, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", edgeGeometry),
+    [edgeGeometry, tracker],
+  );
 
   const scalarColorMode = surfaceScalarColorModeFromSettings(fallbackSettings);
   const scalarColors = scalarColorMode
@@ -140,18 +153,17 @@ export function FallbackTopologyMeshLayer({
           />
         </mesh>
       ) : null}
-      {fallbackSettings.wireframeVisible ? (
-        <mesh
-          geometry={geometry}
+      {fallbackSettings.wireframeVisible && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
-          <meshBasicMaterial
+          <lineBasicMaterial
             color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(fallbackSettings)}
-            wireframe
             {...materialPolicyProps("featureEdges")}
           />
-        </mesh>
+        </lineSegments>
       ) : null}
       {fallbackSettings.pointsVisible ? (
         <points

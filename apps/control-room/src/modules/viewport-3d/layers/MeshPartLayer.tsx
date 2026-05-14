@@ -19,6 +19,7 @@ import {
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
+import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -82,8 +83,20 @@ export function MeshPartLayer({
     next.computeVertexNormals();
     return next;
   }, [partModel, topologyModel, tracker]);
+  const edgeGeometry = useMemo(() => {
+    if (!topologyModel) return null;
+    const next = buildSurfaceEdgeGeometry(
+      topologyModel.positions,
+      partModel.surfaceIndices,
+    );
+    return next ? tracker.track("geometry", next) : null;
+  }, [partModel.surfaceIndices, topologyModel, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(
+    () => () => tracker.release("geometry", edgeGeometry),
+    [edgeGeometry, tracker],
+  );
 
   const scalarColorMode = surfaceScalarColorModeFromSettings(settings);
   const scalarColors = scalarColorMode
@@ -140,18 +153,17 @@ export function MeshPartLayer({
           />
         </mesh>
       ) : null}
-      {settings.wireframeVisible ? (
-        <mesh
-          geometry={geometry}
+      {settings.wireframeVisible && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
-          <meshBasicMaterial
+          <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={wireframeOpacityFromSettings(settings)}
-            wireframe
             {...materialPolicyProps("featureEdges")}
           />
-        </mesh>
+        </lineSegments>
       ) : null}
       {settings.boundsVisible ? (
         <BoundsBox

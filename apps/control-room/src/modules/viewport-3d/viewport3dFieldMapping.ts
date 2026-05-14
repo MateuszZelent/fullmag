@@ -46,9 +46,7 @@ export function buildVertexScalarColors(
   );
   if (
     !fieldVector ||
-    // Field may cover a subset of nodes (e.g. magnetic domain only, no airbox).
-    // Allow pointCount < vertexCount; reject only when field has MORE points than topology.
-    fieldVector.pointCount > vertexCount ||
+    fieldVector.pointCount !== vertexCount ||
     fieldVector.pointCount === 0 ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)
@@ -115,9 +113,6 @@ function buildVertexScalarColorsUnchecked(
   colorMode: Viewport3DVectorColorMode,
 ): ScalarColorBuffer {
   const range = resolveScalarRange(fieldVector, colorMode);
-  // Allocate for the full topology vertex count (may be larger than the field
-  // point count when the field covers only part of the domain, e.g. magnetic
-  // nodes only).  Extra vertices default to 0 (black).
   const colors = new Float32Array(vertexCount * 3);
   writeScalarColors(
     fieldVector,

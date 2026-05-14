@@ -17,6 +17,7 @@ import {
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { buildSurfaceEdgeGeometryFromBufferGeometry } from "../viewport3dSurfaceEdges";
 import type {
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
@@ -96,14 +97,17 @@ function PrimitiveObject({
     () => () => releasePrimitiveObjectGeometry(tracker, geometry),
     [geometry, tracker],
   );
+  const edgeGeometry = useMemo(() => {
+    const next = buildSurfaceEdgeGeometryFromBufferGeometry(geometry);
+    return next ? tracker.track("geometry", next) : null;
+  }, [geometry, tracker]);
+
+  useEffect(
+    () => () => tracker.release("geometry", edgeGeometry),
+    [edgeGeometry, tracker],
+  );
 
   if (!settings.visible) return null;
-
-  // When mesh topology exists but is stale (scene revision mismatch), render
-  // the primitive as a wireframe ghost only.  The topology layer still renders
-  // the stale mesh surface, so showing a second full transparent primitive
-  // surface on top causes surface-mixing artifacts.
-  const isStale = object.meshState === "mesh-stale";
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -127,7 +131,7 @@ function PrimitiveObject({
         primitive: true,
       }}
     >
-      {settings.shaderVisible && !isStale ? (
+      {settings.shaderVisible ? (
         <mesh
           renderOrder={surfaceMaterialPolicyProps(opacity).transparent
             ? RENDER_POLICIES.contextSurface.renderOrder
@@ -142,18 +146,17 @@ function PrimitiveObject({
           />
         </mesh>
       ) : null}
-      {settings.wireframeVisible ? (
-        <mesh
+      {settings.wireframeVisible && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
-          <primitive attach="geometry" object={geometry} />
-          <meshBasicMaterial
+          <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={wireframeOpacityFromSettings(settings)}
-            wireframe
             {...materialPolicyProps("featureEdges")}
           />
-        </mesh>
+        </lineSegments>
       ) : null}
       {settings.boundsVisible ? (
         <mesh>

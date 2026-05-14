@@ -147,6 +147,8 @@ pub struct QuantityVisualizationPatch {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct VisualizationLayerState {
+    #[serde(default = "default_basic_layer_state")]
+    pub bounds: BasicLayerState,
     pub surface: BasicLayerState,
     pub quantity_overlay: BasicLayerState,
     pub wireframe: BasicLayerState,
@@ -159,6 +161,8 @@ pub struct VisualizationLayerState {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct VisualizationLayerPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,6 +185,13 @@ pub struct VisualizationLayerPatch {
 pub struct BasicLayerState {
     pub visible: bool,
     pub opacity: f64,
+}
+
+fn default_basic_layer_state() -> BasicLayerState {
+    BasicLayerState {
+        visible: false,
+        opacity: 1.0,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -223,6 +234,8 @@ pub enum VectorLayerDomain {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct AirboxLayerState {
     pub visible: bool,
+    #[serde(default = "default_basic_layer_state")]
+    pub bounds: BasicLayerState,
     pub surface: BasicLayerState,
     pub wireframe: BasicLayerState,
     pub points: BasicLayerState,
@@ -234,6 +247,8 @@ pub struct AirboxLayerState {
 pub struct AirboxLayerPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -618,6 +633,8 @@ pub struct VisualizationOverrideState {
 pub struct VisualizationTargetDisplayOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface: Option<BasicLayerPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]

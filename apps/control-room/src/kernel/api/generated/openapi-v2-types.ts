@@ -1753,6 +1753,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         AirboxLayerPatch: {
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
             /** Format: double */
             opacity?: number | null;
             points?: null | components["schemas"]["BasicLayerPatch"];
@@ -1762,6 +1763,7 @@ export interface components {
             wireframe?: null | components["schemas"]["BasicLayerPatch"];
         };
         AirboxLayerState: {
+            bounds?: components["schemas"]["BasicLayerState"];
             /** Format: double */
             opacity: number;
             points: components["schemas"]["BasicLayerState"];
@@ -3712,6 +3714,7 @@ export interface components {
         };
         VisualizationLayerPatch: {
             airbox?: null | components["schemas"]["AirboxLayerPatch"];
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
             points?: null | components["schemas"]["BasicLayerPatch"];
             primitives?: null | components["schemas"]["BasicLayerPatch"];
             quantity_overlay?: null | components["schemas"]["BasicLayerPatch"];
@@ -3722,6 +3725,7 @@ export interface components {
         };
         VisualizationLayerState: {
             airbox: components["schemas"]["AirboxLayerState"];
+            bounds?: components["schemas"]["BasicLayerState"];
             points: components["schemas"]["BasicLayerState"];
             primitives: components["schemas"]["BasicLayerState"];
             quantity_overlay: components["schemas"]["BasicLayerState"];
@@ -3859,6 +3863,7 @@ export interface components {
             y_chosen_size: number;
         };
         VisualizationTargetDisplayOverride: {
+            bounds?: null | components["schemas"]["BasicLayerPatch"];
             geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
             /** Format: double */
             opacity?: number | null;

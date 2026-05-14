@@ -9,6 +9,10 @@ import type {
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
+import {
+  resolveStaleTopologyVisualizationSettings,
+  type Viewport3DTopologyFreshness,
+} from "../viewport3dTopologyStaleness";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
@@ -30,6 +34,7 @@ export function TopologyMeshLayer({
   onSelectPart,
   tracker,
   topologyModel,
+  topologyFreshness,
   vectorStyle,
 }: {
   colors: Viewport3DColors;
@@ -43,30 +48,40 @@ export function TopologyMeshLayer({
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
+  topologyFreshness: Viewport3DTopologyFreshness;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
+  const resolvedFieldModel = topologyFreshness === "stale" ? null : fieldModel;
+
   if (topologyModel?.magneticParts.length) {
     return (
       <>
-        {topologyModel.magneticParts.map((partModel) => (
-          <MeshPartLayer
-            colors={colors}
-            fieldModel={fieldModel}
-            key={partModel.part.id}
-            magnetizationTexturePreview={
-              partModel.part.object_id
-                ? (magnetizationTexturePreviews.get(partModel.part.object_id) ?? null)
-                : null
-            }
-            onSelectPart={onSelectPart}
-            partModel={partModel}
-            settings={getPartSettings(partModel.part)}
-            topologyModel={topologyModel}
-            tracker={tracker}
-            vectorColorMode={vectorColorMode}
-            vectorStyle={vectorStyle}
-          />
-        ))}
+        {topologyModel.magneticParts.map((partModel) => {
+          const settings = getPartSettings(partModel.part);
+          return (
+            <MeshPartLayer
+              colors={colors}
+              fieldModel={resolvedFieldModel}
+              key={partModel.part.id}
+              magnetizationTexturePreview={
+                partModel.part.object_id
+                  ? (magnetizationTexturePreviews.get(partModel.part.object_id) ?? null)
+                  : null
+              }
+              onSelectPart={onSelectPart}
+              partModel={partModel}
+              settings={
+                topologyFreshness === "stale"
+                  ? resolveStaleTopologyVisualizationSettings(settings)
+                  : settings
+              }
+              topologyModel={topologyModel}
+              tracker={tracker}
+              vectorColorMode={vectorColorMode}
+              vectorStyle={vectorStyle}
+            />
+          );
+        })}
       </>
     );
   }
@@ -74,9 +89,13 @@ export function TopologyMeshLayer({
   return (
     <FallbackTopologyMeshLayer
       colors={colors}
-      fallbackSettings={fallbackSettings}
+      fallbackSettings={
+        topologyFreshness === "stale"
+          ? resolveStaleTopologyVisualizationSettings(fallbackSettings)
+          : fallbackSettings
+      }
       femDomain={femDomain}
-      fieldModel={fieldModel}
+      fieldModel={resolvedFieldModel}
       onSelectDomain={onSelectDomain}
       onSelectPart={onSelectPart}
       topologyModel={topologyModel}

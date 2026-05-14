@@ -21,6 +21,7 @@ import {
   DEFAULT_AIRBOX_VISUALIZATION,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  visualizationStatePatchFromDefaultTargetPatch,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -177,9 +178,9 @@ async function patchVisualizationStateFromCommand(
   return { status: "completed" };
 }
 
-function patchVisualizationDefaultsFromCommand(
+async function patchVisualizationDefaultsFromCommand(
   context: CommandContext,
-): CommandResult {
+): Promise<CommandResult> {
   const input = asPatchDefaultsInput(context.input);
   if (!input || !context.visualization) {
     return {
@@ -190,6 +191,11 @@ function patchVisualizationDefaultsFromCommand(
 
   for (const kind of input.targetKinds) {
     context.visualization.patchDefaults(kind, input.patch);
+  }
+  const statePatch = visualizationStatePatchFromDefaultTargetPatch(input.patch);
+  if (context.api && hasVisualizationStatePatch(statePatch)) {
+    const state = await context.api.visualization.patch(statePatch);
+    invalidateVisualizationState(context, state);
   }
   return { status: "completed" };
 }

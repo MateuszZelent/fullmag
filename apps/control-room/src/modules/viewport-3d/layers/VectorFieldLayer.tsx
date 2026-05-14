@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import {
-  Color,
   ConeGeometry,
   CylinderGeometry,
   DynamicDrawUsage,
@@ -98,21 +97,14 @@ export function VectorFieldLayer({
   const useInstanceColors = Boolean(glyphs?.colors);
   const glyphCount = glyphs?.count ?? 0;
 
-  // Stable capacity: power-of-two bucket with hysteresis to avoid
-  // InstancedMesh remounts on every arrow count change.
-  const capacityRef = useRef(0);
+  // Stable power-of-two capacity keeps allocations bounded without render-time
+  // ref reads, which React Compiler rejects.
   const capacity = useMemo(() => {
     const desired = Math.max(1, glyphCount);
-    const current = Math.max(1, capacityRef.current);
-    // Only reallocate if count exceeds current bucket or falls below 25%.
-    if (desired <= current && desired >= Math.ceil(current * 0.25)) {
-      return current;
-    }
     let next = 1;
     while (next < desired) next *= 2;
     return Math.min(next, 1 << 20); // cap at ~1M
   }, [glyphCount]);
-  capacityRef.current = capacity;
 
   const shaftGeometry = useMemo(
     () => tracker.track("geometry", new CylinderGeometry(1, 1, 1, 12, 1)),
@@ -148,14 +140,20 @@ export function VectorFieldLayer({
     ],
   );
 
-  // Pre-allocate instance color attribute with stable capacity.
-  const instanceColorAttr = useMemo(() => {
+  const instanceColorAttrRef = useRef<InstancedBufferAttribute | null>(null);
+
+  useEffect(() => {
     const attr = new InstancedBufferAttribute(
       new Float32Array(capacity * 3),
       3,
     );
     attr.setUsage(DynamicDrawUsage);
-    return attr;
+    instanceColorAttrRef.current = attr;
+    return () => {
+      if (instanceColorAttrRef.current === attr) {
+        instanceColorAttrRef.current = null;
+      }
+    };
   }, [capacity]);
 
   useEffect(
@@ -174,7 +172,8 @@ export function VectorFieldLayer({
   useEffect(() => {
     const shaft = shaftRef.current;
     const head = headRef.current;
-    if (!glyphs || !shaft || !head) return;
+    const instanceColorAttr = instanceColorAttrRef.current;
+    if (!glyphs || !shaft || !head || !instanceColorAttr) return;
 
     // Set visible count (may be less than capacity).
     shaft.count = glyphs.count;
@@ -239,7 +238,7 @@ export function VectorFieldLayer({
     head.instanceMatrix.needsUpdate = true;
     tracker.recordDirtyFrame("vector-glyphs");
     invalidate();
-  }, [glyphs, instanceColorAttr, invalidate, tracker]);
+  }, [glyphs, invalidate, tracker]);
 
   if (!glyphs || glyphs.count === 0) return null;
 

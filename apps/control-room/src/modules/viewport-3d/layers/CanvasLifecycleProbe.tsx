@@ -10,7 +10,7 @@ export function CanvasLifecycleProbe({
 }: {
   tracker: Viewport3DResourceTracker;
 }) {
-  const { gl } = useThree();
+  const { gl, invalidate } = useThree();
 
   useEffect(() => {
     const canvas = gl.domElement;
@@ -20,6 +20,8 @@ export function CanvasLifecycleProbe({
     };
     const onRestored = () => {
       tracker.recordContextRestored();
+      tracker.recordDirtyFrame("context-restored");
+      invalidate();
     };
 
     tracker.recordDirtyFrame("canvas-mounted");
@@ -29,7 +31,7 @@ export function CanvasLifecycleProbe({
       canvas.removeEventListener("webglcontextlost", onLost);
       canvas.removeEventListener("webglcontextrestored", onRestored);
     };
-  }, [gl, tracker]);
+  }, [gl, invalidate, tracker]);
 
   return null;
 }

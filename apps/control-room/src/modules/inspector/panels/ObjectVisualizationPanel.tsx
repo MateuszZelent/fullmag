@@ -11,6 +11,7 @@ import {
   DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
+  mergeVisualizationStateTargetOverride,
   renderModePatch,
   resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
@@ -384,7 +385,28 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    visualization.patchTarget(target, patchValue);
+    if (!visualizationState.data) {
+      visualization.patchTarget(target, patchValue);
+      return;
+    }
+
+    setPending(true);
+    try {
+      const next = await api.visualization.patch({
+        overrides: mergeVisualizationStateTargetOverride(
+          visualizationState.data.overrides ?? [],
+          target,
+          patchValue,
+        ),
+      });
+      resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
+      visualization.clearTarget(target);
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPending(false);
+    }
   }
 
   async function resetTarget(): Promise<void> {
@@ -408,7 +430,27 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    visualization.clearTarget(target);
+    if (!visualizationState.data) {
+      visualization.clearTarget(target);
+      return;
+    }
+
+    setPending(true);
+    try {
+      const next = await api.visualization.patch({
+        overrides: (visualizationState.data.overrides ?? []).filter(
+          (entry) =>
+            !(entry.scope === target.kind && entry.scope_id === target.id),
+        ),
+      });
+      resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
+      visualization.clearTarget(target);
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPending(false);
+    }
   }
 
   function sectionDisabled(

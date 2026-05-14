@@ -386,6 +386,9 @@ export function resolveVisualizationStateTargetOverride(
     ...(display?.opacity === undefined || display.opacity === null
       ? {}
       : { opacityPercent: layerOpacityToPercent(display.opacity) }),
+    ...(display?.bounds?.visible === undefined || display.bounds.visible === null
+      ? {}
+      : { boundsVisible: display.bounds.visible }),
     ...(display?.points?.visible === undefined ||
     display.points.visible === null
       ? {}
@@ -454,6 +457,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.opacityPercent === undefined
       ? {}
       : { opacity: clampOpacity(normalized.opacityPercent) / 100 }),
+    ...(normalized.boundsVisible === undefined
+      ? {}
+      : { bounds: { visible: normalized.boundsVisible } }),
     ...(normalized.pointsVisible === undefined
       ? {}
       : { points: { visible: normalized.pointsVisible } }),
@@ -529,6 +535,81 @@ export function mergeVisualizationStateTargetOverride(
   return [...rest, merged];
 }
 
+export function visualizationStatePatchFromDefaultTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationStatePatch {
+  const normalized = normalizePatch(patch);
+  const layers: NonNullable<VisualizationStatePatch["layers"]> = {};
+  const surface = {
+    ...(normalized.opacityPercent === undefined
+      ? {}
+      : { opacity: clampOpacity(normalized.opacityPercent) / 100 }),
+    ...(normalized.shaderVisible === undefined
+      ? {}
+      : { visible: normalized.shaderVisible }),
+  };
+  const wireframe = {
+    ...(normalized.wireframeOpacityPercent === undefined
+      ? {}
+      : { opacity: clampOpacity(normalized.wireframeOpacityPercent) / 100 }),
+    ...(normalized.wireframeVisible === undefined
+      ? {}
+      : { visible: normalized.wireframeVisible }),
+  };
+  const vectors = {
+    ...(normalized.vectorsVisible === undefined
+      ? {}
+      : { visible: normalized.vectorsVisible }),
+  };
+  const vectorColorMode =
+    normalized.surfaceColorSource === undefined
+      ? normalized.vectorColorMode
+      : surfaceColorSourceToColorMode(normalized.surfaceColorSource) ??
+        "monochrome";
+  const vectorStyle = {
+    ...(vectorColorMode === undefined ? {} : { color_mode: vectorColorMode }),
+    ...(normalized.shaderMonoColor === undefined &&
+    normalized.vectorMonoColor === undefined
+      ? {}
+      : {
+          mono_color:
+            normalized.shaderMonoColor ?? normalized.vectorMonoColor ?? "",
+        }),
+    ...(normalized.vectorAlphaPercent === undefined
+      ? {}
+      : { alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
+    ...(normalized.vectorThickness === undefined
+      ? {}
+      : { thickness: clampScale(normalized.vectorThickness) }),
+  };
+
+  if (normalized.boundsVisible !== undefined) {
+    layers.bounds = { visible: normalized.boundsVisible };
+  }
+  if (Object.keys(surface).length > 0) {
+    layers.surface = surface;
+  }
+  if (Object.keys(wireframe).length > 0) {
+    layers.wireframe = wireframe;
+  }
+  if (normalized.pointsVisible !== undefined) {
+    layers.points = { visible: normalized.pointsVisible };
+  }
+  if (Object.keys(vectors).length > 0) {
+    layers.vectors = vectors;
+  }
+
+  return {
+    ...(Object.keys(layers).length === 0 ? {} : { layers }),
+    ...(Object.keys(vectorStyle).length === 0
+      ? {}
+      : { vector_style: vectorStyle }),
+    ...(normalized.vectorsVisible === undefined
+      ? {}
+      : { vector_glyphs: normalized.vectorsVisible }),
+  };
+}
+
 function mergeVisualizationOverride(
   current: VisualizationStateResource["overrides"][number],
   next: VisualizationStateResource["overrides"][number],
@@ -539,6 +620,7 @@ function mergeVisualizationOverride(
     display: {
       ...(current.display ?? {}),
       ...(next.display ?? {}),
+      bounds: mergeOptionalRecord(current.display?.bounds, next.display?.bounds),
       points: mergeOptionalRecord(current.display?.points, next.display?.points),
       surface: mergeOptionalRecord(current.display?.surface, next.display?.surface),
       vectors: mergeOptionalRecord(current.display?.vectors, next.display?.vectors),
@@ -598,6 +680,8 @@ export function resolveGlobalObjectVisualizationSettings(
 
   return {
     ...DEFAULT_OBJECT_VISUALIZATION,
+    boundsVisible:
+      state?.layers?.bounds?.visible ?? DEFAULT_OBJECT_VISUALIZATION.boundsVisible,
     opacityPercent: layerOpacityToPercent(
       state?.layers?.surface?.opacity ??
         DEFAULT_OBJECT_VISUALIZATION.opacityPercent / 100,
@@ -641,6 +725,8 @@ export function resolveAirboxVisualizationSettingsFromState(
 
   return {
     ...DEFAULT_AIRBOX_VISUALIZATION,
+    boundsVisible:
+      airbox?.bounds?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.boundsVisible,
     opacityPercent: layerOpacityToPercent(
       airbox?.opacity ?? DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
     ),
@@ -664,6 +750,9 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   const airbox: NonNullable<
     NonNullable<VisualizationStatePatch["layers"]>["airbox"]
   > = {
+    ...(patch.boundsVisible === undefined
+      ? {}
+      : { bounds: { visible: patch.boundsVisible } }),
     ...(patch.opacityPercent === undefined
       ? {}
       : { opacity: clampOpacity(patch.opacityPercent) / 100 }),
@@ -696,9 +785,6 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
   return {
-    ...(patch.boundsVisible === undefined
-      ? {}
-      : { boundsVisible: patch.boundsVisible }),
     ...(patch.geometryScope === undefined
       ? {}
       : { geometryScope: patch.geometryScope }),

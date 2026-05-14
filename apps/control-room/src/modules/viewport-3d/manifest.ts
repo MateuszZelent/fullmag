@@ -1,4 +1,6 @@
 import type { ModuleManifest } from "@/kernel/types";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import { viewport3dStore } from "./viewport3dStore";
 
@@ -50,10 +52,30 @@ export const viewport3dManifest: ModuleManifest = {
         group: "viewport-3d",
         category: "Viewport",
         scope: "viewport",
-        isActive: () =>
-          viewport3dStore.getSnapshot().widgets.cameraProjection === "orthographic",
-        run: () => {
-          viewport3dStore.toggleCameraProjection();
+        isActive: (context) => {
+          const state = visualizationStateFromContext(context);
+          return state
+            ? state.camera.projection === "orthographic"
+            : viewport3dStore.getSnapshot().widgets.cameraProjection ===
+                "orthographic";
+        },
+        run: async (context) => {
+          const current =
+            visualizationStateFromContext(context) ??
+            (context.api ? await context.api.visualization.state() : null);
+          const currentProjection =
+            current?.camera?.projection ??
+            viewport3dStore.getSnapshot().widgets.cameraProjection;
+          const nextProjection =
+            currentProjection === "orthographic" ? "perspective" : "orthographic";
+          if (context.api) {
+            const state = await context.api.visualization.patch({
+              camera: { projection: nextProjection },
+            });
+            context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
+          } else {
+            viewport3dStore.toggleCameraProjection();
+          }
           return { status: "completed" };
         },
       },
@@ -101,3 +123,12 @@ export const viewport3dManifest: ModuleManifest = {
   emits: ["workspace:selection-changed"],
   listens: ["resource:invalidated", "workspace:selection-changed"],
 };
+
+function visualizationStateFromContext(context: {
+  resourceData?: Readonly<Record<string, unknown>>;
+}): VisualizationStateResource | null {
+  const value = context.resourceData?.[VISUALIZATION_STATE_PATH];
+  return value && typeof value === "object"
+    ? (value as VisualizationStateResource)
+    : null;
+}
