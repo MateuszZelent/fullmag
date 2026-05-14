@@ -1,11 +1,12 @@
 "use client";
 
-import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import {
   Color,
   ConeGeometry,
   CylinderGeometry,
+  DynamicDrawUsage,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
@@ -14,8 +15,10 @@ import {
 } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
+import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 
 const UNIT_Y = new Vector3(0, 1, 0);
 // V1-matched proportions for better visual quality.
@@ -66,9 +69,10 @@ export function VectorFieldLayer({
   style?: VectorFieldLayerVectorStyle;
   tracker: Viewport3DResourceTracker;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate();
   const shaftRef = useRef<InstancedMesh>(null);
   const headRef = useRef<InstancedMesh>(null);
+  const glyphPolicy = RENDER_POLICIES.glyphs;
   const resolvedStyle = resolveVectorFieldLayerStyle({
     colorMode,
     fallbackColor: String(colors.field),
@@ -92,6 +96,24 @@ export function VectorFieldLayer({
     ],
   );
   const useInstanceColors = Boolean(glyphs?.colors);
+  const glyphCount = glyphs?.count ?? 0;
+
+  // Stable capacity: power-of-two bucket with hysteresis to avoid
+  // InstancedMesh remounts on every arrow count change.
+  const capacityRef = useRef(0);
+  const capacity = useMemo(() => {
+    const desired = Math.max(1, glyphCount);
+    const current = Math.max(1, capacityRef.current);
+    // Only reallocate if count exceeds current bucket or falls below 25%.
+    if (desired <= current && desired >= Math.ceil(current * 0.25)) {
+      return current;
+    }
+    let next = 1;
+    while (next < desired) next *= 2;
+    return Math.min(next, 1 << 20); // cap at ~1M
+  }, [glyphCount]);
+  capacityRef.current = capacity;
+
   const shaftGeometry = useMemo(
     () => tracker.track("geometry", new CylinderGeometry(1, 1, 1, 12, 1)),
     [tracker],
@@ -106,20 +128,35 @@ export function VectorFieldLayer({
         "material",
         new MeshBasicMaterial({
           color: useInstanceColors ? "white" : resolvedStyle.materialColor,
-          depthWrite: resolvedStyle.materialOpacity >= 0.99,
+          depthWrite: glyphPolicy.depthWrite,
+          depthTest: glyphPolicy.depthTest,
           opacity: resolvedStyle.materialOpacity,
+          side: glyphPolicy.side,
           toneMapped: false,
-          transparent: resolvedStyle.materialOpacity < 0.99,
+          transparent:
+            glyphPolicy.transparent ||
+            resolvedStyle.materialOpacity < 0.99,
           vertexColors: useInstanceColors,
         }),
       ),
     [
+      glyphPolicy,
       resolvedStyle.materialColor,
       resolvedStyle.materialOpacity,
       tracker,
       useInstanceColors,
     ],
   );
+
+  // Pre-allocate instance color attribute with stable capacity.
+  const instanceColorAttr = useMemo(() => {
+    const attr = new InstancedBufferAttribute(
+      new Float32Array(capacity * 3),
+      3,
+    );
+    attr.setUsage(DynamicDrawUsage);
+    return attr;
+  }, [capacity]);
 
   useEffect(
     () => () => tracker.release("geometry", shaftGeometry),
@@ -139,12 +176,21 @@ export function VectorFieldLayer({
     const head = headRef.current;
     if (!glyphs || !shaft || !head) return;
 
+    // Set visible count (may be less than capacity).
+    shaft.count = glyphs.count;
+    head.count = glyphs.count;
+
+    // Attach instance color attribute for bulk writes.
+    shaft.instanceColor = instanceColorAttr;
+    head.instanceColor = instanceColorAttr;
+    shaft.instanceMatrix.setUsage(DynamicDrawUsage);
+    head.instanceMatrix.setUsage(DynamicDrawUsage);
+
     const matrix = new Matrix4();
     const quaternion = new Quaternion();
     const position = new Vector3();
     const scale = new Vector3();
     const direction = new Vector3();
-    const color = new Color();
 
     for (let index = 0; index < glyphs.count; index += 1) {
       const offset = index * 3;
@@ -180,41 +226,38 @@ export function VectorFieldLayer({
       );
       matrix.compose(position, quaternion, scale);
       head.setMatrixAt(index, matrix);
+    }
 
-      if (glyphs.colors) {
-        color.setRGB(
-          glyphs.colors[offset] ?? 1,
-          glyphs.colors[offset + 1] ?? 1,
-          glyphs.colors[offset + 2] ?? 1,
-        );
-        shaft.setColorAt(index, color);
-        head.setColorAt(index, color);
-      }
+    // Bulk color write instead of per-instance setColorAt.
+    if (glyphs.colors) {
+      const colorArray = instanceColorAttr.array as Float32Array;
+      colorArray.set(glyphs.colors.subarray(0, glyphs.count * 3));
+      instanceColorAttr.needsUpdate = true;
     }
 
     shaft.instanceMatrix.needsUpdate = true;
     head.instanceMatrix.needsUpdate = true;
-    if (shaft.instanceColor) shaft.instanceColor.needsUpdate = true;
-    if (head.instanceColor) head.instanceColor.needsUpdate = true;
     tracker.recordDirtyFrame("vector-glyphs");
     invalidate();
-  }, [glyphs, invalidate, tracker]);
+  }, [glyphs, instanceColorAttr, invalidate, tracker]);
 
   if (!glyphs || glyphs.count === 0) return null;
 
   return (
     <>
       <instancedMesh
-        args={[shaftGeometry, material, glyphs.count]}
+        args={[shaftGeometry, material, capacity]}
         frustumCulled={false}
-        key={`vector-shaft-${glyphs.count}`}
+        key={`vector-shaft-${capacity}`}
         ref={shaftRef}
+        renderOrder={glyphPolicy.renderOrder}
       />
       <instancedMesh
-        args={[headGeometry, material, glyphs.count]}
+        args={[headGeometry, material, capacity]}
         frustumCulled={false}
-        key={`vector-head-${glyphs.count}`}
+        key={`vector-head-${capacity}`}
         ref={headRef}
+        renderOrder={glyphPolicy.renderOrder}
       />
     </>
   );

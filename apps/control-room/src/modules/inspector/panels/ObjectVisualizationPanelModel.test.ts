@@ -9,6 +9,7 @@ import {
 
 import {
   buildVisualizationPanelSections,
+  colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
@@ -35,6 +36,12 @@ describe("ObjectVisualizationPanelModel", () => {
       "magnitude",
       "monochrome",
     ]);
+  });
+
+  it("keeps color picker input compatible with CSS token defaults", () => {
+    expect(colorPickerInputValue("#00ffaa")).toBe("#00ffaa");
+    expect(colorPickerInputValue("#00FFAA")).toBe("#00FFAA");
+    expect(colorPickerInputValue("var(--fm-surface-magnetic)")).toBe("#ffffff");
   });
 
   it("builds pass-specific sections for a visible object target", () => {

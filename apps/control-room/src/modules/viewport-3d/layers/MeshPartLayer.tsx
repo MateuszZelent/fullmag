@@ -1,8 +1,13 @@
 "use client";
 
-import { useThree, type ThreeEvent } from "@react-three/fiber";
+import { type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
+import {
+  RENDER_POLICIES,
+  materialPolicyProps,
+  surfaceMaterialPolicyProps,
+} from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -13,6 +18,7 @@ import {
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -61,7 +67,7 @@ export function MeshPartLayer({
   tracker: Viewport3DResourceTracker;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate();
   const geometry = useMemo(() => {
     if (!topologyModel) return null;
     const surfaceIndices = partModel.surfaceIndices;
@@ -85,17 +91,9 @@ export function MeshPartLayer({
     : null;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
-    if (!shaderUsesVertexColors(settings)) {
-      if (geometry.hasAttribute("color")) {
-        geometry.deleteAttribute("color");
-      }
-      tracker.recordDirtyFrame("field-colors");
-      invalidate();
-      return;
-    }
     applyVertexScalarColorBuffer(
       geometry,
-      scalarColors,
+      shaderUsesVertexColors(settings) ? scalarColors : null,
       topologyModel.nodeCount,
     );
     tracker.recordDirtyFrame("field-colors");
@@ -127,23 +125,31 @@ export function MeshPartLayer({
   return (
     <group onPointerDown={handlePointerDown}>
       {settings.shaderVisible ? (
-        <mesh geometry={geometry}>
+        <mesh
+          geometry={geometry}
+          renderOrder={surfaceMaterialPolicyProps(opacityFromSettings(settings)).transparent
+            ? RENDER_POLICIES.contextSurface.renderOrder
+            : RENDER_POLICIES.solidSurface.renderOrder}
+        >
           <meshStandardMaterial
             color={meshColor}
             opacity={opacityFromSettings(settings)}
             roughness={0.86}
-            transparent
             vertexColors={hasScalarColors}
+            {...surfaceMaterialPolicyProps(opacityFromSettings(settings))}
           />
         </mesh>
       ) : null}
       {settings.wireframeVisible ? (
-        <mesh geometry={geometry}>
+        <mesh
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+        >
           <meshBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={wireframeOpacityFromSettings(settings)}
-            transparent
             wireframe
+            {...materialPolicyProps("featureEdges")}
           />
         </mesh>
       ) : null}
@@ -155,13 +161,16 @@ export function MeshPartLayer({
         />
       ) : null}
       {settings.pointsVisible ? (
-        <points geometry={geometry}>
+        <points
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.points.renderOrder}
+        >
           <pointsMaterial
             color={colors.wire}
             opacity={opacityFromSettings(settings)}
             sizeAttenuation={false}
             size={3}
-            transparent
+            {...materialPolicyProps("points")}
           />
         </points>
       ) : null}

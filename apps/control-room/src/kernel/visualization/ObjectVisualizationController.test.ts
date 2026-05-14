@@ -22,7 +22,7 @@ describe("ObjectVisualizationController", () => {
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "full",
-      opacityPercent: 55,
+      opacityPercent: 100,
       renderMode: "surface+edges",
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",
@@ -201,7 +201,7 @@ describe("ObjectVisualizationController", () => {
     controller.clearTarget(target);
 
     expect(controller.getSettings(target)).toMatchObject({
-      opacityPercent: 55,
+      opacityPercent: 100,
       renderMode: "surface+edges",
     });
   });

@@ -1,16 +1,22 @@
 "use client";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-import { useThree, type ThreeEvent } from "@react-three/fiber";
+import { type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import {
   BoxGeometry,
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   Quaternion,
   Vector3,
 } from "three";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
+import {
+  RENDER_POLICIES,
+  resolveSurfacePolicy,
+} from "./viewport3DRenderPolicy";
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
@@ -85,7 +91,7 @@ export function FdmCuboidLayer({
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate();
   const surfaceRef = useRef<InstancedMesh>(null);
   const wireframeRef = useRef<InstancedMesh>(null);
   const model = useMemo(() => buildFdmCuboidInstanceModel(domain), [domain]);
@@ -93,18 +99,25 @@ export function FdmCuboidLayer({
     () => tracker.track("geometry", new BoxGeometry(1, 1, 1)),
     [tracker],
   );
+  const surfaceOpacity = opacityFromSettings(settings);
+  const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
   const surfaceMaterial = useMemo(
     () =>
       tracker.track(
         "material",
-        new MeshBasicMaterial({
+        new MeshStandardMaterial({
           color: shaderColorFromSettings(settings, colors.mesh),
-          opacity: opacityFromSettings(settings),
-          transparent: opacityFromSettings(settings) < 1,
+          opacity: surfaceOpacity,
+          transparent: surfacePolicy.transparent,
+          depthWrite: surfacePolicy.depthWrite,
+          depthTest: surfacePolicy.depthTest,
+          side: surfacePolicy.side,
+          roughness: 0.86,
         }),
       ),
-    [colors.mesh, settings, tracker],
+    [colors.mesh, settings, surfaceOpacity, surfacePolicy, tracker],
   );
+  const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeMaterial = useMemo(
     () =>
       tracker.track(
@@ -112,11 +125,14 @@ export function FdmCuboidLayer({
         new MeshBasicMaterial({
           color: wireframeColorFromSettings(settings, colors.wire),
           opacity: wireframeOpacityFromSettings(settings),
-          transparent: true,
+          transparent: wireframePolicy.transparent,
+          depthWrite: wireframePolicy.depthWrite,
+          depthTest: wireframePolicy.depthTest,
+          side: wireframePolicy.side,
           wireframe: true,
         }),
       ),
-    [colors.wire, settings, tracker],
+    [colors.wire, settings, tracker, wireframePolicy],
   );
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
@@ -178,6 +194,7 @@ export function FdmCuboidLayer({
           frustumCulled={false}
           key={`fdm-cuboids-surface-${model.count}`}
           ref={surfaceRef}
+          renderOrder={surfacePolicy.renderOrder}
         />
       ) : null}
       {settings.wireframeVisible ? (
@@ -186,6 +203,7 @@ export function FdmCuboidLayer({
           frustumCulled={false}
           key={`fdm-cuboids-wire-${model.count}`}
           ref={wireframeRef}
+          renderOrder={wireframePolicy.renderOrder}
         />
       ) : null}
     </group>

@@ -12,8 +12,8 @@ describe("resolveViewport3DCameraFit", () => {
 
     expect(fit.target).toEqual([1e-7, 0, 0]);
     expect(fit.position[0]).toBeCloseTo(2.4e-7);
-    expect(fit.near).toBeLessThan(1e-9);
-    expect(fit.far).toBeGreaterThan(1e-4);
+    expect(fit.near).toBeLessThan(1e-8);
+    expect(fit.far).toBeGreaterThan(1e-6);
   });
 
   it("uses micrometer-scale defaults before resources arrive", () => {
@@ -21,6 +21,6 @@ describe("resolveViewport3DCameraFit", () => {
 
     expect(fit.position[0]).toBeCloseTo(2.8e-6);
     expect(fit.target).toEqual([0, 0, 0]);
-    expect(fit.near).toBeLessThan(1e-8);
+    expect(fit.near).toBeLessThan(1e-7);
   });
 });

@@ -655,7 +655,24 @@
   font-size: var(--fm-font-size-xs);
 }
 
-.fm-visualization-color-field input {
+.fm-visualization-color-field__control {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--fm-space-2);
+}
+
+.fm-visualization-color-field__picker {
+  width: 32px;
+  height: 28px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.fm-visualization-color-field__value {
   min-width: 0;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-sm);

@@ -2,8 +2,12 @@
 
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
-import { BackSide, BufferAttribute, BufferGeometry, DoubleSide } from "three";
+import { BufferAttribute, BufferGeometry } from "three";
 import type { ColorRepresentation } from "three";
+import {
+  RENDER_POLICIES,
+  materialPolicyProps,
+} from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -179,25 +183,29 @@ function AirboxMeshPartLayer({
   return (
     <group onPointerDown={handlePointerDown}>
       {settings.shaderVisible ? (
-        <mesh geometry={geometry}>
+        <mesh
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.airSurface.renderOrder}
+        >
           <meshStandardMaterial
             color={shaderColorFromSettings(settings, colors.mesh)}
             opacity={opacity}
             roughness={0.86}
-            side={BackSide}
-            transparent
+            {...materialPolicyProps("airSurface")}
           />
         </mesh>
       ) : null}
       {settings.wireframeVisible ? (
         settings.geometryScope === "surface" ? (
-          <mesh geometry={geometry}>
+          <mesh
+            geometry={geometry}
+            renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+          >
             <meshBasicMaterial
               color={wireframeColorFromSettings(settings, colors.wire)}
               opacity={wireframeOpacityFromSettings(settings)}
-              side={DoubleSide}
-              transparent
               wireframe
+              {...materialPolicyProps("featureEdges")}
             />
           </mesh>
         ) : (
@@ -216,13 +224,16 @@ function AirboxMeshPartLayer({
         />
       ) : null}
       {settings.pointsVisible ? (
-        <points geometry={geometry}>
+        <points
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.points.renderOrder}
+        >
           <pointsMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={opacity}
             sizeAttenuation={false}
             size={3}
-            transparent
+            {...materialPolicyProps("points")}
           />
         </points>
       ) : null}

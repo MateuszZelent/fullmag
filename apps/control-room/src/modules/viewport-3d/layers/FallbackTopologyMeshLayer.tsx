@@ -1,8 +1,13 @@
 "use client";
 
-import { useThree, type ThreeEvent } from "@react-three/fiber";
+import { type ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
+import {
+  RENDER_POLICIES,
+  materialPolicyProps,
+  surfaceMaterialPolicyProps,
+} from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -12,6 +17,7 @@ import {
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -54,7 +60,7 @@ export function FallbackTopologyMeshLayer({
   tracker: Viewport3DResourceTracker;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  const invalidate = useThree((state) => state.invalidate);
+  const invalidate = useBatchedInvalidate();
   const geometry = useMemo(() => {
     if (!topologyModel) return null;
     const next = tracker.track("geometry", new BufferGeometry());
@@ -77,17 +83,9 @@ export function FallbackTopologyMeshLayer({
     : null;
   useEffect(() => {
     if (!geometry || !topologyModel) return;
-    if (!shaderUsesVertexColors(fallbackSettings)) {
-      if (geometry.hasAttribute("color")) {
-        geometry.deleteAttribute("color");
-      }
-      tracker.recordDirtyFrame("field-colors");
-      invalidate();
-      return;
-    }
     applyVertexScalarColorBuffer(
       geometry,
-      scalarColors,
+      shaderUsesVertexColors(fallbackSettings) ? scalarColors : null,
       topologyModel.nodeCount,
     );
     tracker.recordDirtyFrame("field-colors");
@@ -121,12 +119,16 @@ export function FallbackTopologyMeshLayer({
   return (
     <group onPointerDown={handlePointerDown}>
       {fallbackSettings.shaderVisible ? (
-        <mesh geometry={geometry}>
+        <mesh
+          geometry={geometry}
+          renderOrder={surfaceMaterialPolicyProps(opacityFromSettings(fallbackSettings)).transparent
+            ? RENDER_POLICIES.contextSurface.renderOrder
+            : RENDER_POLICIES.solidSurface.renderOrder}
+        >
           <meshStandardMaterial
             color={shaderColorFromSettings(fallbackSettings, colors.mesh)}
             opacity={opacityFromSettings(fallbackSettings)}
             roughness={0.86}
-            transparent
             vertexColors={
               shaderUsesVertexColors(fallbackSettings) &&
               canApplyVertexScalarColorBuffer(
@@ -134,27 +136,34 @@ export function FallbackTopologyMeshLayer({
                 topologyModel?.nodeCount ?? 0,
               )
             }
+            {...surfaceMaterialPolicyProps(opacityFromSettings(fallbackSettings))}
           />
         </mesh>
       ) : null}
       {fallbackSettings.wireframeVisible ? (
-        <mesh geometry={geometry}>
+        <mesh
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+        >
           <meshBasicMaterial
             color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(fallbackSettings)}
-            transparent
             wireframe
+            {...materialPolicyProps("featureEdges")}
           />
         </mesh>
       ) : null}
       {fallbackSettings.pointsVisible ? (
-        <points geometry={geometry}>
+        <points
+          geometry={geometry}
+          renderOrder={RENDER_POLICIES.points.renderOrder}
+        >
           <pointsMaterial
             color={colors.wire}
             opacity={opacityFromSettings(fallbackSettings)}
             sizeAttenuation={false}
             size={3}
-            transparent
+            {...materialPolicyProps("points")}
           />
         </points>
       ) : null}

@@ -86,7 +86,7 @@ describe("visualization target commands", () => {
     expect(result.status).toBe("completed");
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({
-        opacityPercent: 55,
+        opacityPercent: 100,
       });
   });
 

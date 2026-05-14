@@ -49,33 +49,40 @@ export function applyVertexScalarColorBuffer(
   colorBuffer: ScalarColorBuffer | null | undefined,
   vertexCount: number,
 ): boolean {
+  const existing = geometry.getAttribute("color");
+  const hasCompatibleBuffer =
+    existing instanceof BufferAttribute &&
+    existing.itemSize === 3 &&
+    existing.count === vertexCount &&
+    existing.array instanceof Float32Array;
+
   if (!colorBuffer) {
-    if (geometry.hasAttribute("color")) {
+    // When the existing buffer matches the current topology, zero-fill it
+    // instead of deleting it.  The material's `vertexColors` flag controls
+    // whether the buffer is actually sampled — this avoids intermediate blank
+    // frames during HSL→monochrome transitions.
+    if (hasCompatibleBuffer) {
+      (existing.array as Float32Array).fill(0);
+      existing.needsUpdate = true;
+    } else if (geometry.hasAttribute("color")) {
+      // Buffer size doesn't match the current topology — stale data from a
+      // previous mesh.  Remove it.
       geometry.deleteAttribute("color");
     }
     return false;
   }
 
-  const existing = geometry.getAttribute("color");
-  if (
-    colorBuffer.colors.length === vertexCount * 3 &&
-    existing instanceof BufferAttribute &&
-    existing.itemSize === 3 &&
-    existing.count === vertexCount &&
-    existing.array instanceof Float32Array
-  ) {
-    existing.array.set(colorBuffer.colors);
+  if (colorBuffer.colors.length !== vertexCount * 3) {
+    return false;
+  }
+
+  if (hasCompatibleBuffer) {
+    (existing.array as Float32Array).set(colorBuffer.colors);
     existing.needsUpdate = true;
     return true;
   }
 
-  if (colorBuffer.colors.length !== vertexCount * 3) {
-    if (geometry.hasAttribute("color")) {
-      geometry.deleteAttribute("color");
-    }
-    return false;
-  }
-
+  // First-time allocation — create a persistent buffer that will be reused.
   geometry.setAttribute("color", new BufferAttribute(colorBuffer.colors, 3));
   return true;
 }

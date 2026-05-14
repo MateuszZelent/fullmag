@@ -35,6 +35,7 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildVisualizationPanelSections,
+  colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
@@ -527,15 +528,28 @@ function ColorField({
   onChange: (value: string) => void;
   value: string;
 }) {
+  const pickerValue = colorPickerInputValue(value);
+
   return (
     <label className="fm-visualization-color-field">
       <span>{label}</span>
-      <input
-        disabled={disabled}
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <div className="fm-visualization-color-field__control">
+        <input
+          aria-label={`${label} picker`}
+          className="fm-visualization-color-field__picker"
+          disabled={disabled}
+          type="color"
+          value={pickerValue}
+          onChange={(event) => onChange(event.target.value)}
+        />
+        <input
+          className="fm-visualization-color-field__value"
+          disabled={disabled}
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
     </label>
   );
 }

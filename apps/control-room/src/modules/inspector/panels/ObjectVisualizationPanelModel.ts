@@ -29,6 +29,10 @@ export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
   { value: "monochrome", label: "Monochrome" },
 ];
 
+export function colorPickerInputValue(value: string): string {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff";
+}
+
 export interface VisualizationPanelField {
   id: keyof VisualizationTargetSettings;
   kind: "color" | "mode" | "number" | "toggle";

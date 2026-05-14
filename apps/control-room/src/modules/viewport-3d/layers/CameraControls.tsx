@@ -46,8 +46,8 @@ export function resolveViewport3DCameraFit(
   const [x, y, z] = activeBounds.center;
   const radius = Math.max(activeBounds.radius, 1e-12);
   const distance = radius * 2.8;
-  const near = Math.max(distance / 10_000, 1e-12);
-  const far = Math.max(distance * 10_000, near * 1_000, 1e-3);
+  const near = Math.max(distance / 100, 1e-12);
+  const far = Math.max(distance * 100, near * 100, 1e-3);
 
   return {
     far,

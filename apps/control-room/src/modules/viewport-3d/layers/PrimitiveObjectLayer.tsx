@@ -8,6 +8,11 @@ import {
   CylinderGeometry,
   SphereGeometry,
 } from "three";
+import {
+  RENDER_POLICIES,
+  materialPolicyProps,
+  surfaceMaterialPolicyProps,
+} from "./viewport3DRenderPolicy";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -94,6 +99,12 @@ function PrimitiveObject({
 
   if (!settings.visible) return null;
 
+  // When mesh topology exists but is stale (scene revision mismatch), render
+  // the primitive as a wireframe ghost only.  The topology layer still renders
+  // the stale mesh surface, so showing a second full transparent primitive
+  // surface on top causes surface-mixing artifacts.
+  const isStale = object.meshState === "mesh-stale";
+
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
     onSelectObject(object);
@@ -116,25 +127,31 @@ function PrimitiveObject({
         primitive: true,
       }}
     >
-      {settings.shaderVisible ? (
-        <mesh>
+      {settings.shaderVisible && !isStale ? (
+        <mesh
+          renderOrder={surfaceMaterialPolicyProps(opacity).transparent
+            ? RENDER_POLICIES.contextSurface.renderOrder
+            : RENDER_POLICIES.solidSurface.renderOrder}
+        >
           <primitive attach="geometry" object={geometry} />
           <meshStandardMaterial
             color={shaderColor}
-            opacity={Math.min(opacity, 0.58)}
+            opacity={opacity}
             roughness={0.78}
-            transparent
+            {...surfaceMaterialPolicyProps(opacity)}
           />
         </mesh>
       ) : null}
       {settings.wireframeVisible ? (
-        <mesh>
+        <mesh
+          renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+        >
           <primitive attach="geometry" object={geometry} />
           <meshBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
             opacity={wireframeOpacityFromSettings(settings)}
-            transparent
             wireframe
+            {...materialPolicyProps("featureEdges")}
           />
         </mesh>
       ) : null}
