@@ -3,6 +3,10 @@
 import { useSyncExternalStore } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import {
+  DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
+  type Viewport3DVisualProfileId,
+} from "./viewport3dVisualProfile";
 
 export interface Viewport3DCameraState {
   position: [number, number, number];
@@ -11,8 +15,10 @@ export interface Viewport3DCameraState {
 
 export interface Viewport3DCommandState {
   camera: Viewport3DCameraState;
+  captureRevision: number;
   fitRevision: number;
   resetCameraRevision: number;
+  visualProfileId: Viewport3DVisualProfileId;
   widgets: Viewport3DWidgetState;
 }
 
@@ -35,8 +41,10 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   camera: {
     ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
+  captureRevision: 0,
   fitRevision: 0,
   resetCameraRevision: 0,
+  visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
     cameraProjection: "perspective",
     hslReferenceMode: "auto",
@@ -56,6 +64,15 @@ class Viewport3DStore {
     this.snapshot = {
       ...this.snapshot,
       fitRevision: this.snapshot.fitRevision + 1,
+    };
+    this.notify();
+  }
+
+  requestCapture(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      captureRevision: this.snapshot.captureRevision + 1,
+      visualProfileId: "capture",
     };
     this.notify();
   }
@@ -82,6 +99,15 @@ class Viewport3DStore {
         ...this.snapshot.widgets,
         hslReferenceMode: mode,
       },
+    };
+    this.notify();
+  }
+
+  setVisualProfile(profileId: Viewport3DVisualProfileId): void {
+    if (this.snapshot.visualProfileId === profileId) return;
+    this.snapshot = {
+      ...this.snapshot,
+      visualProfileId: profileId,
     };
     this.notify();
   }

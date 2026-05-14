@@ -50,6 +50,7 @@ export interface Viewport3DTopologyRenderModel<
   TPart extends Viewport3DRenderablePart = Viewport3DRenderablePart,
 > {
   fallbackSurfaceIndices: Uint32Array;
+  fallbackVolumeEdgeIndices: Uint32Array;
   magneticParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
   airboxParts: Array<Viewport3DTopologyPartRenderModel<TPart>>;
   nodeCount: number;
@@ -123,6 +124,7 @@ export function buildViewport3DTopologyRenderModel<
       ...buildPartTopologyModel(part, topology),
     })),
     fallbackSurfaceIndices: buildTetraSurfaceIndices(topology.indices),
+    fallbackVolumeEdgeIndices: buildTetraVolumeEdgeIndices(topology.indices),
     magneticParts: magneticParts.map((part) => ({
       part,
       ...buildPartTopologyModel(part, topology),
@@ -338,12 +340,13 @@ export function viewport3DFieldRenderOptionsNeedFieldData(
 
 export function resolveViewport3DMaxVectorGlyphs(
   state: Viewport3DVectorBudgetState | null | undefined,
+  fallback = DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET,
 ): number {
   const maxGlyphs =
     state?.sampling?.max_glyphs ??
     state?.layers?.vectors?.density ??
     state?.vector_density ??
-    DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
+    fallback;
   return Math.max(0, Math.floor(maxGlyphs));
 }
 
@@ -407,6 +410,44 @@ export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
   }
 
   return faces;
+}
+
+export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
+  const tetraCount = Math.floor(indices.length / 4);
+  const seen = new Set<string>();
+  const edges: number[] = [];
+
+  for (let tetra = 0; tetra < tetraCount; tetra += 1) {
+    const source = tetra * 4;
+    const a = indices[source] ?? 0;
+    const b = indices[source + 1] ?? 0;
+    const c = indices[source + 2] ?? 0;
+    const d = indices[source + 3] ?? 0;
+
+    appendTetraEdge(edges, seen, a, b);
+    appendTetraEdge(edges, seen, a, c);
+    appendTetraEdge(edges, seen, a, d);
+    appendTetraEdge(edges, seen, b, c);
+    appendTetraEdge(edges, seen, b, d);
+    appendTetraEdge(edges, seen, c, d);
+  }
+
+  return new Uint32Array(edges);
+}
+
+function appendTetraEdge(
+  edges: number[],
+  seen: Set<string>,
+  first: number,
+  second: number,
+): void {
+  if (first === second) return;
+  const a = Math.min(first, second);
+  const b = Math.max(first, second);
+  const key = `${a}:${b}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  edges.push(a, b);
 }
 
 export function buildPartSurfaceIndices(

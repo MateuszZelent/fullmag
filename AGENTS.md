@@ -199,6 +199,10 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
 - Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Raw Catppuccin hex values belong only in central token/theme files; components consume `--fm-*` tokens.
 - Build menus, ribbons, tabs, dropdowns, dialogs, command palette, context menus, tooltips, switches, and segmented controls from shadcn/ui-style shared primitives. Bespoke widgets need a documented exception.
+- Client components in `apps/control-room` that read external stores, browser state, local storage, runtime resources, or cached API data must make their first client render match SSR; use `useSyncExternalStore` server snapshots or another explicit hydration gate instead of rendering live client-only values immediately.
+- Every `apps/control-room` R3F/WebGL viewport change must run a browser smoke or Playwright check that asserts the canvas is visible, the WebGL context is not lost, and the drawing buffer is non-zero after load; passing TypeScript/tests alone is not enough for viewport work.
+- Treat `THREE.WebGLRenderer: Context Lost` during `apps/control-room` startup as a failing viewport lifecycle signal until proven to be teardown-only; verify with `gl.isContextLost()` and drawing-buffer dimensions before calling it harmless.
+- Keep `apps/control-room` development StrictMode disabled while the installed R3F/Three stack force-loses WebGL during React development remounts; do not re-enable `reactStrictMode` without a real browser smoke showing stable 3D canvas after load.
 
 ---
 

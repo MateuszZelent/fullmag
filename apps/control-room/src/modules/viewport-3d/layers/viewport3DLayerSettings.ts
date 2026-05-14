@@ -5,6 +5,7 @@ import {
 import type { ColorRepresentation } from "three";
 
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 export function opacityFromSettings(
   settings: VisualizationTargetSettings,
@@ -67,9 +68,12 @@ export function wireframeColorFromSettings(
 
 export function wireframeOpacityFromSettings(
   settings: VisualizationTargetSettings,
+  featureEdges?: Viewport3DMaterialProfile["featureEdges"],
 ): number {
-  return opacityFromSettings(settings) *
+  const opacity =
+    opacityFromSettings(settings) *
     percentToUnit(settings.wireframeOpacityPercent);
+  return Math.max(0, Math.min(1, opacity * (featureEdges?.opacity ?? 1)));
 }
 
 function renderableColor(

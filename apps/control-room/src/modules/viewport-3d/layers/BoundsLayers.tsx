@@ -30,6 +30,7 @@ import type {
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
@@ -101,6 +102,7 @@ function BoundsPoints({
 function AirboxMeshPartLayer({
   colors,
   fieldModel,
+  materialProfile,
   onSelectPart,
   partModel,
   settings,
@@ -112,6 +114,7 @@ function AirboxMeshPartLayer({
 }: {
   colors: Viewport3DColors;
   fieldModel: Viewport3DFieldRenderModel | null;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   settings: VisualizationTargetSettings;
@@ -212,7 +215,7 @@ function AirboxMeshPartLayer({
           <meshStandardMaterial
             color={shaderColorFromSettings(resolvedSettings, colors.mesh)}
             opacity={opacity}
-            roughness={0.86}
+            {...materialProfile.airSurface}
             {...materialPolicyProps("airSurface")}
           />
         </mesh>
@@ -225,7 +228,10 @@ function AirboxMeshPartLayer({
           >
             <lineBasicMaterial
               color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-              opacity={wireframeOpacityFromSettings(resolvedSettings)}
+              opacity={wireframeOpacityFromSettings(
+                resolvedSettings,
+                materialProfile.featureEdges,
+              )}
               {...materialPolicyProps("featureEdges")}
             />
           </lineSegments>
@@ -314,6 +320,7 @@ export function AirboxLayer({
   colors,
   vectorColorMode,
   fieldModel,
+  materialProfile,
   onSelectPart,
   settings,
   topologyModel,
@@ -324,6 +331,7 @@ export function AirboxLayer({
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -340,6 +348,7 @@ export function AirboxLayer({
           key={partModel.part.id}
           colors={colors}
           fieldModel={fieldModel}
+          materialProfile={materialProfile}
           onSelectPart={onSelectPart}
           partModel={partModel}
           settings={settings}

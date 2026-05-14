@@ -12,6 +12,11 @@ interface StyleTokenSource {
   getPropertyValue(name: string): string;
 }
 
+interface Viewport3DColorDocument {
+  body?: Element | null;
+  documentElement: Element;
+}
+
 function useClientReady(): boolean {
   return useSyncExternalStore(
     subscribeClientReady,
@@ -55,13 +60,21 @@ export function readViewport3DColorsFromStyles(
   return null;
 }
 
+export function resolveViewport3DColorElement(
+  documentLike: Viewport3DColorDocument,
+): Element {
+  return documentLike.body ?? documentLike.documentElement;
+}
+
 function readViewport3DColorsFromDocument(): Viewport3DColors | null {
   if (typeof document === "undefined") {
     return null;
   }
 
   try {
-    return readViewport3DColorsFromStyles(getComputedStyle(document.documentElement));
+    return readViewport3DColorsFromStyles(
+      getComputedStyle(resolveViewport3DColorElement(document)),
+    );
   } catch {
     return null;
   }
@@ -110,10 +123,14 @@ export function useViewport3DColors() {
             }
             updateColors();
           });
-    observer?.observe(document.documentElement, {
+    const observerOptions = {
       attributeFilter: ["class", "data-theme", "style"],
       attributes: true,
-    });
+    };
+    observer?.observe(document.documentElement, observerOptions);
+    if (document.body) {
+      observer?.observe(document.body, observerOptions);
+    }
 
     return () => {
       disposed = true;

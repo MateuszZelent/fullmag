@@ -21,6 +21,7 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useKernel } from "@/kernel/KernelContext";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -114,8 +115,12 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     kernel.commands.isEnabled(commandId, commandContext);
 
   return (
-    <div className="fm-inspector-panel">
-      <InspectorSection title="Runtime" badge={model.runtime.state}>
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["runtime", "selected-stage", "boundary", "pipeline", "history"]}
+    >
+      <InspectorSection value="runtime" title="Runtime" badge={model.runtime.state}>
         <FieldRow label="Run" value={model.runtime.runId} />
         <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
         <FieldRow label="Max torque" value={model.runtime.maxTorque} />
@@ -180,7 +185,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Selected Stage" badge={model.selectedStage?.status ?? "none"}>
+      <InspectorSection value="selected-stage" title="Selected Stage" badge={model.selectedStage?.status ?? "none"}>
         <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
         <FieldRow
           label="Torque stop"
@@ -205,7 +210,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Boundary Conditions" badge={snapshot.requested.backend}>
+      <InspectorSection value="boundary" title="Boundary Conditions" badge={snapshot.requested.backend}>
         <FieldRow
           label="Demag realization"
           value={model.boundary.demagRealization}
@@ -216,7 +221,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Mode" value={snapshot.requested.mode} />
       </InspectorSection>
 
-      <InspectorSection title="Stage Pipeline" badge={`${model.stages.length}`}>
+      <InspectorSection value="pipeline" title="Stage Pipeline" badge={`${model.stages.length}`}>
         <div className="fm-study-stage-list">
           {model.stages.map((stage) => (
             <StageCard
@@ -270,7 +275,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Run History" badge={`${energyHistory.data?.returned_rows ?? 0}`}>
+      <InspectorSection value="history" title="Run History" badge={`${energyHistory.data?.returned_rows ?? 0}`}>
         <FieldRow
           label="Energy step"
           value={energyCurrent.data?.step ?? "not available"}
@@ -293,6 +298,6 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           value={energyHistory.data?.total_rows ?? "not available"}
         />
       </InspectorSection>
-    </div>
+    </Accordion>
   );
 }

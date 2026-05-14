@@ -38,6 +38,20 @@ export function buildSurfaceEdgeGeometry(
   return geometry;
 }
 
+export function buildLineIndexGeometry(
+  positions: Float32Array,
+  lineIndices: ArrayLike<number> | null | undefined,
+): BufferGeometry | null {
+  if (!lineIndices || lineIndices.length < 2 || lineIndices.length % 2 !== 0) {
+    return null;
+  }
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  geometry.setIndex(new BufferAttribute(new Uint32Array(lineIndices), 1));
+  return geometry;
+}
+
 export function buildSurfaceEdgeGeometryFromBufferGeometry(
   source: BufferGeometry,
 ): BufferGeometry | null {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveViewport3DCameraFit } from "./CameraControls";
+import {
+  resolveViewport3DCameraFit,
+  shouldAutoFitViewport3DBoundsChange,
+} from "./CameraControls";
 
 describe("resolveViewport3DCameraFit", () => {
   it("fits nanoscale micromagnetic bounds without meter-scale clipping", () => {
@@ -22,5 +25,33 @@ describe("resolveViewport3DCameraFit", () => {
     expect(fit.position[0]).toBeCloseTo(2.8e-6);
     expect(fit.target).toEqual([0, 0, 0]);
     expect(fit.near).toBeLessThan(1e-7);
+  });
+
+  it("auto-fits changed bounds only while the camera is still auto-managed", () => {
+    const lastAutoFitCameraState = {
+      position: [1, 2, 3] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+    };
+
+    expect(
+      shouldAutoFitViewport3DBoundsChange({
+        currentCameraState: lastAutoFitCameraState,
+        lastAutoFitCameraState,
+        nextBoundsSignature: "next",
+        previousBoundsSignature: "previous",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldAutoFitViewport3DBoundsChange({
+        currentCameraState: {
+          position: [4, 5, 6],
+          target: [0, 0, 0],
+        },
+        lastAutoFitCameraState,
+        nextBoundsSignature: "next",
+        previousBoundsSignature: "previous",
+      }),
+    ).toBe(false);
   });
 });

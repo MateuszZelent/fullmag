@@ -15,6 +15,7 @@ import {
   useMaterialResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -187,8 +188,12 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
-      <InspectorSection title="Magnetic Parameters" collapsible defaultCollapsed={false}>
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["parameters", "assignment", "material-parameters", "actions"]}
+    >
+      <InspectorSection value="parameters" title="Magnetic Parameters" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={object.objectId} />
         <FieldRow label="Current material" value={object.material} />
         <FieldRow
@@ -204,7 +209,7 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Material fetch" value={material.status} />
       </InspectorSection>
 
-      <InspectorSection title="Assignment">
+      <InspectorSection value="assignment" title="Assignment">
         <FormField
           label="Material ref"
           mono={false}
@@ -214,7 +219,7 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Material Parameters">
+      <InspectorSection value="material-parameters" title="Material Parameters">
         <FormField
           label="Name"
           mono={false}
@@ -256,7 +261,7 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Actions">
+      <InspectorSection value="actions" title="Actions">
         <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || object.mode !== "committed"}
@@ -291,6 +296,6 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
         </div>
         {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
-    </div>
+    </Accordion>
   );
 }

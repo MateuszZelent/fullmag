@@ -6,9 +6,8 @@
  * resource change).  Without batching, each call schedules a separate frame,
  * which can produce visible intermediate states.
  *
- * This utility coalesces all invalidation requests into a single
- * `requestAnimationFrame` callback so that the viewport re-renders once
- * per commit batch instead of N times.
+ * This utility coalesces all invalidation requests into one short timer tick
+ * so that the viewport re-renders once per commit batch instead of N times.
  */
 
 "use client";
@@ -17,10 +16,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { useThree } from "@react-three/fiber";
 
 const pendingInvalidates = new Set<() => void>();
-let pendingFrame: number | null = null;
+let pendingTimer: number | null = null;
 
 function flushPendingInvalidates() {
-  pendingFrame = null;
+  pendingTimer = null;
   const callbacks = Array.from(pendingInvalidates);
   pendingInvalidates.clear();
   for (const invalidate of callbacks) {
@@ -34,23 +33,23 @@ export function scheduleBatchedViewportInvalidate(invalidate: () => void): void 
     return;
   }
   pendingInvalidates.add(invalidate);
-  if (pendingFrame !== null) {
+  if (pendingTimer !== null) {
     return;
   }
-  pendingFrame = window.requestAnimationFrame(flushPendingInvalidates);
+  pendingTimer = window.setTimeout(flushPendingInvalidates, 0);
 }
 
 export function cancelBatchedViewportInvalidate(invalidate: () => void): void {
   pendingInvalidates.delete(invalidate);
   if (
     pendingInvalidates.size > 0 ||
-    pendingFrame === null ||
+    pendingTimer === null ||
     typeof window === "undefined"
   ) {
     return;
   }
-  window.cancelAnimationFrame(pendingFrame);
-  pendingFrame = null;
+  window.clearTimeout(pendingTimer);
+  pendingTimer = null;
 }
 
 /**

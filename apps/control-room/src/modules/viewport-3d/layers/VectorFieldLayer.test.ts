@@ -51,6 +51,9 @@ describe("VectorFieldLayer style mapping", () => {
     expect(shaderUsesVertexColors(settings)).toBe(false);
     expect(surfaceScalarColorModeFromSettings(settings)).toBeNull();
     expect(wireframeOpacityFromSettings(settings)).toBe(0.15);
+    expect(
+      wireframeOpacityFromSettings(settings, { opacity: 0.42 }),
+    ).toBe(0.063);
     expect(vectorColorModeFromSettings(settings, "orientation")).toBe("x");
     expect(vectorStyleFromSettings(settings, {})).toEqual({
       alpha: 0.4,

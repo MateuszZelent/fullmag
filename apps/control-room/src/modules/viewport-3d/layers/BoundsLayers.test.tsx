@@ -8,7 +8,9 @@ import {
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import type { Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
+import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import { AirboxLayer, SelectionHighlightLayer } from "./BoundsLayers";
+import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 const colors = {
   accent: "#aaccff",
@@ -32,6 +34,10 @@ const visibleWireframeAirbox: VisualizationTargetSettings = {
   wireframeVisible: true,
 };
 
+const materialProfile = resolveViewport3DMaterialProfile(
+  getViewport3DVisualProfile("interactive"),
+);
+
 function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   const part = {
     boundary_face_count: 1,
@@ -50,6 +56,7 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   return {
     airboxParts: [{ part, surfaceIndices: null, surfaceNodeSelection: null }],
     fallbackSurfaceIndices: new Uint32Array(),
+    fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
     nodeCount: 4,
     positions: new Float32Array(),
@@ -63,6 +70,7 @@ describe("AirboxLayer", () => {
     const element = AirboxLayer({
       colors,
       fieldModel: null,
+      materialProfile,
       onSelectPart,
       settings: visibleWireframeAirbox,
       topologyModel,
@@ -79,6 +87,7 @@ describe("AirboxLayer", () => {
     expect(isValidElement(child)).toBe(true);
     expect(child.props).toMatchObject({
       onSelectPart,
+      materialProfile,
       settings: visibleWireframeAirbox,
       topologyModel,
       topologyFreshness: "current",

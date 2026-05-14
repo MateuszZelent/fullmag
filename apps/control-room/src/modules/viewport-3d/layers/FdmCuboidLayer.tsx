@@ -21,6 +21,7 @@ import {
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   shaderColorFromSettings,
@@ -81,12 +82,14 @@ export function buildFdmCuboidInstanceModel(
 export function FdmCuboidLayer({
   colors,
   domain,
+  materialProfile,
   onSelectDomain,
   settings,
   tracker,
 }: {
   colors: Viewport3DColors;
   domain: FdmGridRenderDomain | null;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectDomain: () => void;
   settings: VisualizationTargetSettings;
   tracker: Viewport3DResourceTracker;
@@ -112,10 +115,17 @@ export function FdmCuboidLayer({
           depthWrite: surfacePolicy.depthWrite,
           depthTest: surfacePolicy.depthTest,
           side: surfacePolicy.side,
-          roughness: 0.86,
+          ...materialProfile.magneticSurface,
         }),
       ),
-    [colors.mesh, settings, surfaceOpacity, surfacePolicy, tracker],
+    [
+      colors.mesh,
+      materialProfile.magneticSurface,
+      settings,
+      surfaceOpacity,
+      surfacePolicy,
+      tracker,
+    ],
   );
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeMaterial = useMemo(
@@ -124,7 +134,10 @@ export function FdmCuboidLayer({
         "material",
         new MeshBasicMaterial({
           color: wireframeColorFromSettings(settings, colors.wire),
-          opacity: wireframeOpacityFromSettings(settings),
+          opacity: wireframeOpacityFromSettings(
+            settings,
+            materialProfile.featureEdges,
+          ),
           transparent: wireframePolicy.transparent,
           depthWrite: wireframePolicy.depthWrite,
           depthTest: wireframePolicy.depthTest,
@@ -132,7 +145,7 @@ export function FdmCuboidLayer({
           wireframe: true,
         }),
       ),
-    [colors.wire, settings, tracker, wireframePolicy],
+    [colors.wire, materialProfile.featureEdges, settings, tracker, wireframePolicy],
   );
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);

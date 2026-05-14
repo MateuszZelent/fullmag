@@ -78,13 +78,13 @@ describe("viewport3dGeometryColors", () => {
     expect(canApplyVertexScalarColors(vectorField([1, 0, 0, 0, 1, 0]), 1)).toBe(false);
   });
 
-  it("rejects partial field coverage without a node-index mapping contract", () => {
+  it("accepts prefix partial field coverage used by magnetic-only FEM fields", () => {
     const geometry = new BufferGeometry();
 
     expect(
       applyVertexScalarColors(geometry, vectorField([1, 0, 0]), 2),
-    ).toBe(false);
-    expect(geometry.hasAttribute("color")).toBe(false);
-    expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(false);
+    ).toBe(true);
+    expect(geometry.hasAttribute("color")).toBe(true);
+    expect(canApplyVertexScalarColors(vectorField([1, 0, 0]), 2)).toBe(true);
   });
 });

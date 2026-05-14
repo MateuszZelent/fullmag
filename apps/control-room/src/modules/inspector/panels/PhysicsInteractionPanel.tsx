@@ -12,6 +12,7 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import type { InteractionFieldSpec } from "@/shared/domain/physics/interactions";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -198,8 +199,12 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
-      <InspectorSection title="Physics Interaction">
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["interaction", "contract", "backend", "state", "parameters", "actions"]}
+    >
+      <InspectorSection value="interaction" title="Physics Interaction" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
         {selectedRegionId && <FieldRow label="Region ID" value={selectedRegionId} />}
         <FormField
@@ -235,7 +240,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       </InspectorSection>
 
       {spec && (
-        <InspectorSection title="Contract">
+        <InspectorSection value="contract" title="Contract">
           <FieldRow label="Scope" value={scopeLabel(spec.scope)} />
           <FieldRow label="Storage" value={storageLabel(spec.storage)} />
           <FieldRow label="Status" value={statusLabel(spec.availability)} />
@@ -244,7 +249,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
       )}
 
       {isWritableObjectInteraction(interactionId) && (
-        <InspectorSection title="Backend Resource" collapsible defaultCollapsed={true}>
+        <InspectorSection value="backend" title="Backend Resource" collapsible defaultCollapsed={true}>
           <FieldRow label="Fetch state" value={objectInteraction.status} />
           <FieldRow label="Present" value={resource.present ? "yes" : "no"} />
           <FieldRow label="Enabled" value={resource.enabled ? "yes" : "no"} />
@@ -252,7 +257,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         </InspectorSection>
       )}
 
-      <InspectorSection title="State">
+      <InspectorSection value="state" title="State">
         <FormField
           label="Present"
           type="checkbox"
@@ -269,7 +274,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Parameters">
+      <InspectorSection value="parameters" title="Parameters">
         {spec && spec.fields.length > 0 ? (
           spec.fields.map((field) => (
             <InteractionField
@@ -285,7 +290,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorSection>
 
-      <InspectorSection title="Actions">
+      <InspectorSection value="actions" title="Actions">
         <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || !canApply}
@@ -341,7 +346,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           </DialogContent>
         </Dialog>
       )}
-    </div>
+    </Accordion>
   );
 }
 

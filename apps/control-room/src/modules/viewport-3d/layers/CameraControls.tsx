@@ -99,6 +99,27 @@ function cameraStateSignature(cameraState: Viewport3DCameraState): string {
     .join(":");
 }
 
+export function shouldAutoFitViewport3DBoundsChange({
+  currentCameraState,
+  lastAutoFitCameraState,
+  nextBoundsSignature,
+  previousBoundsSignature,
+}: {
+  currentCameraState: Viewport3DCameraState;
+  lastAutoFitCameraState: Viewport3DCameraState | null;
+  nextBoundsSignature: string | null;
+  previousBoundsSignature: string | null;
+}): boolean {
+  return Boolean(
+    nextBoundsSignature &&
+      previousBoundsSignature &&
+      nextBoundsSignature !== previousBoundsSignature &&
+      lastAutoFitCameraState &&
+      cameraStateSignature(currentCameraState) ===
+        cameraStateSignature(lastAutoFitCameraState),
+  );
+}
+
 export function CameraController({
   bounds,
   cameraState,
@@ -118,6 +139,7 @@ export function CameraController({
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
   const autoFittedBoundsRef = useRef<string | null>(null);
+  const lastAutoFitCameraStateRef = useRef<Viewport3DCameraState | null>(null);
   const appliedCameraStateRef = useRef<string | null>(null);
   // Store cameraState in a ref so the fit/reset effect doesn't re-fire
   // when OrbitControls updates the store (which it does on every drag-end).
@@ -135,10 +157,17 @@ export function CameraController({
       nextBoundsSignature !== null &&
       autoFittedBoundsRef.current === null &&
       isDefaultCameraState(cameraStateRef.current);
+    const shouldAutoFitChangedBounds = shouldAutoFitViewport3DBoundsChange({
+      currentCameraState: cameraStateRef.current,
+      lastAutoFitCameraState: lastAutoFitCameraStateRef.current,
+      nextBoundsSignature,
+      previousBoundsSignature: autoFittedBoundsRef.current,
+    });
     const shouldFit =
       handledFitRevisionRef.current !== fitRevision ||
       handledResetCameraRevisionRef.current !== resetCameraRevision ||
-      shouldAutoFitInitialBounds;
+      shouldAutoFitInitialBounds ||
+      shouldAutoFitChangedBounds;
     if (!shouldFit) return;
 
     const fit = resolveViewport3DCameraFit(bounds);
@@ -151,15 +180,14 @@ export function CameraController({
     handledFitRevisionRef.current = fitRevision;
     handledResetCameraRevisionRef.current = resetCameraRevision;
     autoFittedBoundsRef.current = nextBoundsSignature;
-    viewport3dStore.setCamera({
+    const nextCamera = {
       position: fit.position,
       target: fit.target,
-    });
+    };
+    lastAutoFitCameraStateRef.current = nextCamera;
+    viewport3dStore.setCamera(nextCamera);
     void Promise.resolve(
-      onCameraChange({
-        position: fit.position,
-        target: fit.target,
-      }),
+      onCameraChange(nextCamera),
     ).catch(() => undefined);
     invalidate();
     tracker.recordDirtyFrame("camera-fit");

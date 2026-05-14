@@ -320,6 +320,18 @@ export function buildViewport3DPrimitiveRenderModel(
   };
 }
 
+export function buildViewport3DPrimitiveFrameKey(
+  primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined,
+): string {
+  if (!primitiveModel?.objects.length) {
+    return `${primitiveModel?.sceneRevision ?? "none"}:empty`;
+  }
+  return [
+    primitiveModel.sceneRevision ?? "none",
+    ...primitiveModel.objects.map((object) => object.geometryKey),
+  ].join("|");
+}
+
 export function resolvePrimitiveSelectionBounds(
   selection: Selection,
   primitiveModel: Viewport3DPrimitiveRenderModel | null | undefined,

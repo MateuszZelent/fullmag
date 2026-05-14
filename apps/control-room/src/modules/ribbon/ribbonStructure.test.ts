@@ -205,7 +205,7 @@ describe("ribbon structure", () => {
       value: "inherit",
     });
     expect(solidColorNode).toMatchObject({
-      disabled: true,
+      disabled: false,
       value: "var(--fm-surface-magnetic)",
     });
     expect(vectorAlphaNode).toMatchObject({ value: 100 });
@@ -255,6 +255,57 @@ describe("ribbon structure", () => {
         surfaceColorSource: "solid",
         vectorAlphaPercent: 48,
         wireframeOpacityPercent: 64,
+      });
+  });
+
+  it("lets the selected surface color picker switch the target to solid coloring", async () => {
+    const visualization = new ObjectVisualizationController();
+    const content = buildRibbonTabContent("view", {
+      selection: {
+        kind: "object.visualization",
+        label: "Free layer",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:visualization",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const solidColorNode = textureAction?.menu?.find(
+      (node) => node.type === "color" && node.id === "selected-texture:solid-color",
+    );
+
+    expect(solidColorNode).toMatchObject({ disabled: false });
+    if (solidColorNode?.type !== "color") {
+      throw new Error("Expected selected surface color picker");
+    }
+
+    await runRibbonNode(solidColorNode, "#336699", {
+      selection: {
+        get: () => ({
+          kind: "object.visualization",
+          label: "Free layer",
+          moduleSource: "test",
+          nodeId: "model:object:free-layer:visualization",
+          objectId: "free-layer",
+          ref: null,
+        }),
+      } as never,
+      visualization,
+    });
+
+    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
+      .toMatchObject({
+        shaderColorMode: "monochrome",
+        shaderMonoColor: "#336699",
+        surfaceColorSource: "solid",
       });
   });
 
@@ -1203,6 +1254,54 @@ describe("ribbon structure", () => {
       isActive: () => false,
       run: () => ({ status: "completed" }),
     });
+    commands.register({
+      id: "viewport-3d.capture-frame",
+      title: "Capture 3D Frame",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.profile-interactive",
+      title: "Interactive 3D Profile",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.profile-figure",
+      title: "Figure 3D Profile",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => true,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.profile-capture",
+      title: "Capture 3D Profile",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.profile-balanced",
+      title: "Balanced 3D Profile",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
+      id: "viewport-3d.profile-interactive-lite",
+      title: "Interactive Lite 3D Profile",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
 
     const content = buildRibbonTabContent("view", {
       commands,
@@ -1220,6 +1319,18 @@ describe("ribbon structure", () => {
     });
     const orientationGroup = content?.groups.find(
       (group) => group.id === "view-orientation-tools",
+    );
+    const globalGroup = content?.groups.find(
+      (group) => group.id === "view-global-display",
+    );
+    const qualityAction = globalGroup?.actions.find(
+      (action) => action.id === "view-render-quality",
+    );
+    const qualityNode = qualityAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "3d-quality:profile",
+    );
+    const captureNode = qualityAction?.menu?.find(
+      (node) => node.type === "item" && node.id === "3d-quality:capture-frame",
     );
     const viewCubeAction = orientationGroup?.actions.find(
       (action) => action.id === "viewport-3d.toggle-viewcube",
@@ -1258,6 +1369,39 @@ describe("ribbon structure", () => {
       ],
     });
     expect(hslNode).not.toHaveProperty("onValueChange");
+    expect(qualityAction).toMatchObject({
+      active: true,
+      label: "Quality",
+    });
+    expect(qualityNode).toMatchObject({
+      value: "figure",
+      items: [
+        expect.objectContaining({
+          commandId: "viewport-3d.profile-interactive-lite",
+          value: "interactive-lite",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.profile-interactive",
+          value: "interactive",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.profile-balanced",
+          value: "balanced",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.profile-figure",
+          value: "figure",
+        }),
+        expect.objectContaining({
+          commandId: "viewport-3d.profile-capture",
+          value: "capture",
+        }),
+      ],
+    });
+    expect(captureNode).toMatchObject({
+      commandId: "viewport-3d.capture-frame",
+      label: "Capture current frame",
+    });
   });
 
   it("mirrors command registry disabled state into ribbon actions", () => {

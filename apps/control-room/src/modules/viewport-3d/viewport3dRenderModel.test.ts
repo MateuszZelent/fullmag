@@ -7,6 +7,7 @@ import {
   buildViewport3DTopologyRenderModel,
   buildPartSurfaceIndices,
   buildTetraSurfaceIndices,
+  buildTetraVolumeEdgeIndices,
   buildVectorLineSegments,
   buildVectorLineSegmentsForNodeSelection,
   combineViewport3DBounds,
@@ -57,6 +58,29 @@ describe("viewport3dRenderModel", () => {
   it("expands tetrahedral element indices into drawable triangle faces", () => {
     expect(Array.from(buildTetraSurfaceIndices(new Uint32Array([0, 1, 2, 3]))))
       .toEqual([0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3]);
+  });
+
+  it("deduplicates tetrahedral volume edges into line segments", () => {
+    expect(
+      Array.from(
+        buildTetraVolumeEdgeIndices(
+          new Uint32Array([
+            0, 1, 2, 3,
+            0, 1, 2, 4,
+          ]),
+        ),
+      ),
+    ).toEqual([
+      0, 1,
+      0, 2,
+      0, 3,
+      1, 2,
+      1, 3,
+      2, 3,
+      0, 4,
+      1, 4,
+      2, 4,
+    ]);
   });
 
   it("resolves center and radius from decoded topology positions", () => {
@@ -463,6 +487,15 @@ describe("viewport3dRenderModel", () => {
       }),
     ).toBe(256);
     expect(resolveViewport3DMaxVectorGlyphs({})).toBe(2048);
+    expect(resolveViewport3DMaxVectorGlyphs({}, 700)).toBe(700);
+    expect(
+      resolveViewport3DMaxVectorGlyphs(
+        {
+          sampling: { max_glyphs: 384 },
+        },
+        700,
+      ),
+    ).toBe(384);
   });
 
   it("counts node selections for budget weighting without expanding indices", () => {

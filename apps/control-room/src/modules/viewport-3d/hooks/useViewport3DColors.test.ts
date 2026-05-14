@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { readViewport3DColorsFromStyles } from "./useViewport3DColors";
+import {
+  readViewport3DColorsFromStyles,
+  resolveViewport3DColorElement,
+} from "./useViewport3DColors";
 
 function styles(values: Record<string, string>) {
   return {
@@ -11,6 +14,15 @@ function styles(values: Record<string, string>) {
 }
 
 describe("readViewport3DColorsFromStyles", () => {
+  it("uses the body as the effective theme source when present", () => {
+    const body = {} as Element;
+    const documentElement = {} as Element;
+
+    expect(
+      resolveViewport3DColorElement({ body, documentElement }),
+    ).toBe(body);
+  });
+
   it("waits for required viewport theme tokens instead of returning partial colors", () => {
     expect(readViewport3DColorsFromStyles(styles({}))).toBeNull();
   });

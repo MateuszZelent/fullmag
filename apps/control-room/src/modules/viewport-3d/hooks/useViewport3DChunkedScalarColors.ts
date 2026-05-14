@@ -120,10 +120,10 @@ const EMPTY_SCALAR_COLOR_MAP = new Map<string, ScalarColorBuffer>();
 function yieldToViewport3DMainThread(): Promise<void> {
   if (
     typeof window !== "undefined" &&
-    typeof window.requestAnimationFrame === "function"
+    typeof window.setTimeout === "function"
   ) {
     return new Promise((resolve) => {
-      window.requestAnimationFrame(() => resolve());
+      window.setTimeout(resolve, 0);
     });
   }
   return Promise.resolve();

@@ -212,9 +212,9 @@ async function verifyGeometryAuthoringFlow({
     const draftName = page.locator('.fm-inspector-panel input[aria-label="Name"]').first();
     await draftName.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
     await fillDraftInput(draftName, objectName);
-    await fillDraftField(page, "X", "1.4e-7");
-    await fillDraftField(page, "Y", "1.4e-7");
-    await fillDraftField(page, "Z", "1.4e-8");
+    await fillDraftField(page, "X", "9e-7");
+    await fillDraftField(page, "Y", "7e-7");
+    await fillDraftField(page, "Z", "1e-7");
     await fillDraftField(page, "TX", "-1.6e-6");
 
     const transactionResponsePromise = page.waitForResponse(
@@ -404,7 +404,7 @@ async function commitExternalObjectTransaction(
     baseRevision,
     geometry: {
       geometry_kind: "Box",
-      geometry_params: { size: [8e-8, 8e-8, 8e-9] },
+      geometry_params: { size: [9e-7, 7e-7, 1e-7] },
     },
     kind: "create_object",
     name: objectName,

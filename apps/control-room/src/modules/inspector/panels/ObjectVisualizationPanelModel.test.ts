@@ -11,6 +11,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
+  surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
 
@@ -42,6 +43,13 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(colorPickerInputValue("#00ffaa")).toBe("#00ffaa");
     expect(colorPickerInputValue("#00FFAA")).toBe("#00FFAA");
     expect(colorPickerInputValue("var(--fm-surface-magnetic)")).toBe("#ffffff");
+  });
+
+  it("turns a surface color picker value into a visible solid-color patch", () => {
+    expect(surfaceSolidColorPatch("#00ffaa")).toEqual({
+      shaderMonoColor: "#00ffaa",
+      surfaceColorSource: "solid",
+    });
   });
 
   it("builds pass-specific sections for a visible object target", () => {

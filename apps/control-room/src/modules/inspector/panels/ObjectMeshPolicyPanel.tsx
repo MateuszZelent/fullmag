@@ -17,6 +17,7 @@ import {
   useObjectMeshSizeFieldResource,
   useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -76,7 +77,7 @@ function ObjectMeshPolicySummarySection({
   reportStatus: string;
 }) {
   return (
-    <InspectorSection title="Object Mesh Policy" badge={policyStatus}>
+    <InspectorSection value="summary" title="Object Mesh Policy" badge={policyStatus} collapsible defaultCollapsed={false}>
       <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
       <FieldRow label="Revision" value={String(policyRevision)} />
       <FieldRow label="Policy" value={hasConfig ? "object override" : "inherited"} />
@@ -94,7 +95,7 @@ function ObjectMeshOverrideSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="Override">
+    <InspectorSection value="override" title="Override">
       <FormField
         checked={draft.present}
         label="Use object policy"
@@ -113,7 +114,7 @@ function ObjectMeshSizeSemanticsSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="COMSOL-Style Size Semantics" badge="solver policy">
+    <InspectorSection value="semantics" title="COMSOL-Style Size Semantics" badge="solver policy">
       <FormField disabled={!draft.present} label="Maximum element size" type="number" unit="m" value={draft.maximumElementSize} onChange={(event) => updateDraft({ maximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Minimum element size" type="number" unit="m" value={draft.minimumElementSize} onChange={(event) => updateDraft({ minimumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Maximum growth rate" type="number" value={draft.maximumElementGrowthRate} onChange={(event) => updateDraft({ maximumElementGrowthRate: event.target.value })} />
@@ -132,7 +133,7 @@ function ObjectMeshSweepStrategySection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="Thin-Film Sweep Strategy" collapsible>
+    <InspectorSection value="strategy" title="Thin-Film Sweep Strategy" collapsible defaultCollapsed={true}>
       <FormField disabled={!draft.present} label="Mesh strategy" type="select" value={draft.meshStrategy} onChange={(event) => updateDraft({ meshStrategy: event.target.value })}>
         <option value="">Inherited</option>
         <option value="auto">Auto</option>
@@ -170,7 +171,7 @@ function ObjectMeshInterfaceTransitionSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="Interface And Transition Refinement" collapsible>
+    <InspectorSection value="interface" title="Interface And Transition Refinement" collapsible defaultCollapsed={true}>
       <FormField disabled={!draft.present} label="Interface hmax" type="number" unit="m" value={draft.interfaceMaximumElementSize} onChange={(event) => updateDraft({ interfaceMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Interface thickness" type="number" unit="m" value={draft.interfaceThickness} onChange={(event) => updateDraft({ interfaceThickness: event.target.value })} />
       <FormField disabled={!draft.present} label="Transition distance" type="number" unit="m" value={draft.transitionDistance} onChange={(event) => updateDraft({ transitionDistance: event.target.value })} />
@@ -189,7 +190,7 @@ function ObjectMeshBackendParametersSection({
   sizeFieldsLength: number;
 }) {
   return (
-    <InspectorSection title="Backend Mesh Parameters" badge="backend truth">
+    <InspectorSection value="backend" title="Backend Mesh Parameters" badge="backend truth">
       <MeshResourceFields
         fields={[
           { label: "Gmsh 2D algorithm", value: formatValue(recordField(configRecord, "algorithm_2d")) },
@@ -217,7 +218,7 @@ function ObjectMeshEdgeCornerSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="Edge And Corner Refinement" collapsible defaultCollapsed>
+    <InspectorSection value="edge" title="Edge And Corner Refinement" collapsible defaultCollapsed={true}>
       <FormField disabled={!draft.present} label="Edge hmax" type="number" unit="m" value={draft.edgeMaximumElementSize} onChange={(event) => updateDraft({ edgeMaximumElementSize: event.target.value })} />
       <FormField disabled={!draft.present} label="Edge thickness" type="number" unit="m" value={draft.edgeThickness} onChange={(event) => updateDraft({ edgeThickness: event.target.value })} />
       <FormField disabled={!draft.present} label="Corner hmax" type="number" unit="m" value={draft.cornerMaximumElementSize} onChange={(event) => updateDraft({ cornerMaximumElementSize: event.target.value })} />
@@ -234,7 +235,7 @@ function ObjectMeshEffectiveTargetSection({
   reportStatus: string;
 }) {
   return (
-    <InspectorSection title="Effective Target" badge={reportStatus}>
+    <InspectorSection value="target" title="Effective Target" badge={reportStatus}>
       <MeshResourceFields
         fields={[
           { label: "Maximum element", value: String(recordField(effectiveTarget, "maximum_element_size") ?? "unset") },
@@ -259,7 +260,7 @@ function ObjectMeshTopologyQualitySection({
   topology: ReturnType<typeof useObjectTopologyResource>;
 }) {
   return (
-    <InspectorSection title="Topology And Quality" badge={topology.status}>
+    <InspectorSection value="topology" title="Topology And Quality" badge={topology.status}>
       <MeshResourceFields
         fields={[
           { label: "Topology fetch", value: topology.status },
@@ -282,7 +283,7 @@ function ObjectMeshAdvancedJsonSection({
   updateDraft: UpdateObjectMeshPolicyDraft;
 }) {
   return (
-    <InspectorSection title="Advanced JSON" collapsible defaultCollapsed>
+    <InspectorSection value="advanced" title="Advanced JSON" collapsible defaultCollapsed={true}>
       <FormField disabled={!draft.present} label="Policy JSON" rows={8} type="textarea" value={draft.configText} onChange={(event) => updateDraft({ configText: event.target.value })} />
     </InspectorSection>
   );
@@ -304,7 +305,7 @@ function ObjectMeshTransactionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection title="Transactions">
+    <InspectorSection value="transactions" title="Transactions">
       <div className="fm-inspector-toolbar">
         <Button disabled={pending || !objectId} size="sm" type="button" variant="primary" onClick={onApply}>
           Apply Policy
@@ -407,7 +408,11 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["summary", "override", "semantics", "backend", "target", "topology", "transactions"]}
+    >
       <ObjectMeshPolicySummarySection
         hasConfig={Boolean(resource.config)}
         objectId={objectId}
@@ -449,9 +454,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
         pending={pending}
       />
 
-      <JsonResourceSection title="Object Mesh Report JSON" value={report.data} />
-      <JsonResourceSection title="Object Mesh Quality JSON" value={quality.data} />
-      <JsonResourceSection title="Object Size Field JSON" value={sizeField.data} />
-    </div>
+      <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
+      <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />
+      <JsonResourceSection sectionValue="json-size-field" title="Object Size Field JSON" value={sizeField.data} />
+    </Accordion>
   );
 }

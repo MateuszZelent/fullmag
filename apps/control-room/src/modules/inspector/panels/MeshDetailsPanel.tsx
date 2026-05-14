@@ -19,6 +19,7 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useKernel } from "@/kernel/KernelContext";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -122,7 +123,7 @@ function MeshOverviewSection({
   title: string;
 }) {
   return (
-    <InspectorSection title={title} badge={buildStatus}>
+    <InspectorSection value="overview" title={title} badge={buildStatus} collapsible defaultCollapsed={false}>
       {meshIsStale ? (
         <FeedbackBanner
           kind="warning"
@@ -185,7 +186,7 @@ function SolverMeshIdentitySection({
   } | null | undefined;
 }) {
   return (
-    <InspectorSection title="Solver Mesh Identity" badge={badge}>
+    <InspectorSection value="identity" title="Solver Mesh Identity" badge={badge} collapsible defaultCollapsed={false}>
       <MeshResourceFields
         fields={[
           { label: "Mesh name", value: manifest?.mesh_name ?? "not built" },
@@ -229,7 +230,7 @@ function MeshCountsExtentsSection({
   meshSummary: unknown;
 }) {
   return (
-    <InspectorSection title="Counts And Extents" collapsible defaultCollapsed={false}>
+    <InspectorSection value="counts" title="Counts And Extents" collapsible defaultCollapsed={false}>
       <MeshResourceFields
         fields={[
           {
@@ -293,7 +294,7 @@ function MeshBuildPipelineSection({
   sizeFieldKinds: readonly string[] | null | undefined;
 }) {
   return (
-    <InspectorSection title="Build Pipeline" badge={activeBuildStatus}>
+    <InspectorSection value="pipeline" title="Build Pipeline" badge={activeBuildStatus} collapsible defaultCollapsed={false}>
       <MeshResourceFields
         fields={[
           { label: "Active build", value: buildStatus },
@@ -349,7 +350,7 @@ function MeshQualityGatesSection({
   gateRows: ReturnType<typeof qualityGateRows>;
 }) {
   return (
-    <InspectorSection title="Quality Gates" badge={badge}>
+    <InspectorSection value="quality-gates" title="Quality Gates" badge={badge} collapsible defaultCollapsed={false}>
       {gateRows.length > 0 ? (
         <div className="fm-mesh-detail-table" role="table">
           <div className="fm-mesh-detail-table__row" role="row">
@@ -379,7 +380,7 @@ function MeshQualityGatesSection({
 
 function RealizedSizeFieldsSection({ sizeFields }: { sizeFields: readonly unknown[] }) {
   return (
-    <InspectorSection title="Realized Size Fields" badge={`${sizeFields.length}`}>
+    <InspectorSection value="size-fields" title="Realized Size Fields" badge={`${sizeFields.length}`} collapsible defaultCollapsed={false}>
       {sizeFields.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {sizeFields.map((field) => {
@@ -414,7 +415,7 @@ function OperationStatusesSection({
   operationStatuses: readonly unknown[];
 }) {
   return (
-    <InspectorSection title="Operation Statuses" badge={`${operationStatuses.length}`}>
+    <InspectorSection value="operation-statuses" title="Operation Statuses" badge={`${operationStatuses.length}`} collapsible defaultCollapsed={true}>
       {operationStatuses.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {operationStatuses.map((statusEntry) => {
@@ -449,7 +450,7 @@ function ThinFilmDiagnosticsSection({
   thinFilmDiagnostics: readonly unknown[];
 }) {
   return (
-    <InspectorSection title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`}>
+    <InspectorSection value="thin-film" title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`} collapsible defaultCollapsed={true}>
       {thinFilmDiagnostics.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {thinFilmDiagnostics.map((diagnosticEntry) => {
@@ -558,7 +559,11 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   );
 
   return (
-    <div className="fm-inspector-panel">
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["overview", "identity", "counts", "pipeline", "quality-gates", "size-fields"]}
+    >
       <MeshOverviewSection
         activeBuildRevision={activeBuild.data?.revision}
         buildStatus={buildStatus}
@@ -616,16 +621,17 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       <ThinFilmDiagnosticsSection thinFilmDiagnostics={thinFilmDiagnostics} />
 
       <JsonResourceSection
+        sectionValue="json-capabilities"
         badge={capabilities.status}
         title="Meshing Capabilities JSON"
         value={capabilities.data}
       />
-      <JsonResourceSection title="Mesh Semantics JSON" value={semantics.data} />
-      <JsonResourceSection title="Universe Report JSON" value={universeReport.data} />
-      <JsonResourceSection title="Universe Quality JSON" value={universeQuality.data} />
-      <JsonResourceSection title="Shared-Domain Report JSON" value={sharedReport.data} />
-      <JsonResourceSection title="Shared-Domain Quality JSON" value={sharedQuality.data} />
-      <JsonResourceSection title="Latest Build JSON" value={lastBuildSummary} />
-    </div>
+      <JsonResourceSection sectionValue="json-semantics" title="Mesh Semantics JSON" value={semantics.data} />
+      <JsonResourceSection sectionValue="json-universe-report" title="Universe Report JSON" value={universeReport.data} />
+      <JsonResourceSection sectionValue="json-universe-quality" title="Universe Quality JSON" value={universeQuality.data} />
+      <JsonResourceSection sectionValue="json-shared-report" title="Shared-Domain Report JSON" value={sharedReport.data} />
+      <JsonResourceSection sectionValue="json-shared-quality" title="Shared-Domain Quality JSON" value={sharedQuality.data} />
+      <JsonResourceSection sectionValue="json-last-build" title="Latest Build JSON" value={lastBuildSummary} />
+    </Accordion>
   );
 }

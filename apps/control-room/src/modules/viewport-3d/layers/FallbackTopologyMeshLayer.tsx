@@ -18,7 +18,10 @@ import {
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
+import {
+  buildLineIndexGeometry,
+  buildSurfaceEdgeGeometry,
+} from "../viewport3dSurfaceEdges";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -27,6 +30,7 @@ import type { Viewport3DFieldRenderModel, Viewport3DTopologyRenderModel } from "
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   shaderColorFromSettings,
@@ -44,6 +48,7 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings,
   femDomain,
   fieldModel,
+  materialProfile,
   onSelectDomain,
   onSelectPart,
   topologyModel,
@@ -55,6 +60,7 @@ export function FallbackTopologyMeshLayer({
   fallbackSettings: VisualizationTargetSettings;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   topologyModel: Viewport3DTopologyRenderModel | null;
@@ -77,12 +83,17 @@ export function FallbackTopologyMeshLayer({
   }, [topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
     if (!topologyModel) return null;
-    const next = buildSurfaceEdgeGeometry(
-      topologyModel.positions,
-      topologyModel.fallbackSurfaceIndices,
-    );
+    const next = fallbackSettings.geometryScope === "full"
+      ? buildLineIndexGeometry(
+          topologyModel.positions,
+          topologyModel.fallbackVolumeEdgeIndices,
+        )
+      : buildSurfaceEdgeGeometry(
+          topologyModel.positions,
+          topologyModel.fallbackSurfaceIndices,
+        );
     return next ? tracker.track("geometry", next) : null;
-  }, [topologyModel, tracker]);
+  }, [fallbackSettings.geometryScope, topologyModel, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -141,7 +152,7 @@ export function FallbackTopologyMeshLayer({
           <meshStandardMaterial
             color={shaderColorFromSettings(fallbackSettings, colors.mesh)}
             opacity={opacityFromSettings(fallbackSettings)}
-            roughness={0.86}
+            {...materialProfile.magneticSurface}
             vertexColors={
               shaderUsesVertexColors(fallbackSettings) &&
               canApplyVertexScalarColorBuffer(
@@ -160,7 +171,10 @@ export function FallbackTopologyMeshLayer({
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(fallbackSettings)}
+            opacity={wireframeOpacityFromSettings(
+              fallbackSettings,
+              materialProfile.featureEdges,
+            )}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>

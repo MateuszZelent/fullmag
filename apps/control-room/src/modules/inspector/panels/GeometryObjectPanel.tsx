@@ -22,6 +22,7 @@ import {
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -314,7 +315,20 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={[
+        "summary",
+        "energies",
+        "resource",
+        "primitive",
+        "transform",
+        "identity",
+        "actions",
+        "validation",
+      ]}
+    >
       <GeometryObjectSummarySection
         draft={draft}
         object={object}
@@ -346,7 +360,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         messages={validationMessages}
         status={validation.status}
       />
-    </div>
+    </Accordion>
   );
 }
 
@@ -364,7 +378,7 @@ function GeometryObjectSummarySection({
   visualizationSettings: VisualizationTargetSettings | null;
 }) {
   return (
-    <InspectorSection title="Geometry Object" collapsible defaultCollapsed={false}>
+    <InspectorSection value="summary" title="Geometry Object" collapsible defaultCollapsed={false}>
       {draft.mode === "committed" ? (
         <>
           <FormField
@@ -419,7 +433,7 @@ function ObjectMetricsSection({
   status: string;
 }) {
   return (
-    <InspectorSection title="Energies" badge={metrics.status}>
+    <InspectorSection value="energies" title="Energies" badge={metrics.status}>
       <FieldRow label="Fetch state" value={status} />
       <FieldRow label="Sample" value={metrics.sample} />
       <FieldRow label="Source" value={metrics.source} />
@@ -442,7 +456,7 @@ function GeometryResourceStateSection({
   sceneStatus: string;
 }) {
   return (
-    <InspectorSection title="Resource State" collapsible defaultCollapsed={true}>
+    <InspectorSection value="resource" title="Resource State" collapsible defaultCollapsed={true}>
       <FieldRow label="Source" value={object.source} />
       <FieldRow label="Mode" value={object.mode} />
       <FieldRow label="Mesh" value={object.meshStatus} />
@@ -465,7 +479,7 @@ function PrimitiveGeometrySection({
   onVectorChange: VectorDraftUpdater;
 }) {
   return (
-    <InspectorSection title="Primitive Geometry">
+    <InspectorSection value="primitive" title="Primitive Geometry">
       <FieldRow label="Kind" value={draft.geometryKind} />
       <PrimitiveGeometryFields
         draft={draft}
@@ -579,7 +593,7 @@ function TransformSection({
   onVectorChange: VectorDraftUpdater;
 }) {
   return (
-    <InspectorSection title="Transform">
+    <InspectorSection value="transform" title="Transform">
       <DraftVectorFormField
         labels={["TX", "TY", "TZ"]}
         unit="m"
@@ -612,7 +626,7 @@ function DraftIdentitySection({
   if (draft.mode !== "draft-new") return null;
 
   return (
-    <InspectorSection title="Draft Identity">
+    <InspectorSection value="identity" title="Draft Identity">
       <FormField
         label="Name"
         mono={false}
@@ -660,7 +674,7 @@ function ActionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection title="Actions">
+    <InspectorSection value="actions" title="Actions">
       <div className="fm-inspector-toolbar">
         {draft.mode === "draft-new" ? (
           <Button
@@ -767,6 +781,7 @@ function ValidationSection({
 }) {
   return (
     <InspectorSection
+      value="validation"
       title="Validation"
       badge={messages.length > 0 ? String(messages.length) : undefined}
       collapsible

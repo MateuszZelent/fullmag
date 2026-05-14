@@ -38,6 +38,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
+  surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
 
@@ -464,7 +465,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     value: string,
   ) {
     if (field === "shaderMonoColor") {
-      void patch({ shaderMonoColor: value });
+      void patch(surfaceSolidColorPatch(value));
       return;
     }
     if (field === "vectorMonoColor") {

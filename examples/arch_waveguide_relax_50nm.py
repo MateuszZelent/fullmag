@@ -68,7 +68,7 @@ waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
-waveguide.m = fm.texture.uniform(0.0, 0.0, 1.0)
+waveguide.m = fm.texture.random(seed=1)
 waveguide.mesh(
     maximum_element_size=6e-9,
     minimum_element_size=1.8e-9,

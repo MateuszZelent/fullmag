@@ -34,6 +34,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { BoundsBox } from "./BoundsLayers";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   shaderColorFromSettings,
@@ -49,6 +50,7 @@ export function MeshPartLayer({
   colors,
   vectorColorMode,
   fieldModel,
+  materialProfile,
   onSelectPart,
   partModel,
   magnetizationTexturePreview,
@@ -60,6 +62,7 @@ export function MeshPartLayer({
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
@@ -147,7 +150,7 @@ export function MeshPartLayer({
           <meshStandardMaterial
             color={meshColor}
             opacity={opacityFromSettings(settings)}
-            roughness={0.86}
+            {...materialProfile.magneticSurface}
             vertexColors={hasScalarColors}
             {...surfaceMaterialPolicyProps(opacityFromSettings(settings))}
           />
@@ -160,7 +163,10 @@ export function MeshPartLayer({
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(settings)}
+            opacity={wireframeOpacityFromSettings(
+              settings,
+              materialProfile.featureEdges,
+            )}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>

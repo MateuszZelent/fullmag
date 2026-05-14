@@ -118,11 +118,13 @@ export function JsonResourceSection({
   defaultCollapsed = true,
   title,
   value,
+  sectionValue,
 }: {
   badge?: string;
   defaultCollapsed?: boolean;
   title: string;
   value: unknown;
+  sectionValue?: string;
 }) {
   return (
     <InspectorSection
@@ -130,6 +132,7 @@ export function JsonResourceSection({
       collapsible
       defaultCollapsed={defaultCollapsed}
       title={title}
+      value={sectionValue}
     >
       <pre className="fm-mesh-json-preview">{formatJson(value)}</pre>
     </InspectorSection>

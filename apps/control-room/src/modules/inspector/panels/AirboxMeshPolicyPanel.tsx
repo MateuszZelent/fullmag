@@ -12,6 +12,7 @@ import {
   useMeshUniverseReportResource,
   useUniverseMeshPolicyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -106,15 +107,19 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
-      <InspectorSection title="Universe / Airbox Mesh Policy" badge={policy.status}>
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["summary", "controls", "target", "transactions"]}
+    >
+      <InspectorSection value="summary" title="Universe / Airbox Mesh Policy" badge={policy.status} collapsible defaultCollapsed={false}>
         <FieldRow label="Revision" value={String(resource.revision)} />
         <FieldRow label="Policy state" value={resource.config ? "configured" : "unconfigured"} />
         <FieldRow label="Report state" value={report.status} />
         <FieldRow label="Quality state" value={quality.status} />
       </InspectorSection>
 
-      <InspectorSection title="Airbox Size Controls" badge="FEM domain">
+      <InspectorSection value="controls" title="Airbox Size Controls" badge="FEM domain">
         <FormField
           label="Airbox hmax"
           type="number"
@@ -155,7 +160,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         </FormField>
       </InspectorSection>
 
-      <InspectorSection title="Resolved Airbox Target">
+      <InspectorSection value="target" title="Resolved Airbox Target">
         <MeshResourceFields
           fields={[
             {
@@ -178,7 +183,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Advanced JSON" collapsible defaultCollapsed>
+      <InspectorSection value="advanced" title="Advanced JSON" collapsible defaultCollapsed={true}>
         <FormField
           label="Universe policy JSON"
           rows={8}
@@ -188,7 +193,7 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Transactions">
+      <InspectorSection value="transactions" title="Transactions">
         <div className="fm-inspector-toolbar">
           <Button
             disabled={pending}
@@ -217,8 +222,8 @@ export function AirboxMeshPolicyPanel({ selection }: InspectorPanelProps) {
         ) : null}
       </InspectorSection>
 
-      <JsonResourceSection title="Universe Report JSON" value={report.data} />
-      <JsonResourceSection title="Universe Quality JSON" value={quality.data} />
-    </div>
+      <JsonResourceSection sectionValue="json-report" title="Universe Report JSON" value={report.data} />
+      <JsonResourceSection sectionValue="json-quality" title="Universe Quality JSON" value={quality.data} />
+    </Accordion>
   );
 }

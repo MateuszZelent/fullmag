@@ -229,6 +229,9 @@ function stringPatchCommand(
       return value === null
         ? invalidPayload(id)
         : patchSelectedTarget(context, {
+            ...(patchKey === "shaderMonoColor"
+              ? { surfaceColorSource: "solid" }
+              : {}),
             [patchKey]: value,
           } as VisualizationTargetPatch);
     },

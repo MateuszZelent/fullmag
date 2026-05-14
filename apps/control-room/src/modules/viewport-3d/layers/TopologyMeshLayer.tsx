@@ -20,6 +20,7 @@ import type {
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 
 export function TopologyMeshLayer({
@@ -29,6 +30,7 @@ export function TopologyMeshLayer({
   femDomain,
   fieldModel,
   getPartSettings,
+  materialProfile,
   magnetizationTexturePreviews,
   onSelectDomain,
   onSelectPart,
@@ -43,6 +45,7 @@ export function TopologyMeshLayer({
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
+  materialProfile: Viewport3DMaterialProfile;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -68,6 +71,7 @@ export function TopologyMeshLayer({
                   ? (magnetizationTexturePreviews.get(partModel.part.object_id) ?? null)
                   : null
               }
+              materialProfile={materialProfile}
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={
@@ -96,6 +100,7 @@ export function TopologyMeshLayer({
       }
       femDomain={femDomain}
       fieldModel={resolvedFieldModel}
+      materialProfile={materialProfile}
       onSelectDomain={onSelectDomain}
       onSelectPart={onSelectPart}
       topologyModel={topologyModel}

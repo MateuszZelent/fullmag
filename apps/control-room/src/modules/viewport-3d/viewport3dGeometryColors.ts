@@ -17,7 +17,7 @@ export function canApplyVertexScalarColors(
   return Boolean(
     fieldVector &&
       fieldVector.pointCount > 0 &&
-      fieldVector.pointCount === vertexCount &&
+      fieldVector.pointCount <= vertexCount &&
       !fieldTransformNeedsChunking(
         fieldVector.pointCount,
         maxSynchronousPoints,

@@ -339,6 +339,54 @@ export const viewTab: RibbonTabContent = {
           ],
         },
         {
+          id: "view-render-quality",
+          icon: icon(Monitor),
+          label: "Quality",
+          iconColor: "text-green-300",
+          menu: [
+            {
+              type: "radio-group",
+              id: "3d-quality:profile",
+              label: "3D quality profile",
+              value: "interactive",
+              items: [
+                {
+                  commandId: "viewport-3d.profile-interactive-lite",
+                  label: "Interactive Lite",
+                  value: "interactive-lite",
+                },
+                {
+                  commandId: "viewport-3d.profile-interactive",
+                  label: "Interactive",
+                  value: "interactive",
+                },
+                {
+                  commandId: "viewport-3d.profile-balanced",
+                  label: "Balanced",
+                  value: "balanced",
+                },
+                {
+                  commandId: "viewport-3d.profile-figure",
+                  label: "Figure",
+                  value: "figure",
+                },
+                {
+                  commandId: "viewport-3d.profile-capture",
+                  label: "Capture",
+                  value: "capture",
+                },
+              ],
+            },
+            { type: "separator", id: "3d-quality:s0" },
+            {
+              type: "item",
+              id: "3d-quality:capture-frame",
+              label: "Capture current frame",
+              commandId: "viewport-3d.capture-frame",
+            },
+          ],
+        },
+        {
           id: "view-surface",
           icon: icon(Box),
           label: "Surface",
@@ -1948,9 +1996,74 @@ function buildViewGlobalDisplayGroup(
       if (action.id === "view-quantity") return buildQuantityAction(context);
       if (action.id === "view-vectors") return buildVectorsAction(context);
       if (action.id === "view-airbox") return buildAirboxAction(context);
+      if (action.id === "view-render-quality") return buildRenderQualityAction(context);
       if (action.id === "view-render-layers") return buildMeshViewAction(context);
       return action;
     }),
+  };
+}
+
+function buildRenderQualityAction({
+  commandContext = { source: "ribbon" },
+  commands,
+}: RibbonBuildContext): RibbonTabContent["groups"][number]["actions"][number] {
+  const profile =
+    activeCommandValue(commands, commandContext, [
+      ["viewport-3d.profile-interactive-lite", "interactive-lite"],
+      ["viewport-3d.profile-interactive", "interactive"],
+      ["viewport-3d.profile-balanced", "balanced"],
+      ["viewport-3d.profile-figure", "figure"],
+      ["viewport-3d.profile-capture", "capture"],
+    ]) ?? "interactive";
+
+  return {
+    id: "view-render-quality",
+    icon: icon(Monitor),
+    label: "Quality",
+    active: profile !== "interactive",
+    iconColor: "text-green-300",
+    menu: [
+      {
+        type: "radio-group",
+        id: "3d-quality:profile",
+        label: "3D quality profile",
+        value: profile,
+        items: [
+          {
+            commandId: "viewport-3d.profile-interactive-lite",
+            label: "Interactive Lite",
+            value: "interactive-lite",
+          },
+          {
+            commandId: "viewport-3d.profile-interactive",
+            label: "Interactive",
+            value: "interactive",
+          },
+          {
+            commandId: "viewport-3d.profile-balanced",
+            label: "Balanced",
+            value: "balanced",
+          },
+          {
+            commandId: "viewport-3d.profile-figure",
+            label: "Figure",
+            value: "figure",
+          },
+          {
+            commandId: "viewport-3d.profile-capture",
+            label: "Capture",
+            value: "capture",
+          },
+        ],
+      },
+      { type: "separator", id: "3d-quality:s0" },
+      {
+        type: "item",
+        id: "3d-quality:capture-frame",
+        label: "Capture current frame",
+        commandId: "viewport-3d.capture-frame",
+      },
+    ],
   };
 }
 
@@ -3042,8 +3155,7 @@ function buildSelectedVisualizationGroup(
             disabled:
               !enabled ||
               passControlsDisabled ||
-              !effectiveSettings?.shaderVisible ||
-              settings?.surfaceColorSource !== "solid",
+              !effectiveSettings?.shaderVisible,
             commandId: "visualization.target.set-shader-mono-color",
             commandInput: (value: unknown) => value,
           },

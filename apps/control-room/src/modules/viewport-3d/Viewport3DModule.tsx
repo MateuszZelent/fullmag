@@ -1,7 +1,7 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { useCallback, useMemo, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
@@ -18,6 +18,10 @@ import {
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
+import {
+  mergeViewport3DFieldScalarColors,
+  useViewport3DChunkedScalarColors,
+} from "./hooks/useViewport3DChunkedScalarColors";
 import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import {
@@ -77,6 +81,12 @@ import {
   useViewport3DCommandState,
 } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
+import {
+  configureViewport3DRenderer,
+  getViewport3DVisualProfile,
+  resolveViewport3DCanvasDpr,
+  resolveViewport3DCanvasGlOptions,
+} from "./viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 
@@ -84,6 +94,7 @@ interface Viewport3DFrameProps
   extends Omit<Viewport3DSceneProps, "colors"> {
   clientReady: boolean;
   colors: Viewport3DSceneProps["colors"] | null;
+  captureRevision: number;
   diagnostics: string;
   domainSummary: string;
   kernel: ModuleProps["kernel"];
@@ -117,9 +128,12 @@ export default function Viewport3DModule({
     useViewport3DSelectionHandlers({
       domainId,
       select,
-    });
+  });
   const saveCameraState = useCallback(
-    async (camera: { position: [number, number, number]; target: [number, number, number] }) => {
+    async (camera: {
+      position: [number, number, number];
+      target: [number, number, number];
+    }) => {
       const next = await kernel.api.visualization.patch({
         camera: {
           position: camera.position,
@@ -144,6 +158,7 @@ export default function Viewport3DModule({
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
       onCameraChange={saveCameraState}
+      captureRevision={commandState.captureRevision}
       resetCameraRevision={commandState.resetCameraRevision}
       slotId={slotId}
       tracker={tracker}
@@ -166,6 +181,7 @@ function useViewport3DSceneModel({
   selection: ReturnType<typeof useSelection>["selection"];
 }) {
   const visualizationState = useViewport3DVisualizationState();
+  const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const quantityId = visualizationState.data?.active_quantity_id ?? "m";
   const vectorColorMode =
     visualizationState.data?.vector_style.color_mode ?? "orientation";
@@ -189,6 +205,7 @@ function useViewport3DSceneModel({
   );
   const maxVectorGlyphs = resolveViewport3DMaxVectorGlyphs(
     visualizationState.data,
+    visualProfile.glyphBudget,
   );
   const maxAirboxVectorGlyphs = resolveViewport3DAirboxMaxVectorGlyphs(
     visualizationState.data,
@@ -246,11 +263,17 @@ function useViewport3DSceneModel({
   );
   const topologyBounds =
     topologyFreshness === "stale" ? null : resolveTopologyBounds(topology.data);
-  const bounds =
+  const resourceBounds =
     topologyBounds ??
-    (topologyFreshness === "stale" ? primitiveBounds : null) ??
     resolveDomainBounds(domainMeta.data) ??
-    resolveUniverseBounds(universe.data) ??
+    resolveUniverseBounds(universe.data);
+  const bounds =
+    combineViewport3DBounds(
+      [resourceBounds, primitiveBounds].filter(
+        (entry): entry is NonNullable<typeof entry> => Boolean(entry),
+      ),
+    ) ??
+    resourceBounds ??
     primitiveBounds;
   const vectorScale = Math.max(
     Math.max(...(bounds?.size ?? [1e-6, 1e-6, 1e-6])) * 0.035 * vectorLengthScale,
@@ -341,18 +364,32 @@ function useViewport3DSceneModel({
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
+  const chunkedScalarColors = useViewport3DChunkedScalarColors({
+    colorModes: fieldRenderOptions.scalarColorModes,
+    enabled: fieldRenderOptions.scalarColorsVisible !== false,
+    fieldVector: fieldVector.data,
+    topology: currentTopologyRenderModel,
+  });
   const fieldRenderModel = useMemo(
-    () =>
-      buildViewport3DFieldRenderModel(
+    () => {
+      const model = buildViewport3DFieldRenderModel(
         currentTopologyRenderModel,
         fieldVector.data,
         vectorScale,
         fieldRenderOptions,
-      ),
+      );
+      return mergeViewport3DFieldScalarColors(
+        model,
+        chunkedScalarColors,
+        vectorColorMode,
+      );
+    },
     [
+      chunkedScalarColors,
       currentTopologyRenderModel,
       fieldRenderOptions,
       fieldVector.data,
+      vectorColorMode,
       vectorScale,
     ],
   );
@@ -453,6 +490,7 @@ function useViewport3DSceneModel({
     topologyModel: topologyRenderModel,
     vectorColorMode,
     vectorStyle,
+    visualProfileId: commandState.visualProfileId,
   };
 }
 
@@ -669,6 +707,7 @@ function resolveViewport3DAirboxMaxVectorGlyphs(
 }
 
 function Viewport3DFrame({
+  captureRevision,
   clientReady,
   colors,
   diagnostics,
@@ -681,9 +720,38 @@ function Viewport3DFrame({
   status,
   ...sceneProps
 }: Viewport3DFrameProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const primitiveObjectIds =
     sceneProps.primitiveModel?.objects.map((object) => object.objectId).join(" ") ??
     "";
+  const visualProfile = getViewport3DVisualProfile(
+    sceneProps.visualProfileId,
+  );
+  const canvasDpr = resolveViewport3DCanvasDpr({
+    devicePixelRatio:
+      typeof window === "undefined" ? 1 : window.devicePixelRatio,
+    profile: visualProfile,
+  });
+  const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
+  useEffect(() => {
+    if (captureRevision <= 0 || typeof window === "undefined") return;
+    let disposed = false;
+    const captureFrame = () => {
+      if (disposed) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const link = document.createElement("a");
+      link.download = "fullmag-viewport-3d.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    };
+    const captureTimer = window.setTimeout(captureFrame, 80);
+    return () => {
+      disposed = true;
+      window.clearTimeout(captureTimer);
+    };
+  }, [captureRevision]);
+
   return (
     <section
       aria-label="3D viewport"
@@ -709,17 +777,19 @@ function Viewport3DFrame({
             up: VIEWPORT_3D_WORLD_UP,
           }}
           className="fm-viewport-3d__canvas"
+          dpr={canvasDpr}
           frameloop={VIEWPORT_3D_FRAMELOOP}
-          gl={{
-            alpha: false,
-            antialias: true,
-            powerPreference: "high-performance",
+          gl={canvasGlOptions}
+          onCreated={({ gl }) => {
+            canvasRef.current = gl.domElement;
+            configureViewport3DRenderer(gl, visualProfile);
           }}
           onPointerMissed={onClearSelection}
         >
           <Viewport3DScene
             {...sceneProps}
             colors={colors}
+            visualProfileId={visualProfile.id}
           />
         </Canvas>
       ) : (

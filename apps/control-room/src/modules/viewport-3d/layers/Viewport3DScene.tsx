@@ -43,6 +43,12 @@ import {
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer } from "./FdmCuboidLayer";
+import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
+import {
+  getViewport3DVisualProfile,
+  type Viewport3DVisualProfileId,
+} from "../viewport3dVisualProfile";
+import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
@@ -73,6 +79,7 @@ interface Viewport3DSceneProps {
   vectorStyle: VectorFieldLayerVectorStyle;
   hslReferenceVisible: boolean;
   viewCubeVisible: boolean;
+  visualProfileId: Viewport3DVisualProfileId;
 }
 
 interface Viewport3DGridSpec {
@@ -189,6 +196,7 @@ export function Viewport3DScene({
   vectorStyle,
   hslReferenceVisible,
   viewCubeVisible,
+  visualProfileId,
 }: Viewport3DSceneProps) {
   const invalidate = useThree((state) => state.invalidate);
   const gridSpec = useMemo(() => resolveViewport3DGridSpec(bounds), [bounds]);
@@ -196,6 +204,13 @@ export function Viewport3DScene({
   const orthographicZoom = useMemo(
     () => resolveViewport3DOrthographicZoom(bounds),
     [bounds],
+  );
+  const materialProfile = useMemo(
+    () =>
+      resolveViewport3DMaterialProfile(
+        getViewport3DVisualProfile(visualProfileId),
+      ),
+    [visualProfileId],
   );
 
   // Demand rendering needs an explicit frame when async resources settle.
@@ -207,8 +222,7 @@ export function Viewport3DScene({
   return (
     <>
       <color attach="background" args={[colors.background]} />
-      <ambientLight intensity={0.72} />
-      <directionalLight intensity={0.9} position={[2, 3, 4]} />
+      <Viewport3DLightingRig profileId={visualProfileId} />
       <CanvasLifecycleProbe tracker={tracker} />
       <CameraController
         bounds={bounds}
@@ -237,6 +251,7 @@ export function Viewport3DScene({
       <FdmCuboidLayer
         colors={colors}
         domain={fdmDomain}
+        materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
         settings={fallbackSettings}
         tracker={tracker}
@@ -244,6 +259,7 @@ export function Viewport3DScene({
       <AirboxLayer
         colors={colors}
         fieldModel={fieldModel}
+        materialProfile={materialProfile}
         onSelectPart={onSelectPart}
         settings={airboxSettings}
         topologyModel={topologyModel}
@@ -255,6 +271,7 @@ export function Viewport3DScene({
       <PrimitiveObjectLayer
         colors={colors}
         getObjectSettings={getObjectSettings}
+        materialProfile={materialProfile}
         onSelectObject={onSelectObject}
         primitiveModel={primitiveModel}
         tracker={tracker}
@@ -265,6 +282,7 @@ export function Viewport3DScene({
         femDomain={femDomain}
         fieldModel={fieldModel}
         getPartSettings={getPartSettings}
+        materialProfile={materialProfile}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         onSelectDomain={onSelectDomain}
         onSelectPart={onSelectPart}

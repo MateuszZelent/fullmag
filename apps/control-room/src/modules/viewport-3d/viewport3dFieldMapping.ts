@@ -46,7 +46,7 @@ export function buildVertexScalarColors(
   );
   if (
     !fieldVector ||
-    fieldVector.pointCount !== vertexCount ||
+    fieldVector.pointCount > vertexCount ||
     fieldVector.pointCount === 0 ||
     resolvedColorMode === "monochrome" ||
     fieldTransformNeedsChunking(fieldVector.pointCount, maxSynchronousPoints)

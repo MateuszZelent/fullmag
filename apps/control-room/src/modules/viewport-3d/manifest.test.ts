@@ -35,6 +35,9 @@ describe("viewport3dManifest", () => {
     await expect(
       registry.execute("viewport-3d.reset-camera", { source: "test" }),
     ).resolves.toMatchObject({ status: "completed" });
+    await expect(
+      registry.execute("viewport-3d.capture-frame", { source: "test" }),
+    ).resolves.toMatchObject({ status: "completed" });
 
     expect(viewport3dStore.getSnapshot().fitRevision).toBe(
       before.fitRevision + 1,
@@ -42,6 +45,10 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().resetCameraRevision).toBe(
       before.resetCameraRevision + 1,
     );
+    expect(viewport3dStore.getSnapshot().captureRevision).toBe(
+      before.captureRevision + 1,
+    );
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
   });
 
   it("contributes orientation widget commands for ribbon and palette", async () => {
@@ -52,6 +59,7 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.hsl-reference-auto")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-on")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-off")).toBeDefined();
+    expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
 
     await registry.execute("viewport-3d.toggle-viewcube", { source: "test" });
     expect(viewport3dStore.getSnapshot().widgets.viewCubeVisible).toBe(false);
@@ -67,6 +75,26 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("off");
     expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
       .toBe(true);
+  });
+
+  it("contributes visual quality profile commands", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("interactive");
+
+    await expect(
+      registry.execute("viewport-3d.profile-figure", { source: "test" }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("figure");
+    expect(registry.isActive("viewport-3d.profile-figure", { source: "test" }))
+      .toBe(true);
+    expect(registry.isActive("viewport-3d.profile-interactive", { source: "test" }))
+      .toBe(false);
+
+    await registry.execute("viewport-3d.profile-capture", { source: "test" });
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
   });
 
   it("uses demand rendering instead of an always-on R3F loop", () => {

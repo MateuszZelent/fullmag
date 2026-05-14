@@ -3,6 +3,39 @@ import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import { viewport3dStore } from "./viewport3dStore";
+import type { Viewport3DVisualProfileId } from "./viewport3dVisualProfile";
+
+const VISUAL_PROFILE_COMMANDS: Array<{
+  id: string;
+  profileId: Viewport3DVisualProfileId;
+  title: string;
+}> = [
+  {
+    id: "viewport-3d.profile-interactive-lite",
+    profileId: "interactive-lite",
+    title: "Use Interactive Lite 3D Profile",
+  },
+  {
+    id: "viewport-3d.profile-interactive",
+    profileId: "interactive",
+    title: "Use Interactive 3D Profile",
+  },
+  {
+    id: "viewport-3d.profile-balanced",
+    profileId: "balanced",
+    title: "Use Balanced 3D Profile",
+  },
+  {
+    id: "viewport-3d.profile-figure",
+    profileId: "figure",
+    title: "Use Figure 3D Profile",
+  },
+  {
+    id: "viewport-3d.profile-capture",
+    profileId: "capture",
+    title: "Use Capture 3D Profile",
+  },
+];
 
 export const viewport3dManifest: ModuleManifest = {
   id: "viewport-3d",
@@ -31,6 +64,17 @@ export const viewport3dManifest: ModuleManifest = {
         scope: "viewport",
         run: () => {
           viewport3dStore.resetCamera();
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.capture-frame",
+        title: "Capture 3D Frame",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        run: () => {
+          viewport3dStore.requestCapture();
           return { status: "completed" };
         },
       },
@@ -118,6 +162,19 @@ export const viewport3dManifest: ModuleManifest = {
           return { status: "completed" };
         },
       },
+      ...VISUAL_PROFILE_COMMANDS.map((command) => ({
+        id: command.id,
+        title: command.title,
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport" as const,
+        isActive: () =>
+          viewport3dStore.getSnapshot().visualProfileId === command.profileId,
+        run: () => {
+          viewport3dStore.setVisualProfile(command.profileId);
+          return { status: "completed" as const };
+        },
+      })),
     ],
   },
   emits: ["workspace:selection-changed"],

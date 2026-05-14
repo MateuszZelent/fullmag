@@ -17,6 +17,7 @@ import {
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -112,8 +113,12 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel">
-      <InspectorSection title="Object Regions" collapsible defaultCollapsed={false}>
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["regions", "state", "actions"]}
+    >
+      <InspectorSection value="regions" title="Object Regions" collapsible defaultCollapsed={false}>
         <FieldRow label="Object ID" value={model.objectId} />
         <FieldRow label="Region ID" value={model.regionId} />
         <FieldRow label="Source" value={model.source} />
@@ -123,7 +128,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Regions fetch" value={regions.status} />
       </InspectorSection>
 
-      <InspectorSection title="Region State">
+      <InspectorSection value="state" title="Region State">
         <FormField
           label="Region name"
           mono={false}
@@ -139,7 +144,7 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
         />
       </InspectorSection>
 
-      <InspectorSection title="Actions">
+      <InspectorSection value="actions" title="Actions">
         <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || model.mode !== "committed"}
@@ -165,6 +170,6 @@ export function ObjectRegionsPanel({ selection }: InspectorPanelProps) {
         </div>
         {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
       </InspectorSection>
-    </div>
+    </Accordion>
   );
 }

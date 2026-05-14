@@ -94,15 +94,18 @@ describe("viewport3dFieldMapping", () => {
     expect(buildVertexScalarColors(vectorField([1, 0, 0]), 1, 0)).toBeNull();
   });
 
-  it("rejects partial field coverage without an explicit topology node mapping", () => {
-    expect(
-      buildVertexScalarColors(
-        vectorField([0, 0, 1]),
-        2,
-        undefined,
-        "orientation",
-      ),
-    ).toBeNull();
+  it("maps prefix partial field coverage while leaving unmatched topology nodes black", () => {
+    const result = buildVertexScalarColors(
+      vectorField([0, 0, 1]),
+      2,
+      undefined,
+      "orientation",
+    );
+
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      1, 1, 1,
+      0, 0, 0,
+    ]);
   });
 
   it("rejects field with more points than the topology vertex count", () => {

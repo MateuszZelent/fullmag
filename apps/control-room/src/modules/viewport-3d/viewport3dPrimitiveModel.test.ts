@@ -5,6 +5,7 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import {
   buildViewport3DMagnetizationTexturePreviewMap,
+  buildViewport3DPrimitiveFrameKey,
   buildViewport3DPrimitiveRenderModel,
   resolvePrimitiveSelectionBounds,
 } from "./viewport3dPrimitiveModel";
@@ -42,6 +43,46 @@ describe("viewport3dPrimitiveModel", () => {
     });
     expect(model.objects[0]?.bounds.center).toEqual([4, 5, 6]);
     expect(model.objects[0]?.bounds.size).toEqual([1, 2, 3]);
+    expect(buildViewport3DPrimitiveFrameKey(model)).toBe(
+      "7|box:Box:{\"size\":[1,2,3]}:{\"translation\":[4,5,6]}",
+    );
+  });
+
+  it("changes primitive frame keys when primitive geometry changes", () => {
+    const first = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "box",
+          },
+        ],
+        revision: 7,
+      },
+      null,
+    );
+    const second = buildViewport3DPrimitiveRenderModel(
+      {
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [2, 1, 1] },
+            },
+            id: "box",
+          },
+        ],
+        revision: 8,
+      },
+      null,
+    );
+
+    expect(buildViewport3DPrimitiveFrameKey(first)).not.toBe(
+      buildViewport3DPrimitiveFrameKey(second),
+    );
   });
 
   it("attaches committed magnetization texture preview metadata", () => {

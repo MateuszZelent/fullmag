@@ -17,12 +17,15 @@ import {
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
+import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import { buildSurfaceEdgeGeometryFromBufferGeometry } from "../viewport3dSurfaceEdges";
+import { buildViewport3DPrimitiveFrameKey } from "../viewport3dPrimitiveModel";
 import type {
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
   opacityFromSettings,
   shaderColorFromSettings,
@@ -47,16 +50,26 @@ export function releasePrimitiveObjectGeometry(
 export function PrimitiveObjectLayer({
   colors,
   getObjectSettings,
+  materialProfile,
   onSelectObject,
   primitiveModel,
   tracker,
 }: {
   colors: Viewport3DColors;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+  materialProfile: Viewport3DMaterialProfile;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   tracker: Viewport3DResourceTracker;
 }) {
+  const invalidate = useBatchedInvalidate();
+  const primitiveFrameKey = buildViewport3DPrimitiveFrameKey(primitiveModel);
+
+  useEffect(() => {
+    tracker.recordDirtyFrame("primitive-geometry");
+    invalidate();
+  }, [invalidate, primitiveFrameKey, tracker]);
+
   if (!primitiveModel?.objects.length) return null;
 
   return (
@@ -67,6 +80,7 @@ export function PrimitiveObjectLayer({
           key={object.geometryKey}
           object={object}
           onSelectObject={onSelectObject}
+          materialProfile={materialProfile}
           settings={getObjectSettings(object)}
           tracker={tracker}
         />
@@ -78,11 +92,13 @@ export function PrimitiveObjectLayer({
 function PrimitiveObject({
   colors,
   object,
+  materialProfile,
   onSelectObject,
   settings,
   tracker,
 }: {
   colors: Viewport3DColors;
+  materialProfile: Viewport3DMaterialProfile;
   object: Viewport3DPrimitiveObject;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   settings: VisualizationTargetSettings;
@@ -141,7 +157,7 @@ function PrimitiveObject({
           <meshStandardMaterial
             color={shaderColor}
             opacity={opacity}
-            roughness={0.78}
+            {...materialProfile.primitivePreview}
             {...surfaceMaterialPolicyProps(opacity)}
           />
         </mesh>
@@ -153,7 +169,10 @@ function PrimitiveObject({
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(settings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(settings)}
+            opacity={wireframeOpacityFromSettings(
+              settings,
+              materialProfile.featureEdges,
+            )}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>

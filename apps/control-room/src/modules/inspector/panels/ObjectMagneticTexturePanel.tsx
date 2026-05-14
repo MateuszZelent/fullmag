@@ -20,6 +20,7 @@ import {
 } from "@/shared/domain/magnetization-texture/draftModel";
 import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
+import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -80,7 +81,7 @@ function MagneticTextureSummarySection({
   sceneStatus: string;
 }) {
   return (
-    <InspectorSection title="Magnetic Texture" collapsible defaultCollapsed={false}>
+    <InspectorSection value="summary" title="Magnetic Texture" collapsible defaultCollapsed={false}>
       <FieldRow label="Object ID" value={model.objectId} />
       <FieldRow label="Target" value={model.targetKind} />
       {model.regionId && <FieldRow label="Region ID" value={model.regionId} />}
@@ -103,7 +104,7 @@ function MagneticTextureAssignmentSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection title="Assignment">
+    <InspectorSection value="assignment" title="Assignment">
       <FormField
         label="Magnetization ref"
         mono={false}
@@ -148,7 +149,7 @@ function MagneticTexturePresetParametersSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection title="Preset Parameters">
+    <InspectorSection value="preset" title="Preset Parameters">
       {draft.presetKind === "uniform" && (
         <>
           <FormField
@@ -207,7 +208,7 @@ function MagneticTextureTransformSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection title="Texture Transform">
+    <InspectorSection value="transform" title="Texture Transform">
       <FormField label="Translate X" type="number" unit="m" value={draft.translationX} onChange={(event) => updateDraft({ translationX: event.target.value })} />
       <FormField label="Translate Y" type="number" unit="m" value={draft.translationY} onChange={(event) => updateDraft({ translationY: event.target.value })} />
       <FormField label="Translate Z" type="number" unit="m" value={draft.translationZ} onChange={(event) => updateDraft({ translationZ: event.target.value })} />
@@ -229,7 +230,7 @@ function MagneticTextureMappingSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection title="Mapping" collapsible defaultCollapsed={true}>
+    <InspectorSection value="mapping" title="Mapping" collapsible defaultCollapsed={true}>
       <FormField label="Space" type="select" value={draft.mappingSpace} onChange={(event) => updateDraft({ mappingSpace: event.target.value })}>
         <option value="object">Object</option>
         <option value="world">World</option>
@@ -256,7 +257,7 @@ function MagneticTextureRawAssetSection({
   model: MagneticTexturePanelModel;
 }) {
   return (
-    <InspectorSection title="Raw Asset" collapsible defaultCollapsed={true}>
+    <InspectorSection value="raw" title="Raw Asset" collapsible defaultCollapsed={true}>
       <FormField label="Mapping" type="textarea" readOnly rows={5} value={model.mapping} />
       <FormField label="Texture transform" type="textarea" readOnly rows={5} value={model.textureTransform} />
     </InspectorSection>
@@ -281,7 +282,7 @@ function MagneticTextureActionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection title="Actions">
+    <InspectorSection value="actions" title="Actions">
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || model.mode !== "committed"}
@@ -447,7 +448,11 @@ export function ObjectMagneticTexturePanel({
   }
 
   return (
-    <div className="fm-inspector-panel">
+    <Accordion
+      className="fm-inspector-panel"
+      type="multiple"
+      defaultValue={["summary", "assignment", "preset", "transform", "mapping", "actions"]}
+    >
       <MagneticTextureSummarySection
         model={model}
         regionsStatus={regions.status}
@@ -470,6 +475,6 @@ export function ObjectMagneticTexturePanel({
         onSave={() => void saveTexture()}
         pending={pending}
       />
-    </div>
+    </Accordion>
   );
 }

@@ -1,4 +1,5 @@
 import type {
+  VisualizationTargetPatch,
   SurfaceColorSource,
   VisualizationColorMode,
   VisualizationTargetSettings,
@@ -31,6 +32,13 @@ export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
 
 export function colorPickerInputValue(value: string): string {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff";
+}
+
+export function surfaceSolidColorPatch(value: string): VisualizationTargetPatch {
+  return {
+    shaderMonoColor: value,
+    surfaceColorSource: "solid",
+  };
 }
 
 export interface VisualizationPanelField {
