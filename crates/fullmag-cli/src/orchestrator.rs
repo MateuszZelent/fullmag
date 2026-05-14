@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, DiscretizationHintsIR, DynamicsIR, ExecutionPlanIR, FemHintsIR,
@@ -7,7 +7,7 @@ use fullmag_ir::{
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -6095,11 +6095,11 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        LIVE_PROGRESS_PUBLISH_INTERVAL, LiveProgressCadence, WaitForSolveCommandAction,
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
         fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
-        wait_for_solve_supported,
+        wait_for_solve_supported, LiveProgressCadence, WaitForSolveCommandAction,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{

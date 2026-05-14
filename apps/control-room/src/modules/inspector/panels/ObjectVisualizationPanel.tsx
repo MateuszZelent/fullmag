@@ -28,6 +28,11 @@ import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
+import {
+  useMeshSharedDomainManifestResource,
+  useSceneResource,
+} from "@/kernel/resources/geometryLifecycleResources";
+import { resolveVisualizationTopologyFreshness } from "@/kernel/visualization/visualizationDisplayResolution";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -37,7 +42,9 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
+  resolveVisualizationRenderResolution,
   SURFACE_COLOR_SOURCE_ITEMS,
+  surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
@@ -86,40 +93,45 @@ type SectionDisabled = (
 ) => boolean;
 
 function VisualizationDisplayPassesSection({
-  effectiveSettings,
+  displaySettings,
   passControlsDisabled,
   patch,
   pending,
+  renderWarning,
   settings,
 }: {
-  effectiveSettings: VisualizationTargetSettings | null;
+  displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
   pending: boolean;
+  renderWarning: string | null;
   settings: VisualizationTargetSettings;
 }) {
   return (
     <InspectorSection title="Display Passes">
+      {renderWarning ? (
+        <FeedbackBanner kind="warning" message={renderWarning} />
+      ) : null}
       <div className="fm-visualization-toggle-grid">
-        <ToggleButton active={settings.visible} disabled={pending} label="Visible" onClick={() => void patch({ visible: !settings.visible })} />
-        <ToggleButton active={effectiveSettings?.shaderVisible ?? false} disabled={passControlsDisabled} label="Surface" onClick={() => void patch({ shaderVisible: !settings.shaderVisible })} />
-        <ToggleButton active={effectiveSettings?.wireframeVisible ?? false} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch({ wireframeVisible: !settings.wireframeVisible })} />
-        <ToggleButton active={effectiveSettings?.boundsVisible ?? false} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
-        <ToggleButton active={effectiveSettings?.pointsVisible ?? false} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
-        <ToggleButton active={effectiveSettings?.vectorsVisible ?? false} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
+        <ToggleButton active={displaySettings.visible} disabled={pending} label="Visible" onClick={() => void patch({ visible: !settings.visible })} />
+        <ToggleButton active={displaySettings.shaderVisible} disabled={passControlsDisabled} label="Surface" onClick={() => void patch(surfaceDisplayPassPatch(settings))} />
+        <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch({ wireframeVisible: !settings.wireframeVisible })} />
+        <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
+        <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
+        <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
       </div>
     </InspectorSection>
   );
 }
 
 function VisualizationRenderModeSection({
+  displaySettings,
   passControlsDisabled,
   patch,
-  settings,
 }: {
+  displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
-  settings: VisualizationTargetSettings;
 }) {
   return (
     <InspectorSection title="Render Mode">
@@ -130,7 +142,7 @@ function VisualizationRenderModeSection({
             size="sm"
             type="button"
             disabled={passControlsDisabled}
-            variant={settings.visible && settings.renderMode === mode.value ? "primary" : "secondary"}
+            variant={displaySettings.visible && displaySettings.renderMode === mode.value ? "primary" : "secondary"}
             onClick={() => void patch(renderModePatch(mode.value))}
           >
             {mode.label}
@@ -342,6 +354,10 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const { snapshot, visualization } = useObjectVisualizationRegistry();
   const visualizationState = useVisualizationStateResource();
   const sessionStatus = useSessionStatus();
+  const scene = useSceneResource({ enabled: Boolean(target) });
+  const manifest = useMeshSharedDomainManifestResource({
+    enabled: Boolean(target),
+  });
   const [feedback, setFeedback] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const targetVisualization = target
@@ -353,8 +369,22 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
+  const topologyFreshness =
+    scene.data && manifest.data
+      ? resolveVisualizationTopologyFreshness(scene.data, manifest.data)
+      : null;
+  const renderResolution = settings && effectiveSettings
+    ? resolveVisualizationRenderResolution({
+        effectiveSettings,
+        settings,
+        topologyFreshness,
+      })
+    : null;
   const sections = settings && effectiveSettings
-    ? buildVisualizationPanelSections({ effectiveSettings, settings })
+    ? buildVisualizationPanelSections({
+        effectiveSettings: renderResolution?.finalSettings ?? effectiveSettings,
+        settings,
+      })
     : [];
   const passControlsDisabled = pending || !settings?.visible;
   const revision = targetVisualization?.revision ?? snapshot.version;
@@ -503,24 +533,37 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     );
   }
 
+  const displaySettings = renderResolution?.finalSettings ?? effectiveSettings ?? settings;
+  const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
+
   return (
     <div className="fm-inspector-panel" data-visualization-revision={revision}>
       <InspectorSection title="Visualization Target">
         <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
         <FieldRow label="Kind" value={target.kind} />
+        <FieldRow
+          label="Render state"
+          value={
+            renderResolution?.degradedReasons[0]?.message ??
+            (settings.renderMode === "surface+edges"
+              ? "Shaded + wireframe"
+              : settings.renderMode)
+          }
+        />
       </InspectorSection>
       <VisualizationDisplayPassesSection
-        effectiveSettings={effectiveSettings}
+        displaySettings={displaySettings}
         passControlsDisabled={passControlsDisabled}
         patch={patch}
         pending={pending}
+        renderWarning={renderWarning}
         settings={settings}
       />
       <VisualizationRenderModeSection
+        displaySettings={displaySettings}
         passControlsDisabled={passControlsDisabled}
         patch={patch}
-        settings={settings}
       />
       <VisualizationSurfaceColoringSection
         patch={patch}

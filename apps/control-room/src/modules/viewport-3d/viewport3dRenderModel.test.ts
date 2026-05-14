@@ -16,6 +16,7 @@ import {
   resolveTopologyBounds,
   resolveUniverseBounds,
   resolveViewport3DMaxVectorGlyphs,
+  resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
 
@@ -193,6 +194,24 @@ describe("viewport3dRenderModel", () => {
       1, -0.25, 0, 1, 0.25, 0, 1,
       0, 1, -0.25, 0, 1, 0.25, 1,
     ]);
+  });
+
+  it("caps selected vector glyph scale by local sampled node spacing", () => {
+    const positions = new Float64Array(1000 * 3);
+    for (let index = 0; index < 1000; index += 1) {
+      const target = index * 3;
+      positions[target] = (index % 10) / 9;
+      positions[target + 1] = (Math.floor(index / 10) % 10) / 9;
+      positions[target + 2] = Math.floor(index / 100) / 9;
+    }
+
+    const scale = resolveViewport3DVectorSegmentScale(
+      { nodeCount: 1000, positions },
+      10,
+      { nodeCount: 1000, nodeStart: 0 },
+    );
+
+    expect(scale).toBeCloseTo(0.09);
   });
 
   it("keeps topology render buffers separate from field render buffers", () => {

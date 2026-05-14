@@ -1561,18 +1561,14 @@ mod tests {
         second.transform.translation = [0.25, 0.0, 0.0];
         scene.objects.push(second);
         let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
-        assert!(
-            validation
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "GEOMETRY_REGION_NAME_DUPLICATE")
-        );
-        assert!(
-            validation
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "GEOMETRY_OBJECT_OVERLAPS_OBJECT")
-        );
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_REGION_NAME_DUPLICATE"));
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_OBJECT_OVERLAPS_OBJECT"));
     }
 
     #[test]
@@ -1585,11 +1581,9 @@ mod tests {
         });
         scene.study.mesh_defaults.maximum_element_size = Some("0.2".to_string());
         let validation = validate_geometry_scene(&scene, GeometryBackendTarget::Fem);
-        assert!(
-            validation
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE")
-        );
+        assert!(validation
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "GEOMETRY_TINY_FEATURE_BELOW_MESH_SIZE"));
     }
 }

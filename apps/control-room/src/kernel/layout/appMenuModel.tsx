@@ -11,6 +11,7 @@ import {
   HelpCircle,
   Info,
   LayoutDashboard,
+  ListChecks,
   Pause,
   Play,
   Redo2,
@@ -111,6 +112,7 @@ export const MAIN_MENUS: AppMenuNode[] = [
       { id: "workspace.diagnostics", label: "Diagnostics", icon: <Gauge size={14} /> },
       { id: "workspace.api-console", label: "API Console", icon: <TerminalSquare size={14} /> },
       { id: "workspace.script-view", label: "Script View", icon: <Braces size={14} /> },
+      { id: "tools.registry-inspector", label: "Visualization Registry", icon: <ListChecks size={14} /> },
     ],
   },
   {

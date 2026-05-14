@@ -3,9 +3,12 @@
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  ChevronsUpDown,
   Maximize2,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import { Button } from "@/shared/ui/Button";
@@ -24,7 +27,10 @@ import {
   formatTransportDuration,
   formatTransportTimestamp,
   formatTransportTimestampSignature,
+  type FooterLogSort,
+  type FooterLogSortKey,
   serializeTransportEntry,
+  sortTransportEntries,
   summarizeTransportPath,
 } from "./footerModel";
 
@@ -35,6 +41,14 @@ export function TransportLogTable({
 }) {
   const [selectedEntry, setSelectedEntry] =
     useState<RequestDiagnosticEntry | null>(null);
+  const [sort, setSort] = useState<FooterLogSort>({
+    direction: "desc",
+    key: "time",
+  });
+  const sortedEntries = useMemo(
+    () => sortTransportEntries(entries, sort),
+    [entries, sort],
+  );
 
   if (entries.length === 0) {
     return (
@@ -51,15 +65,45 @@ export function TransportLogTable({
           className="fm-footer-log__row fm-footer-log__row--header"
           role="row"
         >
-          <span role="columnheader">Time</span>
+          <SortableHeader
+            label="Time"
+            sort={sort}
+            sortKey="time"
+            onSort={setSort}
+          />
           <span role="columnheader">Message</span>
-          <span role="columnheader">Dir</span>
-          <span role="columnheader">Channel</span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader">Size</span>
-          <span role="columnheader">Latency</span>
+          <SortableHeader
+            label="Dir"
+            sort={sort}
+            sortKey="direction"
+            onSort={setSort}
+          />
+          <SortableHeader
+            label="Channel"
+            sort={sort}
+            sortKey="channel"
+            onSort={setSort}
+          />
+          <SortableHeader
+            label="Status"
+            sort={sort}
+            sortKey="status"
+            onSort={setSort}
+          />
+          <SortableHeader
+            label="Size"
+            sort={sort}
+            sortKey="size"
+            onSort={setSort}
+          />
+          <SortableHeader
+            label="Latency"
+            sort={sort}
+            sortKey="latency"
+            onSort={setSort}
+          />
         </div>
-        {entries.map((entry) => (
+        {sortedEntries.map((entry) => (
           <div className="fm-footer-log__row" role="row" key={entry.id}>
             <time
               role="cell"
@@ -99,6 +143,50 @@ export function TransportLogTable({
         }}
       />
     </>
+  );
+}
+
+function SortableHeader({
+  label,
+  onSort,
+  sort,
+  sortKey,
+}: {
+  label: string;
+  onSort: (sort: FooterLogSort) => void;
+  sort: FooterLogSort;
+  sortKey: FooterLogSortKey;
+}) {
+  const active = sort.key === sortKey;
+  const Icon = active
+    ? sort.direction === "asc"
+      ? ArrowUpNarrowWide
+      : ArrowDownWideNarrow
+    : ChevronsUpDown;
+
+  return (
+    <span
+      role="columnheader"
+      aria-sort={
+        active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"
+      }
+    >
+      <button
+        type="button"
+        className="fm-footer-log__sort"
+        data-active={active}
+        onClick={() =>
+          onSort({
+            direction:
+              active && sort.direction === "asc" ? "desc" : "asc",
+            key: sortKey,
+          })
+        }
+      >
+        <span>{label}</span>
+        <Icon size={12} aria-hidden="true" />
+      </button>
+    </span>
   );
 }
 

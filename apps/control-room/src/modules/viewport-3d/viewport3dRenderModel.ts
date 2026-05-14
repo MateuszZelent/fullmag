@@ -592,6 +592,61 @@ export function buildVectorLineSegments(
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 export const VECTOR_SEGMENT_STRIDE = 7;
+const VECTOR_SCALE_SAMPLE_LIMIT = 512;
+const VECTOR_LOCAL_SPACING_RATIO = 0.9;
+
+export function resolveViewport3DVectorSegmentScale(
+  topology: Viewport3DPositionSource,
+  requestedScale: number,
+  nodeSelection?: Viewport3DNodeSelection | null,
+): number {
+  const safeScale = Math.max(requestedScale, 1e-12);
+  const selectedNodeCount = Math.max(
+    0,
+    Math.floor(resolveNodeSelectionCount(nodeSelection, topology)),
+  );
+  if (selectedNodeCount <= 1) return safeScale;
+
+  const sampleCount = Math.min(selectedNodeCount, VECTOR_SCALE_SAMPLE_LIMIT);
+  const stride = Math.max(1, Math.floor(selectedNodeCount / sampleCount));
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  let acceptedSamples = 0;
+
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    const pointIndex = resolveNodeSelectionIndex(nodeSelection, sample * stride);
+    if (pointIndex === null || pointIndex >= topology.nodeCount) continue;
+
+    const positionOffset = pointIndex * 3;
+    const x = topology.positions[positionOffset] ?? 0;
+    const y = topology.positions[positionOffset + 1] ?? 0;
+    const z = topology.positions[positionOffset + 2] ?? 0;
+    min[0] = Math.min(min[0], x);
+    min[1] = Math.min(min[1], y);
+    min[2] = Math.min(min[2], z);
+    max[0] = Math.max(max[0], x);
+    max[1] = Math.max(max[1], y);
+    max[2] = Math.max(max[2], z);
+    acceptedSamples += 1;
+  }
+
+  if (acceptedSamples <= 1) return safeScale;
+
+  const maxExtent = Math.max(
+    max[0] - min[0],
+    max[1] - min[1],
+    max[2] - min[2],
+  );
+  if (!Number.isFinite(maxExtent) || maxExtent <= 0) return safeScale;
+
+  const approximateSpacing =
+    maxExtent / Math.cbrt(Math.max(selectedNodeCount, 1));
+  const localCap = Math.max(
+    approximateSpacing * VECTOR_LOCAL_SPACING_RATIO,
+    1e-12,
+  );
+  return Math.min(safeScale, localCap);
+}
 
 export function buildVectorLineSegmentsFromPositions(
   topology: Viewport3DPositionSource,
@@ -629,6 +684,7 @@ export function buildVectorLineSegmentsFromPositions(
     if (mag > maxMag) maxMag = mag;
   }
   const scaleMag = Math.max(maxMag, 1e-12);
+  const effectiveScale = resolveViewport3DVectorSegmentScale(topology, scale);
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
@@ -647,7 +703,7 @@ export function buildVectorLineSegmentsFromPositions(
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;
-    const halfScale = scale / 2;
+    const halfScale = effectiveScale / 2;
 
     segments[target] = x - ux * halfScale;
     segments[target + 1] = y - uy * halfScale;
@@ -715,6 +771,11 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
     if (mag > maxMag) maxMag = mag;
   }
   const scaleMag = Math.max(maxMag, 1e-12);
+  const effectiveScale = resolveViewport3DVectorSegmentScale(
+    topology,
+    scale,
+    nodeSelection,
+  );
 
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
@@ -744,7 +805,7 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;
-    const halfScale = scale / 2;
+    const halfScale = effectiveScale / 2;
 
     segments[target] = x - ux * halfScale;
     segments[target + 1] = y - uy * halfScale;

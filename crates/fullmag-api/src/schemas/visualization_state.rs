@@ -33,6 +33,9 @@ pub struct VisualizationStateResource {
     pub vector_style: VectorStyleVisualizationState,
     /// Object/part overrides. Endpoint projections must patch this state, not create a second store.
     pub overrides: Vec<VisualizationOverrideState>,
+    /// Complete effective target registry for the current scene and mesh.
+    #[serde(default = "default_visualization_target_registry_state")]
+    pub targets: VisualizationTargetRegistryState,
     /// Backend normalization warnings and degraded-state reasons for display controls.
     pub diagnostics: VisualizationDiagnostics,
     /// Compatibility projection for current display clients. Prefer `quantity.active_quantity_id`.
@@ -627,6 +630,96 @@ pub struct VisualizationOverrideState {
     pub display: Option<VisualizationTargetDisplayOverride>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<VisualizationTargetStyleOverride>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationTargetRegistryState {
+    pub airbox: VisualizationTargetRegistryEntry,
+    pub objects: Vec<VisualizationTargetRegistryEntry>,
+    pub parts: Vec<VisualizationTargetRegistryEntry>,
+}
+
+fn default_visualization_target_registry_state() -> VisualizationTargetRegistryState {
+    VisualizationTargetRegistryState {
+        airbox: VisualizationTargetRegistryEntry {
+            scope: VisualizationScopeKind::Airbox,
+            scope_id: "airbox".to_string(),
+            label: "Airbox".to_string(),
+            source: VisualizationTargetSource::Airbox,
+            settings: VisualizationResolvedTargetSettings {
+                visible: false,
+                bounds_visible: false,
+                geometry_scope: VisualizationTargetGeometryScope::Full,
+                opacity: 0.18,
+                points_visible: false,
+                render_mode: VisualizationTargetRenderMode::Wireframe,
+                surface_color_source: SurfaceColorSource::Solid,
+                surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+                surface_visible: false,
+                vector_alpha: 1.0,
+                vector_color_mode: VectorColorMode::Orientation,
+                vector_mono_color: "var(--fm-accent)".to_string(),
+                vector_thickness: 1.0,
+                vectors_visible: false,
+                wireframe_color: "var(--fm-airbox-wire)".to_string(),
+                wireframe_opacity: 1.0,
+                wireframe_visible: false,
+            },
+            override_state: None,
+        },
+        objects: Vec::new(),
+        parts: Vec::new(),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationTargetRegistryEntry {
+    pub scope: VisualizationScopeKind,
+    pub scope_id: String,
+    pub label: String,
+    pub source: VisualizationTargetSource,
+    pub settings: VisualizationResolvedTargetSettings,
+    #[serde(rename = "override", skip_serializing_if = "Option::is_none")]
+    pub override_state: Option<VisualizationOverrideState>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualizationTargetSource {
+    Airbox,
+    SceneObject,
+    MeshPart,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationResolvedTargetSettings {
+    pub visible: bool,
+    pub bounds_visible: bool,
+    pub geometry_scope: VisualizationTargetGeometryScope,
+    pub opacity: f64,
+    pub points_visible: bool,
+    pub render_mode: VisualizationTargetRenderMode,
+    pub surface_color_source: SurfaceColorSource,
+    pub surface_mono_color: String,
+    pub surface_visible: bool,
+    pub vector_alpha: f64,
+    pub vector_color_mode: VectorColorMode,
+    pub vector_mono_color: String,
+    pub vector_thickness: f64,
+    pub vectors_visible: bool,
+    pub wireframe_color: String,
+    pub wireframe_opacity: f64,
+    pub wireframe_visible: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualizationTargetRenderMode {
+    Points,
+    Surface,
+    #[serde(rename = "surface+edges")]
+    SurfaceEdges,
+    Wireframe,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

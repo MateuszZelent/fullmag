@@ -13,14 +13,19 @@ use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
     FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
     SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
-    TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
-    TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
-    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationCameraPatch,
-    VisualizationCameraProjection, VisualizationCameraState, VisualizationDiagnostics,
-    VisualizationLayerPatch, VisualizationLayerState, VisualizationScopeKind,
-    VisualizationStatePatch, VisualizationStateResource,
+    SurfaceColorSource, TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch,
+    TrimAxisVisualizationPatch, TrimAxisVisualizationState, TrimVisualizationState,
+    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
+    VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
+    VisualizationCameraState, VisualizationDiagnostics, VisualizationLayerPatch,
+    VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
+    VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
+    VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
+    VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
 };
-use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
+use crate::types::{
+    AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
+};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
@@ -57,9 +62,11 @@ pub async fn get_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
 }
 
@@ -118,9 +125,11 @@ pub async fn replace_visualization_state(
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
 }
 
@@ -165,9 +174,11 @@ pub async fn patch_visualization_state(
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
 }
 
@@ -1221,6 +1232,7 @@ fn basic_layer(visible: bool, opacity: f64) -> BasicLayerState {
 pub(crate) fn build_visualization_state_response(
     selection: &CurrentDisplaySelection,
     presentation: &DisplayPresentationState,
+    live_snapshot: Option<&SessionStateResponse>,
 ) -> VisualizationStateResource {
     let quantity = QuantityProjection {
         active_quantity_id: selection.selection.quantity.clone(),
@@ -1280,6 +1292,8 @@ pub(crate) fn build_visualization_state_response(
         .visualization_overrides
         .clone()
         .unwrap_or_default();
+    let targets =
+        build_visualization_target_registry(&layers, &vector_style, &overrides, live_snapshot);
 
     VisualizationStateResource {
         revision: selection.revision,
@@ -1306,6 +1320,7 @@ pub(crate) fn build_visualization_state_response(
         clip,
         vector_style,
         overrides,
+        targets,
         diagnostics: VisualizationDiagnostics {
             warnings: Vec::new(),
             degraded_reasons: Vec::new(),
@@ -1331,6 +1346,241 @@ pub(crate) fn build_visualization_state_response(
         max_points,
         x_chosen_size: selection.selection.x_chosen_size,
         y_chosen_size: selection.selection.y_chosen_size,
+    }
+}
+
+fn build_visualization_target_registry(
+    layers: &VisualizationLayerState,
+    vector_style: &VectorStyleVisualizationState,
+    overrides: &[VisualizationOverrideState],
+    live_snapshot: Option<&SessionStateResponse>,
+) -> VisualizationTargetRegistryState {
+    VisualizationTargetRegistryState {
+        airbox: visualization_target_registry_entry(
+            VisualizationScopeKind::Airbox,
+            "airbox",
+            "Airbox",
+            VisualizationTargetSource::Airbox,
+            airbox_target_settings(layers),
+            overrides,
+        ),
+        objects: live_snapshot
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .map(|scene| {
+                scene
+                    .objects
+                    .iter()
+                    .map(|object| {
+                        visualization_target_registry_entry(
+                            VisualizationScopeKind::Object,
+                            &object.id,
+                            &object.name,
+                            VisualizationTargetSource::SceneObject,
+                            object_target_settings(layers, vector_style),
+                            overrides,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        parts: live_snapshot
+            .and_then(|snapshot| snapshot.fem_mesh.as_ref())
+            .map(|mesh| {
+                mesh.mesh_parts
+                    .iter()
+                    .map(|part| {
+                        visualization_target_registry_entry(
+                            VisualizationScopeKind::Part,
+                            &part.id,
+                            &part.label,
+                            VisualizationTargetSource::MeshPart,
+                            object_target_settings(layers, vector_style),
+                            overrides,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn visualization_target_registry_entry(
+    scope: VisualizationScopeKind,
+    scope_id: &str,
+    label: &str,
+    source: VisualizationTargetSource,
+    settings: VisualizationResolvedTargetSettings,
+    overrides: &[VisualizationOverrideState],
+) -> VisualizationTargetRegistryEntry {
+    let override_state = overrides
+        .iter()
+        .find(|entry| entry.scope == scope && entry.scope_id == scope_id)
+        .cloned();
+    let settings = override_state
+        .as_ref()
+        .map(|entry| apply_visualization_target_override(settings.clone(), entry))
+        .unwrap_or(settings);
+
+    VisualizationTargetRegistryEntry {
+        scope,
+        scope_id: scope_id.to_string(),
+        label: label.to_string(),
+        source,
+        settings,
+        override_state,
+    }
+}
+
+fn object_target_settings(
+    layers: &VisualizationLayerState,
+    vector_style: &VectorStyleVisualizationState,
+) -> VisualizationResolvedTargetSettings {
+    let mut settings = VisualizationResolvedTargetSettings {
+        visible: true,
+        bounds_visible: layers.bounds.visible,
+        geometry_scope: VisualizationTargetGeometryScope::Full,
+        opacity: layers.surface.opacity,
+        points_visible: layers.points.visible,
+        render_mode: VisualizationTargetRenderMode::Surface,
+        surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
+        surface_mono_color: vector_style.mono_color.clone(),
+        surface_visible: layers.surface.visible,
+        vector_alpha: vector_style.alpha,
+        vector_color_mode: vector_style.color_mode,
+        vector_mono_color: vector_style.mono_color.clone(),
+        vector_thickness: vector_style.thickness,
+        vectors_visible: layers.vectors.visible,
+        wireframe_color: "var(--fm-border-strong)".to_string(),
+        wireframe_opacity: layers.wireframe.opacity,
+        wireframe_visible: layers.wireframe.visible,
+    };
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn airbox_target_settings(layers: &VisualizationLayerState) -> VisualizationResolvedTargetSettings {
+    let mut settings = VisualizationResolvedTargetSettings {
+        visible: layers.airbox.visible,
+        bounds_visible: layers.airbox.bounds.visible,
+        geometry_scope: VisualizationTargetGeometryScope::Full,
+        opacity: layers.airbox.opacity,
+        points_visible: layers.airbox.points.visible,
+        render_mode: VisualizationTargetRenderMode::Wireframe,
+        surface_color_source: SurfaceColorSource::Solid,
+        surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+        surface_visible: layers.airbox.surface.visible,
+        vector_alpha: 1.0,
+        vector_color_mode: VectorColorMode::Orientation,
+        vector_mono_color: "var(--fm-accent)".to_string(),
+        vector_thickness: 1.0,
+        vectors_visible: layers.airbox.vectors.visible,
+        wireframe_color: "var(--fm-airbox-wire)".to_string(),
+        wireframe_opacity: layers.airbox.wireframe.opacity,
+        wireframe_visible: layers.airbox.wireframe.visible,
+    };
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn apply_visualization_target_override(
+    mut settings: VisualizationResolvedTargetSettings,
+    override_state: &VisualizationOverrideState,
+) -> VisualizationResolvedTargetSettings {
+    if let Some(visible) = override_state.visible {
+        settings.visible = visible;
+    }
+    if let Some(display) = &override_state.display {
+        if let Some(visible) = display.visible {
+            settings.visible = visible;
+        }
+        if let Some(bounds) = &display.bounds {
+            if let Some(visible) = bounds.visible {
+                settings.bounds_visible = visible;
+            }
+        }
+        if let Some(surface) = &display.surface {
+            if let Some(visible) = surface.visible {
+                settings.surface_visible = visible;
+            }
+            if let Some(opacity) = surface.opacity {
+                settings.opacity = opacity;
+            }
+        }
+        if let Some(wireframe) = &display.wireframe {
+            if let Some(visible) = wireframe.visible {
+                settings.wireframe_visible = visible;
+            }
+            if let Some(opacity) = wireframe.opacity {
+                settings.wireframe_opacity = opacity;
+            }
+        }
+        if let Some(points) = &display.points {
+            if let Some(visible) = points.visible {
+                settings.points_visible = visible;
+            }
+        }
+        if let Some(vectors) = &display.vectors {
+            if let Some(visible) = vectors.visible {
+                settings.vectors_visible = visible;
+            }
+        }
+        if let Some(opacity) = display.opacity {
+            settings.opacity = opacity;
+        }
+        if let Some(geometry_scope) = display.geometry_scope {
+            settings.geometry_scope = geometry_scope;
+        }
+    }
+    if let Some(style) = &override_state.style {
+        if let Some(surface_color_source) = style.surface_color_source {
+            settings.surface_color_source = surface_color_source;
+        }
+        if let Some(surface_mono_color) = &style.surface_mono_color {
+            settings.surface_mono_color = surface_mono_color.clone();
+        }
+        if let Some(vector_color_mode) = style.vector_color_mode {
+            settings.vector_color_mode = vector_color_mode;
+        }
+        if let Some(vector_mono_color) = &style.vector_mono_color {
+            settings.vector_mono_color = vector_mono_color.clone();
+        }
+        if let Some(vector_alpha) = style.vector_alpha {
+            settings.vector_alpha = vector_alpha;
+        }
+        if let Some(vector_thickness) = style.vector_thickness {
+            settings.vector_thickness = vector_thickness;
+        }
+        if let Some(wireframe_color) = &style.wireframe_color {
+            settings.wireframe_color = wireframe_color.clone();
+        }
+    }
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn visualization_target_render_mode(
+    settings: &VisualizationResolvedTargetSettings,
+) -> VisualizationTargetRenderMode {
+    if settings.points_visible {
+        return VisualizationTargetRenderMode::Points;
+    }
+    if settings.surface_visible && settings.wireframe_visible {
+        return VisualizationTargetRenderMode::SurfaceEdges;
+    }
+    if settings.surface_visible {
+        return VisualizationTargetRenderMode::Surface;
+    }
+    VisualizationTargetRenderMode::Wireframe
+}
+
+fn surface_color_source_from_vector_color_mode(color_mode: VectorColorMode) -> SurfaceColorSource {
+    match color_mode {
+        VectorColorMode::Orientation => SurfaceColorSource::Orientation,
+        VectorColorMode::X => SurfaceColorSource::ComponentX,
+        VectorColorMode::Y => SurfaceColorSource::ComponentY,
+        VectorColorMode::Z => SurfaceColorSource::ComponentZ,
+        VectorColorMode::Magnitude => SurfaceColorSource::Magnitude,
+        VectorColorMode::Monochrome => SurfaceColorSource::Solid,
     }
 }
 

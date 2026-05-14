@@ -595,6 +595,10 @@ pub struct MeshInterfaceQualityResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshActiveBuildResource {
     pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_realization_revision: Option<u64>,
     /// Current active build descriptor and progress metadata.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -632,6 +636,10 @@ pub struct MeshBuildHistoryResource {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshLastSuccessfulBuildResource {
     pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_realization_revision: Option<u64>,
     /// Last successful build artifact/reference summary. It must not become a copy of the active build resource.
     #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]

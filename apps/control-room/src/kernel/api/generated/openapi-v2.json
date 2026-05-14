@@ -3165,6 +3165,14 @@
               "null"
             ]
           },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "last_build_error": {
             "type": [
               "string",
@@ -3199,6 +3207,14 @@
                 "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
                 "description": "Typed shared-domain build report extracted from the latest build summary when present."
               }
+            ]
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
             ]
           }
         },
@@ -3535,6 +3551,14 @@
               "null"
             ]
           },
+          "geometry_realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "last_build_error": {
             "type": [
               "string",
@@ -3552,6 +3576,14 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -7964,6 +7996,85 @@
         ],
         "type": "object"
       },
+      "VisualizationResolvedTargetSettings": {
+        "properties": {
+          "bounds_visible": {
+            "type": "boolean"
+          },
+          "geometry_scope": {
+            "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
+          },
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "points_visible": {
+            "type": "boolean"
+          },
+          "render_mode": {
+            "$ref": "#/components/schemas/VisualizationTargetRenderMode"
+          },
+          "surface_color_source": {
+            "$ref": "#/components/schemas/SurfaceColorSource"
+          },
+          "surface_mono_color": {
+            "type": "string"
+          },
+          "surface_visible": {
+            "type": "boolean"
+          },
+          "vector_alpha": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector_color_mode": {
+            "$ref": "#/components/schemas/VectorColorMode"
+          },
+          "vector_mono_color": {
+            "type": "string"
+          },
+          "vector_thickness": {
+            "format": "double",
+            "type": "number"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "wireframe_color": {
+            "type": "string"
+          },
+          "wireframe_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "wireframe_visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "visible",
+          "bounds_visible",
+          "geometry_scope",
+          "opacity",
+          "points_visible",
+          "render_mode",
+          "surface_color_source",
+          "surface_mono_color",
+          "surface_visible",
+          "vector_alpha",
+          "vector_color_mode",
+          "vector_mono_color",
+          "vector_thickness",
+          "vectors_visible",
+          "wireframe_color",
+          "wireframe_opacity",
+          "wireframe_visible"
+        ],
+        "type": "object"
+      },
       "VisualizationScopeKind": {
         "enum": [
           "full",
@@ -8308,6 +8419,10 @@
           "slice_mode": {
             "type": "string"
           },
+          "targets": {
+            "$ref": "#/components/schemas/VisualizationTargetRegistryState",
+            "description": "Complete effective target registry for the current scene and mesh."
+          },
           "trim": {
             "$ref": "#/components/schemas/TrimVisualizationState",
             "description": "Canonical 3-D trim controls for topology-aware viewports."
@@ -8456,6 +8571,85 @@
         "enum": [
           "surface",
           "full"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetRegistryEntry": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "override": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationOverrideState"
+              }
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/VisualizationScopeKind"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/VisualizationResolvedTargetSettings"
+          },
+          "source": {
+            "$ref": "#/components/schemas/VisualizationTargetSource"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_id",
+          "label",
+          "source",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "VisualizationTargetRegistryState": {
+        "properties": {
+          "airbox": {
+            "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+            },
+            "type": "array"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationTargetRegistryEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "airbox",
+          "objects",
+          "parts"
+        ],
+        "type": "object"
+      },
+      "VisualizationTargetRenderMode": {
+        "enum": [
+          "points",
+          "surface",
+          "surface+edges",
+          "wireframe"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetSource": {
+        "enum": [
+          "airbox",
+          "scene_object",
+          "mesh_part"
         ],
         "type": "string"
       },

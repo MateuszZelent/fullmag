@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DPrimitiveObject } from "../viewport3dPrimitiveModel";
 
@@ -7,6 +8,7 @@ import {
   buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
+  shouldRenderPrimitiveTransformGizmo,
   trackPrimitiveObjectGeometry,
 } from "./PrimitiveObjectLayer";
 
@@ -66,5 +68,18 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         0, 0, 0,
         0, 0, expect.closeTo(2.16),
       ]);
+  });
+
+  it("does not draw primitive transform gizmo in surface-only mode", () => {
+    expect(
+      shouldRenderPrimitiveTransformGizmo({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        renderMode: "surface",
+        shaderVisible: true,
+        wireframeVisible: false,
+      }),
+    ).toBe(false);
+    expect(shouldRenderPrimitiveTransformGizmo(DEFAULT_OBJECT_VISUALIZATION))
+      .toBe(true);
   });
 });

@@ -54,6 +54,32 @@ export function resolveVectorFieldLayerStyle({
   };
 }
 
+export function syncVectorGlyphColorState({
+  hasInstanceColors,
+  head,
+  instanceColorAttr,
+  material,
+  materialColor,
+  shaft,
+}: {
+  hasInstanceColors: boolean;
+  head: InstancedMesh;
+  instanceColorAttr: InstancedBufferAttribute;
+  material: MeshBasicMaterial;
+  materialColor: string;
+  shaft: InstancedMesh;
+}) {
+  const nextInstanceColor = hasInstanceColors ? instanceColorAttr : null;
+  shaft.instanceColor = nextInstanceColor;
+  head.instanceColor = nextInstanceColor;
+  material.vertexColors = hasInstanceColors;
+  material.color.set(hasInstanceColors ? "white" : materialColor);
+  if (hasInstanceColors) {
+    instanceColorAttr.needsUpdate = true;
+  }
+  material.needsUpdate = true;
+}
+
 export function VectorFieldLayer({
   colors,
   colorMode = "orientation",
@@ -184,8 +210,14 @@ export function VectorFieldLayer({
     head.count = glyphs.count;
 
     // Attach instance color attribute for bulk writes.
-    shaft.instanceColor = instanceColorAttr;
-    head.instanceColor = instanceColorAttr;
+    syncVectorGlyphColorState({
+      hasInstanceColors: Boolean(glyphs.colors),
+      head,
+      instanceColorAttr,
+      material,
+      materialColor: resolvedStyle.materialColor,
+      shaft,
+    });
     shaft.instanceMatrix.setUsage(DynamicDrawUsage);
     head.instanceMatrix.setUsage(DynamicDrawUsage);
 
@@ -242,7 +274,7 @@ export function VectorFieldLayer({
     head.instanceMatrix.needsUpdate = true;
     tracker.recordDirtyFrame("vector-glyphs");
     invalidate();
-  }, [glyphs, invalidate, tracker]);
+  }, [glyphs, invalidate, material, resolvedStyle.materialColor, tracker]);
 
   if (!glyphs || glyphs.count === 0) return null;
 

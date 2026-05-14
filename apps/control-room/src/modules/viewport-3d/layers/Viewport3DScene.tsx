@@ -63,6 +63,7 @@ interface Viewport3DSceneProps {
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmSettings: VisualizationTargetSettings;
   fdmSurfaceColors: ScalarColorBuffer | null;
   fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
@@ -184,6 +185,7 @@ export function Viewport3DScene({
   colors,
   airboxSettings,
   fdmDomain,
+  fdmSettings,
   fdmSurfaceColors,
   fieldVector,
   femDomain,
@@ -258,7 +260,7 @@ export function Viewport3DScene({
       )}
       <DomainBoxLayer
         bounds={bounds}
-        boundsVisible={fallbackSettings.boundsVisible}
+        boundsVisible={fdmSettings.boundsVisible}
         colors={colors}
         onSelectDomain={onSelectDomain}
       />
@@ -269,7 +271,7 @@ export function Viewport3DScene({
         maxVectorGlyphs={maxVectorGlyphs}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
-        settings={fallbackSettings}
+        settings={fdmSettings}
         surfaceColors={fdmSurfaceColors}
         tracker={tracker}
         vectorColorMode={vectorColorMode}

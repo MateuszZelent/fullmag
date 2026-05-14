@@ -2584,6 +2584,8 @@ export interface components {
             effective_airbox_target?: Record<string, never> | null;
             /** @description Resolved per-object targets for the current build. Summary-level copies are transitional dashboard projections. */
             effective_per_object_targets?: Record<string, never> | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Current/last build summary for build panels. Latest-success endpoint owns stable successful build references. */
             last_build_summary?: Record<string, never> | null;
@@ -2592,6 +2594,8 @@ export interface components {
             /** Format: int64 */
             revision: number;
             shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
+            /** Format: int64 */
+            source_scene_revision?: number | null;
         };
         MeshAirboxTargetResource: {
             /** Format: double */
@@ -2677,11 +2681,15 @@ export interface components {
             effective_airbox_target?: Record<string, never> | null;
             /** @description Transitional target projection retained for current frontend adapters. */
             effective_per_object_targets?: Record<string, never> | null;
+            /** Format: int64 */
+            geometry_realization_revision?: number | null;
             last_build_error?: string | null;
             /** @description Last successful build artifact/reference summary. It must not become a copy of the active build resource. */
             last_success?: Record<string, never> | null;
             /** Format: int64 */
             revision: number;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
         };
         MeshObjectConfigEntryResource: {
             config?: Record<string, never> | null;
@@ -3742,6 +3750,29 @@ export interface components {
             /** @description Compatibility target visibility override. Prefer `display.visible` for new clients. */
             visible?: boolean | null;
         };
+        VisualizationResolvedTargetSettings: {
+            bounds_visible: boolean;
+            geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
+            /** Format: double */
+            opacity: number;
+            points_visible: boolean;
+            render_mode: components["schemas"]["VisualizationTargetRenderMode"];
+            surface_color_source: components["schemas"]["SurfaceColorSource"];
+            surface_mono_color: string;
+            surface_visible: boolean;
+            /** Format: double */
+            vector_alpha: number;
+            vector_color_mode: components["schemas"]["VectorColorMode"];
+            vector_mono_color: string;
+            /** Format: double */
+            vector_thickness: number;
+            vectors_visible: boolean;
+            visible: boolean;
+            wireframe_color: string;
+            /** Format: double */
+            wireframe_opacity: number;
+            wireframe_visible: boolean;
+        };
         /** @enum {string} */
         VisualizationScopeKind: "full" | "magnetic" | "airbox" | "object" | "part" | "selection";
         VisualizationStatePatch: {
@@ -3838,6 +3869,8 @@ export interface components {
             /** Format: int32 */
             slice_layer: number;
             slice_mode: string;
+            /** @description Complete effective target registry for the current scene and mesh. */
+            targets?: components["schemas"]["VisualizationTargetRegistryState"];
             /** @description Canonical 3-D trim controls for topology-aware viewports. */
             trim: components["schemas"]["TrimVisualizationState"];
             /**
@@ -3875,6 +3908,23 @@ export interface components {
         };
         /** @enum {string} */
         VisualizationTargetGeometryScope: "surface" | "full";
+        VisualizationTargetRegistryEntry: {
+            label: string;
+            override?: null | components["schemas"]["VisualizationOverrideState"];
+            scope: components["schemas"]["VisualizationScopeKind"];
+            scope_id: string;
+            settings: components["schemas"]["VisualizationResolvedTargetSettings"];
+            source: components["schemas"]["VisualizationTargetSource"];
+        };
+        VisualizationTargetRegistryState: {
+            airbox: components["schemas"]["VisualizationTargetRegistryEntry"];
+            objects: components["schemas"]["VisualizationTargetRegistryEntry"][];
+            parts: components["schemas"]["VisualizationTargetRegistryEntry"][];
+        };
+        /** @enum {string} */
+        VisualizationTargetRenderMode: "points" | "surface" | "surface+edges" | "wireframe";
+        /** @enum {string} */
+        VisualizationTargetSource: "airbox" | "scene_object" | "mesh_part";
         VisualizationTargetStyleOverride: {
             surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
             surface_mono_color?: string | null;

@@ -5,6 +5,7 @@ import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import {
   buildFdmCuboidInstanceModel,
   buildFdmVectorSegments,
+  resolveFdmVectorGlyphScale,
 } from "./FdmCuboidLayer";
 
 function domainFixture(
@@ -185,5 +186,14 @@ describe("FdmCuboidLayer model", () => {
       expect.closeTo(1.5e-9),
       1,
     ]);
+  });
+
+  it("caps rendered FDM vector glyph scale to the local voxel size", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture(), {
+      voxelFillRatio: 0.5,
+    });
+
+    expect(resolveFdmVectorGlyphScale(model, 100e-9)).toBeCloseTo(1.125e-9);
+    expect(resolveFdmVectorGlyphScale(model, 0.25e-9)).toBeCloseTo(0.25e-9);
   });
 });

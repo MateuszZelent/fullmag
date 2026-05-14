@@ -321,6 +321,21 @@ function useViewport3DSceneModel({
       ),
     [globalObjectBaseSettings, objectVisualizationSnapshot],
   );
+  const fdmSettings = useMemo(() => {
+    const fdmDomainId = domainMeta.data?.domain_id ?? null;
+    if (!fdmDomain || !fdmDomainId) return fallbackSettings;
+    return resolveTargetVisualization({
+      snapshot: objectVisualizationSnapshot,
+      target: { id: fdmDomainId, kind: "object" },
+      visualizationState: visualizationState.data,
+    }).settings;
+  }, [
+    domainMeta.data?.domain_id,
+    fallbackSettings,
+    fdmDomain,
+    objectVisualizationSnapshot,
+    visualizationState.data,
+  ]);
   const airboxSettings = useMemo(
     () =>
       resolveTargetVisualization({
@@ -363,21 +378,21 @@ function useViewport3DSceneModel({
     vectorDomain,
   });
   const fdmSurfaceColorMode =
-    fdmDomain && fallbackSettings.visible && fallbackSettings.shaderVisible
-      ? surfaceColorSourceToColorMode(fallbackSettings.surfaceColorSource)
+    fdmDomain && fdmSettings.visible && fdmSettings.shaderVisible
+      ? surfaceColorSourceToColorMode(fdmSettings.surfaceColorSource)
       : null;
   const fdmVoxelMagnitudeThreshold =
-    fdmDomain && fallbackSettings.visible && fallbackSettings.shaderVisible
+    fdmDomain && fdmSettings.visible && fdmSettings.shaderVisible
       ? visualProfile.voxelMagnitudeThreshold
       : 0;
   const fdmTopographyEnabled = Boolean(
     fdmDomain &&
-      fallbackSettings.visible &&
-      fallbackSettings.shaderVisible &&
+      fdmSettings.visible &&
+      fdmSettings.shaderVisible &&
       visualProfile.voxelTopography.enabled,
   );
   const fdmVectorsVisible = Boolean(
-    fdmDomain && fallbackSettings.visible && fallbackSettings.vectorsVisible,
+    fdmDomain && fdmSettings.visible && fdmSettings.vectorsVisible,
   );
   const fieldVectorEnabled =
     viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions) ||
@@ -521,6 +536,7 @@ function useViewport3DSceneModel({
     domainSummary,
     fallbackSettings,
     fdmDomain,
+    fdmSettings,
     fdmSurfaceColors,
     femDomain,
     fieldModel: fieldRenderModel,
@@ -784,6 +800,11 @@ function Viewport3DFrame({
     profile: visualProfile,
   });
   const canvasGlOptions = resolveViewport3DCanvasGlOptions(visualProfile);
+  const discretizationKind = sceneProps.fdmDomain
+    ? "FDM"
+    : sceneProps.femDomain.magneticParts.length > 0
+      ? "FEM"
+      : null;
   useEffect(() => {
     if (captureRevision <= 0 || typeof window === "undefined") return;
     let disposed = false;
@@ -847,6 +868,14 @@ function Viewport3DFrame({
         </Canvas>
       ) : (
         <div className="fm-viewport-3d__placeholder">Preparing viewport</div>
+      )}
+      {discretizationKind && (
+        <div
+          aria-label={`Discretization method: ${discretizationKind}`}
+          className="fm-viewport-3d__method-badge"
+        >
+          {discretizationKind}
+        </div>
       )}
     </section>
   );

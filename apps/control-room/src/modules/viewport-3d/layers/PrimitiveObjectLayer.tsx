@@ -62,6 +62,12 @@ export function buildPrimitiveTransformGizmoSegments(
   ]);
 }
 
+export function shouldRenderPrimitiveTransformGizmo(
+  settings: VisualizationTargetSettings,
+): boolean {
+  return settings.visible && settings.wireframeVisible;
+}
+
 export function PrimitiveObjectLayer({
   colors,
   getObjectSettings,
@@ -209,12 +215,14 @@ function PrimitiveObject({
           />
         </mesh>
       ) : null}
-      <PrimitiveObjectGizmo
-        colors={colors}
-        materialProfile={materialProfile}
-        object={object}
-        tracker={tracker}
-      />
+      {shouldRenderPrimitiveTransformGizmo(settings) ? (
+        <PrimitiveObjectGizmo
+          colors={colors}
+          materialProfile={materialProfile}
+          object={object}
+          tracker={tracker}
+        />
+      ) : null}
     </group>
   );
 }

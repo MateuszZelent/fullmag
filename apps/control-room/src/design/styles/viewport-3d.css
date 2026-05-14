@@ -71,6 +71,25 @@
   }
 }
 
+.fm-viewport-3d__method-badge {
+  position: absolute;
+  z-index: 2;
+  right: var(--fm-space-3);
+  bottom: var(--fm-space-3);
+  border: 1px solid color-mix(in srgb, var(--fm-border-subtle) 50%, transparent);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-chrome) 55%, transparent);
+  color: color-mix(in srgb, var(--fm-text-muted) 65%, transparent);
+  font-family: var(--fm-font-mono, monospace);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  user-select: none;
+}
+
 .fm-viewport-3d__primitive-label {
   display: inline-flex;
   max-width: 9rem;

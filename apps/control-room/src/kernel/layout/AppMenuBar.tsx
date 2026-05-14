@@ -13,6 +13,8 @@ import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsCont
 import { useKernel } from "@/kernel/KernelContext";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -44,6 +46,7 @@ import {
   type AppMenuNode,
   type HeaderQuickAction,
 } from "./appMenuModel";
+import { RegistryInspectorDialog } from "./RegistryInspectorDialog";
 
 interface HeaderSessionDisplay {
   connectionLabel: string;
@@ -377,6 +380,9 @@ export function AppMenuBar() {
   );
   const sessionDisplay = resolveHeaderSessionDisplay(visibleSessionStatus);
   const [apiDialogError, setApiDialogError] = useState<Error | null>(null);
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const { snapshot: visualizationSnapshot } = useObjectVisualizationRegistry();
+  const visualizationState = useVisualizationStateResource({ enabled: true });
   const apiErrorDetails = useMemo(() => {
     if (!hydrated || !sessionStatus.error) return null;
 
@@ -401,6 +407,10 @@ export function AppMenuBar() {
   };
   const commandContext = createCommandContext("menu", kernel);
   const runCommand = (commandId: string) => {
+    if (commandId === "tools.registry-inspector") {
+      setRegistryOpen(true);
+      return;
+    }
     if (kernel.commands.get(commandId)) {
       void kernel.commands.execute(commandId, commandContext);
     }
@@ -509,6 +519,13 @@ export function AppMenuBar() {
         onOpenChange={onApiDialogOpenChange}
         onRetry={sessionStatus.refetch}
         open={apiDialogOpen}
+      />
+
+      <RegistryInspectorDialog
+        open={registryOpen}
+        snapshot={visualizationSnapshot}
+        visualizationState={visualizationState.data}
+        onOpenChange={setRegistryOpen}
       />
 
       <div className="fm-header__separator" />

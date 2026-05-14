@@ -1,11 +1,11 @@
 use crate::{
-    MagnetizationAsset, SceneCurrentModulesState, SceneDocument, SceneDocumentValidationError,
-    SceneEditorState, SceneGeometry, SceneMaterialAsset, SceneMeshInterface, SceneMetadata,
-    SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderMagnetizationState, ScriptBuilderMeshInterfaceState,
-    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, StudyPipelineNode, Transform3D,
-    validate_scene_document,
+    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
+    SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
+    SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
+    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
+    ScriptBuilderMeshInterfaceState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
+    StudyPipelineNode, Transform3D,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -1623,11 +1623,9 @@ mod tests {
         scene.objects[0].magnetization_ref = None;
         let error = scene_document_to_script_builder(&scene)
             .expect_err("missing magnetization ref must fail");
-        assert!(
-            error
-                .message
-                .contains("must reference a magnetization asset")
-        );
+        assert!(error
+            .message
+            .contains("must reference a magnetization asset"));
     }
 
     #[test]
@@ -1655,11 +1653,9 @@ mod tests {
         scene.magnetization_assets[0].kind = "procedural".to_string();
         let error = scene_document_to_script_builder(&scene)
             .expect_err("unsupported magnetization kind must fail");
-        assert!(
-            error
-                .message
-                .contains("unsupported magnetization asset kind")
-        );
+        assert!(error
+            .message
+            .contains("unsupported magnetization asset kind"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ import {
   formatTransportTimestamp,
   formatTransportTimestampSignature,
   serializeTransportEntry,
+  sortTransportEntries,
   summarizeTransportPath,
 } from "./footerModel";
 
@@ -115,5 +116,69 @@ describe("footerModel", () => {
         }),
       ),
     ).toBe("resource.batch_changed");
+  });
+
+  it("sorts entries by requested transport columns", () => {
+    const entries = [
+      entry({
+        byteLength: 2048,
+        channel: "http",
+        direction: "rx",
+        durationMs: 40,
+        id: "b",
+        status: 200,
+        timestampMs: 20,
+      }),
+      entry({
+        byteLength: null,
+        channel: "websocket",
+        direction: "tx",
+        durationMs: null,
+        id: "c",
+        status: null,
+        timestampMs: 30,
+      }),
+      entry({
+        byteLength: 1024,
+        channel: "http",
+        direction: "tx",
+        durationMs: 10,
+        id: "a",
+        outcome: "error",
+        status: 500,
+        timestampMs: 10,
+      }),
+    ];
+
+    expect(
+      sortTransportEntries(entries, { direction: "desc", key: "time" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["c", "b", "a"]);
+    expect(
+      sortTransportEntries(entries, { direction: "asc", key: "direction" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["b", "a", "c"]);
+    expect(
+      sortTransportEntries(entries, { direction: "asc", key: "channel" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["a", "b", "c"]);
+    expect(
+      sortTransportEntries(entries, { direction: "asc", key: "status" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["b", "a", "c"]);
+    expect(
+      sortTransportEntries(entries, { direction: "asc", key: "size" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["a", "b", "c"]);
+    expect(
+      sortTransportEntries(entries, { direction: "asc", key: "latency" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["a", "b", "c"]);
   });
 });

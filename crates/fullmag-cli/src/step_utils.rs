@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use fullmag_ir::{BackendPlanIR, ProblemIR};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{
-    GridTransferResult, normalize_unit_vectors, transfer_fem_field_to_grid,
+    normalize_unit_vectors, transfer_fem_field_to_grid, GridTransferResult,
 };
 
 use crate::formatting::unix_time_millis;
@@ -1647,9 +1647,9 @@ fn payload_k_sampling(
                 let values: Vec<f64> = trimmed
                     .split(',')
                     .map(|component| {
-                        component.trim().parse::<f64>().with_context(
-                            || "invalid eigen_k_vector component in study pipeline payload",
-                        )
+                        component.trim().parse::<f64>().with_context(|| {
+                            "invalid eigen_k_vector component in study pipeline payload"
+                        })
                     })
                     .collect::<Result<Vec<_>>>()?;
                 if values.len() != 3 {

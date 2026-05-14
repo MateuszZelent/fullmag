@@ -6,10 +6,23 @@ import type {
 
 export type FooterDirectionFilter = "all" | TransportDirection;
 export type FooterChannelFilter = "all" | TransportChannel;
+export type FooterLogSortDirection = "asc" | "desc";
+export type FooterLogSortKey =
+  | "channel"
+  | "direction"
+  | "latency"
+  | "size"
+  | "status"
+  | "time";
 
 export interface FooterLogFilters {
   channel: FooterChannelFilter;
   direction: FooterDirectionFilter;
+}
+
+export interface FooterLogSort {
+  direction: FooterLogSortDirection;
+  key: FooterLogSortKey;
 }
 
 export function filterTransportEntries(
@@ -26,6 +39,18 @@ export function filterTransportEntries(
     }
 
     return true;
+  });
+}
+
+export function sortTransportEntries(
+  entries: readonly RequestDiagnosticEntry[],
+  sort: FooterLogSort,
+): RequestDiagnosticEntry[] {
+  return [...entries].sort((left, right) => {
+    const order =
+      compareTransportEntries(left, right, sort.key) ||
+      compareString(left.id, right.id);
+    return sort.direction === "asc" ? order : -order;
   });
 }
 
@@ -48,6 +73,53 @@ export function formatTransportByteSize(byteLength: number | null): string {
   }
 
   return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`;
+}
+
+function compareTransportEntries(
+  left: RequestDiagnosticEntry,
+  right: RequestDiagnosticEntry,
+  key: FooterLogSortKey,
+): number {
+  switch (key) {
+    case "channel":
+      return compareString(left.channel, right.channel);
+    case "direction":
+      return compareString(left.direction, right.direction);
+    case "latency":
+      return compareNullableNumber(left.durationMs, right.durationMs);
+    case "size":
+      return compareNullableNumber(left.byteLength, right.byteLength);
+    case "status":
+      return (
+        compareNullableNumber(left.status, right.status) ||
+        compareString(left.outcome, right.outcome)
+      );
+    case "time":
+      return left.timestampMs - right.timestampMs;
+  }
+}
+
+function compareNullableNumber(
+  left: number | null,
+  right: number | null,
+): number {
+  if (left === null && right === null) {
+    return 0;
+  }
+
+  if (left === null) {
+    return 1;
+  }
+
+  if (right === null) {
+    return -1;
+  }
+
+  return left - right;
+}
+
+function compareString(left: string, right: string): number {
+  return left.localeCompare(right);
 }
 
 export function formatTransportTimestamp(timestampMs: number): string {

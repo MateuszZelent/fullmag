@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::control_room::{
@@ -309,7 +309,7 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
-    use super::{CurrentLiveSnapshotPayload, bootstrap_live_state, merge_pending_publish_payload};
+    use super::{bootstrap_live_state, merge_pending_publish_payload, CurrentLiveSnapshotPayload};
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {

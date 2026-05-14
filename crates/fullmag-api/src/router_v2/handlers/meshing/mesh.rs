@@ -186,8 +186,11 @@ pub async fn get_mesh_active_build(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let provenance = mesh_build_provenance(&snapshot);
     let body = MeshActiveBuildResource {
         revision: snapshot.mesh_build_revision,
+        source_scene_revision: provenance.source_scene_revision,
+        geometry_realization_revision: provenance.geometry_realization_revision,
         active_build: mesh_workspace.get("active_build").cloned(),
         mesh_pipeline_status: mesh_workspace.get("mesh_pipeline_status").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
@@ -268,8 +271,11 @@ pub async fn get_mesh_last_successful_build(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let provenance = mesh_build_provenance(&snapshot);
     let body = MeshLastSuccessfulBuildResource {
         revision: snapshot.mesh_build_revision,
+        source_scene_revision: provenance.source_scene_revision,
+        geometry_realization_revision: provenance.geometry_realization_revision,
         last_success: mesh_workspace.get("last_build_summary").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
@@ -1470,7 +1476,7 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
         .mesh_workspace
         .as_ref()
         .and_then(|workspace| workspace.get("last_build_summary"));
-    MeshBuildProvenance {
+    let provenance = MeshBuildProvenance {
         source_scene_revision: last_build
             .and_then(|summary| summary.get("source_scene_revision"))
             .and_then(Value::as_u64)
@@ -1484,7 +1490,54 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
             .and_then(|summary| summary.get("geometry_realization"))
             .and_then(|realization| realization.get("realization_revision"))
             .and_then(Value::as_u64),
+    };
+
+    if provenance.source_scene_revision.is_some() {
+        return provenance;
     }
+
+    clean_scene_mesh_provenance(snapshot).unwrap_or(provenance)
+}
+
+fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    if scene
+        .objects
+        .iter()
+        .any(|object| object.tags.iter().any(|tag| tag == "mesh:dirty"))
+    {
+        return None;
+    }
+
+    let scene_object_ids = scene
+        .objects
+        .iter()
+        .filter(|object| object.visible)
+        .map(|object| object.id.clone())
+        .collect::<BTreeSet<_>>();
+    if scene_object_ids.is_empty() {
+        return None;
+    }
+
+    let mesh_object_ids = mesh
+        .object_segments
+        .iter()
+        .map(|segment| segment.object_id.clone())
+        .chain(
+            mesh.mesh_parts
+                .iter()
+                .filter_map(|part| part.object_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    if !scene_object_ids.is_subset(&mesh_object_ids) {
+        return None;
+    }
+
+    Some(MeshBuildProvenance {
+        source_scene_revision: Some(scene.revision),
+        geometry_realization_revision: Some(scene.revision),
+    })
 }
 
 fn build_periodic_pairs_resource(

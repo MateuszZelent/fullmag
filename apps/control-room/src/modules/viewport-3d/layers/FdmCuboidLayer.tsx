@@ -278,6 +278,18 @@ export function buildFdmVectorSegments(
   return segments;
 }
 
+export function resolveFdmVectorGlyphScale(
+  model: FdmCuboidInstanceModel | null,
+  requestedScale: number,
+): number {
+  const safeScale = Math.max(requestedScale, 1e-12);
+  if (!model) return safeScale;
+
+  const maxCellSize = Math.max(...model.cellSize);
+  const localCap = Math.max(maxCellSize * 0.75, 1e-12);
+  return Math.min(safeScale, localCap);
+}
+
 export function FdmCuboidLayer({
   colors,
   domain,
@@ -339,7 +351,7 @@ export function FdmCuboidLayer({
       buildFdmVectorSegments(
         model,
         fieldVector,
-        vectorScale,
+        resolveFdmVectorGlyphScale(model, vectorScale),
         maxVectorGlyphs,
       ),
     [fieldVector, maxVectorGlyphs, model, vectorScale],

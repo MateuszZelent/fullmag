@@ -11,6 +11,7 @@ import {
   buildVisualizationPanelSections,
   colorPickerInputValue,
   SURFACE_COLOR_SOURCE_ITEMS,
+  surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
 } from "./ObjectVisualizationPanelModel";
@@ -50,6 +51,27 @@ describe("ObjectVisualizationPanelModel", () => {
       shaderMonoColor: "#00ffaa",
       surfaceColorSource: "solid",
     });
+  });
+
+  it("turns the Surface display pass into surface-only rendering", () => {
+    expect(surfaceDisplayPassPatch(DEFAULT_OBJECT_VISUALIZATION)).toMatchObject({
+      pointsVisible: false,
+      renderMode: "surface",
+      shaderVisible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("lets an already surface-only display pass toggle the surface off", () => {
+    expect(
+      surfaceDisplayPassPatch({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        pointsVisible: false,
+        renderMode: "surface",
+        shaderVisible: true,
+        wireframeVisible: false,
+      }),
+    ).toEqual({ shaderVisible: false });
   });
 
   it("builds pass-specific sections for a visible object target", () => {

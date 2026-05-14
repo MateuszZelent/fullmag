@@ -20,6 +20,7 @@ import {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
 import {
+  isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
@@ -125,9 +126,9 @@ function AirboxMeshPartLayer({
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const resolvedSettings =
-    topologyFreshness === "stale"
-      ? resolveStaleTopologyVisualizationSettings(settings)
-      : settings;
+    isViewport3DTopologyCurrent(topologyFreshness)
+      ? settings
+      : resolveStaleTopologyVisualizationSettings(settings);
   const geometry = useMemo(() => {
     const { surfaceIndices } = partModel;
     if (!surfaceIndices?.length) return null;

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use fullmag_ir::{BackendPlanIR, FemDomainMeshModeIR};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::control_room::*;
 use crate::live_workspace::*;

@@ -1,9 +1,14 @@
-import type {
-  VisualizationTargetPatch,
-  SurfaceColorSource,
-  VisualizationColorMode,
-  VisualizationTargetSettings,
+import {
+  renderModePatch,
+  type SurfaceColorSource,
+  type VisualizationColorMode,
+  type VisualizationTargetPatch,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+export {
+  resolveVisualizationRenderResolution,
+  type VisualizationRenderResolution,
+} from "@/kernel/visualization/visualizationDisplayResolution";
 
 export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
   label: string;
@@ -39,6 +44,20 @@ export function surfaceSolidColorPatch(value: string): VisualizationTargetPatch 
     shaderMonoColor: value,
     surfaceColorSource: "solid",
   };
+}
+
+export function surfaceDisplayPassPatch(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetPatch {
+  if (
+    settings.shaderVisible &&
+    !settings.wireframeVisible &&
+    !settings.pointsVisible
+  ) {
+    return { shaderVisible: false };
+  }
+
+  return renderModePatch("surface");
 }
 
 function rgbToHex(red: number, green: number, blue: number): string {

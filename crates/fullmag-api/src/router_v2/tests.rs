@@ -1862,6 +1862,46 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
 }
 
 #[tokio::test]
+async fn visualization_state_exposes_effective_scene_object_targets() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "arch_waveguide".to_string();
+    scene.objects[0].name = "arch_waveguide".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let objects = json["targets"]["objects"]
+        .as_array()
+        .expect("visualization target registry should expose scene objects");
+    let target = objects
+        .iter()
+        .find(|target| target["scope_id"] == "arch_waveguide")
+        .expect("arch_waveguide target should be present");
+
+    assert_eq!(target["scope"], "object");
+    assert_eq!(target["label"], "arch_waveguide");
+    assert_eq!(target["source"], "scene_object");
+    assert_eq!(target["settings"]["visible"], true);
+    assert_eq!(target["settings"]["surface_visible"], true);
+    assert_eq!(target["settings"]["wireframe_visible"], false);
+    assert_eq!(target["settings"]["render_mode"], "surface");
+}
+
+#[tokio::test]
 async fn visualization_state_patch_accepts_nested_v2_controls() {
     let app = build_v2_router().with_state(test_app_state_with_live_session().await);
 
@@ -4003,6 +4043,101 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
     assert_eq!(json["regions"][0]["material_ref"], "mat:body");
     assert_eq!(json["regions"][0]["mesh_part_ids"][0], "body");
     assert_eq!(json["regions"][0]["element_count"], 1);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_build_summary() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 93;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 96;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 96);
+    assert_eq!(json["source_scene_revision"], 93);
+    assert_eq!(json["geometry_realization_revision"], 93);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
+) {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 94;
+    scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 97;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source_scene_revision"], serde_json::Value::Null);
+    assert_eq!(
+        json["geometry_realization_revision"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn mesh_build_resources_report_clean_scene_provenance_without_build_summary() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 95;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_build_revision = 99;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    for path in [
+        "/v2/sessions/current/meshing/builds/current",
+        "/v2/sessions/current/meshing/builds/latest-successful",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let json = body_json(response).await;
+        assert_eq!(json["revision"], 99);
+        assert_eq!(json["source_scene_revision"], 95);
+        assert_eq!(json["geometry_realization_revision"], 95);
+    }
 }
 
 #[tokio::test]
@@ -8542,6 +8677,10 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         .and_then(|value| value.as_object())
         .expect("OpenAPI schemas must be present");
     let state_props = schema_property_names(schemas, "VisualizationStateResource");
+    let target_registry_props = schema_property_names(schemas, "VisualizationTargetRegistryState");
+    let target_entry_props = schema_property_names(schemas, "VisualizationTargetRegistryEntry");
+    let target_settings_props =
+        schema_property_names(schemas, "VisualizationResolvedTargetSettings");
     let override_props = schema_property_names(schemas, "VisualizationOverrideState");
     let override_display_props =
         schema_property_names(schemas, "VisualizationTargetDisplayOverride");
@@ -8561,6 +8700,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "clip",
         "vector_style",
         "overrides",
+        "targets",
         "diagnostics",
     ] {
         assert!(
@@ -8579,6 +8719,35 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         assert!(
             state_props.contains(compatibility_field),
             "VisualizationStateResource must retain compatibility projection `{compatibility_field}`"
+        );
+    }
+
+    for required in ["airbox", "objects", "parts"] {
+        assert!(
+            target_registry_props.contains(required),
+            "VisualizationTargetRegistryState missing field `{required}`"
+        );
+    }
+    for required in ["scope", "scope_id", "label", "source", "settings"] {
+        assert!(
+            target_entry_props.contains(required),
+            "VisualizationTargetRegistryEntry missing field `{required}`"
+        );
+    }
+    for required in [
+        "visible",
+        "bounds_visible",
+        "surface_visible",
+        "wireframe_visible",
+        "points_visible",
+        "vectors_visible",
+        "render_mode",
+        "surface_color_source",
+        "vector_color_mode",
+    ] {
+        assert!(
+            target_settings_props.contains(required),
+            "VisualizationResolvedTargetSettings missing field `{required}`"
         );
     }
 
@@ -8663,9 +8832,11 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
         BTreeSet::from([
             "effective_airbox_target".to_string(),
             "effective_per_object_targets".to_string(),
+            "geometry_realization_revision".to_string(),
             "last_build_error".to_string(),
+            "source_scene_revision".to_string(),
         ]),
-        "active/latest-success overlap must not grow beyond transitional target and error projections"
+        "active/latest-success overlap must not grow beyond transitional target, provenance, and error projections"
     );
 
     for field in [
