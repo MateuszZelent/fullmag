@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
   resolveViewport3DTopologyFreshness,
 } from "./viewport3dTopologyStaleness";
@@ -23,6 +24,12 @@ describe("viewport3dTopologyStaleness", () => {
         { source_scene_revision: 12 },
       ),
     ).toBe("current");
+  });
+
+  it("only allows full field rendering for topology proven current", () => {
+    expect(isViewport3DTopologyCurrent("current")).toBe(true);
+    expect(isViewport3DTopologyCurrent("stale")).toBe(false);
+    expect(isViewport3DTopologyCurrent("unknown")).toBe(false);
   });
 
   it("renders stale topology as an edge ghost without shader, points, or vectors", () => {

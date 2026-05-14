@@ -848,3 +848,21 @@
   border-radius: var(--fm-radius-xs);
   padding: 1px var(--fm-space-1);
 }
+
+.fm-inspector-section__item {
+  background: var(--fm-bg-panel-raised);
+  border-left: 1px solid var(--fm-border-subtle);
+  border-right: 1px solid var(--fm-border-subtle);
+  border-top: 1px solid var(--fm-border-subtle);
+}
+
+.fm-inspector-section__item:first-child {
+  border-top-left-radius: var(--fm-radius-md);
+  border-top-right-radius: var(--fm-radius-md);
+}
+
+.fm-inspector-section__item:last-child {
+  border-bottom-left-radius: var(--fm-radius-md);
+  border-bottom-right-radius: var(--fm-radius-md);
+  border-bottom: 1px solid var(--fm-border-subtle);
+}

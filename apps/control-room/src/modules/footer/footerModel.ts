@@ -51,7 +51,32 @@ export function formatTransportByteSize(byteLength: number | null): string {
 }
 
 export function formatTransportTimestamp(timestampMs: number): string {
-  return new Date(timestampMs).toISOString().slice(11, 19);
+  return new Date(timestampMs).toISOString().slice(11, 23);
+}
+
+export function formatTransportTimestampSignature(timestampMs: number): string {
+  return new Date(timestampMs).toISOString();
+}
+
+export function formatTransportDuration(durationMs: number | null): string {
+  if (durationMs === null) {
+    return "—";
+  }
+
+  return `${Math.round(durationMs)} ms`;
+}
+
+export function buildTransportMessagePreview(
+  entry: RequestDiagnosticEntry,
+): string {
+  const direction = entry.direction.toUpperCase();
+
+  if (entry.channel === "websocket") {
+    const messageType = entry.messageType ?? "message";
+    return `${direction} WS ${messageType}`;
+  }
+
+  return `${direction} ${entry.method} ${entry.path}`;
 }
 
 export function summarizeTransportPath(entry: RequestDiagnosticEntry): string {
@@ -60,4 +85,28 @@ export function summarizeTransportPath(entry: RequestDiagnosticEntry): string {
   }
 
   return entry.path;
+}
+
+export function serializeTransportEntry(entry: RequestDiagnosticEntry): string {
+  return JSON.stringify(
+    {
+      byteLength: entry.byteLength,
+      channel: entry.channel,
+      contentType: entry.contentType,
+      detail: entry.detail,
+      direction: entry.direction,
+      durationMs: entry.durationMs,
+      id: entry.id,
+      messageType: entry.messageType,
+      method: entry.method,
+      outcome: entry.outcome,
+      path: entry.path,
+      requestId: entry.requestId,
+      status: entry.status,
+      timestamp: formatTransportTimestampSignature(entry.timestampMs),
+      timestampMs: entry.timestampMs,
+    },
+    null,
+    2,
+  );
 }

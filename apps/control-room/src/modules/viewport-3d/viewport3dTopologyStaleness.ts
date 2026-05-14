@@ -20,6 +20,12 @@ export function resolveViewport3DTopologyFreshness(
   return sceneRevision === sourceSceneRevision ? "current" : "stale";
 }
 
+export function isViewport3DTopologyCurrent(
+  freshness: Viewport3DTopologyFreshness,
+): boolean {
+  return freshness === "current";
+}
+
 export function resolveStaleTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
 ): VisualizationTargetSettings {

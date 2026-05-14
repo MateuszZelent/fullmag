@@ -426,7 +426,7 @@ function ViewCubeFacePanel({
         />
       ))}
       <AutoOrientText
-        color={faceHovered ? "#ffffff" : String(colors.textPrimary ?? colors.wire)}
+        color={String(colors.textPrimary ?? colors.wire)}
         label={label}
       />
     </group>
@@ -481,7 +481,7 @@ function viewCubeCellMaterial(
 ): { color: string; opacity: number } {
   if (kind === "face") {
     return {
-      color: "#ffffff",
+      color: String(colors.textPrimary ?? colors.field),
       opacity: hovered ? 1 : (faceHovered ? 0.95 : 0.85),
     };
   }

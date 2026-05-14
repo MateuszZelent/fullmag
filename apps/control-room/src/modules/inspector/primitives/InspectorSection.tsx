@@ -29,15 +29,15 @@ export function InspectorSection({
   if (value) {
     // Radix Accordion Mode (Modern, animated, grouped)
     return (
-      <AccordionItem value={value} className="bg-[var(--fm-bg-panel-raised)] border-x border-t border-[var(--fm-border-subtle)] first:rounded-t-md last:rounded-b-md last:border-b">
-        <AccordionTrigger className="fm-inspector-section__header flex w-full items-center justify-between px-2 py-1">
-          <div className="fm-inspector-section__title-row flex items-center gap-1">
-            <h3 className="m-0 text-sm font-semibold text-[var(--fm-text-primary)]">{title}</h3>
+      <AccordionItem value={value} className="fm-inspector-section__item">
+        <AccordionTrigger className="fm-inspector-section__header">
+          <div className="fm-inspector-section__title-row">
+            <h3 className="fm-inspector-section__title">{title}</h3>
           </div>
-          {badge && <span className="fm-inspector-section__badge ml-auto">{badge}</span>}
+          {badge && <span className="fm-inspector-section__badge">{badge}</span>}
         </AccordionTrigger>
         <AccordionContent>
-          <div className="fm-inspector-section__body grid gap-[1px] p-1">{children}</div>
+          <div className="fm-inspector-section__body">{children}</div>
         </AccordionContent>
       </AccordionItem>
     );

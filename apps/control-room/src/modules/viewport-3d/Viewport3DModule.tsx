@@ -63,7 +63,10 @@ import {
   resolvePrimitiveSelectionBounds,
   type Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
-import { resolveViewport3DTopologyFreshness } from "./viewport3dTopologyStaleness";
+import {
+  isViewport3DTopologyCurrent,
+  resolveViewport3DTopologyFreshness,
+} from "./viewport3dTopologyStaleness";
 import {
   getViewport3DCacheStats,
   useViewport3DDomainMeta,
@@ -252,8 +255,8 @@ function useViewport3DSceneModel({
       ),
     [scene.data, sharedDomainManifest.data],
   );
-  const currentTopologyRenderModel =
-    topologyFreshness === "stale" ? null : topologyRenderModel;
+  const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
+  const currentTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
   const magnetizationTexturePreviews = useMemo(
     () => buildViewport3DMagnetizationTexturePreviewMap(scene.data),
     [scene.data],
@@ -264,8 +267,7 @@ function useViewport3DSceneModel({
     ),
     [primitiveModel],
   );
-  const topologyBounds =
-    topologyFreshness === "stale" ? null : resolveTopologyBounds(topology.data);
+  const topologyBounds = topologyCurrent ? resolveTopologyBounds(topology.data) : null;
   const resourceBounds =
     topologyBounds ??
     resolveDomainBounds(domainMeta.data) ??

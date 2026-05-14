@@ -2,8 +2,6 @@
 
 import {
   Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
   Gauge,
   Trash2,
 } from "lucide-react";
@@ -16,12 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import {
   filterTransportEntries,
-  formatTransportByteSize,
-  formatTransportTimestamp,
   type FooterChannelFilter,
   type FooterDirectionFilter,
-  summarizeTransportPath,
 } from "./footerModel";
+import { TransportLogTable } from "./TransportLogTable";
 
 export default function FooterModule({ kernel }: ModuleProps) {
   const entries = useTransportDiagnostics(kernel);
@@ -153,60 +149,4 @@ function FilterButton({
       {children}
     </button>
   );
-}
-
-function TransportLogTable({ entries }: { entries: RequestDiagnosticEntry[] }) {
-  if (entries.length === 0) {
-    return (
-      <div className="fm-footer__empty" role="status">
-        No transport events captured yet.
-      </div>
-    );
-  }
-
-  return (
-    <div className="fm-footer-log" role="table" aria-label="Transport logs">
-      <div className="fm-footer-log__row fm-footer-log__row--header" role="row">
-        <span role="columnheader">Time</span>
-        <span role="columnheader">Dir</span>
-        <span role="columnheader">Channel</span>
-        <span role="columnheader">Status</span>
-        <span role="columnheader">Size</span>
-        <span role="columnheader">Target</span>
-      </div>
-      {entries.map((entry) => (
-        <div className="fm-footer-log__row" role="row" key={entry.id}>
-          <span role="cell">{formatTransportTimestamp(entry.timestampMs)}</span>
-          <span role="cell">
-            <DirectionBadge entry={entry} />
-          </span>
-          <span role="cell">{entry.channel.toUpperCase()}</span>
-          <span role="cell">{formatStatus(entry)}</span>
-          <span role="cell">{formatTransportByteSize(entry.byteLength)}</span>
-          <span role="cell" title={summarizeTransportPath(entry)}>
-            {summarizeTransportPath(entry)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function DirectionBadge({ entry }: { entry: RequestDiagnosticEntry }) {
-  const Icon = entry.direction === "rx" ? ArrowDownToLine : ArrowUpFromLine;
-
-  return (
-    <span className="fm-footer-log__direction" data-direction={entry.direction}>
-      <Icon size={13} aria-hidden="true" />
-      {entry.direction.toUpperCase()}
-    </span>
-  );
-}
-
-function formatStatus(entry: RequestDiagnosticEntry): string {
-  if (entry.status !== null) {
-    return `${entry.status} ${entry.outcome}`;
-  }
-
-  return entry.outcome;
 }

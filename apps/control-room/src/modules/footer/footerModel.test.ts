@@ -7,9 +7,13 @@ import {
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 
 import {
+  buildTransportMessagePreview,
   filterTransportEntries,
+  formatTransportDuration,
   formatTransportByteSize,
   formatTransportTimestamp,
+  formatTransportTimestampSignature,
+  serializeTransportEntry,
   summarizeTransportPath,
 } from "./footerModel";
 
@@ -44,8 +48,47 @@ describe("footerModel", () => {
 
   it("uses a deterministic timestamp format", () => {
     expect(formatTransportTimestamp(Date.UTC(2026, 4, 14, 12, 34, 56))).toBe(
-      "12:34:56",
+      "12:34:56.000",
     );
+    expect(
+      formatTransportTimestampSignature(Date.UTC(2026, 4, 14, 12, 34, 56, 789)),
+    ).toBe("2026-05-14T12:34:56.789Z");
+  });
+
+  it("formats nullable transport latency", () => {
+    expect(formatTransportDuration(null)).toBe("—");
+    expect(formatTransportDuration(12.6)).toBe("13 ms");
+  });
+
+  it("builds compact clickable message previews", () => {
+    expect(buildTransportMessagePreview(entry({ direction: "tx" }))).toBe(
+      `TX GET ${SESSION_STATUS_PATH}`,
+    );
+    expect(
+      buildTransportMessagePreview(
+        entry({
+          channel: "websocket",
+          messageType: "resource.batch_changed",
+        }),
+      ),
+    ).toBe("RX WS resource.batch_changed");
+  });
+
+  it("serializes full entries for the details modal", () => {
+    expect(
+      JSON.parse(
+        serializeTransportEntry(
+          entry({
+            byteLength: 262144000,
+            timestampMs: Date.UTC(2026, 4, 14, 12, 34, 56),
+          }),
+        ),
+      ),
+    ).toMatchObject({
+      byteLength: 262144000,
+      path: SESSION_STATUS_PATH,
+      timestamp: "2026-05-14T12:34:56.000Z",
+    });
   });
 
   it("filters entries by direction and channel", () => {

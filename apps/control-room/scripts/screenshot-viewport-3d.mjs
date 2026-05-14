@@ -8,7 +8,7 @@ const apiBase =
   process.env.NEXT_PUBLIC_API_URL ??
   null;
 const requiredScenes = new Set(
-  (process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? "object")
+  (process.env.CONTROL_ROOM_SCREENSHOT_SCENES ?? "fdm,fem,object")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean),
@@ -75,6 +75,11 @@ try {
   }
   const detectedScenes = new Set([detectedScene]);
   if ((await primitiveObjectCount(viewport)) > 0) detectedScenes.add("object");
+  let fdmFixtureDelta = null;
+  if (requiredScenes.has("fdm") && !detectedScenes.has("fdm")) {
+    fdmFixtureDelta = await verifyFdmFixtureScene(browser);
+    detectedScenes.add("fdm");
+  }
 
   for (const scene of requiredScenes) {
     if (!detectedScenes.has(scene)) {
@@ -113,9 +118,165 @@ try {
     `profiles=${requiredProfiles.join(",")}`,
     `scenes=${[...detectedScenes].join(",")}`,
     `changedPixels=${delta.changedPixels}/${delta.sampledPixels}`,
+    fdmFixtureDelta
+      ? `fdmFixtureChangedPixels=${fdmFixtureDelta.changedPixels}/${fdmFixtureDelta.sampledPixels}`
+      : "fdmFixture=live",
   );
 } finally {
   await browser.close();
+}
+
+async function verifyFdmFixtureScene(browser) {
+  const page = await browser.newPage({
+    viewport: { height: 900, width: 1440 },
+  });
+  const errors = [];
+  const fixtureRequests = [];
+
+  await installFdmFixtureApi(page, fixtureRequests);
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  page.on("pageerror", (error) => {
+    errors.push(error.message);
+  });
+  page.on("response", (response) => {
+    const status = response.status();
+    if (status >= 400) errors.push(`${status} ${response.url()}`);
+  });
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const viewport = page.locator(".fm-viewport-3d");
+    const canvas = page.locator(".fm-viewport-3d canvas");
+    await canvas.waitFor({ state: "visible", timeout: 15_000 });
+    await waitForCanvasReady(canvas);
+    try {
+      await page.waitForFunction(
+        () => {
+          const summary = document
+            .querySelector(".fm-viewport-3d__hud span:nth-child(3)")
+            ?.textContent?.trim();
+          return /^\d+\/\d+$/.test(summary ?? "");
+        },
+        null,
+        { timeout: 10_000 },
+      );
+    } catch (error) {
+      const summary = await viewport
+        .locator(".fm-viewport-3d__hud span")
+        .nth(2)
+        .textContent()
+        .catch(() => "missing");
+      const hudText = await viewport
+        .locator(".fm-viewport-3d__hud")
+        .textContent()
+        .catch(() => "missing");
+      throw new Error(
+        `Timed out waiting for FDM fixture HUD. hud=${hudText}; summary=${summary}; errors=${errors.join(" | ") || "none"}; requests=${[
+          ...new Set(fixtureRequests),
+        ].join(", ") || "none"}; cause=${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    const detectedScene = await detectScene(viewport);
+    if (detectedScene !== "fdm") {
+      throw new Error(`FDM fixture rendered '${detectedScene}' instead of 'fdm'.`);
+    }
+
+    const captures = [];
+    for (const profile of requiredProfiles) {
+      await setVisualProfile(page, viewport, profile);
+      const sample = await sampleCanvasComposite(page, canvas);
+      if (!sample.nonBlank) {
+        throw new Error(
+          `FDM fixture ${profile} screenshot is blank: ${sample.variedPixels}/${sample.sampledPixels} sampled pixels differ from background.`,
+        );
+      }
+      captures.push({ profile, sample });
+    }
+
+    const delta = canvasCompositeDifference(
+      captures[0].sample,
+      captures[1].sample,
+    );
+    if (!delta.changed) {
+      throw new Error(
+        `FDM fixture interactive/figure screenshots are too similar: ${delta.changedPixels}/${delta.sampledPixels} changed sampled pixels, minimum ${delta.minimumChangedPixels}.`,
+      );
+    }
+    if (errors.length > 0) {
+      throw new Error(`FDM fixture browser console/network errors:\n${errors.join("\n")}`);
+    }
+    return delta;
+  } finally {
+    await page.close();
+  }
+}
+
+async function installFdmFixtureApi(page, fixtureRequests) {
+  const fixtureBase = apiBase ?? "http://localhost:8081";
+  await page.addInitScript((baseUrl) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      controlRoomApiBase: baseUrl,
+    };
+  }, fixtureBase);
+
+  await page.route("**/v2/sessions/current/**", async (route) => {
+    const request = route.request();
+    const requestUrl = new URL(request.url());
+    fixtureRequests.push(`${request.method()} ${requestUrl.pathname}`);
+    if (request.method() === "OPTIONS") {
+      await fulfillEmpty(route, 204);
+      return;
+    }
+
+    const path = requestUrl.pathname;
+    if (path === "/v2/sessions/current/status") {
+      await fulfillJson(route, fdmStatusFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/visualization/state") {
+      await fulfillJson(route, fdmVisualizationStateFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/domain/meta") {
+      await fulfillJson(route, fdmDomainMetaFixture());
+      return;
+    }
+    if (path === "/v2/sessions/current/data/domain/topology") {
+      await fulfillEmpty(route, 204);
+      return;
+    }
+    if (path === "/v2/sessions/current/data/fields/m/samples/vector") {
+      await fulfillBinary(route, makeFdmFieldVectorBuffer());
+      return;
+    }
+    if (path === "/v2/sessions/current/model/scene") {
+      await fulfillJson(route, { objects: [], revision: 0, schema_version: 1 });
+      return;
+    }
+    if (path === "/v2/sessions/current/model/universe") {
+      await fulfillJson(route, {
+        mesh_dirty: false,
+        object_bounds_max: [6e-7, 4e-7, 1e-7],
+        object_bounds_min: [-6e-7, -4e-7, -1e-7],
+        scene_revision: 0,
+        study_universe_mesh: null,
+        universe: null,
+      });
+      return;
+    }
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") {
+      await fulfillEmpty(route, 204);
+      return;
+    }
+
+    await fulfillEmpty(route, 204);
+  });
 }
 
 async function ensureObjectScene(page, viewport) {
@@ -155,9 +316,11 @@ async function ensureObjectScene(page, viewport) {
 async function setVisualProfile(page, viewport, profile) {
   if ((await viewport.getAttribute("data-visual-profile-id")) === profile) return;
 
-  await page.getByRole("tab", { name: "View" }).click();
-  await page.locator('[data-action-id="view-render-quality"]').click();
-  await page.getByRole("menuitemradio", { name: profileLabel(profile) }).click();
+  await page.getByRole("tab", { name: "View" }).click({ force: true });
+  await page.locator('[data-action-id="view-render-quality"]').click({ force: true });
+  await page
+    .getByRole("menuitemradio", { exact: true, name: profileLabel(profile) })
+    .click();
   await page.waitForFunction(
     (expected) =>
       document
@@ -289,6 +452,263 @@ function canvasCompositeDifference(before, after) {
     minimumChangedPixels,
     sampledPixels,
   };
+}
+
+async function fulfillJson(route, body, status = 200) {
+  await route.fulfill({
+    body: JSON.stringify(body),
+    headers: fixtureHeaders({ "content-type": "application/json" }),
+    status,
+  });
+}
+
+async function fulfillBinary(route, arrayBuffer, status = 200) {
+  await route.fulfill({
+    body: Buffer.from(arrayBuffer),
+    headers: fixtureHeaders({
+      "content-type": "application/octet-stream",
+      etag: '"fdm-fixture"',
+    }),
+    status,
+  });
+}
+
+async function fulfillEmpty(route, status = 204) {
+  await route.fulfill({
+    body: "",
+    headers: fixtureHeaders(),
+    status,
+  });
+}
+
+function fixtureHeaders(extra = {}) {
+  return {
+    "access-control-allow-headers": "*",
+    "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-expose-headers": "x-api-contract-version,etag,x-request-id",
+    "x-api-contract-version": "1.0.0",
+    ...extra,
+  };
+}
+
+function fdmStatusFixture() {
+  return {
+    api_contract_version: "1.0.0",
+    capabilities: {
+      algorithms_available: [],
+      binary_fields: true,
+      cell_fields: true,
+      eigen_modes: false,
+      explicit_topology: false,
+      gpu_telemetry: false,
+      node_fields: false,
+      preview_2d: false,
+      preview_3d: true,
+      scalar_history: false,
+      structured_grid: true,
+    },
+    display: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+      max_points: 120000,
+      slice_layer: 0,
+      slice_mode: "xy",
+      vector_density: 2,
+      vector_glyphs: true,
+      view_mode: "3d",
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    domain: {
+      cell_count: 192,
+      discretization: "fdm",
+      generation_id: 1,
+    },
+    energies: {},
+    metrics: {
+      steps_per_second: null,
+      total_steps: 0,
+      uptime_seconds: 0,
+    },
+    resources: {
+      artifact_revision: 0,
+      artifacts_revision: 0,
+      command_completion_revision: 0,
+      commands_revision: 0,
+      display_revision: 1,
+      domain_generation_id: 1,
+      engine_log_revision: 0,
+      field_catalog_revision: 1,
+      field_revision: 1,
+      fields_revision: 1,
+      mesh_build_revision: 0,
+      mesh_revision: 0,
+      scalars_revision: 0,
+      scene_revision: 0,
+      slice_revision: 0,
+      stages_revision: 0,
+      topology_revision: 0,
+      visualization_state_revision: 1,
+      workspace_revision: 0,
+    },
+    run: null,
+    runtime_bundle_version: "screenshot-fixture",
+    session: {
+      created_at: "0",
+      name: "fdm-screenshot-fixture",
+      session_id: "fdm-fixture",
+      workspace_root: "/tmp/fullmag-fdm-fixture",
+    },
+    solver: {
+      state: "idle",
+    },
+  };
+}
+
+function fdmDomainMetaFixture() {
+  return {
+    bounds: {
+      max: [6e-7, 4e-7, 1e-7],
+      min: [-6e-7, -4e-7, -1e-7],
+    },
+    coordinate_system: "cartesian",
+    counts: { cells: 192 },
+    dimension: 3,
+    discretization: "fdm",
+    domain_id: "fdm-fixture-domain",
+    generation_id: 1,
+    grid: {
+      origin: [-6e-7, -4e-7, -1e-7],
+      shape: [12, 8, 2],
+      spacing: [1e-7, 1e-7, 1e-7],
+    },
+    units: { length: "m" },
+  };
+}
+
+function fdmVisualizationStateFixture() {
+  return {
+    active_quantity_id: "m",
+    auto_contrast: true,
+    camera: {
+      position: [1.4e-6, 1.0e-6, 8e-7],
+      projection: "perspective",
+      target: [0, 0, 0],
+      up: [0, 0, 1],
+    },
+    clip: {
+      enabled: false,
+      normal_axis: "z",
+      offset: 0,
+    },
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    diagnostics: { warnings: [] },
+    domains: {
+      active_scope_id: null,
+      active_scope_kind: "domain",
+    },
+    fdm: {
+      x_chosen_size: 1,
+      y_chosen_size: 1,
+    },
+    fem: {
+      topology_mode: "surface",
+      volume_edges_budget: 0,
+    },
+    field_component: "magnitude",
+    layers: {
+      bounds: { visible: true },
+      points: { visible: false },
+      quantity_overlay: { visible: true },
+      surface: { opacity: 0.94, visible: true },
+      vectors: { density: 2, domain: "full_domain", visible: true },
+      wireframe: { visible: true },
+    },
+    max_points: 120000,
+    overrides: [],
+    quantity: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+    },
+    revision: 1,
+    sampling: {
+      max_glyphs: 192,
+      max_points: 120000,
+    },
+    schema_version: 1,
+    slice: {
+      layer: 0,
+      mode: "xy",
+    },
+    slice_layer: 0,
+    slice_mode: "xy",
+    trim: {
+      enabled: false,
+      max: [1, 1, 1],
+      min: [0, 0, 0],
+    },
+    vector_density: 2,
+    vector_glyphs: true,
+    vector_style: {
+      alpha: 1,
+      color_mode: "orientation",
+      ferromagnet_visibility: "ghost",
+      length_scale: 1,
+      mono_color: "#89b4fa",
+      thickness: 1.4,
+    },
+    view_mode: "3d",
+    x_chosen_size: 1,
+    y_chosen_size: 1,
+  };
+}
+
+function makeFdmFieldVectorBuffer() {
+  const grid = [12, 8, 2];
+  const pointCount = grid[0] * grid[1] * grid[2];
+  const valueCount = pointCount * 3;
+  const buffer = new ArrayBuffer(48 + valueCount * Float64Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto("m", new Uint8Array(buffer, 28, 16));
+
+  const values = new Float64Array(buffer, 48);
+  let offset = 0;
+  for (let z = 0; z < grid[2]; z += 1) {
+    for (let y = 0; y < grid[1]; y += 1) {
+      for (let x = 0; x < grid[0]; x += 1) {
+        const centeredX = (x - (grid[0] - 1) / 2) / ((grid[0] - 1) / 2);
+        const centeredY = (y - (grid[1] - 1) / 2) / ((grid[1] - 1) / 2);
+        const twist = z === 0 ? -0.35 : 0.35;
+        const length = Math.hypot(centeredX, centeredY, twist) || 1;
+        values[offset++] = -centeredY / length;
+        values[offset++] = centeredX / length;
+        values[offset++] = twist / length;
+      }
+    }
+  }
+
+  return buffer;
 }
 
 function parsePng(buffer) {

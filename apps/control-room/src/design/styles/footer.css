@@ -100,12 +100,14 @@
 
 .fm-footer-log__row {
   display: grid;
-  grid-template-columns: 72px 66px 78px 92px 82px minmax(220px, 1fr);
-  min-width: 620px;
+  grid-template-columns:
+    92px minmax(280px, 1fr) 62px 78px 90px 84px
+    78px;
+  min-width: 860px;
   align-items: center;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
-  padding: 3px var(--fm-space-2);
+  padding: var(--fm-space-1) var(--fm-space-2);
   color: var(--fm-text-secondary);
   font-family: var(--fm-font-mono);
 }
@@ -120,7 +122,45 @@
   font-weight: 600;
 }
 
-.fm-footer-log__row > span {
+.fm-footer-log__row > span,
+.fm-footer-log__row > time {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-footer-log__message-cell {
+  display: flex;
+  align-items: center;
+}
+
+.fm-footer-log__message {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-primary);
+  cursor: pointer;
+  font: inherit;
+  padding: 2px var(--fm-space-1);
+  text-align: left;
+}
+
+.fm-footer-log__message:hover,
+.fm-footer-log__message:focus-visible {
+  border-color: var(--fm-border-default);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-accent);
+  outline: none;
+}
+
+.fm-footer-log__message > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -154,4 +194,23 @@
   align-items: center;
   justify-content: center;
   color: var(--fm-text-muted);
+}
+
+.fm-footer-log-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.fm-footer-log-dialog__raw {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.45;
+  padding: var(--fm-space-3);
+  white-space: pre-wrap;
 }
