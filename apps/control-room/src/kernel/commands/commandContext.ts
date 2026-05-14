@@ -9,6 +9,7 @@ export function createCommandContext(
 ): CommandContext {
   return {
     api: kernel.api,
+    input: patch.input,
     source,
     layout: kernel.layout,
     resourceData: patch.resourceData,

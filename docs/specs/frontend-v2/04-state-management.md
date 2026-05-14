@@ -17,7 +17,7 @@ This split prevents the legacy failure mode where context, stores, normalizers, 
 | Runtime invalidation pointer | kernel session store | revision map, connection status, command completion revision |
 | Layout state | kernel layout store | panel sizes, active slot modules, split ratio |
 | Selection state | kernel selection store | selected node, selected resource, selection source |
-| Module UI state | module-local Zustand store | expanded tree nodes, active inspector tab, camera preset, chart zoom |
+| Module UI state | module-local Zustand store | expanded tree nodes, active inspector tab, transient camera interaction state, chart zoom |
 | Imperative external resource | resource tracker / renderer class | WebGL buffers, textures, workers, observers |
 | Theme | CSS/token provider | dark/light/high-contrast variant |
 
@@ -51,7 +51,7 @@ Each module may define `store.ts` for local UI state. That file is private to th
 Allowed examples:
 
 - `explorer/store.ts`: expanded node ids, tree filter, active explorer tab;
-- `viewport-3d/store.ts`: camera state, active local layer panel, local dirty reason counters;
+- `viewport-3d/store.ts`: transient camera interaction fallback, active local layer panel, local dirty reason counters;
 - `inspector/store.ts`: open sections, draft edit session id, validation panel visibility;
 - `charts/store.ts`: visible series ids, brush range, display density.
 
@@ -106,7 +106,7 @@ Only user preferences and layout state persist locally:
 
 - panel visibility/sizes;
 - active module per slot;
-- camera presets;
+- local viewport presets that are not canonical session state;
 - chart display preferences;
 - theme;
 - debug overlay preferences.

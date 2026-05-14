@@ -2,11 +2,11 @@
 
 **Status:** Proposed architecture
 **Date:** 2026-05-11
-**Scope:** New modular browser control room for Fullmag, replacing `apps/web` as the active frontend after validation.
+**Scope:** New modular browser control room for Fullmag, replacing `apps/legacy_web` as the active frontend after validation.
 
 ## 1. Decision
 
-Build frontend v2 as a clean app root at `apps/control-room`. Keep `apps/web` as a legacy reference until cutover, then remove it from active development and deployment.
+Build frontend v2 as a clean app root at `apps/control-room`. Keep `apps/legacy_web` as a legacy reference until cutover, then remove it from active development and deployment.
 
 The new frontend uses a module-kernel architecture:
 
@@ -51,15 +51,15 @@ Electron is an acceptable fallback if Tauri proves impractical, but Tauri is pre
 
 ## 2. Current Frontend Diagnosis
 
-Measured locally on 2026-05-11, excluding `.next`, `node_modules`, `dist`, and `coverage`, `apps/web` contains 992 files and about 212,214 lines.
+Measured locally on 2026-05-11, excluding `.next`, `node_modules`, `dist`, and `coverage`, `apps/legacy_web` contains 992 files and about 212,214 lines.
 
 | Problem | Local evidence |
 |---|---|
-| God context | `apps/web/components/runs/control-room/ControlRoomContext.tsx` is 1,930 lines and still coordinates transport, model, viewport, commands, and derived state. |
-| Monolithic shell | `apps/web/components/runs/RunControlRoom.tsx` is 912 lines. |
-| Bootstrap-era normalization | `apps/web/lib/session/normalize.ts` is 2,350 lines and `apps/web/lib/session/merge.ts` is 557 lines. |
-| Legacy wire type gravity | `apps/web/lib/session/types.ts` is 1,472 lines and still carries preview/bootstrap vocabulary. |
-| Viewport risk concentration | `apps/web/components/preview/FemMeshView3D.tsx` is 1,397 lines, `useViewportDataBridge.ts` is 2,034 lines, and `UnifiedVectorFieldRenderer.tsx` is 2,302 lines. |
+| God context | `apps/legacy_web/components/runs/control-room/ControlRoomContext.tsx` is 1,930 lines and still coordinates transport, model, viewport, commands, and derived state. |
+| Monolithic shell | `apps/legacy_web/components/runs/RunControlRoom.tsx` is 912 lines. |
+| Bootstrap-era normalization | `apps/legacy_web/lib/session/normalize.ts` is 2,350 lines and `apps/legacy_web/lib/session/merge.ts` is 557 lines. |
+| Legacy wire type gravity | `apps/legacy_web/lib/session/types.ts` is 1,472 lines and still carries preview/bootstrap vocabulary. |
+| Viewport risk concentration | `apps/legacy_web/components/preview/FemMeshView3D.tsx` is 1,397 lines, `useViewportDataBridge.ts` is 2,034 lines, and `UnifiedVectorFieldRenderer.tsx` is 2,302 lines. |
 | Mixed architecture | Both `components/`, `features/`, `src/features/`, `src/hooks/`, and `lib/` contain overlapping frontend ownership. |
 | Transitional semantics leak | `preview`, `bootstrap`, `poll`, and legacy mode names remain visible in runtime/UI code. |
 
@@ -92,7 +92,7 @@ Frontend v2 may port code only when the port has a named owner, a test target, a
 - Always-on WebGL render loops.
 - Mutable singleton diagnostics and feature flags.
 - Legacy `Build` / `Study` / `Analyze` shell switching as product architecture.
-- Code copied from `apps/web` without an explicit acceptance reason.
+- Code copied from `apps/legacy_web` without an explicit acceptance reason.
 
 ## 5. Target Product Shape
 
@@ -125,7 +125,7 @@ Frontend v2 is allowed to replace legacy only when:
 - idle workspace CPU/GPU use is bounded and verified;
 - WebGL resources are counted and released across mode switches;
 - all modules can be disabled by manifest registration without breaking the shell;
-- `apps/web` has no active import path into `apps/control-room`;
+- `apps/legacy_web` has no active import path into `apps/control-room`;
 - legacy remains only as a documented reference until removal;
 - the interface looks and feels premium — Catppuccin Mocha/Latte themes work, transitions are smooth, typography is polished, shadcn/ui-style components are consistent;
 - the app runs in both browser and Tauri desktop modes without code forks.

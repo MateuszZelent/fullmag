@@ -64,7 +64,7 @@ export function resolveRibbonIconColor(iconColor?: string): string | undefined {
 
 interface RibbonGroupsRowProps {
   groups: RibbonGroupData[];
-  onAction?: (actionId: string) => void;
+  onAction?: (actionId: string, input?: unknown) => void;
 }
 
 function RibbonActionButton({
@@ -90,7 +90,7 @@ function RibbonActionButton({
   tooltip?: string;
   iconColor?: string;
   splitButton?: boolean;
-  onAction?: (actionId: string) => void;
+  onAction?: (actionId: string, input?: unknown) => void;
 }) {
   const hasMenu = Boolean(actionMenu?.length);
   const isTriggerDisabled = Boolean(disabled && !hasMenu);
@@ -174,7 +174,7 @@ function RibbonGroup({
   onAction,
 }: {
   group: RibbonGroupData;
-  onAction?: (actionId: string) => void;
+  onAction?: (actionId: string, input?: unknown) => void;
 }) {
   return (
     <div

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_OBJECT_VISUALIZATION,
+  ObjectVisualizationController,
   resolveEffectiveVisualizationSettings,
+  resolveTargetVisualization,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
@@ -77,6 +79,38 @@ describe("ObjectVisualizationPanelModel", () => {
       .toMatchObject({ disabled: true });
     expect(sections.find((section) => section.id === "vectors"))
       .toMatchObject({ disabled: true });
+  });
+
+  it("keeps object vector controls active when the target inherits global vector visibility", () => {
+    const visualization = new ObjectVisualizationController();
+    const resolved = resolveTargetVisualization({
+      snapshot: visualization.getSnapshot(),
+      target: {
+        id: "free-layer",
+        kind: "object",
+        label: "Free layer",
+      },
+      visualizationState: {
+        layers: {
+          vectors: {
+            density: 512,
+            domain: "full_domain",
+            visible: true,
+          },
+        },
+        revision: 11,
+        vector_glyphs: true,
+      } as never,
+    });
+    const sections = buildVisualizationPanelSections({
+      effectiveSettings: resolved.effectiveSettings,
+      settings: resolved.settings,
+    });
+
+    expect(resolved.settings.vectorsVisible).toBe(true);
+    expect(sections.find((section) => section.id === "vectors")).toMatchObject({
+      disabled: false,
+    });
   });
 
   it("keeps surface vector and wireframe fields addressable by target setting keys", () => {

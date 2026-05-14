@@ -31,7 +31,7 @@ apps/control-room/
   next.config.mjs
 ```
 
-`apps/control-room` is the active v2 app. `apps/web` remains legacy reference during migration and must not be imported by v2 code.
+`apps/control-room` is the active v2 app. `apps/legacy_web` remains legacy reference during migration and must not be imported by v2 code.
 
 `app/globals.css` is an import-only stylesheet entrypoint. Token definitions, themes, base rules, layout classes, and component contracts live under `src/design/styles/*`.
 

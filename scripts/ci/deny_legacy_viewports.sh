@@ -25,7 +25,7 @@ unexpected="$tmp_dir/unexpected"
 stale="$tmp_dir/stale"
 raw="$tmp_dir/raw"
 
-if rg -n --no-heading -o 'VectorFieldView3D|FdmViewportHost|FallbackBoundsPreview' apps/web \
+if rg -n --no-heading -o 'VectorFieldView3D|FdmViewportHost|FallbackBoundsPreview' apps/control-room \
   --glob '!**/*.test.*' \
   --glob '!**/*.spec.*' \
   --glob '!**/*.stories.*' \

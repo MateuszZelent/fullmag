@@ -274,7 +274,7 @@ export function Viewport3DScene({
         />
         <axesHelper args={[gridSpec.axesLength]} />
       </group>
-      <OrbitCameraControls tracker={tracker} />
+      <OrbitCameraControls cameraState={cameraState} tracker={tracker} />
       <OrientationHudLayer
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}

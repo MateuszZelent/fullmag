@@ -25,12 +25,32 @@ export function readViewport3DColorsFromStyles(
 ): Viewport3DColors | null {
   const read = (name: string) => styles.getPropertyValue(name).trim();
   const accent = read("--fm-accent");
+  const accentStrong = read("--fm-accent-strong");
   const background = read("--fm-bg-viewport");
+  const danger = read("--fm-danger");
   const field = read("--fm-syntax-string") || read("--fm-accent");
   const mesh = read("--fm-surface-3") || read("--fm-bg-panel");
+  const panel = read("--fm-bg-panel");
+  const panelRaised = read("--fm-bg-panel-raised");
+  const success = read("--fm-success");
+  const textPrimary = read("--fm-text-primary");
+  const textSecondary = read("--fm-text-secondary");
   const wire = read("--fm-text-muted") || read("--fm-text-secondary");
   if (accent && background && field && mesh && wire) {
-    return { accent, background, field, mesh, wire };
+    return {
+      accent,
+      accentStrong,
+      background,
+      danger,
+      field,
+      mesh,
+      panel,
+      panelRaised,
+      success,
+      textPrimary,
+      textSecondary,
+      wire,
+    };
   }
   return null;
 }
@@ -113,9 +133,16 @@ function sameViewport3DColors(
 ): boolean {
   return (
     left?.accent === right.accent &&
+    left.accentStrong === right.accentStrong &&
     left.background === right.background &&
+    left.danger === right.danger &&
     left.field === right.field &&
     left.mesh === right.mesh &&
+    left.panel === right.panel &&
+    left.panelRaised === right.panelRaised &&
+    left.success === right.success &&
+    left.textPrimary === right.textPrimary &&
+    left.textSecondary === right.textSecondary &&
     left.wire === right.wire
   );
 }

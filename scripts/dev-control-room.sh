@@ -161,7 +161,7 @@ TARGET_URL="${WEB_URL_BASE}/"
 if ! web_url_is_healthy "${WEB_URL_BASE}" && ! port_is_bindable "${WEB_PORT}"; then
   echo "Restarting unhealthy Next.js control room on ${WEB_URL_BASE} ..."
   stop_next_on_port "${WEB_PORT}"
-  rm -rf "${REPO_ROOT}/apps/web/.next"
+  rm -rf "${REPO_ROOT}/apps/control-room/.next"
 fi
 
 if web_url_is_healthy "${WEB_URL_BASE}"; then
@@ -196,12 +196,12 @@ echo "Starting Next.js control room on ${WEB_URL_BASE} ..."
 echo "Workspace route: ${TARGET_URL}"
 echo "API log: ${REPO_ROOT}/.fullmag/logs/fullmag-api.log"
 
-if [[ ! -d "$REPO_ROOT/apps/web/node_modules" && ! -d "$REPO_ROOT/node_modules" ]]; then
+if [[ ! -d "$REPO_ROOT/apps/control-room/node_modules" && ! -d "$REPO_ROOT/node_modules" ]]; then
   echo "Installing web dependencies ..."
-  "${PNPM_CMD[@]}" install --dir apps/web
+  "${PNPM_CMD[@]}" install --dir apps/control-room
 fi
 
 printf '%s\n' "${WEB_URL_BASE}" > "${CONTROL_ROOM_URL_FILE}"
 
 FULLMAG_API_PROXY_TARGET="${API_URL}" \
-  "${PNPM_CMD[@]}" --dir apps/web exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "${API_URL}"
+  "${PNPM_CMD[@]}" --dir apps/control-room exec node dev-server.mjs --hostname "${WEB_BIND_HOST}" --port "${WEB_PORT}" --api-target "${API_URL}"

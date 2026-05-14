@@ -1,95 +1,125 @@
 import { describe, expect, it } from "vitest";
 
+import type { SceneResource } from "@/kernel/api/apiTypes";
+
 import {
-  buildInteractionPatch,
+  buildInteractionApplyPatch,
   defaultObjectInteractionResource,
   draftFromInteractionResource,
-  formatInteractionParams,
+  draftFromStudyScene,
+  draftKeyForInteraction,
   interactionLabel,
-  isOptionalInteraction,
+  interactionSelectOptions,
+  isWritableObjectInteraction,
+  isWritableStudyInteraction,
 } from "./PhysicsInteractionPanelModel";
 
 describe("PhysicsInteractionPanelModel", () => {
-  it("labels canonical object interaction kinds without frontend-only aliases", () => {
-    expect(interactionLabel("exchange")).toBe("Exchange");
-    expect(interactionLabel("demag")).toBe("Demagnetization");
-    expect(interactionLabel("interfacial_dmi")).toBe("Interfacial DMI");
-    expect(interactionLabel("uniaxial_anisotropy")).toBe("Uniaxial anisotropy");
+  it("lists backend interaction choices from the shared physics catalog", () => {
+    expect(interactionSelectOptions().map((option) => option.id)).toEqual([
+      "exchange",
+      "demag",
+      "zeeman",
+      "current_transport",
+      "spin_torque",
+      "interfacial_dmi",
+      "bulk_dmi",
+      "uniaxial_anisotropy",
+      "cubic_anisotropy",
+      "oersted_field",
+      "magnetoelastic",
+    ]);
+    expect(interactionLabel("oersted_field")).toBe("Regional field source");
   });
 
-  it("treats exchange and demag as required interactions", () => {
-    expect(isOptionalInteraction("exchange")).toBe(false);
-    expect(isOptionalInteraction("demag")).toBe(false);
-    expect(isOptionalInteraction("interfacial_dmi")).toBe(true);
-    expect(isOptionalInteraction("uniaxial_anisotropy")).toBe(true);
+  it("classifies writable paths without treating demag as object-local", () => {
+    expect(isWritableObjectInteraction("exchange")).toBe(true);
+    expect(isWritableObjectInteraction("demag")).toBe(false);
+    expect(isWritableObjectInteraction("zeeman")).toBe(false);
+    expect(isWritableStudyInteraction("demag")).toBe(true);
+    expect(isWritableStudyInteraction("zeeman")).toBe(true);
   });
 
-  it("builds typed patch payloads from JSON parameter drafts", () => {
-    expect(
-      buildInteractionPatch({
-        enabled: true,
-        interactionKind: "uniaxial_anisotropy",
-        paramsText: '{"ku1":1200,"axis":[0,0,1]}',
-        present: true,
-      }),
-    ).toEqual({
+  it("creates typed object drafts and patches without JSON parameter text", () => {
+    const resource = {
+      ...defaultObjectInteractionResource("free-layer", "uniaxial_anisotropy"),
+      enabled: true,
+      params: { axis: [1, 0, 0], ku1: 1200 },
+      present: true,
+    };
+    const draft = draftFromInteractionResource("uniaxial_anisotropy", resource);
+
+    expect(draft).toMatchObject({
+      enabled: true,
+      id: "uniaxial_anisotropy",
+      present: true,
+      values: { axis: ["1", "0", "0"], ku1: "1200" },
+    });
+    expect(buildInteractionApplyPatch(draft)).toEqual({
       patch: {
         enabled: true,
-        params: { axis: [0, 0, 1], ku1: 1200 },
+        params: { axis: [1, 0, 0], ku1: 1200, ku2: 0 },
         present: true,
       },
+      storage: "object_interaction",
     });
   });
 
-  it("rejects removing required interactions before hitting the backend", () => {
-    expect(
-      buildInteractionPatch({
-        enabled: false,
-        interactionKind: "exchange",
-        paramsText: "{}",
-        present: false,
-      }),
-    ).toEqual({
-      error: "Exchange is required and cannot be removed.",
+  it("creates global study drafts for demag and uniform Zeeman", () => {
+    const scene = {
+      revision: 4,
+      study: {
+        demag_realization: "poisson_robin",
+        external_field: [0.01, 0, -0.002],
+      },
+    } as unknown as SceneResource;
+
+    expect(draftFromStudyScene("demag", scene)).toMatchObject({
+      id: "demag",
+      values: { method: "poisson_robin" },
     });
-  });
+    const zeeman = draftFromStudyScene("zeeman", scene);
 
-  it("reports malformed JSON parameter drafts", () => {
-    expect(
-      buildInteractionPatch({
-        enabled: true,
-        interactionKind: "interfacial_dmi",
-        paramsText: "{",
-        present: true,
-      }),
-    ).toEqual({
-      error: "Interaction parameters must be a JSON object.",
-    });
-  });
-
-  it("formats default absent optional resources for a selected object", () => {
-    const resource = defaultObjectInteractionResource("free-layer", "interfacial_dmi");
-
-    expect(resource).toEqual({
-      enabled: false,
-      interaction_kind: "interfacial_dmi",
-      object_id: "free-layer",
-      params: {},
-      present: false,
-    });
-    expect(formatInteractionParams(resource.params)).toBe("{}");
-  });
-
-  it("starts absent required interactions as present and enabled drafts", () => {
-    expect(
-      draftFromInteractionResource(
-        "exchange",
-        defaultObjectInteractionResource("free-layer", "exchange"),
-      ),
-    ).toMatchObject({
+    expect(zeeman).toMatchObject({
       enabled: true,
-      interactionKind: "exchange",
+      id: "zeeman",
       present: true,
+      values: { field: ["0.01", "0", "-0.002"] },
     });
+    expect(buildInteractionApplyPatch(zeeman)).toEqual({
+      patch: { study: { external_field: [0.01, 0, -0.002] } },
+      storage: "study",
+    });
+  });
+
+  it("rejects deferred backend terms before hitting the API", () => {
+    expect(
+      buildInteractionApplyPatch({
+        enabled: true,
+        id: "oersted_field",
+        present: true,
+        values: {
+          axis: ["0", "0", "1"],
+          current: "0",
+          current_density: ["0", "0", "0"],
+          radius: "0",
+          region_id: "region:free-layer",
+          source_mode: "antenna_field_source",
+          source_name: "drive",
+        },
+      }),
+    ).toEqual({
+      error:
+        "Regional field sources need a dedicated source/current-module authoring resource before control-room edits are safe.",
+    });
+  });
+
+  it("uses stable draft keys for scene-backed global settings", () => {
+    const draft = draftFromStudyScene("demag", {
+      study: { demag_realization: "poisson_dirichlet" },
+    } as unknown as SceneResource);
+
+    expect(draftKeyForInteraction("body", draft)).toContain("demag");
+    expect(draftKeyForInteraction("body", draft)).toContain("poisson_dirichlet");
   });
 });

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::State;
+use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;
@@ -15,7 +15,8 @@ use crate::schemas::visualization_state::{
     SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
     TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
     TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
-    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationDiagnostics,
+    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationCameraPatch,
+    VisualizationCameraProjection, VisualizationCameraState, VisualizationDiagnostics,
     VisualizationLayerPatch, VisualizationLayerState, VisualizationScopeKind,
     VisualizationStatePatch, VisualizationStateResource,
 };
@@ -99,6 +100,7 @@ pub async fn replace_visualization_state(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<VisualizationStateResource>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
+    validate_camera_state(&replacement.camera)?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(state.clone(), display_replacement).await?;
     {
@@ -109,6 +111,7 @@ pub async fn replace_visualization_state(
         presentation.visualization_fem = Some(replacement.fem);
         presentation.visualization_slice = Some(replacement.slice);
         presentation.visualization_trim = Some(replacement.trim.clone());
+        presentation.visualization_camera = Some(replacement.camera);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
         presentation.visualization_overrides = Some(replacement.overrides);
@@ -158,7 +161,7 @@ pub async fn patch_visualization_state(
     apply_display_patch(state.clone(), display_patch).await?;
     {
         let mut presentation = state.current_display_presentation.write().await;
-        apply_visualization_presentation_patch(&mut presentation, &update);
+        apply_visualization_presentation_patch(&mut presentation, &update)?;
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
@@ -318,6 +321,9 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             ));
         }
     }
+    if let Some(camera) = &update.camera {
+        validate_camera_patch(camera)?;
+    }
     if let Some(layers) = &update.layers {
         if matches!(
             layers.vectors.as_ref().and_then(|vectors| vectors.density),
@@ -346,7 +352,127 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             }
         }
     }
+    if let Some(overrides) = &update.overrides {
+        for (index, target_override) in overrides.iter().enumerate() {
+            if target_override.scope_id.trim().is_empty() {
+                return Err(ApiError::bad_request(format!(
+                    "overrides[{index}].scope_id must not be empty"
+                )));
+            }
+            if let Some(display) = &target_override.display {
+                if matches!(display.opacity, Some(value) if !(0.0..=1.0).contains(&value)) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].display.opacity must be between 0 and 1"
+                    )));
+                }
+                for (label, layer) in [
+                    ("surface", display.surface.as_ref()),
+                    ("wireframe", display.wireframe.as_ref()),
+                    ("points", display.points.as_ref()),
+                ] {
+                    if matches!(
+                        layer.and_then(|layer| layer.opacity),
+                        Some(value) if !(0.0..=1.0).contains(&value)
+                    ) {
+                        return Err(ApiError::bad_request(format!(
+                            "overrides[{index}].display.{label}.opacity must be between 0 and 1"
+                        )));
+                    }
+                }
+                if matches!(
+                    display.vectors.as_ref().and_then(|vectors| vectors.density),
+                    Some(0)
+                ) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].display.vectors.density must be greater than zero"
+                    )));
+                }
+            }
+            if let Some(style) = &target_override.style {
+                if matches!(style.vector_alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_alpha must be between 0 and 1"
+                    )));
+                }
+                if matches!(style.vector_thickness, Some(value) if value <= 0.0) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_thickness must be greater than zero"
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+fn validate_camera_patch(camera: &VisualizationCameraPatch) -> Result<(), ApiError> {
+    if let Some(position) = camera.position {
+        validate_camera_vector("camera.position", position)?;
+        if matches!(camera.target, Some(target) if position == target) {
+            return Err(ApiError::bad_request(
+                "camera.position must not equal camera.target",
+            ));
+        }
+    }
+    if let Some(target) = camera.target {
+        validate_camera_vector("camera.target", target)?;
+    }
+    if let Some(up) = camera.up {
+        validate_camera_vector("camera.up", up)?;
+        if vector_length_squared(up) <= f64::EPSILON {
+            return Err(ApiError::bad_request("camera.up must not be zero"));
+        }
+    }
+    if matches!(camera.fov_degrees, Some(value) if !value.is_finite() || !(1.0..=179.0).contains(&value))
+    {
+        return Err(ApiError::bad_request(
+            "camera.fov_degrees must be between 1 and 179",
+        ));
+    }
+    if matches!(camera.orthographic_scale, Some(value) if !value.is_finite() || value <= 0.0) {
+        return Err(ApiError::bad_request(
+            "camera.orthographic_scale must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_camera_state(camera: &VisualizationCameraState) -> Result<(), ApiError> {
+    validate_camera_vector("camera.position", camera.position)?;
+    validate_camera_vector("camera.target", camera.target)?;
+    validate_camera_vector("camera.up", camera.up)?;
+    if camera.position == camera.target {
+        return Err(ApiError::bad_request(
+            "camera.position must not equal camera.target",
+        ));
+    }
+    if vector_length_squared(camera.up) <= f64::EPSILON {
+        return Err(ApiError::bad_request("camera.up must not be zero"));
+    }
+    if !camera.fov_degrees.is_finite() || !(1.0..=179.0).contains(&camera.fov_degrees) {
+        return Err(ApiError::bad_request(
+            "camera.fov_degrees must be between 1 and 179",
+        ));
+    }
+    if matches!(camera.orthographic_scale, Some(value) if !value.is_finite() || value <= 0.0) {
+        return Err(ApiError::bad_request(
+            "camera.orthographic_scale must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_camera_vector(label: &str, vector: [f64; 3]) -> Result<(), ApiError> {
+    if vector.iter().all(|value| value.is_finite()) {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "{label} must contain finite values"
+    )))
+}
+
+fn vector_length_squared(vector: [f64; 3]) -> f64 {
+    vector.iter().map(|component| component * component).sum()
 }
 
 fn default_visualization_layers(
@@ -468,6 +594,17 @@ fn default_clip_visualization() -> ClipVisualizationState {
         axis: ClipAxis::X,
         position_percent: 50.0,
         flipped: false,
+    }
+}
+
+fn default_camera_visualization() -> VisualizationCameraState {
+    VisualizationCameraState {
+        projection: VisualizationCameraProjection::Perspective,
+        position: [2e-6, 1.4e-6, 2e-6],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 0.0, 1.0],
+        fov_degrees: 45.0,
+        orthographic_scale: None,
     }
 }
 
@@ -683,7 +820,7 @@ fn apply_visualization_layer_patch(
 fn apply_visualization_presentation_patch(
     presentation: &mut DisplayPresentationState,
     update: &VisualizationStatePatch,
-) {
+) -> Result<(), ApiError> {
     if let Some(layers_patch) = &update.layers {
         let mut layers = presentation
             .visualization_layers
@@ -835,6 +972,15 @@ fn apply_visualization_presentation_patch(
         presentation.visualization_trim = Some(trim);
         presentation.visualization_clip = Some(clip);
     }
+    if let Some(camera_patch) = &update.camera {
+        let mut camera = presentation
+            .visualization_camera
+            .take()
+            .unwrap_or_else(default_camera_visualization);
+        apply_camera_patch(&mut camera, camera_patch);
+        validate_camera_state(&camera)?;
+        presentation.visualization_camera = Some(camera);
+    }
     if let Some(clip_patch) = &update.clip {
         let trim_updated_directly = update.trim.is_some();
         let mut clip = presentation.visualization_clip.take().unwrap_or_else(|| {
@@ -891,6 +1037,31 @@ fn apply_visualization_presentation_patch(
             style.ferromagnet_visibility = ferromagnet_visibility;
         }
         presentation.visualization_vector_style = Some(style);
+    }
+    if let Some(overrides) = &update.overrides {
+        presentation.visualization_overrides = Some(overrides.clone());
+    }
+    Ok(())
+}
+
+fn apply_camera_patch(camera: &mut VisualizationCameraState, patch: &VisualizationCameraPatch) {
+    if let Some(projection) = patch.projection {
+        camera.projection = projection;
+    }
+    if let Some(position) = patch.position {
+        camera.position = position;
+    }
+    if let Some(target) = patch.target {
+        camera.target = target;
+    }
+    if let Some(up) = patch.up {
+        camera.up = up;
+    }
+    if let Some(fov_degrees) = patch.fov_degrees {
+        camera.fov_degrees = fov_degrees;
+    }
+    if let Some(orthographic_scale) = patch.orthographic_scale {
+        camera.orthographic_scale = Some(orthographic_scale);
     }
 }
 
@@ -1085,6 +1256,10 @@ pub(crate) fn build_visualization_state_response(
         .visualization_trim
         .clone()
         .unwrap_or_else(default_trim_visualization);
+    let camera = presentation
+        .visualization_camera
+        .clone()
+        .unwrap_or_else(default_camera_visualization);
     let clip = presentation
         .visualization_clip
         .clone()
@@ -1100,7 +1275,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 3,
+        schema_version: 4,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1119,6 +1294,7 @@ pub(crate) fn build_visualization_state_response(
         fem,
         slice,
         trim,
+        camera,
         clip,
         vector_style,
         overrides,

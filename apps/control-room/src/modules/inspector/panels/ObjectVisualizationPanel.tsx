@@ -1,7 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
@@ -12,14 +12,13 @@ import {
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   renderModePatch,
-  resolveAirboxVisualizationSettingsFromState,
-  resolveEffectiveVisualizationSettings,
-  resolveVisualizationSettings,
+  resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type SurfaceColorSource,
   type VisualizationTargetPatch,
+  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
@@ -78,6 +77,262 @@ function surfaceFieldStatus(
   return fetchStatus === "ready" ? "none" : fetchStatus;
 }
 
+type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promise<void>;
+type SectionDisabled = (
+  id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
+) => boolean;
+
+function VisualizationDisplayPassesSection({
+  effectiveSettings,
+  passControlsDisabled,
+  patch,
+  pending,
+  settings,
+}: {
+  effectiveSettings: VisualizationTargetSettings | null;
+  passControlsDisabled: boolean;
+  patch: PatchVisualizationTarget;
+  pending: boolean;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Display Passes">
+      <div className="fm-visualization-toggle-grid">
+        <ToggleButton active={settings.visible} disabled={pending} label="Visible" onClick={() => void patch({ visible: !settings.visible })} />
+        <ToggleButton active={effectiveSettings?.shaderVisible ?? false} disabled={passControlsDisabled} label="Surface" onClick={() => void patch({ shaderVisible: !settings.shaderVisible })} />
+        <ToggleButton active={effectiveSettings?.wireframeVisible ?? false} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch({ wireframeVisible: !settings.wireframeVisible })} />
+        <ToggleButton active={effectiveSettings?.boundsVisible ?? false} disabled={passControlsDisabled} label="Frame" onClick={() => void patch({ boundsVisible: !settings.boundsVisible })} />
+        <ToggleButton active={effectiveSettings?.pointsVisible ?? false} disabled={passControlsDisabled} label="Points" onClick={() => void patch({ pointsVisible: !settings.pointsVisible })} />
+        <ToggleButton active={effectiveSettings?.vectorsVisible ?? false} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })} />
+      </div>
+    </InspectorSection>
+  );
+}
+
+function VisualizationRenderModeSection({
+  passControlsDisabled,
+  patch,
+  settings,
+}: {
+  passControlsDisabled: boolean;
+  patch: PatchVisualizationTarget;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Render Mode">
+      <div className="fm-visualization-segments" role="group" aria-label="Render mode">
+        {RENDER_MODES.map((mode) => (
+          <Button
+            key={mode.value}
+            size="sm"
+            type="button"
+            disabled={passControlsDisabled}
+            variant={settings.visible && settings.renderMode === mode.value ? "primary" : "secondary"}
+            onClick={() => void patch(renderModePatch(mode.value))}
+          >
+            {mode.label}
+          </Button>
+        ))}
+      </div>
+    </InspectorSection>
+  );
+}
+
+function VisualizationSurfaceColoringSection({
+  patch,
+  patchColor,
+  pending,
+  sectionDisabled,
+  sessionStatus,
+  settings,
+}: {
+  patch: PatchVisualizationTarget;
+  patchColor: (
+    field: "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
+    value: string,
+  ) => void;
+  pending: boolean;
+  sectionDisabled: SectionDisabled;
+  sessionStatus: ReturnType<typeof useSessionStatus>;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Surface Coloring" collapsible>
+      <FormField
+        disabled={pending || sectionDisabled("surface-coloring")}
+        label="Color source"
+        type="select"
+        value={settings.surfaceColorSource}
+        onChange={(event) =>
+          void patch({ surfaceColorSource: event.target.value as SurfaceColorSource })
+        }
+      >
+        {SURFACE_COLOR_SOURCE_ITEMS.map((source) => (
+          <option key={source.value} value={source.value}>
+            {source.label}
+          </option>
+        ))}
+      </FormField>
+      <ColorField
+        disabled={pending || sectionDisabled("surface-coloring")}
+        label="Solid color"
+        value={settings.shaderMonoColor}
+        onChange={(value) => patchColor("shaderMonoColor", value)}
+      />
+      <FieldRow
+        label="Field status"
+        value={surfaceFieldStatus(
+          settings.surfaceColorSource,
+          sessionStatus.data,
+          sessionStatus.status,
+        )}
+      />
+    </InspectorSection>
+  );
+}
+
+function VisualizationWireframeSection({
+  patchColor,
+  patchNumber,
+  pending,
+  sectionDisabled,
+  settings,
+}: {
+  patchColor: (field: "wireframeColor", value: string) => void;
+  patchNumber: (field: "wireframeOpacityPercent", value: number) => void;
+  pending: boolean;
+  sectionDisabled: SectionDisabled;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Wireframe">
+      <ColorField disabled={pending || sectionDisabled("wireframe")} label="Wireframe color" value={settings.wireframeColor} onChange={(value) => patchColor("wireframeColor", value)} />
+      <NumberField disabled={pending || sectionDisabled("wireframe")} label="Wireframe opacity" max={100} min={0} step={1} unit="%" value={settings.wireframeOpacityPercent} onChange={(value) => patchNumber("wireframeOpacityPercent", value)} />
+    </InspectorSection>
+  );
+}
+
+function VisualizationVectorsSection({
+  patch,
+  patchColor,
+  patchNumber,
+  pending,
+  sectionDisabled,
+  settings,
+}: {
+  patch: PatchVisualizationTarget;
+  patchColor: (field: "vectorMonoColor", value: string) => void;
+  patchNumber: (
+    field: "vectorAlphaPercent" | "vectorThickness",
+    value: number,
+  ) => void;
+  pending: boolean;
+  sectionDisabled: SectionDisabled;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Vectors">
+      <div className="fm-visualization-segments" role="group" aria-label="Vector coloring">
+        {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
+          <Button
+            key={mode.value}
+            size="sm"
+            type="button"
+            disabled={pending || sectionDisabled("vectors")}
+            variant={settings.vectorColorMode === mode.value ? "primary" : "secondary"}
+            onClick={() => void patch({ vectorColorMode: mode.value })}
+          >
+            {mode.label}
+          </Button>
+        ))}
+      </div>
+      <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
+      <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
+      <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
+    </InspectorSection>
+  );
+}
+
+function VisualizationGeometryScopeSection({
+  passControlsDisabled,
+  patch,
+  settings,
+}: {
+  passControlsDisabled: boolean;
+  patch: PatchVisualizationTarget;
+  settings: VisualizationTargetSettings;
+}) {
+  return (
+    <InspectorSection title="Geometry Scope">
+      <div className="fm-visualization-segments" role="group" aria-label="Geometry scope">
+        {GEOMETRY_SCOPES.map((scope) => (
+          <Button
+            key={scope.value}
+            size="sm"
+            type="button"
+            disabled={passControlsDisabled}
+            variant={settings.visible && settings.geometryScope === scope.value ? "primary" : "secondary"}
+            onClick={() => void patch({ geometryScope: scope.value })}
+          >
+            {scope.label}
+          </Button>
+        ))}
+      </div>
+    </InspectorSection>
+  );
+}
+
+function VisualizationOpacitySection({
+  patch,
+  settings,
+}: {
+  patch: PatchVisualizationTarget;
+  settings: VisualizationTargetSettings;
+}) {
+  const opacityPercent = settings.opacityPercent;
+  return (
+    <InspectorSection title="Opacity">
+      <label className="fm-visualization-range">
+        <span>{opacityPercent}%</span>
+        <input
+          aria-label="Opacity"
+          max={100}
+          min={0}
+          step={1}
+          style={{ "--pct": `${opacityPercent}%` } as React.CSSProperties}
+          type="range"
+          value={opacityPercent}
+          onChange={(event) =>
+            void patch({ opacityPercent: Number(event.target.value) })
+          }
+        />
+      </label>
+    </InspectorSection>
+  );
+}
+
+function VisualizationOverridesSection({
+  feedback,
+  onReset,
+  pending,
+}: {
+  feedback: string | null;
+  onReset: () => void;
+  pending: boolean;
+}) {
+  return (
+    <InspectorSection title="Overrides">
+      <div className="fm-inspector-toolbar">
+        <Button size="sm" type="button" disabled={pending} variant="ghost" onClick={onReset}>
+          <RotateCcw size={12} aria-hidden="true" />
+          Reset display
+        </Button>
+      </div>
+      {feedback && <FeedbackBanner kind="error" message={feedback} />}
+    </InspectorSection>
+  );
+}
+
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const target = resolveVisualizationTargetFromSelection(selection);
   const { api, resources } = useKernel();
@@ -86,26 +341,20 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const sessionStatus = useSessionStatus();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const airboxBaseSettings = useMemo(
-    () => resolveAirboxVisualizationSettingsFromState(visualizationState.data),
-    [visualizationState.data],
-  );
-  const settings = target
-    ? target.kind === "airbox"
-      ? resolveVisualizationSettings(snapshot, target, airboxBaseSettings)
-      : visualization.getSettings(target)
+  const targetVisualization = target
+    ? resolveTargetVisualization({
+        snapshot,
+        target,
+        visualizationState: visualizationState.data,
+      })
     : null;
-  const effectiveSettings = settings
-    ? resolveEffectiveVisualizationSettings(settings)
-    : null;
+  const settings = targetVisualization?.settings ?? null;
+  const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
   const sections = settings && effectiveSettings
     ? buildVisualizationPanelSections({ effectiveSettings, settings })
     : [];
   const passControlsDisabled = pending || !settings?.visible;
-  const revision =
-    target?.kind === "airbox"
-      ? visualizationState.revision ?? visualizationState.status
-      : snapshot.version;
+  const revision = targetVisualization?.revision ?? snapshot.version;
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!target) return;
@@ -210,8 +459,6 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     );
   }
 
-  const opacityPercent = settings.opacityPercent;
-
   return (
     <div className="fm-inspector-panel" data-visualization-revision={revision}>
       <InspectorSection title="Visualization Target">
@@ -219,226 +466,52 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
         <FieldRow label="Kind" value={target.kind} />
       </InspectorSection>
-
-      <InspectorSection title="Display Passes">
-        <div className="fm-visualization-toggle-grid">
-          <ToggleButton
-            active={settings.visible}
-            disabled={pending}
-            label="Visible"
-            onClick={() => void patch({ visible: !settings.visible })}
-          />
-          <ToggleButton
-            active={effectiveSettings?.shaderVisible ?? false}
-            disabled={passControlsDisabled}
-            label="Surface"
-            onClick={() => void patch({ shaderVisible: !settings.shaderVisible })}
-          />
-          <ToggleButton
-            active={effectiveSettings?.wireframeVisible ?? false}
-            disabled={passControlsDisabled}
-            label="Wireframe"
-            onClick={() =>
-              void patch({ wireframeVisible: !settings.wireframeVisible })
-            }
-          />
-          <ToggleButton
-            active={effectiveSettings?.boundsVisible ?? false}
-            disabled={passControlsDisabled}
-            label="Frame"
-            onClick={() =>
-              void patch({ boundsVisible: !settings.boundsVisible })
-            }
-          />
-          <ToggleButton
-            active={effectiveSettings?.pointsVisible ?? false}
-            disabled={passControlsDisabled}
-            label="Points"
-            onClick={() => void patch({ pointsVisible: !settings.pointsVisible })}
-          />
-          <ToggleButton
-            active={effectiveSettings?.vectorsVisible ?? false}
-            disabled={passControlsDisabled}
-            label="Vectors"
-            onClick={() => void patch({ vectorsVisible: !settings.vectorsVisible })}
-          />
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Render Mode">
-        <div className="fm-visualization-segments" role="group" aria-label="Render mode">
-          {RENDER_MODES.map((mode) => (
-            <Button
-              key={mode.value}
-              size="sm"
-              type="button"
-              disabled={passControlsDisabled}
-              variant={
-                settings.visible && settings.renderMode === mode.value
-                  ? "primary"
-                  : "secondary"
-              }
-              onClick={() => void patch(renderModePatch(mode.value))}
-            >
-              {mode.label}
-            </Button>
-          ))}
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Surface Coloring" collapsible>
-        <FormField
-          disabled={pending || sectionDisabled("surface-coloring")}
-          label="Color source"
-          type="select"
-          value={settings.surfaceColorSource}
-          onChange={(event) =>
-            void patch({
-              surfaceColorSource: event.target.value as SurfaceColorSource,
-            })
-          }
-        >
-          {SURFACE_COLOR_SOURCE_ITEMS.map((source) => (
-            <option key={source.value} value={source.value}>
-              {source.label}
-            </option>
-          ))}
-        </FormField>
-        <ColorField
-          disabled={pending || sectionDisabled("surface-coloring")}
-          label="Solid color"
-          value={settings.shaderMonoColor}
-          onChange={(value) => patchColor("shaderMonoColor", value)}
-        />
-        <FieldRow
-          label="Field status"
-          value={surfaceFieldStatus(
-            settings.surfaceColorSource,
-            sessionStatus.data,
-            sessionStatus.status,
-          )}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Wireframe">
-        <ColorField
-          disabled={pending || sectionDisabled("wireframe")}
-          label="Wireframe color"
-          value={settings.wireframeColor}
-          onChange={(value) => patchColor("wireframeColor", value)}
-        />
-        <NumberField
-          disabled={pending || sectionDisabled("wireframe")}
-          label="Wireframe opacity"
-          max={100}
-          min={0}
-          step={1}
-          unit="%"
-          value={settings.wireframeOpacityPercent}
-          onChange={(value) => patchNumber("wireframeOpacityPercent", value)}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Vectors">
-        <div className="fm-visualization-segments" role="group" aria-label="Vector coloring">
-          {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
-            <Button
-              key={mode.value}
-              size="sm"
-              type="button"
-              disabled={pending || sectionDisabled("vectors")}
-              variant={
-                settings.vectorColorMode === mode.value
-                  ? "primary"
-                  : "secondary"
-              }
-              onClick={() => void patch({ vectorColorMode: mode.value })}
-            >
-              {mode.label}
-            </Button>
-          ))}
-        </div>
-        <ColorField
-          disabled={pending || sectionDisabled("vectors")}
-          label="Vector mono color"
-          value={settings.vectorMonoColor}
-          onChange={(value) => patchColor("vectorMonoColor", value)}
-        />
-        <NumberField
-          disabled={pending || sectionDisabled("vectors")}
-          label="Vector alpha"
-          max={100}
-          min={0}
-          step={1}
-          unit="%"
-          value={settings.vectorAlphaPercent}
-          onChange={(value) => patchNumber("vectorAlphaPercent", value)}
-        />
-        <NumberField
-          disabled={pending || sectionDisabled("vectors")}
-          label="Vector thickness"
-          max={8}
-          min={0.1}
-          step={0.1}
-          value={settings.vectorThickness}
-          onChange={(value) => patchNumber("vectorThickness", value)}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Geometry Scope">
-        <div className="fm-visualization-segments" role="group" aria-label="Geometry scope">
-          {GEOMETRY_SCOPES.map((scope) => (
-            <Button
-              key={scope.value}
-              size="sm"
-              type="button"
-              disabled={passControlsDisabled}
-              variant={
-                settings.visible && settings.geometryScope === scope.value
-                  ? "primary"
-                  : "secondary"
-              }
-              onClick={() => void patch({ geometryScope: scope.value })}
-            >
-              {scope.label}
-            </Button>
-          ))}
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Opacity">
-        <label className="fm-visualization-range">
-          <span>{opacityPercent}%</span>
-          <input
-            aria-label="Opacity"
-            max={100}
-            min={0}
-            step={1}
-            style={{ "--pct": `${opacityPercent}%` } as React.CSSProperties}
-            type="range"
-            value={opacityPercent}
-            onChange={(event) =>
-              void patch({ opacityPercent: Number(event.target.value) })
-            }
-          />
-        </label>
-      </InspectorSection>
-
-      <InspectorSection title="Overrides">
-        <div className="fm-inspector-toolbar">
-          <Button
-            size="sm"
-            type="button"
-            disabled={pending}
-            variant="ghost"
-            onClick={() => void resetTarget()}
-          >
-            <RotateCcw size={12} aria-hidden="true" />
-            Reset display
-          </Button>
-        </div>
-        {feedback && <FeedbackBanner kind="error" message={feedback} />}
-      </InspectorSection>
+      <VisualizationDisplayPassesSection
+        effectiveSettings={effectiveSettings}
+        passControlsDisabled={passControlsDisabled}
+        patch={patch}
+        pending={pending}
+        settings={settings}
+      />
+      <VisualizationRenderModeSection
+        passControlsDisabled={passControlsDisabled}
+        patch={patch}
+        settings={settings}
+      />
+      <VisualizationSurfaceColoringSection
+        patch={patch}
+        patchColor={patchColor}
+        pending={pending}
+        sectionDisabled={sectionDisabled}
+        sessionStatus={sessionStatus}
+        settings={settings}
+      />
+      <VisualizationWireframeSection
+        patchColor={patchColor}
+        patchNumber={patchNumber}
+        pending={pending}
+        sectionDisabled={sectionDisabled}
+        settings={settings}
+      />
+      <VisualizationVectorsSection
+        patch={patch}
+        patchColor={patchColor}
+        patchNumber={patchNumber}
+        pending={pending}
+        sectionDisabled={sectionDisabled}
+        settings={settings}
+      />
+      <VisualizationGeometryScopeSection
+        passControlsDisabled={passControlsDisabled}
+        patch={patch}
+        settings={settings}
+      />
+      <VisualizationOpacitySection patch={patch} settings={settings} />
+      <VisualizationOverridesSection
+        feedback={feedback}
+        onReset={() => void resetTarget()}
+        pending={pending}
+      />
     </div>
   );
 }

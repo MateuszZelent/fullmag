@@ -3,17 +3,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
-use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
-use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
+use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};

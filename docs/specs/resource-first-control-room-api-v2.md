@@ -50,7 +50,7 @@ The default frontend base path is `/v2/sessions/current`.
 - `data/quantities` describes supported quantities and preview capability.
 - `data/fields` describes materialized field resources; an empty field catalog does not make a quantity unsupported.
 - `visualization/display` owns the legacy display-selection projection.
-- `visualization/state` owns canonical renderer state. Its schema version 2 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, clip-plane state, vector glyph style, object/part `overrides`, and diagnostics while retaining flat display fields as a compatibility projection.
+- `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, and diagnostics while retaining flat display fields as a compatibility projection.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 

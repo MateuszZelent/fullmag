@@ -81,7 +81,6 @@ export function VectorFieldLayer({
         ? buildVectorGlyphInstances(segments, {
             colorMode,
             headRadiusRatio: resolvedStyle.headRadiusRatio,
-            orientationFrame: "hud",
             shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
           })
         : null,

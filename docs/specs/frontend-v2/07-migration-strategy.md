@@ -8,8 +8,8 @@
 Use a parallel app root, not in-place refactoring:
 
 - `apps/control-room` is built from a clean kernel and selected ports.
-- `apps/web` remains available as a reference while v2 reaches parity.
-- No v2 file imports from `apps/web`.
+- `apps/legacy_web` remains available as a reference while v2 reaches parity.
+- No v2 file imports from `apps/legacy_web`.
 - Legacy files are copied only through reviewed extraction commits.
 - Cutover happens only after acceptance criteria in `21-cutover-acceptance.md` pass.
 
@@ -162,13 +162,13 @@ Deliver:
 - visual regression set;
 - performance profile;
 - legacy route/deployment switch;
-- removal plan for `apps/web`.
+- removal plan for `apps/legacy_web`.
 
 Verification:
 
 - acceptance in `21-cutover-acceptance.md`;
 - CI gates in `18-testing-quality-gates.md`;
-- `apps/web` no longer active in default scripts/deployment.
+- `apps/legacy_web` no longer active in default scripts/deployment.
 
 ## 4. Legacy Reference Policy
 

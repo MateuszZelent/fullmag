@@ -45,6 +45,19 @@ export const viewport3dManifest: ModuleManifest = {
         },
       },
       {
+        id: "view-projection",
+        title: "Toggle projection",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.cameraProjection === "orthographic",
+        run: () => {
+          viewport3dStore.toggleCameraProjection();
+          return { status: "completed" };
+        },
+      },
+      {
         id: "viewport-3d.hsl-reference-auto",
         title: "HSL Reference Auto",
         group: "viewport-3d",

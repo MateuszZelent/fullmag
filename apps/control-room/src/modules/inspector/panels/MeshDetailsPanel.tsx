@@ -57,19 +57,24 @@ function selectedSectionTitle(kind: string | null): string {
 function qualityGateRows(gates: unknown): Array<{ id: string; status: string; value: string }> {
   const checks = asRecord(gates)?.checks;
   if (!Array.isArray(checks)) return [];
-  return checks
-    .map((entry) => {
-      const record = asRecord(entry);
-      if (!record) return null;
-      return {
-        id: formatValue(record.id),
-        status: formatValue(record.status),
-        value: formatValue(record.value),
-      };
-    })
-    .filter((entry): entry is { id: string; status: string; value: string } =>
-      Boolean(entry),
-    );
+  const rows: Array<{ id: string; status: string; value: string }> = [];
+  for (const entry of checks) {
+    const record = asRecord(entry);
+    if (!record) continue;
+    rows.push({
+      id: formatValue(record.id),
+      status: formatValue(record.status),
+      value: formatValue(record.value),
+    });
+  }
+  return rows;
+}
+
+function meshDetailKey(
+  prefix: string,
+  fields: Array<unknown>,
+): string {
+  return fields.map((field) => formatValue(field)).join(":") || prefix;
 }
 
 function numericRevision(value: unknown): number | null {
@@ -87,6 +92,400 @@ function firstNumericRevision(...values: unknown[]): number | null {
     if (revision !== null) return revision;
   }
   return null;
+}
+
+function MeshOverviewSection({
+  activeBuildRevision,
+  buildStatus,
+  meshFreshness,
+  meshIsStale,
+  meshRevision,
+  meshSourceSceneRevision,
+  objectPolicyCount,
+  sceneRevision,
+  semanticLayers,
+  summaryStatus,
+  targetCount,
+  title,
+}: {
+  activeBuildRevision: unknown;
+  buildStatus: string;
+  meshFreshness: string;
+  meshIsStale: boolean;
+  meshRevision: unknown;
+  meshSourceSceneRevision: number | null;
+  objectPolicyCount: number;
+  sceneRevision: number | null;
+  semanticLayers: string;
+  summaryStatus: string;
+  targetCount: number;
+  title: string;
+}) {
+  return (
+    <InspectorSection title={title} badge={buildStatus}>
+      {meshIsStale ? (
+        <FeedbackBanner
+          kind="warning"
+          message="Solver mesh was built from an older scene revision. Rebuild the shared-domain mesh to synchronize inspector data with backend solver state."
+        />
+      ) : null}
+      <MeshResourceFields
+        fields={[
+          { label: "Summary state", value: summaryStatus },
+          {
+            label: "Scene revision",
+            value: String(sceneRevision ?? "unknown"),
+          },
+          {
+            label: "Source scene revision",
+            value: String(meshSourceSceneRevision ?? "unknown"),
+          },
+          {
+            label: "Mesh freshness",
+            value: meshFreshness,
+          },
+          { label: "Mesh revision", value: String(meshRevision ?? "unknown") },
+          {
+            label: "Build revision",
+            value: String(activeBuildRevision ?? "unknown"),
+          },
+          {
+            label: "Semantic layers",
+            value: semanticLayers,
+          },
+          {
+            label: "Object policies",
+            value: objectPolicyCount.toLocaleString("en-US"),
+          },
+          {
+            label: "Resolved object targets",
+            value: targetCount.toLocaleString("en-US"),
+          },
+        ]}
+      />
+    </InspectorSection>
+  );
+}
+
+function SolverMeshIdentitySection({
+  badge,
+  manifest,
+}: {
+  badge: string;
+  manifest: {
+    domain_mesh_mode?: string | null;
+    generation_id?: string | null;
+    geometry_realization_revision?: number | null;
+    mesh_id?: string | null;
+    mesh_name?: string | null;
+    mesh_parts?: readonly unknown[] | null;
+    object_segments?: readonly unknown[] | null;
+    regions?: readonly unknown[] | null;
+    source_scene_revision?: number | null;
+  } | null | undefined;
+}) {
+  return (
+    <InspectorSection title="Solver Mesh Identity" badge={badge}>
+      <MeshResourceFields
+        fields={[
+          { label: "Mesh name", value: manifest?.mesh_name ?? "not built" },
+          { label: "Mesh id", value: manifest?.mesh_id ?? "none" },
+          {
+            label: "Generation",
+            value: manifest?.generation_id ?? "no generation",
+          },
+          {
+            label: "Domain mode",
+            value: manifest?.domain_mesh_mode ?? "not applicable",
+          },
+          {
+            label: "Source scene",
+            value: String(manifest?.source_scene_revision ?? "unknown"),
+          },
+          {
+            label: "Geometry realization",
+            value: String(manifest?.geometry_realization_revision ?? "unknown"),
+          },
+          {
+            label: "Mesh parts",
+            value: String(manifest?.mesh_parts?.length ?? 0),
+          },
+          {
+            label: "Object segments",
+            value: String(manifest?.object_segments?.length ?? 0),
+          },
+          { label: "Regions", value: String(manifest?.regions?.length ?? 0) },
+        ]}
+      />
+    </InspectorSection>
+  );
+}
+
+function MeshCountsExtentsSection({
+  meshStatistics,
+  meshSummary,
+}: {
+  meshStatistics: unknown;
+  meshSummary: unknown;
+}) {
+  return (
+    <InspectorSection title="Counts And Extents" collapsible defaultCollapsed={false}>
+      <MeshResourceFields
+        fields={[
+          {
+            label: "Nodes",
+            value: formatCount(
+              recordField(asRecord(meshSummary), "node_count") ??
+                recordField(asRecord(meshStatistics), "node_count"),
+            ),
+          },
+          {
+            label: "Elements",
+            value: formatCount(
+              recordField(asRecord(meshSummary), "element_count") ??
+                recordField(asRecord(meshStatistics), "element_count"),
+            ),
+          },
+          {
+            label: "Boundary faces",
+            value: formatCount(
+              recordField(asRecord(meshSummary), "boundary_face_count") ??
+                recordField(asRecord(meshStatistics), "boundary_face_count"),
+            ),
+          },
+          {
+            label: "Min edge",
+            value: formatLength(recordField(asRecord(meshStatistics), "min_edge_length")),
+          },
+          {
+            label: "Max edge",
+            value: formatLength(recordField(asRecord(meshStatistics), "max_edge_length")),
+          },
+          {
+            label: "Mean edge",
+            value: formatLength(recordField(asRecord(meshStatistics), "mean_edge_length")),
+          },
+        ]}
+      />
+    </InspectorSection>
+  );
+}
+
+function MeshBuildPipelineSection({
+  activeBuildStatus,
+  buildMode,
+  buildStatus,
+  fallbacks,
+  lastBuildError,
+  latestSuccessAvailable,
+  onBuildSharedDomain,
+  onOpenBuildDetails,
+  sizeFieldKinds,
+}: {
+  activeBuildStatus: string;
+  buildMode: unknown;
+  buildStatus: string;
+  fallbacks: readonly string[] | null | undefined;
+  lastBuildError: unknown;
+  latestSuccessAvailable: boolean;
+  onBuildSharedDomain: () => void;
+  onOpenBuildDetails: () => void;
+  sizeFieldKinds: readonly string[] | null | undefined;
+}) {
+  return (
+    <InspectorSection title="Build Pipeline" badge={activeBuildStatus}>
+      <MeshResourceFields
+        fields={[
+          { label: "Active build", value: buildStatus },
+          {
+            label: "Last success",
+            value: latestSuccessAvailable ? "available" : "missing",
+          },
+          {
+            label: "Last error",
+            value: formatValue(lastBuildError ?? "none"),
+          },
+          {
+            label: "Build mode",
+            value: formatValue(buildMode ?? "unknown"),
+          },
+          {
+            label: "Fallbacks",
+            value: fallbacks?.join(", ") ?? "none",
+          },
+          {
+            label: "Size field kinds",
+            value: sizeFieldKinds?.join(", ") ?? "none",
+          },
+        ]}
+      />
+      <div className="fm-inspector-toolbar">
+        <Button
+          size="sm"
+          type="button"
+          variant="primary"
+          onClick={onBuildSharedDomain}
+        >
+          Build Shared-Domain Mesh
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={onOpenBuildDetails}
+        >
+          Open Build Details
+        </Button>
+      </div>
+    </InspectorSection>
+  );
+}
+
+function MeshQualityGatesSection({
+  badge,
+  gateRows,
+}: {
+  badge: string;
+  gateRows: ReturnType<typeof qualityGateRows>;
+}) {
+  return (
+    <InspectorSection title="Quality Gates" badge={badge}>
+      {gateRows.length > 0 ? (
+        <div className="fm-mesh-detail-table" role="table">
+          <div className="fm-mesh-detail-table__row" role="row">
+            <span>Check</span>
+            <span>Status</span>
+            <span>Value</span>
+          </div>
+          {gateRows.map((row) => (
+            <div
+              key={row.id}
+              className="fm-mesh-detail-table__row"
+              data-status={row.status}
+              role="row"
+            >
+              <span>{row.id}</span>
+              <span>{row.status}</span>
+              <span>{row.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <MeshResourceEmpty label="No quality-gate checks published yet." />
+      )}
+    </InspectorSection>
+  );
+}
+
+function RealizedSizeFieldsSection({ sizeFields }: { sizeFields: readonly unknown[] }) {
+  return (
+    <InspectorSection title="Realized Size Fields" badge={`${sizeFields.length}`}>
+      {sizeFields.length > 0 ? (
+        <div className="fm-mesh-detail-list">
+          {sizeFields.map((field) => {
+            const record = asRecord(field);
+            const kind = recordField(record, "kind");
+            const reason = recordField(record, "reason");
+            const source = recordField(record, "source");
+            const status = recordField(record, "status");
+            return (
+              <div
+                key={meshDetailKey("size-field", [kind, status, reason, source])}
+                className="fm-mesh-detail-list__item"
+                data-status={formatValue(status)}
+              >
+                <strong>{formatValue(kind)}</strong>
+                <span>{formatValue(status)}</span>
+                <small>{formatValue(reason ?? source ?? "applied")}</small>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <MeshResourceEmpty label="No realized size fields are available for the current build." />
+      )}
+    </InspectorSection>
+  );
+}
+
+function OperationStatusesSection({
+  operationStatuses,
+}: {
+  operationStatuses: readonly unknown[];
+}) {
+  return (
+    <InspectorSection title="Operation Statuses" badge={`${operationStatuses.length}`}>
+      {operationStatuses.length > 0 ? (
+        <div className="fm-mesh-detail-list">
+          {operationStatuses.map((statusEntry) => {
+            const record = asRecord(statusEntry);
+            const kind = recordField(record, "kind");
+            const reason = recordField(record, "reason");
+            const scope = recordField(record, "scope");
+            const status = recordField(record, "status");
+            return (
+              <div
+                key={meshDetailKey("operation-status", [kind, scope, status, reason])}
+                className="fm-mesh-detail-list__item"
+                data-status={formatValue(status)}
+              >
+                <strong>{formatValue(kind)}</strong>
+                <span>{formatValue(status)}</span>
+                <small>{formatValue(reason ?? scope)}</small>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <MeshResourceEmpty label="No operation statuses are present in the active build report." />
+      )}
+    </InspectorSection>
+  );
+}
+
+function ThinFilmDiagnosticsSection({
+  thinFilmDiagnostics,
+}: {
+  thinFilmDiagnostics: readonly unknown[];
+}) {
+  return (
+    <InspectorSection title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`}>
+      {thinFilmDiagnostics.length > 0 ? (
+        <div className="fm-mesh-detail-list">
+          {thinFilmDiagnostics.map((diagnosticEntry) => {
+            const record = asRecord(diagnosticEntry);
+            const actualMethod = recordField(record, "actual_method");
+            const geometryName = recordField(record, "geometry_name");
+            const lateralSize = recordField(record, "lateral_size");
+            const requestedMethod = recordField(record, "requested_method");
+            const thickness = recordField(record, "thickness");
+            const warnings = recordField(record, "warnings");
+            return (
+              <div
+                key={meshDetailKey("thin-film-diagnostic", [
+                  geometryName,
+                  actualMethod,
+                  requestedMethod,
+                  thickness,
+                  lateralSize,
+                ])}
+                className="fm-mesh-detail-list__item"
+                data-status={Array.isArray(warnings) && warnings.length ? "warning" : "ready"}
+              >
+                <strong>{formatValue(geometryName)}</strong>
+                <span>{formatValue(actualMethod ?? requestedMethod ?? "auto")}</span>
+                <small>
+                  thickness {formatLength(thickness)} / lateral {formatLength(lateralSize)}
+                </small>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <MeshResourceEmpty label="No thin-film diagnostics are present in the active build report." />
+      )}
+    </InspectorSection>
+  );
 }
 
 export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
@@ -160,278 +559,61 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title={title} badge={buildStatus}>
-        {meshIsStale ? (
-          <FeedbackBanner
-            kind="warning"
-            message="Solver mesh was built from an older scene revision. Rebuild the shared-domain mesh to synchronize inspector data with backend solver state."
-          />
-        ) : null}
-        <MeshResourceFields
-          fields={[
-            { label: "Summary state", value: summary.status },
+      <MeshOverviewSection
+        activeBuildRevision={activeBuild.data?.revision}
+        buildStatus={buildStatus}
+        meshFreshness={meshFreshness}
+        meshIsStale={meshIsStale}
+        meshRevision={summary.data?.revision}
+        meshSourceSceneRevision={meshSourceSceneRevision}
+        objectPolicyCount={objectConfigs.length}
+        sceneRevision={sceneRevision}
+        semanticLayers={
+          semantics.data?.render_only_controls_do_not_change_solver_domain
+            ? "universe / object / shared-domain"
+            : "unknown"
+        }
+        summaryStatus={summary.status}
+        targetCount={targetCount}
+        title={title}
+      />
+      <SolverMeshIdentitySection badge={manifest.status} manifest={manifest.data} />
+      <MeshCountsExtentsSection
+        meshStatistics={meshStatistics}
+        meshSummary={meshSummary}
+      />
+      <MeshBuildPipelineSection
+        activeBuildStatus={activeBuild.status}
+        buildMode={activeBuild.data?.shared_domain_build_report?.build_mode}
+        buildStatus={buildStatus}
+        fallbacks={activeBuild.data?.shared_domain_build_report?.fallbacks_triggered}
+        lastBuildError={
+          activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error
+        }
+        latestSuccessAvailable={Boolean(latestBuild.data?.last_success)}
+        onBuildSharedDomain={() =>
+          void kernel.commands.execute("mesh.build-shared-domain", buildContext)
+        }
+        onOpenBuildDetails={() =>
+          kernel.selection.set(
             {
-              label: "Scene revision",
-              value: String(sceneRevision ?? "unknown"),
+              kind: "mesh.builds",
+              label: "Mesh Build Pipeline",
+              nodeId: "model:mesh:builds",
+              objectId: null,
+              ref: null,
             },
-            {
-              label: "Source scene revision",
-              value: String(meshSourceSceneRevision ?? "unknown"),
-            },
-            {
-              label: "Mesh freshness",
-              value: meshFreshness,
-            },
-            { label: "Mesh revision", value: String(summary.data?.revision ?? "unknown") },
-            {
-              label: "Build revision",
-              value: String(activeBuild.data?.revision ?? "unknown"),
-            },
-            {
-              label: "Semantic layers",
-              value: semantics.data?.render_only_controls_do_not_change_solver_domain
-                ? "universe / object / shared-domain"
-                : "unknown",
-            },
-            {
-              label: "Object policies",
-              value: objectConfigs.length.toLocaleString("en-US"),
-            },
-            {
-              label: "Resolved object targets",
-              value: targetCount.toLocaleString("en-US"),
-            },
-          ]}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Solver Mesh Identity" badge={manifest.status}>
-        <MeshResourceFields
-          fields={[
-            { label: "Mesh name", value: manifest.data?.mesh_name ?? "not built" },
-            { label: "Mesh id", value: manifest.data?.mesh_id ?? "none" },
-            {
-              label: "Generation",
-              value: manifest.data?.generation_id ?? "no generation",
-            },
-            {
-              label: "Domain mode",
-              value: manifest.data?.domain_mesh_mode ?? "not applicable",
-            },
-            {
-              label: "Source scene",
-              value: String(manifest.data?.source_scene_revision ?? "unknown"),
-            },
-            {
-              label: "Geometry realization",
-              value: String(
-                manifest.data?.geometry_realization_revision ?? "unknown",
-              ),
-            },
-            {
-              label: "Mesh parts",
-              value: String(manifest.data?.mesh_parts?.length ?? 0),
-            },
-            {
-              label: "Object segments",
-              value: String(manifest.data?.object_segments?.length ?? 0),
-            },
-            { label: "Regions", value: String(manifest.data?.regions?.length ?? 0) },
-          ]}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Counts And Extents" collapsible defaultCollapsed={false}>
-        <MeshResourceFields
-          fields={[
-            {
-              label: "Nodes",
-              value: formatCount(
-                recordField(meshSummary, "node_count") ??
-                  recordField(meshStatistics, "node_count"),
-              ),
-            },
-            {
-              label: "Elements",
-              value: formatCount(
-                recordField(meshSummary, "element_count") ??
-                  recordField(meshStatistics, "element_count"),
-              ),
-            },
-            {
-              label: "Boundary faces",
-              value: formatCount(
-                recordField(meshSummary, "boundary_face_count") ??
-                  recordField(meshStatistics, "boundary_face_count"),
-              ),
-            },
-            {
-              label: "Min edge",
-              value: formatLength(recordField(meshStatistics, "min_edge_length")),
-            },
-            {
-              label: "Max edge",
-              value: formatLength(recordField(meshStatistics, "max_edge_length")),
-            },
-            {
-              label: "Mean edge",
-              value: formatLength(recordField(meshStatistics, "mean_edge_length")),
-            },
-          ]}
-        />
-      </InspectorSection>
-
-      <InspectorSection title="Build Pipeline" badge={activeBuild.status}>
-        <MeshResourceFields
-          fields={[
-            { label: "Active build", value: buildStatus },
-            {
-              label: "Last success",
-              value: latestBuild.data?.last_success ? "available" : "missing",
-            },
-            {
-              label: "Last error",
-              value: activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error ?? "none",
-            },
-            {
-              label: "Build mode",
-              value: activeBuild.data?.shared_domain_build_report?.build_mode ?? "unknown",
-            },
-            {
-              label: "Fallbacks",
-              value:
-                activeBuild.data?.shared_domain_build_report?.fallbacks_triggered
-                  ?.join(", ") ?? "none",
-            },
-            {
-              label: "Size field kinds",
-              value:
-                activeBuild.data?.shared_domain_build_report?.used_size_field_kinds
-                  ?.join(", ") ?? "none",
-            },
-          ]}
-        />
-        <div className="fm-inspector-toolbar">
-          <Button
-            size="sm"
-            type="button"
-            variant="primary"
-            onClick={() =>
-              void kernel.commands.execute("mesh.build-shared-domain", buildContext)
-            }
-          >
-            Build Shared-Domain Mesh
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={() =>
-              kernel.selection.set(
-                {
-                  kind: "mesh.builds",
-                  label: "Mesh Build Pipeline",
-                  nodeId: "model:mesh:builds",
-                  objectId: null,
-                  ref: null,
-                },
-                "mesh",
-              )
-            }
-          >
-            Open Build Details
-          </Button>
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Quality Gates" badge={sharedQuality.status}>
-        {gateRows.length > 0 ? (
-          <div className="fm-mesh-detail-table" role="table">
-            <div className="fm-mesh-detail-table__row" role="row">
-              <span>Check</span>
-              <span>Status</span>
-              <span>Value</span>
-            </div>
-            {gateRows.map((row) => (
-              <div
-                key={row.id}
-                className="fm-mesh-detail-table__row"
-                data-status={row.status}
-                role="row"
-              >
-                <span>{row.id}</span>
-                <span>{row.status}</span>
-                <span>{row.value}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <MeshResourceEmpty label="No quality-gate checks published yet." />
-        )}
-      </InspectorSection>
-
-      <InspectorSection title="Realized Size Fields" badge={`${sizeFields.length}`}>
-        {sizeFields.length > 0 ? (
-          <div className="fm-mesh-detail-list">
-            {sizeFields.map((field, index) => (
-              <div
-                key={`${field.kind}:${index}`}
-                className="fm-mesh-detail-list__item"
-                data-status={field.status}
-              >
-                <strong>{field.kind}</strong>
-                <span>{field.status}</span>
-                <small>{field.reason ?? field.source ?? "applied"}</small>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <MeshResourceEmpty label="No realized size fields are available for the current build." />
-        )}
-      </InspectorSection>
-
-      <InspectorSection title="Operation Statuses" badge={`${operationStatuses.length}`}>
-        {operationStatuses.length > 0 ? (
-          <div className="fm-mesh-detail-list">
-            {operationStatuses.map((status, index) => (
-              <div
-                key={`${status.kind}:${status.scope}:${index}`}
-                className="fm-mesh-detail-list__item"
-                data-status={status.status}
-              >
-                <strong>{status.kind}</strong>
-                <span>{status.status}</span>
-                <small>{status.reason ?? status.scope}</small>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <MeshResourceEmpty label="No operation statuses are present in the active build report." />
-        )}
-      </InspectorSection>
-
-      <InspectorSection title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`}>
-        {thinFilmDiagnostics.length > 0 ? (
-          <div className="fm-mesh-detail-list">
-            {thinFilmDiagnostics.map((diagnostic, index) => (
-              <div
-                key={`${diagnostic.geometry_name}:${index}`}
-                className="fm-mesh-detail-list__item"
-                data-status={diagnostic.warnings?.length ? "warning" : "ready"}
-              >
-                <strong>{diagnostic.geometry_name}</strong>
-                <span>{diagnostic.actual_method ?? diagnostic.requested_method ?? "auto"}</span>
-                <small>
-                  thickness {formatLength(diagnostic.thickness)} / lateral{" "}
-                  {formatLength(diagnostic.lateral_size)}
-                </small>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <MeshResourceEmpty label="No thin-film diagnostics are present in the active build report." />
-        )}
-      </InspectorSection>
+            "mesh",
+          )
+        }
+        sizeFieldKinds={
+          activeBuild.data?.shared_domain_build_report?.used_size_field_kinds
+        }
+      />
+      <MeshQualityGatesSection badge={sharedQuality.status} gateRows={gateRows} />
+      <RealizedSizeFieldsSection sizeFields={sizeFields} />
+      <OperationStatusesSection operationStatuses={operationStatuses} />
+      <ThinFilmDiagnosticsSection thinFilmDiagnostics={thinFilmDiagnostics} />
 
       <JsonResourceSection
         badge={capabilities.status}

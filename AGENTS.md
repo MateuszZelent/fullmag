@@ -518,8 +518,8 @@ The target browser frontend is documented in:
 During the frontend v2 migration:
 
 - `apps/control-room` is the clean v2 target app root,
-- `apps/web` is legacy reference unless the user explicitly asks to modify it,
-- v2 code must not import from `apps/web`,
+- `apps/legacy_web` is legacy reference unless the user explicitly asks to modify it,
+- v2 code must not import from `apps/legacy_web`,
 - legacy code may be read for behavior, math, fixtures, and visual comparison, but not copied wholesale,
 - every v2 module must have a manifest and must communicate through the kernel API, event bus, command registry, resource hooks, or shared primitives,
 - menu, ribbon, toolbar, shortcuts, context menus, and command palette must render one command registry,
@@ -948,7 +948,7 @@ When a file grows past that threshold, split it.
 | `crates/fullmag-engine` | trusted CPU/reference solvers |
 | `crates/fullmag-py-core` | private Python/Rust bridge |
 | `apps/control-room` | target modular frontend v2 control room |
-| `apps/web` | legacy frontend reference during v2 migration |
+| `apps/legacy_web` | legacy frontend reference during v2 migration |
 | `native/` | production native backends |
 | `docs/` | specs, ADRs, physics notes |
 | `.agents/` | agent workflows / skills |

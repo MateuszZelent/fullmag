@@ -1,33 +1,50 @@
 import type {
   JsonObject,
+  JsonValue,
   ObjectInteractionKind,
   ObjectInteractionPatchRequest,
   ObjectInteractionResource,
+  SceneResource,
 } from "@/kernel/api/apiTypes";
 import {
-  isOptionalObjectInteractionKind,
-  OBJECT_INTERACTION_KINDS,
-} from "@/kernel/api/apiTypes";
+  allInteractionSpecs,
+  buildObjectInteractionPatchFromDraft,
+  buildStudyInteractionPatchFromDraft,
+  defaultDraftForInteraction,
+  draftFromObjectInteractionResource,
+  findInteractionSpec,
+  type InteractionSpec,
+  type PhysicsInteractionDraft,
+  type PhysicsInteractionId,
+} from "@/shared/domain/physics/interactions";
 
-export { OBJECT_INTERACTION_KINDS };
-export type { ObjectInteractionKind };
+export type { ObjectInteractionKind, PhysicsInteractionDraft, PhysicsInteractionId };
 
-export interface PhysicsInteractionDraft {
-  enabled: boolean;
-  interactionKind: ObjectInteractionKind;
-  paramsText: string;
-  present: boolean;
+export type InteractionApplyPatchResult =
+  | { error: string }
+  | { patch: JsonObject; storage: "study" }
+  | { patch: ObjectInteractionPatchRequest; storage: "object_interaction" };
+
+export function interactionSelectOptions(): readonly InteractionSpec[] {
+  return allInteractionSpecs();
 }
 
-export function interactionLabel(kind: ObjectInteractionKind): string {
-  if (kind === "exchange") return "Exchange";
-  if (kind === "demag") return "Demagnetization";
-  if (kind === "interfacial_dmi") return "Interfacial DMI";
-  return "Uniaxial anisotropy";
+export function interactionLabel(id: PhysicsInteractionId): string {
+  return findInteractionSpec(id)?.label ?? id;
 }
 
-export function isOptionalInteraction(kind: ObjectInteractionKind): boolean {
-  return isOptionalObjectInteractionKind(kind);
+export function isWritableObjectInteraction(
+  id: PhysicsInteractionId,
+): id is ObjectInteractionKind {
+  return isObjectInteractionKind(id) && findInteractionSpec(id)?.storage === "object_interaction";
+}
+
+export function isWritableStudyInteraction(id: PhysicsInteractionId): boolean {
+  return findInteractionSpec(id)?.storage === "study";
+}
+
+export function isDeferredInteraction(id: PhysicsInteractionId): boolean {
+  return findInteractionSpec(id)?.availability === "deferred";
 }
 
 export function defaultObjectInteractionResource(
@@ -47,77 +64,111 @@ export function draftFromInteractionResource(
   interactionKind: ObjectInteractionKind,
   resource: ObjectInteractionResource,
 ): PhysicsInteractionDraft {
-  const optional = isOptionalInteraction(interactionKind);
-  const present = resource.present || !optional;
-  return {
-    enabled: resource.present ? resource.enabled : !optional,
+  return draftFromObjectInteractionResource(
     interactionKind,
-    paramsText: formatInteractionParams(resource.params),
-    present,
-  };
+    resource.params,
+    resource.present,
+    resource.enabled,
+  );
 }
 
-export function draftKeyForInteractionResource(
-  objectId: string | null,
-  interactionKind: ObjectInteractionKind,
-  resource: ObjectInteractionResource,
+export function draftFromStudyScene(
+  id: PhysicsInteractionId,
+  scene: SceneResource | null | undefined,
+): PhysicsInteractionDraft {
+  const draft = defaultDraftForInteraction(id);
+  const study = jsonObject(scene?.study);
+
+  if (id === "demag") {
+    return {
+      ...draft,
+      enabled: true,
+      present: true,
+      values: {
+        ...draft.values,
+        method: textValue(study?.demag_realization, "auto"),
+      },
+    };
+  }
+
+  if (id === "zeeman") {
+    const field = vector3Value(study?.external_field);
+    return {
+      ...draft,
+      enabled: field !== null,
+      present: field !== null,
+      values: {
+        ...draft.values,
+        field: field ?? ["0", "0", "0"],
+      },
+    };
+  }
+
+  return draft;
+}
+
+export function draftKeyForInteraction(
+  objectId: string | null | undefined,
+  draft: PhysicsInteractionDraft,
 ): string {
   return [
     objectId ?? "",
-    interactionKind,
-    resource.present ? "present" : "absent",
-    resource.enabled ? "enabled" : "disabled",
-    formatInteractionParams(resource.params),
+    draft.id,
+    draft.present ? "present" : "absent",
+    draft.enabled ? "enabled" : "disabled",
+    JSON.stringify(draft.values),
   ].join(":");
 }
 
-export function formatInteractionParams(params: JsonObject): string {
-  if (Object.keys(params).length === 0) return "{}";
-  return JSON.stringify(params, null, 2);
-}
+export function buildInteractionApplyPatch(
+  draft: PhysicsInteractionDraft,
+): InteractionApplyPatchResult {
+  const spec = findInteractionSpec(draft.id);
+  if (!spec) return { error: `Unknown physics interaction: ${draft.id}` };
 
-export function buildInteractionPatch({
-  enabled,
-  interactionKind,
-  paramsText,
-  present,
-}: PhysicsInteractionDraft): { error: string } | { patch: ObjectInteractionPatchRequest } {
-  if (!present && !isOptionalInteraction(interactionKind)) {
-    return {
-      error: `${interactionLabel(interactionKind)} is required and cannot be removed.`,
-    };
+  if (spec.storage === "object_interaction") {
+    const result = buildObjectInteractionPatchFromDraft(draft);
+    return "error" in result
+      ? result
+      : { patch: result.patch, storage: "object_interaction" };
   }
 
-  const params = parseParams(paramsText);
-  if (!params.ok) {
-    return { error: params.error };
+  if (spec.storage === "study") {
+    const result = buildStudyInteractionPatchFromDraft(draft);
+    return "error" in result ? result : { patch: result.patch, storage: "study" };
   }
 
   return {
-    patch: {
-      enabled,
-      params: params.value,
-      present,
-    },
+    error:
+      spec.writableReason ??
+      `${spec.label} is not writable from the current control-room authoring surface.`,
   };
 }
 
-function parseParams(
-  paramsText: string,
-): { ok: true; value: JsonObject } | { error: string; ok: false } {
-  try {
-    const parsed = JSON.parse(paramsText || "{}") as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        error: "Interaction parameters must be a JSON object.",
-        ok: false,
-      };
-    }
-    return { ok: true, value: parsed as JsonObject };
-  } catch {
-    return {
-      error: "Interaction parameters must be a JSON object.",
-      ok: false,
-    };
-  }
+function isObjectInteractionKind(id: PhysicsInteractionId): id is ObjectInteractionKind {
+  return (
+    id === "exchange" ||
+    id === "demag" ||
+    id === "interfacial_dmi" ||
+    id === "uniaxial_anisotropy"
+  );
+}
+
+function jsonObject(value: JsonValue | undefined): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
+function textValue(value: JsonValue | undefined, fallback: string): string {
+  if (typeof value === "string" && value.trim()) return value;
+  return fallback;
+}
+
+function vector3Value(value: JsonValue | undefined): string[] | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const values = value.map((entry) =>
+    typeof entry === "number" || typeof entry === "string" ? String(entry) : "",
+  );
+  return values.every((entry) => entry.trim() !== "") ? values : null;
 }

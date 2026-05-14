@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
 import {
-  resolveAirboxBaseVisualizationSettings,
+  resolveAirboxVisualizationSettingsFromState,
   resolveGlobalObjectVisualizationSettings,
-} from "./viewport3DTargets";
+} from "@/kernel/visualization/ObjectVisualizationController";
 
 describe("viewport3DTargets", () => {
   it("maps canonical global mesh/vector layers into object render defaults", () => {
@@ -53,7 +53,7 @@ describe("viewport3DTargets", () => {
 
   it("maps canonical airbox layer state into the airbox render base", () => {
     expect(
-      resolveAirboxBaseVisualizationSettings({
+      resolveAirboxVisualizationSettingsFromState({
         layers: {
           airbox: {
             opacity: 0.35,

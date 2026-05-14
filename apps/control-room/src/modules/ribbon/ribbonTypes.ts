@@ -43,6 +43,8 @@ export interface RibbonTabContent {
   groups: RibbonGroup[];
 }
 
+type RibbonStaticOrMappedInput<T> = unknown | ((value: T) => unknown);
+
 export type RibbonMenuNode =
   | {
       type: "label";
@@ -62,7 +64,7 @@ export type RibbonMenuNode =
       shortcut?: string;
       disabled?: boolean;
       commandId?: string;
-      onSelect?: () => void;
+      commandInput?: unknown;
     }
   | {
       type: "checkbox";
@@ -71,7 +73,7 @@ export type RibbonMenuNode =
       checked: boolean;
       disabled?: boolean;
       commandId?: string;
-      onCheckedChange?: (checked: boolean) => void;
+      commandInput?: RibbonStaticOrMappedInput<boolean>;
     }
   | {
       type: "radio-group";
@@ -83,9 +85,11 @@ export type RibbonMenuNode =
         label: string;
         disabled?: boolean;
         commandId?: string;
+        commandInput?: unknown;
       }>;
       disabled?: boolean;
-      onValueChange?: (value: string) => void;
+      commandId?: string;
+      commandInput?: RibbonStaticOrMappedInput<string>;
     }
   | {
       type: "status";
@@ -111,7 +115,8 @@ export type RibbonMenuNode =
       step: number;
       unit?: string;
       disabled?: boolean;
-      onValueChange?: (value: number) => void;
+      commandId?: string;
+      commandInput?: RibbonStaticOrMappedInput<number>;
     }
   | {
       type: "color";
@@ -119,7 +124,8 @@ export type RibbonMenuNode =
       label: string;
       value: string;
       disabled?: boolean;
-      onValueChange?: (value: string) => void;
+      commandId?: string;
+      commandInput?: RibbonStaticOrMappedInput<string>;
     };
 
 export const RIBBON_TABS: RibbonTabDef[] = [

@@ -40,18 +40,18 @@ describe("vectorGlyphGeometry", () => {
     expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 1, 1]);
   });
 
-  it("colors production glyphs in the HUD orientation frame", () => {
+  it("keeps production glyph colors aligned with the physical HSL sphere", () => {
     const glyphs = buildVectorGlyphInstances(
       new Float32Array([
+        0, 0, 0, 0, 0, 1, 1,
         0, 0, 0, 0, 0, -1, 1,
-        0, 0, 0, 1, 0, 0, 1,
       ]),
       { colorMode: "orientation", orientationFrame: "hud" },
     );
 
     expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [
       1, 1, 1,
-      0.5, 0, 0,
+      0, 0, 0,
     ]);
   });
 

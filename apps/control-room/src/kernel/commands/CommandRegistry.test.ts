@@ -150,6 +150,21 @@ describe("CommandRegistry", () => {
     });
   });
 
+  it("passes command input through command context", async () => {
+    const { registry } = setupWithBus();
+    const runFn = vi.fn(() => ({ status: "completed" as const }));
+    registry.register(command("run-with-input", { run: runFn }));
+
+    const result = await registry.execute(
+      "run-with-input",
+      { source: "test" },
+      70,
+    );
+
+    expect(result.status).toBe("completed");
+    expect(runFn).toHaveBeenCalledWith({ source: "test", input: 70 });
+  });
+
   it("execute returns failed for unknown command", async () => {
     const { registry } = setupWithBus();
     const result = await registry.execute("nope", { source: "test" });

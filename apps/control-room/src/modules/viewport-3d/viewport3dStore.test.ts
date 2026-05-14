@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   resolveHslReferenceVisible,
+  resolveViewport3DCameraProjection,
+  resolveViewport3DCameraState,
   viewport3dStore,
 } from "./viewport3dStore";
 
@@ -64,5 +66,31 @@ describe("viewport3dStore", () => {
     expect(resolveHslReferenceVisible("auto", "magnitude")).toBe(false);
     expect(resolveHslReferenceVisible("on", "magnitude")).toBe(true);
     expect(resolveHslReferenceVisible("off", "orientation")).toBe(false);
+  });
+
+  it("derives viewport camera from backend visualization state", () => {
+    const state = {
+      camera: {
+        fov_degrees: 35,
+        orthographic_scale: 2.5e-6,
+        position: [1e-6, 2e-6, 3e-6],
+        projection: "orthographic" as const,
+        target: [0, 0, 0],
+        up: [0, 0, 1],
+      },
+    };
+
+    expect(resolveViewport3DCameraState(state)).toEqual({
+      position: [1e-6, 2e-6, 3e-6],
+      target: [0, 0, 0],
+    });
+    expect(resolveViewport3DCameraProjection(state)).toBe("orthographic");
+  });
+
+  it("falls back to local camera defaults when visualization state has no camera", () => {
+    expect(resolveViewport3DCameraState(null)).toEqual(
+      DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+    );
+    expect(resolveViewport3DCameraProjection(null)).toBe("perspective");
   });
 });

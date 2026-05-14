@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-`viewport-3d` renders the physical domain, mesh, field quantities, vector glyphs, airbox, selection highlights, geometry overlays, and camera tools. It must stay domain-neutral at renderer level.
+`viewport-3d` renders the physical domain, mesh, field quantities, vector glyphs, airbox, selection highlights, geometry overlays, and session-wide camera tools. It must stay domain-neutral at renderer level.
 
 The renderer uses React Three Fiber (R3F), but R3F is not a substitute for resource ownership. The module must still prove cleanup of WebGL resources, decoded binary resources, workers, observers, subscriptions, and diagnostics state.
 
@@ -75,7 +75,7 @@ export interface Viewport3DRenderModel {
 }
 ```
 
-No R3F layer receives raw API payloads. FDM/FEM resources are converted by adapters before rendering.
+No R3F layer receives raw API payloads. FDM/FEM resources are converted by adapters before rendering. Camera position, target, projection, and scale come from `VisualizationStateResource.camera`; WebSocket events invalidate that HTTP resource rather than carrying a separate camera snapshot.
 
 ## 4. Single Canvas Rule
 

@@ -5,7 +5,7 @@
 
 ## 1. Cutover Definition
 
-Cutover means `apps/control-room` becomes the default and only active browser frontend. `apps/web` becomes frozen reference, then is removed or moved out of the active product path.
+Cutover means `apps/control-room` becomes the default and only active browser frontend. `apps/legacy_web` becomes frozen reference, then is removed or moved out of the active product path.
 
 Cutover is not allowed just because v2 starts or looks better.
 
@@ -34,7 +34,7 @@ Required workflows:
 
 Required:
 
-- no imports from `apps/web` into `apps/control-room`;
+- no imports from `apps/legacy_web` into `apps/control-room`;
 - no direct component/module `fetch`;
 - no `/v1/live/current` references in v2;
 - no bootstrap/poll/preview canonical data path;
@@ -91,7 +91,7 @@ Required:
 
 ## 6. Legacy Freeze Criteria
 
-`apps/web` can be frozen when:
+`apps/legacy_web` can be frozen when:
 
 - v2 is default for local dev and deployment;
 - all required workflows pass in v2;
@@ -100,16 +100,16 @@ Required:
 
 After freeze:
 
-- no new features in `apps/web`;
-- no architectural cleanup in `apps/web`;
+- no new features in `apps/legacy_web`;
+- no architectural cleanup in `apps/legacy_web`;
 - only critical reference fixes if needed for migration comparison.
 
 ## 7. Legacy Removal Criteria
 
-`apps/web` can be removed or archived outside the active product tree when:
+`apps/legacy_web` can be removed or archived outside the active product tree when:
 
 - v2 has run through at least one stable release cycle;
-- no tests/scripts/deployments reference `apps/web`;
+- no tests/scripts/deployments reference `apps/legacy_web`;
 - all copied assets have v2 ownership;
 - docs no longer instruct users or agents to work in legacy;
 - removal PR passes full frontend, API, and docs checks.

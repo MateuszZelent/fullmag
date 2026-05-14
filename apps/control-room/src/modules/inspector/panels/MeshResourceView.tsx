@@ -154,7 +154,14 @@ export function jsonValue(value: unknown): JsonValue | null {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map(jsonValue).filter((entry) => entry !== undefined) as JsonValue[];
+    const result: JsonValue[] = [];
+    for (const entry of value) {
+      const converted = jsonValue(entry);
+      if (converted !== undefined) {
+        result.push(converted);
+      }
+    }
+    return result;
   }
   const record = asRecord(value);
   if (!record) return null;

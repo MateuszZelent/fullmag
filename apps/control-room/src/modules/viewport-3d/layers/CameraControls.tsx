@@ -93,6 +93,12 @@ function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
   );
 }
 
+function cameraStateSignature(cameraState: Viewport3DCameraState): string {
+  return [...cameraState.position, ...cameraState.target]
+    .map((value) => value.toExponential(8))
+    .join(":");
+}
+
 export function CameraController({
   bounds,
   cameraState,
@@ -110,6 +116,7 @@ export function CameraController({
   const handledFitRevisionRef = useRef(fitRevision);
   const handledResetCameraRevisionRef = useRef(resetCameraRevision);
   const autoFittedBoundsRef = useRef<string | null>(null);
+  const appliedCameraStateRef = useRef<string | null>(null);
   // Store cameraState in a ref so the fit/reset effect doesn't re-fire
   // when OrbitControls updates the store (which it does on every drag-end).
   const cameraStateRef = useRef(cameraState);
@@ -157,18 +164,33 @@ export function CameraController({
     camera.position.set(...state.position);
     camera.lookAt(...state.target);
     camera.updateProjectionMatrix();
+    appliedCameraStateRef.current = cameraStateSignature(state);
     invalidate();
     tracker.recordDirtyFrame("camera-init");
     // Intentionally runs only on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const signature = cameraStateSignature(cameraState);
+    if (appliedCameraStateRef.current === signature) return;
+    applyViewport3DWorldUp(camera);
+    camera.position.set(...cameraState.position);
+    camera.lookAt(...cameraState.target);
+    camera.updateProjectionMatrix();
+    appliedCameraStateRef.current = signature;
+    invalidate();
+    tracker.recordDirtyFrame("camera-resource");
+  }, [camera, cameraState, invalidate, tracker]);
+
   return null;
 }
 
 export function OrbitCameraControls({
+  cameraState,
   tracker,
 }: {
+  cameraState: Viewport3DCameraState;
   tracker: Viewport3DResourceTracker;
 }) {
   const { camera, invalidate } = useThree();
@@ -204,6 +226,7 @@ export function OrbitCameraControls({
       enableDamping={false}
       onChange={recordCameraControlChange}
       onEnd={handleEnd}
+      target={cameraState.target}
     />
   );
 }

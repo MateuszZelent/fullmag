@@ -25,6 +25,8 @@ pub struct VisualizationStateResource {
     pub slice: SliceVisualizationState,
     /// Canonical 3-D trim controls for topology-aware viewports.
     pub trim: TrimVisualizationState,
+    /// Session-wide viewport camera. All connected clients should converge to this view.
+    pub camera: VisualizationCameraState,
     /// Compatibility projection of the legacy single clip plane.
     pub clip: ClipVisualizationState,
     /// Vector glyph style independent from vector visibility and sampling.
@@ -108,9 +110,13 @@ pub struct VisualizationStatePatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trim: Option<TrimVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera: Option<VisualizationCameraPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<ClipVisualizationPatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_style: Option<VectorStyleVisualizationPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<Vec<VisualizationOverrideState>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
@@ -177,7 +183,7 @@ pub struct BasicLayerState {
     pub opacity: f64,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct BasicLayerPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
@@ -192,7 +198,7 @@ pub struct VectorLayerState {
     pub domain: VectorLayerDomain,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct VectorLayerPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
@@ -562,11 +568,105 @@ pub enum FerromagnetVisibilityMode {
     Ghost,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualizationCameraProjection {
+    Perspective,
+    Orthographic,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationCameraState {
+    pub projection: VisualizationCameraProjection,
+    pub position: [f64; 3],
+    pub target: [f64; 3],
+    pub up: [f64; 3],
+    pub fov_degrees: f64,
+    pub orthographic_scale: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationCameraPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<VisualizationCameraProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub up: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fov_degrees: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orthographic_scale: Option<f64>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 pub struct VisualizationOverrideState {
     pub scope: VisualizationScopeKind,
     pub scope_id: String,
+    /// Compatibility target visibility override. Prefer `display.visible` for new clients.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<VisualizationTargetDisplayOverride>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<VisualizationTargetStyleOverride>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationTargetDisplayOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<BasicLayerPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wireframe: Option<BasicLayerPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points: Option<BasicLayerPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vectors: Option<VectorLayerPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry_scope: Option<VisualizationTargetGeometryScope>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct VisualizationTargetStyleOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_color_source: Option<SurfaceColorSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_mono_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_color_mode: Option<VectorColorMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_mono_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_alpha: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_thickness: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wireframe_color: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualizationTargetGeometryScope {
+    Surface,
+    Full,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceColorSource {
+    Solid,
+    Orientation,
+    ComponentX,
+    ComponentY,
+    ComponentZ,
+    Magnitude,
+    Colormap,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

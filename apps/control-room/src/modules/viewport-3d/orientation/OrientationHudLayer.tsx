@@ -68,43 +68,38 @@ const VIEW_CUBE_FACE_GRID_POINTS = buildViewCubeFaceGridPoints(
   VIEW_CUBE_HALF,
   VIEW_CUBE_EDGE_SIZE,
 );
-const VIEW_CUBE_AXIS_COLORS = {
-  x: "#e65050",
-  y: "#50c850",
-  z: "#5090e6",
-};
 const VIEW_CUBE_FACE_PLACEMENTS: Record<ViewCubeFaceModel["id"], {
-  accent: string;
+  axis: "x" | "y" | "z";
   position: [number, number, number];
   rotation: [number, number, number];
 }> = {
   right: {
-    accent: VIEW_CUBE_AXIS_COLORS.x,
+    axis: "x",
     position: [VIEW_CUBE_HALF, 0, 0],
     rotation: [0, Math.PI / 2, 0],
   },
   left: {
-    accent: VIEW_CUBE_AXIS_COLORS.x,
+    axis: "x",
     position: [-VIEW_CUBE_HALF, 0, 0],
     rotation: [0, -Math.PI / 2, 0],
   },
   top: {
-    accent: VIEW_CUBE_AXIS_COLORS.z,
+    axis: "z",
     position: [0, 0, VIEW_CUBE_HALF],
     rotation: [0, 0, 0],
   },
   bottom: {
-    accent: VIEW_CUBE_AXIS_COLORS.z,
+    axis: "z",
     position: [0, 0, -VIEW_CUBE_HALF],
     rotation: [0, Math.PI, 0],
   },
   front: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
+    axis: "y",
     position: [0, VIEW_CUBE_HALF, 0],
     rotation: [-Math.PI / 2, 0, 0],
   },
   back: {
-    accent: VIEW_CUBE_AXIS_COLORS.y,
+    axis: "y",
     position: [0, -VIEW_CUBE_HALF, 0],
     rotation: [Math.PI / 2, 0, 0],
   },
@@ -118,6 +113,16 @@ const VIEW_CUBE_FACE_LABELS: Record<ViewCubeFaceModel["id"], string> = {
   front: "FRONT",
   back: "BACK",
 };
+
+function viewCubeAxisColors(
+  colors: Viewport3DColors,
+): Record<"x" | "y" | "z", string> {
+  return {
+    x: String(colors.danger ?? colors.accent),
+    y: String(colors.success ?? colors.field),
+    z: String(colors.accentStrong ?? colors.accent),
+  };
+}
 
 export function OrientationHudLayer({
   colors,
@@ -241,6 +246,7 @@ export function ViewCube3DBox({
 }) {
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
   const axisLabels = getViewCubeAxisLabels();
+  const axisColors = viewCubeAxisColors(colors);
   const faces = useMemo(() => buildViewCubeFaces(), []);
 
   return (
@@ -255,7 +261,7 @@ export function ViewCube3DBox({
           ]}
         />
         <meshBasicMaterial
-          color="#0a0e16"
+          color={colors.background}
           depthTest={false}
           depthWrite={false}
           opacity={0.64}
@@ -291,7 +297,7 @@ export function ViewCube3DBox({
         />
       ))}
       <AxisLabelSprite
-        color={VIEW_CUBE_AXIS_COLORS.x}
+        color={axisColors.x}
         label={trimPositiveAxisLabel(axisLabels.x)}
         outlineColor={String(colors.background)}
         position={[VIEW_CUBE_LABEL_DISTANCE, 0, 0]}
@@ -299,7 +305,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={VIEW_CUBE_AXIS_COLORS.y}
+        color={axisColors.y}
         label={trimPositiveAxisLabel(axisLabels.y)}
         outlineColor={String(colors.background)}
         position={[0, VIEW_CUBE_LABEL_DISTANCE, 0]}
@@ -307,7 +313,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={VIEW_CUBE_AXIS_COLORS.z}
+        color={axisColors.z}
         label={trimPositiveAxisLabel(axisLabels.z)}
         outlineColor={String(colors.background)}
         position={[0, 0, VIEW_CUBE_LABEL_DISTANCE]}
@@ -335,14 +341,15 @@ function ViewCubeFacePanel({
 }) {
   const placement = VIEW_CUBE_FACE_PLACEMENTS[face.id];
   const label = VIEW_CUBE_FACE_LABELS[face.id];
+  const accent = viewCubeAxisColors(colors)[placement.axis];
 
   const normalTexture = useMemo(
-    () => buildViewCubeFaceTexture(label, placement.accent, false),
-    [label, placement.accent],
+    () => buildViewCubeFaceTexture(label, accent, colors, false),
+    [accent, colors, label],
   );
   const hoveredTexture = useMemo(
-    () => buildViewCubeFaceTexture(label, placement.accent, true),
-    [label, placement.accent],
+    () => buildViewCubeFaceTexture(label, accent, colors, true),
+    [accent, colors, label],
   );
 
   useEffect(
@@ -359,7 +366,7 @@ function ViewCubeFacePanel({
       <mesh renderOrder={WIDGET_RENDER_ORDER + 1}>
         <planeGeometry args={[VIEW_CUBE_FACE_SIZE, VIEW_CUBE_FACE_SIZE]} />
         <meshBasicMaterial
-          color="#0f1724"
+          color={colors.panel ?? colors.mesh}
           depthTest={false}
           depthWrite={false}
           opacity={faceHovered ? 0.86 : 0.68}
@@ -380,7 +387,8 @@ function ViewCubeFacePanel({
           targetKind,
           isHovered,
           faceHovered,
-          placement.accent,
+          accent,
+          colors,
         );
         const cellInset = targetKind === "face" ? 0.9 : 0.5;
         return (
@@ -437,6 +445,7 @@ function viewCubeCellMaterial(
   hovered: boolean,
   faceHovered: boolean,
   accent: string,
+  colors: Viewport3DColors,
 ): { color: string; opacity: number } {
   if (hovered) {
     return {
@@ -447,20 +456,20 @@ function viewCubeCellMaterial(
 
   if (kind === "face") {
     return {
-      color: "#ffffff",
+      color: String(colors.textPrimary ?? "white"),
       opacity: faceHovered ? 0.98 : 0.9,
     };
   }
 
   if (kind === "edge") {
     return {
-      color: "#26344a",
+      color: String(colors.panelRaised ?? colors.mesh),
       opacity: faceHovered ? 0.76 : 0.58,
     };
   }
 
   return {
-    color: "#30415c",
+    color: String(colors.panel ?? colors.background),
     opacity: faceHovered ? 0.84 : 0.66,
   };
 }
@@ -476,7 +485,7 @@ export function HslReferenceSphere({ colors }: { colors: Viewport3DColors }) {
       <mesh renderOrder={WIDGET_RENDER_ORDER - 1}>
         <sphereGeometry args={[1.09, 32, 18]} />
         <meshBasicMaterial
-          color="#8ec8ff"
+          color={colors.accentStrong ?? colors.accent}
           depthTest={false}
           depthWrite={false}
           opacity={0.07}
@@ -724,6 +733,7 @@ function buildAxisLabelTexture(
 function buildViewCubeFaceTexture(
   label: string,
   accentColor: string,
+  colors: Viewport3DColors,
   hovered: boolean,
 ): CanvasTexture {
   const size = 256;
@@ -737,8 +747,11 @@ function buildViewCubeFaceTexture(
     const margin = bw / 2 + 3;
     const r = 20;
     const gradient = ctx.createLinearGradient(0, 0, size, size);
-    gradient.addColorStop(0, hovered ? "rgba(62,82,118,0.98)" : "rgba(42,56,80,0.94)");
-    gradient.addColorStop(1, hovered ? "rgba(30,45,72,0.98)" : "rgba(20,31,50,0.94)");
+    const gradientStart = hovered
+      ? colors.panelRaised ?? colors.mesh
+      : colors.panel ?? colors.mesh;
+    gradient.addColorStop(0, String(gradientStart));
+    gradient.addColorStop(1, String(colors.background));
 
     ctx.beginPath();
     ctx.moveTo(margin + r, margin);
@@ -764,10 +777,17 @@ function buildViewCubeFaceTexture(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineWidth = 6;
-    ctx.strokeStyle = "rgba(0,0,0,0.72)";
+    ctx.strokeStyle = String(colors.background);
+    ctx.globalAlpha = 0.72;
     ctx.strokeText(label, size / 2, size / 2);
-    ctx.fillStyle = hovered ? "#ffffff" : "rgba(210,225,255,0.88)";
+    ctx.globalAlpha = hovered ? 1 : 0.88;
+    ctx.fillStyle = String(
+      hovered
+        ? colors.textPrimary ?? colors.accent
+        : colors.textSecondary ?? colors.wire,
+    );
     ctx.fillText(label, size / 2, size / 2);
+    ctx.globalAlpha = 1.0;
   }
   const texture = new CanvasTexture(canvas);
   texture.needsUpdate = true;

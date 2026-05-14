@@ -8,11 +8,11 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   magnetizationTextureAssetId,
   presetMagnetizationAsset,
-} from "@/modules/magnetization-texture/assetFactory";
-import { resolveMagnetizationTextureModel } from "@/modules/magnetization-texture/draftModel";
-import { resolveMagnetizationTextureTarget } from "@/modules/magnetization-texture/targetResolver";
-import type { MagnetizationTexturePresetId } from "@/modules/magnetization-texture/texturePresets";
-import type { MagnetizationAssetDraft } from "@/modules/magnetization-texture/types";
+} from "@/shared/domain/magnetization-texture/assetFactory";
+import { resolveMagnetizationTextureModel } from "@/shared/domain/magnetization-texture/draftModel";
+import { resolveMagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/targetResolver";
+import type { MagnetizationTexturePresetId } from "@/shared/domain/magnetization-texture/texturePresets";
+import type { MagnetizationAssetDraft } from "@/shared/domain/magnetization-texture/types";
 
 interface JsonRecord {
   [key: string]: unknown;

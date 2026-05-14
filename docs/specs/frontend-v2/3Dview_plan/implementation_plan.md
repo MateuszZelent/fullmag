@@ -11,7 +11,7 @@ This plan is the implementation authority for Phase 5. The earlier split/multi-p
 
 1. Render surface: a single R3F `<Canvas frameloop="demand">`.
 2. No multi-pane, no split-h/split-v, no quad, no per-pane layer state, no synced-camera grid in Phase 5.
-3. One camera state belongs to `viewport-3d/store.ts`.
+3. One session-wide camera state belongs to `/v2/sessions/current/visualization/state.camera`; `viewport-3d/store.ts` may keep only transient interaction fallback.
 4. One canonical visualization state comes from `/v2/sessions/current/visualization/state`.
 5. HTTP v2 resources are authoritative. WebSocket only invalidates resource keys.
 6. All module data access goes through `ControlRoomApi` facade methods and resource hooks.

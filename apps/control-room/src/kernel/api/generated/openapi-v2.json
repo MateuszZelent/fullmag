@@ -7222,6 +7222,18 @@
         ],
         "type": "object"
       },
+      "SurfaceColorSource": {
+        "enum": [
+          "solid",
+          "orientation",
+          "component_x",
+          "component_y",
+          "component_z",
+          "magnitude",
+          "colormap"
+        ],
+        "type": "string"
+      },
       "TrimAxisVisualizationAxes": {
         "properties": {
           "x": {
@@ -7626,6 +7638,119 @@
         ],
         "type": "object"
       },
+      "VisualizationCameraPatch": {
+        "properties": {
+          "fov_degrees": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "orthographic_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "projection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationCameraProjection"
+              }
+            ]
+          },
+          "target": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "up": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationCameraProjection": {
+        "enum": [
+          "perspective",
+          "orthographic"
+        ],
+        "type": "string"
+      },
+      "VisualizationCameraState": {
+        "properties": {
+          "fov_degrees": {
+            "format": "double",
+            "type": "number"
+          },
+          "orthographic_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "position": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "projection": {
+            "$ref": "#/components/schemas/VisualizationCameraProjection"
+          },
+          "target": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "up": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "projection",
+          "position",
+          "target",
+          "up",
+          "fov_degrees"
+        ],
+        "type": "object"
+      },
       "VisualizationDiagnostics": {
         "properties": {
           "degraded_reasons": {
@@ -7773,13 +7898,34 @@
       },
       "VisualizationOverrideState": {
         "properties": {
+          "display": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetDisplayOverride"
+              }
+            ]
+          },
           "scope": {
             "$ref": "#/components/schemas/VisualizationScopeKind"
           },
           "scope_id": {
             "type": "string"
           },
+          "style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetStyleOverride"
+              }
+            ]
+          },
           "visible": {
+            "description": "Compatibility target visibility override. Prefer `display.visible` for new clients.",
             "type": [
               "boolean",
               "null"
@@ -7815,6 +7961,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "camera": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationCameraPatch"
+              }
             ]
           },
           "clip": {
@@ -7902,6 +8058,15 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationOverrideState"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -8020,6 +8185,10 @@
           "auto_contrast": {
             "description": "Compatibility projection for current display clients. Prefer `quantity.auto_contrast`.",
             "type": "boolean"
+          },
+          "camera": {
+            "$ref": "#/components/schemas/VisualizationCameraState",
+            "description": "Session-wide viewport camera. All connected clients should converge to this view."
           },
           "clip": {
             "$ref": "#/components/schemas/ClipVisualizationState",
@@ -8159,6 +8328,7 @@
           "fem",
           "slice",
           "trim",
+          "camera",
           "clip",
           "vector_style",
           "overrides",
@@ -8176,6 +8346,138 @@
           "x_chosen_size",
           "y_chosen_size"
         ],
+        "type": "object"
+      },
+      "VisualizationTargetDisplayOverride": {
+        "properties": {
+          "geometry_scope": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
+              }
+            ]
+          },
+          "opacity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "points": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "surface": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          },
+          "vectors": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorLayerPatch"
+              }
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wireframe": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BasicLayerPatch"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "VisualizationTargetGeometryScope": {
+        "enum": [
+          "surface",
+          "full"
+        ],
+        "type": "string"
+      },
+      "VisualizationTargetStyleOverride": {
+        "properties": {
+          "surface_color_source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SurfaceColorSource"
+              }
+            ]
+          },
+          "surface_mono_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vector_alpha": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "vector_color_mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VectorColorMode"
+              }
+            ]
+          },
+          "vector_mono_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vector_thickness": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "wireframe_color": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "WorkspaceActiveNodeReplaceRequest": {

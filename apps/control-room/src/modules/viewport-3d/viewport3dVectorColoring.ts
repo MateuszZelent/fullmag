@@ -64,10 +64,10 @@ export function resolveViewport3DVectorColorScalar(
  * dark-purple → blue → green → yellow.
  */
 const MAGNITUDE_STOPS: [number, number, number][] = [
-  [0x44 / 255, 0x01 / 255, 0x54 / 255], // #440154 dark-purple
-  [0x31 / 255, 0x68 / 255, 0x8e / 255], // #31688e blue
-  [0x35 / 255, 0xb7 / 255, 0x79 / 255], // #35b779 green
-  [0xfd / 255, 0xe7 / 255, 0x25 / 255], // #fde725 yellow
+  [0x44 / 255, 0x01 / 255, 0x54 / 255],
+  [0x31 / 255, 0x68 / 255, 0x8e / 255],
+  [0x35 / 255, 0xb7 / 255, 0x79 / 255],
+  [0xfd / 255, 0xe7 / 255, 0x25 / 255],
 ];
 
 /**

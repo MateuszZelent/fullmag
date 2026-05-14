@@ -14,7 +14,6 @@ import type { JsonObject, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext } from "../commands/commandTypes";
 import type { CommandContribution } from "../commands/commandTypes";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
-import { viewport3dStore } from "../../modules/viewport-3d/viewport3dStore";
 
 const DEFAULT_RELAX_STAGE: JsonObject = {
   entrypoint_kind: "relax",
@@ -283,24 +282,6 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
 
       return {
         message: "Compute energies command accepted.",
-        status: "completed",
-      };
-    },
-  },
-  {
-    id: "study.test-random-field",
-    title: "Test Random Field",
-    category: "Study",
-    group: "study-debug",
-    scope: "workspace",
-    isActive: () => viewport3dStore.getSnapshot().mockField.running,
-    run: async () => {
-      viewport3dStore.toggleMockField();
-      const running = viewport3dStore.getSnapshot().mockField.running;
-      return {
-        message: running
-          ? "Mock field animation started — viewport receives random magnetization at ~8 fps."
-          : "Mock field animation stopped.",
         status: "completed",
       };
     },

@@ -14,9 +14,9 @@ import {
 import {
   magnetizationTextureAssetId,
   presetMagnetizationAsset,
-} from "./assetFactory";
-import { resolveMagnetizationTextureTarget } from "./targetResolver";
-import type { MagnetizationTextureTarget } from "./types";
+} from "@/shared/domain/magnetization-texture/assetFactory";
+import { resolveMagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/targetResolver";
+import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
 
 function selectedTarget(context: CommandContext): MagnetizationTextureTarget | null {
   const selection = context.selection?.get();

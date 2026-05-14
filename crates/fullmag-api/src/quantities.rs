@@ -2,7 +2,7 @@
 
 use crate::types::*;
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
-use fullmag_quantities::{QuantityShape, quantity_specs};
+use fullmag_quantities::{quantity_specs, QuantityShape};
 use fullmag_runner::{BackendCapabilities, FemMeshPayload};
 use serde_json::Value;
 

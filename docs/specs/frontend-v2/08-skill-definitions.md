@@ -39,7 +39,7 @@ Any agent touching frontend v2 must:
 2. load the relevant frontend-v2 skill;
 3. identify which module, kernel service, resource family, command, and test gate are affected;
 4. state whether the work touches canonical semantics, API contracts, or only UI composition;
-5. avoid modifying `apps/web` unless the task is explicitly about the legacy reference;
+5. avoid modifying `apps/legacy_web` unless the task is explicitly about the legacy reference;
 6. run the narrow verification gate before claiming completion.
 
 ## 5. CI Translation

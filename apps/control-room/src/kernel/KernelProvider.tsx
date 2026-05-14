@@ -4,12 +4,13 @@ import { useEffect, useMemo, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
 import { ControlRoomApi } from "./api/ControlRoomApi";
-import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
 import {
   resolveControlRoomApiBase,
   resolveControlRoomWebSocketUrl,
 } from "./api/apiRuntimeTarget";
 import { RequestDiagnosticsController } from "./api/RequestDiagnosticsController";
+import { GEOMETRY_LIFECYCLE_COMMANDS } from "./authoring/geometryLifecycleCommandContributions";
+import { MAGNETIZATION_TEXTURE_COMMANDS } from "./authoring/magnetization-texture/commands";
 import { createCommandContext } from "./commands/commandContext";
 import { CommandRegistry } from "./commands/CommandRegistry";
 import {
@@ -28,8 +29,8 @@ import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributio
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { ALL_MODULES } from "@/modules";
-import { MAGNETIZATION_TEXTURE_COMMANDS } from "@/modules/magnetization-texture/commands";
 
 interface KernelProviderProps {
   children: ReactNode;
@@ -62,6 +63,9 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
   for (const cmd of MAGNETIZATION_TEXTURE_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of VISUALIZATION_TARGET_COMMANDS) {
     commands.register(cmd);
   }
 

@@ -53,7 +53,6 @@ import {
 import { createElement } from "react";
 
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   LiveStatusResource,
   MeshActiveBuildResource,
@@ -65,22 +64,16 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
-import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   AIRBOX_VISUALIZATION_TARGET,
-  airboxLocalVisualizationPatchFromTargetPatch,
-  airboxVisualizationStatePatchFromTargetPatch,
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
   displayLabelForVisualizationTarget,
-  hasVisualizationStatePatch,
   renderModePatch,
-  resolveAirboxVisualizationSettingsFromState,
   resolveEffectiveVisualizationSettings,
-  resolveVisualizationSettings,
+  resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
-  visualizationTargetKey,
   type ObjectVisualizationController,
   type ObjectVisualizationSnapshot,
   type SurfaceColorSource,
@@ -89,10 +82,30 @@ import {
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
+import {
+  RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+  RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
+  visualizationAirboxCommandInput,
+  visualizationDefaultsCommandInput,
+  visualizationStateCommandInput,
+} from "./ribbonCommands";
 
 const I = 20; // icon size
+type RibbonVisualizationApi = Pick<
+  NonNullable<CommandContext["api"]>["visualization"],
+  "patch"
+>;
+type RibbonResourceInvalidator = Pick<
+  NonNullable<CommandContext["resources"]>,
+  "invalidate"
+>;
 
 function icon(Icon: typeof Play, props?: Record<string, unknown>) {
   return createElement(Icon, { size: I, ...props });
@@ -161,6 +174,19 @@ function statusMenu(
 
 function separator(id: string): RibbonMenuNode {
   return { type: "separator", id };
+}
+
+function physicsInteractionMenu(): RibbonMenuNode[] {
+  return [
+    { type: "label", id: "physics-interactions:label", label: "Interactions" },
+    ...allInteractionSpecs().map((spec) => ({
+      type: "item" as const,
+      id: `physics-interactions:${spec.id}`,
+      label: spec.label,
+      commandId: RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      commandInput: { interactionId: spec.id },
+    })),
+  ];
 }
 
 export const homeTab: RibbonTabContent = {
@@ -1190,7 +1216,7 @@ export const physicsTab: RibbonTabContent = {
       subtitle: "interactions",
       tone: "neutral",
       actions: [
-        { id: "physics-object", icon: icon(Magnet), label: "Object Physics", iconColor: "text-violet-400", menu: menu("physics-object", "Object physics", ["Exchange", "Demag", "Anisotropy", "DMI", "Zeeman"]) },
+        { id: "physics-interactions", icon: icon(Magnet), label: "Interactions", iconColor: "text-violet-400", menu: physicsInteractionMenu() },
         { id: "physics-global", icon: icon(Cog),    label: "Global Physics", iconColor: "text-muted-foreground" },
       ],
     },
@@ -1341,7 +1367,6 @@ export const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
-        { id: "study.test-random-field", icon: icon(FlaskConical), label: "Test Random", iconColor: "text-amber-400", tooltip: "Toggle mock solver: feed random magnetization data to the 3D viewport at ~8 fps" },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
@@ -1441,16 +1466,14 @@ export const automationTab: RibbonTabContent = {
 };
 
 export interface RibbonBuildContext {
-  api?: {
-    visualization: Pick<ControlRoomApi["visualization"], "patch">;
-  };
+  api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
   meshSemantics?: MeshSemanticsResource | null;
   meshSummary?: MeshSummaryResource | null;
-  resources?: Pick<ResourceInvalidationController, "invalidate">;
+  resources?: RibbonResourceInvalidator;
   selection: Selection;
   sessionStatus?: LiveStatusResource | null;
   visualization: ObjectVisualizationController;
@@ -1758,7 +1781,7 @@ function applyCommandState(
   content: RibbonTabContent,
   context: RibbonBuildContext,
 ): RibbonTabContent {
-  const commandContext = context.commandContext ?? { source: "ribbon" };
+  const commandContext = ribbonCommandContext(context);
 
   return {
     ...content,
@@ -1798,23 +1821,66 @@ function isCommandDisabled(
   return !context.commands.isEnabled(commandId, commandContext);
 }
 
+function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
+  const base = context.commandContext ?? { source: "ribbon" as const };
+  const resourceData = context.visualizationState
+    ? {
+        [VISUALIZATION_STATE_PATH]: context.visualizationState,
+        ...base.resourceData,
+      }
+    : base.resourceData;
+  const selectionController = base.selection as
+    | { get?: () => Selection; set?: (...args: unknown[]) => void }
+    | undefined;
+  const selection = {
+    get:
+      typeof selectionController?.get === "function"
+        ? () => selectionController.get?.() ?? context.selection
+        : () => context.selection,
+    set:
+      typeof selectionController?.set === "function"
+        ? (...args: unknown[]) => selectionController.set?.(...args)
+        : () => undefined,
+  } as unknown as CommandContext["selection"];
+
+  return {
+    ...base,
+    api: (base.api ?? context.api) as CommandContext["api"],
+    resourceData,
+    resources: (base.resources ?? context.resources) as CommandContext["resources"],
+    selection,
+    visualization: base.visualization ?? context.visualization,
+  };
+}
+
 function applyCommandStateToMenuNode(
   node: RibbonMenuNode,
   context: RibbonBuildContext,
   commandContext: CommandContext,
 ): RibbonMenuNode {
-  if (node.type === "item" || node.type === "checkbox") {
+  if (node.type === "checkbox") {
     const cmdId = node.commandId ?? node.id;
     const command = context.commands?.get(cmdId);
     const disabledByCommand = isCommandDisabled(node.commandId, context, commandContext);
 
-    if (node.type === "checkbox" && command) {
+    if (command) {
       return {
         ...node,
-        checked: context.commands?.isActive(cmdId, commandContext) ?? node.checked,
+        checked: command.isActive
+          ? context.commands?.isActive(cmdId, commandContext) ?? node.checked
+          : node.checked,
         disabled: node.disabled || disabledByCommand,
       };
     }
+
+    return {
+      ...node,
+      disabled: node.disabled || disabledByCommand,
+    };
+  }
+
+  if (node.type === "item") {
+    const disabledByCommand = isCommandDisabled(node.commandId, context, commandContext);
 
     return {
       ...node,
@@ -1840,6 +1906,30 @@ function applyCommandStateToMenuNode(
       nodes: node.nodes.map((child) =>
         applyCommandStateToMenuNode(child, context, commandContext),
       ),
+    };
+  }
+
+  if (node.type === "slider" && node.commandId && context.commands?.get(node.commandId)) {
+    const disabledByCommand = isCommandDisabled(
+      node.commandId,
+      context,
+      commandContext,
+    );
+    return {
+      ...node,
+      disabled: node.disabled || disabledByCommand,
+    };
+  }
+
+  if (node.type === "color" && node.commandId && context.commands?.get(node.commandId)) {
+    const disabledByCommand = isCommandDisabled(
+      node.commandId,
+      context,
+      commandContext,
+    );
+    return {
+      ...node,
+      disabled: node.disabled || disabledByCommand,
     };
   }
 
@@ -1947,23 +2037,6 @@ function activeCommandValue(
   )?.[1] ?? null;
 }
 
-function patchVisualizationState(
-  context: RibbonBuildContext,
-  patch: VisualizationStatePatch,
-): void {
-  const request = context.api?.visualization.patch(patch);
-  if (!request) return;
-
-  void request
-    .then((state) => {
-      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-    })
-    .catch(() => {
-      // The viewport HUD/resource hooks surface the failed state fetch. The ribbon
-      // must not throw from menu callbacks because Radix closes the menu eagerly.
-    });
-}
-
 function quantityLabel(quantityId: string): string {
   return (
     QUANTITY_ITEMS.find((item) => item.value === quantityId)?.label ??
@@ -2004,22 +2077,12 @@ function surfaceFieldStatus(
     : { tone: "neutral", value: "unknown" };
 }
 
-function patchGlobalObjectAndPartDefaults(
-  context: RibbonBuildContext,
-  patch: VisualizationTargetPatch,
-): void {
-  context.visualization.patchDefaults("object", patch);
-  context.visualization.patchDefaults("part", patch);
-}
-
 function buildSurfaceAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
   const settings = context.visualization.getDefaultSettings("object");
   const effectiveSettings = resolveEffectiveVisualizationSettings(settings);
   const passControlsDisabled = !settings.visible;
-  const patch = (patchValue: VisualizationTargetPatch) =>
-    patchGlobalObjectAndPartDefaults(context, patchValue);
 
   return {
     id: "view-surface",
@@ -2045,7 +2108,9 @@ function buildSurfaceAction(
         label: "Surface on/off",
         checked: effectiveSettings.shaderVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationDefaultsCommandInput({ shaderVisible: checked }),
       },
       { type: "separator", id: "surface:s0" },
       {
@@ -2055,8 +2120,11 @@ function buildSurfaceAction(
         value: settings.renderMode,
         items: MESH_RENDER_ITEMS,
         disabled: passControlsDisabled,
-        onValueChange: (value) =>
-          patch(renderModePatch(value as VisualizationRenderMode)),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (value: string) =>
+          visualizationDefaultsCommandInput(
+            renderModePatch(value as VisualizationRenderMode),
+          ),
       },
       {
         type: "checkbox",
@@ -2064,7 +2132,9 @@ function buildSurfaceAction(
         label: "Wireframe on/off",
         checked: effectiveSettings.wireframeVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationDefaultsCommandInput({ wireframeVisible: checked }),
       },
       {
         type: "checkbox",
@@ -2072,7 +2142,9 @@ function buildSurfaceAction(
         label: "Frame on/off",
         checked: effectiveSettings.boundsVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ boundsVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationDefaultsCommandInput({ boundsVisible: checked }),
       },
       {
         type: "checkbox",
@@ -2080,7 +2152,9 @@ function buildSurfaceAction(
         label: "Points on/off",
         checked: effectiveSettings.pointsVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationDefaultsCommandInput({ pointsVisible: checked }),
       },
       {
         type: "slider",
@@ -2092,7 +2166,9 @@ function buildSurfaceAction(
         step: 1,
         unit: "%",
         disabled: passControlsDisabled,
-        onValueChange: (value) => patch({ opacityPercent: value }),
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (value: number) =>
+          visualizationDefaultsCommandInput({ opacityPercent: value }),
       },
     ],
   };
@@ -2107,7 +2183,7 @@ function buildTextureAction(
     context.sessionStatus,
   );
   const patch = (patchValue: VisualizationTargetPatch) =>
-    patchGlobalObjectAndPartDefaults(context, patchValue);
+    visualizationDefaultsCommandInput(patchValue);
 
   return {
     id: "view-texture",
@@ -2128,7 +2204,8 @@ function buildTextureAction(
         label: "Color source",
         value: settings.surfaceColorSource,
         items: SURFACE_COLOR_SOURCE_ITEMS,
-        onValueChange: (value) =>
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (value: string) =>
           patch({ surfaceColorSource: value as SurfaceColorSource }),
       },
       { type: "separator", id: "texture:s0" },
@@ -2154,9 +2231,6 @@ function buildQuantityAction(
   const colormap = state?.quantity?.colormap ?? state?.colormap ?? "viridis";
   const vectorColorMode =
     state?.vector_style?.color_mode ?? "orientation";
-  const patch = (patchValue: VisualizationStatePatch) =>
-    patchVisualizationState(context, patchValue);
-
   return {
     id: "view-quantity",
     icon: icon(Sigma),
@@ -2177,8 +2251,11 @@ function buildQuantityAction(
         label: "Quantity overlay on/off",
         checked: overlayVisible,
         disabled: !context.api,
-        onCheckedChange: (checked) =>
-          patch({ layers: { quantity_overlay: { visible: checked } } }),
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationStateCommandInput({
+            layers: { quantity_overlay: { visible: checked } },
+          }),
       },
       { type: "separator", id: "quantity:s0" },
       {
@@ -2188,8 +2265,9 @@ function buildQuantityAction(
         value: activeQuantityId,
         items: QUANTITY_ITEMS,
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch({
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: string) =>
+          visualizationStateCommandInput({
             active_quantity_id: value,
             quantity: { active_quantity_id: value },
           }),
@@ -2213,16 +2291,21 @@ function buildQuantityAction(
               { value: "coolwarm", label: "Coolwarm" },
               { value: "jet", label: "Jet" },
             ],
-            onValueChange: (value) =>
-              patch({ colormap: value, quantity: { colormap: value } }),
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: string) =>
+              visualizationStateCommandInput({
+                colormap: value,
+                quantity: { colormap: value },
+              }),
           },
           {
             type: "checkbox",
             id: "quantity:auto-scale",
             label: "Auto-scale range",
             checked: autoContrast,
-            onCheckedChange: (checked) =>
-              patch({
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (checked: boolean) =>
+              visualizationStateCommandInput({
                 auto_contrast: checked,
                 quantity: { auto_contrast: checked },
               }),
@@ -2234,8 +2317,9 @@ function buildQuantityAction(
             label: "Vector coloring",
             value: vectorColorMode,
             items: VECTOR_COLOR_ITEMS,
-            onValueChange: (value) =>
-              patch({
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: string) =>
+              visualizationStateCommandInput({
                 vector_style: { color_mode: value as VectorColorModePatch },
               }),
           },
@@ -2258,11 +2342,14 @@ function buildVectorsAction(
   const state = context.visualizationState;
   const vectorLayer = state?.layers?.vectors;
   const vectorStyle = state?.vector_style;
+  const objectVectorSettings = context.visualization.getDefaultSettings("object");
   const visible = vectorLayer?.visible ?? state?.vector_glyphs ?? false;
-  const density = vectorLayer?.density ?? state?.vector_density ?? 1200;
+  const density =
+    state?.sampling?.max_glyphs ??
+    vectorLayer?.density ??
+    state?.vector_density ??
+    1200;
   const component = state?.field_component ?? state?.quantity?.field_component ?? "3D";
-  const patch = (patchValue: VisualizationStatePatch) =>
-    patchVisualizationState(context, patchValue);
 
   return {
     id: "view-vectors",
@@ -2283,8 +2370,9 @@ function buildVectorsAction(
         label: "Show vectors / field arrows",
         checked: visible,
         disabled: !context.api,
-        onCheckedChange: (checked) =>
-          patch({
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationStateCommandInput({
             layers: { vectors: { visible: checked } },
             vector_glyphs: checked,
           }),
@@ -2298,11 +2386,25 @@ function buildVectorsAction(
         max: 4096,
         step: 8,
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch({
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: number) =>
+          visualizationStateCommandInput({
             layers: { vectors: { density: value } },
             sampling: { max_glyphs: value },
             vector_density: value,
+          }),
+      },
+      {
+        type: "radio-group",
+        id: "vectors:geometry-scope",
+        label: "Arrow extent",
+        value: objectVectorSettings.geometryScope,
+        items: GEOMETRY_SCOPE_ITEMS,
+        disabled: !context.api,
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (value: string) =>
+          visualizationDefaultsCommandInput({
+            geometryScope: value as VisualizationGeometryScope,
           }),
       },
       {
@@ -2312,8 +2414,9 @@ function buildVectorsAction(
         value: component,
         items: VECTOR_COMPONENT_ITEMS,
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch(
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: string) =>
+          visualizationStateCommandInput(
             value === "3D"
               ? {
                   field_component: null,
@@ -2339,8 +2442,11 @@ function buildVectorsAction(
             min: 0.2,
             max: 4,
             step: 0.1,
-            onValueChange: (value) =>
-              patch({ vector_style: { length_scale: value } }),
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
+                vector_style: { length_scale: value },
+              }),
           },
           {
             type: "slider",
@@ -2350,8 +2456,11 @@ function buildVectorsAction(
             min: 0.2,
             max: 4,
             step: 0.1,
-            onValueChange: (value) =>
-              patch({ vector_style: { thickness: value } }),
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
+                vector_style: { thickness: value },
+              }),
           },
           {
             type: "slider",
@@ -2361,8 +2470,11 @@ function buildVectorsAction(
             min: 0,
             max: 1,
             step: 0.05,
-            onValueChange: (value) =>
-              patch({ vector_style: { alpha: value } }),
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
+                vector_style: { alpha: value },
+              }),
           },
         ],
       },
@@ -2378,8 +2490,9 @@ function buildVectorsAction(
           { value: "airbox_only", label: "Airbox only" },
         ],
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch({
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: string) =>
+          visualizationStateCommandInput({
             layers: { vectors: { domain: value as VectorLayerDomainPatch } },
           }),
       },
@@ -2390,8 +2503,11 @@ function buildVectorsAction(
         value: vectorStyle?.color_mode ?? "orientation",
         items: VECTOR_COLOR_ITEMS,
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch({ vector_style: { color_mode: value as VectorColorModePatch } }),
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: string) =>
+          visualizationStateCommandInput({
+            vector_style: { color_mode: value as VectorColorModePatch },
+          }),
       },
       {
         type: "color",
@@ -2419,9 +2535,6 @@ function buildMeshViewAction(
       layers?.points?.opacity ??
       1,
   );
-  const patch = (patchValue: VisualizationStatePatch) =>
-    patchVisualizationState(context, patchValue);
-
   return {
     id: "view-render-layers",
     icon: icon(Layers3),
@@ -2436,8 +2549,11 @@ function buildMeshViewAction(
         value: meshMode,
         items: MESH_RENDER_ITEMS,
         disabled: !context.api,
-        onValueChange: (value) =>
-          patch(meshRenderModeVisualizationPatch(value as VisualizationRenderMode)),
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: string) =>
+          visualizationStateCommandInput(
+            meshRenderModeVisualizationPatch(value as VisualizationRenderMode),
+          ),
       },
       {
         type: "slider",
@@ -2449,9 +2565,10 @@ function buildMeshViewAction(
         step: 1,
         unit: "%",
         disabled: !context.api,
-        onValueChange: (value) => {
+        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+        commandInput: (value: number) => {
           const opacity = percentToLayerOpacity(value);
-          patch({
+          return visualizationStateCommandInput({
             layers: {
               points: { opacity },
               surface: { opacity },
@@ -2534,27 +2651,14 @@ function buildAirboxAction(
   const { commandContext, visualizationSnapshot } = context;
   const vectorLayer = context.visualizationState?.layers?.airbox?.vectors;
   const vectorStyle = context.visualizationState?.vector_style;
-  const settings = resolveVisualizationSettings(
-    visualizationSnapshot,
-    AIRBOX_VISUALIZATION_TARGET,
-    resolveAirboxVisualizationSettingsFromState(context.visualizationState),
-  );
-  const effectiveSettings = resolveEffectiveVisualizationSettings(settings);
+  const targetVisualization = resolveTargetVisualization({
+    snapshot: visualizationSnapshot,
+    target: AIRBOX_VISUALIZATION_TARGET,
+    visualizationState: context.visualizationState,
+  });
+  const settings = targetVisualization.settings;
+  const effectiveSettings = targetVisualization.effectiveSettings;
   const passControlsDisabled = !settings.visible;
-  const patch = (patchValue: VisualizationTargetPatch) => {
-    patchAirboxVisualization(context, patchValue);
-  };
-  const selectAirbox = () => {
-    commandContext?.selection?.set(
-      {
-        kind: "airbox.visualization",
-        label: "Airbox Visualization",
-        nodeId: "model:airbox:visualization",
-        objectId: null,
-      },
-      commandContext.source,
-    );
-  };
 
   return {
     id: "view-airbox",
@@ -2575,7 +2679,8 @@ function buildAirboxAction(
         label: "Airbox on/off",
         checked: settings.visible,
         disabled: false,
-        onCheckedChange: (checked) => patch({ visible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) => visualizationAirboxCommandInput({ visible: checked }),
       },
       { type: "separator", id: "airbox:s-primitive" },
       {
@@ -2590,7 +2695,9 @@ function buildAirboxAction(
         label: "Shaded on/off",
         checked: effectiveSettings.shaderVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationAirboxCommandInput({ shaderVisible: checked }),
       },
       {
         type: "checkbox",
@@ -2598,7 +2705,9 @@ function buildAirboxAction(
         label: "Wireframe on/off",
         checked: effectiveSettings.wireframeVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationAirboxCommandInput({ wireframeVisible: checked }),
       },
       {
         type: "checkbox",
@@ -2606,7 +2715,9 @@ function buildAirboxAction(
         label: "Frame on/off",
         checked: effectiveSettings.boundsVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ boundsVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationAirboxCommandInput({ boundsVisible: checked }),
       },
       {
         type: "radio-group",
@@ -2629,7 +2740,9 @@ function buildAirboxAction(
         label: "Points on/off",
         checked: effectiveSettings.pointsVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationAirboxCommandInput({ pointsVisible: checked }),
       },
       {
         type: "radio-group",
@@ -2652,15 +2765,22 @@ function buildAirboxAction(
         label: "Vectors on/off",
         checked: effectiveSettings.vectorsVisible,
         disabled: passControlsDisabled,
-        onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationAirboxCommandInput({ vectorsVisible: checked }),
       },
       {
         type: "radio-group",
         id: "airbox:vectors-scope",
         label: "Vectors extent",
-        value: "surface",
-        items: AIRBOX_EXTENT_ITEMS,
-        disabled: true,
+        value: settings.geometryScope,
+        items: GEOMETRY_SCOPE_ITEMS,
+        disabled: passControlsDisabled || !effectiveSettings.vectorsVisible,
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (value: string) =>
+          visualizationAirboxCommandInput({
+            geometryScope: value as VisualizationGeometryScope,
+          }),
       },
       {
         type: "submenu",
@@ -2675,8 +2795,9 @@ function buildAirboxAction(
             min: 8,
             max: 4096,
             step: 8,
-            onValueChange: (value) =>
-              patchVisualizationState(context, {
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
                 layers: {
                   airbox: {
                     vectors: {
@@ -2695,8 +2816,9 @@ function buildAirboxAction(
             min: 0.2,
             max: 4,
             step: 0.1,
-            onValueChange: (value) =>
-              patchVisualizationState(context, {
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
                 vector_style: { length_scale: value },
               }),
           },
@@ -2708,8 +2830,9 @@ function buildAirboxAction(
             min: 0.2,
             max: 4,
             step: 0.1,
-            onValueChange: (value) =>
-              patchVisualizationState(context, {
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
                 vector_style: { thickness: value },
               }),
           },
@@ -2721,8 +2844,9 @@ function buildAirboxAction(
             min: 0,
             max: 1,
             step: 0.05,
-            onValueChange: (value) =>
-              patchVisualizationState(context, {
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: number) =>
+              visualizationStateCommandInput({
                 vector_style: { alpha: value },
               }),
           },
@@ -2739,8 +2863,9 @@ function buildAirboxAction(
             label: "Vector colors",
             value: vectorStyle?.color_mode ?? "orientation",
             items: VECTOR_COLOR_ITEMS,
-            onValueChange: (value) =>
-              patchVisualizationState(context, {
+            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandInput: (value: string) =>
+              visualizationStateCommandInput({
                 vector_style: { color_mode: value as VectorColorModePatch },
               }),
           },
@@ -2763,7 +2888,9 @@ function buildAirboxAction(
         max: 100,
         step: 1,
         unit: "%",
-        onValueChange: (value) => patch({ opacityPercent: value }),
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (value: number) =>
+          visualizationAirboxCommandInput({ opacityPercent: value }),
       },
       { type: "separator", id: "airbox:s0" },
       {
@@ -2771,65 +2898,16 @@ function buildAirboxAction(
         id: "airbox:focus",
         label: "Focus airbox",
         disabled: !commandContext?.selection,
-        onSelect: selectAirbox,
+        commandId: RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
       },
       {
         type: "item",
         id: "airbox:reset",
         label: "Reset airbox display",
-        onSelect: () => resetAirboxVisualization(context),
+        commandId: RIBBON_VISUALIZATION_RESET_AIRBOX_COMMAND,
       },
     ],
   };
-}
-
-function patchAirboxVisualization(
-  context: RibbonBuildContext,
-  patchValue: VisualizationTargetPatch,
-): void {
-  const localPatch = airboxLocalVisualizationPatchFromTargetPatch(patchValue);
-  if (Object.keys(localPatch).length > 0) {
-    context.visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, localPatch);
-  }
-
-  const statePatch = airboxVisualizationStatePatchFromTargetPatch(patchValue);
-  const request = hasVisualizationStatePatch(statePatch)
-    ? context.api?.visualization.patch(statePatch)
-    : null;
-  if (!request) {
-    if (!context.api) {
-      context.visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, patchValue);
-    }
-    return;
-  }
-
-  void request
-    .then((state) => {
-      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-    })
-    .catch(() => {
-      // The viewport resource hook exposes failed visualization refreshes.
-      // Menu callbacks must stay non-throwing because Radix closes eagerly.
-    });
-}
-
-function resetAirboxVisualization(context: RibbonBuildContext): void {
-  const request = context.api?.visualization.patch(
-    airboxVisualizationStatePatchFromTargetPatch(DEFAULT_AIRBOX_VISUALIZATION),
-  );
-  if (!request) {
-    context.visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET);
-    return;
-  }
-
-  void request
-    .then((state) => {
-      context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-      context.visualization.clearTarget(AIRBOX_VISUALIZATION_TARGET);
-    })
-    .catch(() => {
-      // The viewport resource hook exposes failed visualization refreshes.
-    });
 }
 
 function buildDimensionFrameAction({
@@ -2839,10 +2917,6 @@ function buildDimensionFrameAction({
   const partSettings = visualization.getDefaultSettings("part");
   const objectFrameVisible =
     objectSettings.boundsVisible && partSettings.boundsVisible;
-  const patchObjectFrame = (visible: boolean) => {
-    visualization.patchDefaults("object", { boundsVisible: visible });
-    visualization.patchDefaults("part", { boundsVisible: visible });
-  };
 
   return {
     id: "view-dimension-frame",
@@ -2866,7 +2940,9 @@ function buildDimensionFrameAction({
         label: "Object frame",
         checked: objectFrameVisible,
         disabled: false,
-        onCheckedChange: patchObjectFrame,
+        commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+        commandInput: (checked: boolean) =>
+          visualizationDefaultsCommandInput({ boundsVisible: checked }),
       },
     ],
   };
@@ -2875,20 +2951,17 @@ function buildDimensionFrameAction({
 function buildSelectedVisualizationGroup(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number] {
-  const { selection, visualization, visualizationSnapshot } = context;
+  const { selection, visualizationSnapshot } = context;
   const target = resolveVisualizationTargetFromSelection(selection);
-  const settings = target
-    ? target.kind === "airbox"
-      ? resolveVisualizationSettings(
-          visualizationSnapshot,
-          target,
-          resolveAirboxVisualizationSettingsFromState(context.visualizationState),
-        )
-      : visualization.getSettings(target)
+  const targetVisualization = target
+    ? resolveTargetVisualization({
+        snapshot: visualizationSnapshot,
+        target,
+        visualizationState: context.visualizationState,
+      })
     : null;
-  const effectiveSettings = settings
-    ? resolveEffectiveVisualizationSettings(settings)
-    : null;
+  const settings = targetVisualization?.settings ?? null;
+  const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
   const passControlsDisabled = !settings?.visible;
   const enabled = Boolean(target && settings);
   const targetLabel = target
@@ -2899,9 +2972,7 @@ function buildSelectedVisualizationGroup(
     target?.kind === "airbox"
       ? DEFAULT_AIRBOX_VISUALIZATION
       : DEFAULT_OBJECT_VISUALIZATION;
-  const targetOverride = target
-    ? visualizationSnapshot.overrides[visualizationTargetKey(target)]
-    : null;
+  const targetOverride = targetVisualization?.override ?? null;
   const hasSurfaceColorOverride = Boolean(
     targetOverride &&
       ("surfaceColorSource" in targetOverride ||
@@ -2914,15 +2985,7 @@ function buildSelectedVisualizationGroup(
     settings?.surfaceColorSource ?? targetDefaults.surfaceColorSource,
     context.sessionStatus,
   );
-  const revision = visualizationSnapshot.version;
-  const patch = (patchValue: Parameters<typeof visualization.patchTarget>[1]) => {
-    if (!target) return;
-    if (target.kind === "airbox") {
-      patchAirboxVisualization(context, patchValue);
-      return;
-    }
-    visualization.patchTarget(target, patchValue);
-  };
+  const revision = targetVisualization?.revision ?? `${visualizationSnapshot.version}`;
 
   return {
     id: "view-selected-display",
@@ -2955,7 +3018,8 @@ function buildSelectedVisualizationGroup(
             label: "Surface on/off",
             checked: effectiveSettings?.shaderVisible ?? false,
             disabled: !enabled || passControlsDisabled,
-            onCheckedChange: (checked) => patch({ shaderVisible: checked }),
+            commandId: "visualization.target.set-surface-visible",
+            commandInput: (checked: boolean) => checked,
           },
           {
             type: "radio-group",
@@ -2967,16 +3031,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.shaderVisible,
-            onValueChange: (value) => {
-              if (value === "inherit") {
-                patch({
-                  shaderColorMode: undefined,
-                  surfaceColorSource: undefined,
-                });
-                return;
-              }
-              patch({ surfaceColorSource: value as SurfaceColorSource });
-            },
+            commandId: "visualization.target.set-surface-color-source",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "color",
@@ -2988,7 +3044,8 @@ function buildSelectedVisualizationGroup(
               passControlsDisabled ||
               !effectiveSettings?.shaderVisible ||
               settings?.surfaceColorSource !== "solid",
-            onValueChange: (value) => patch({ shaderMonoColor: value }),
+            commandId: "visualization.target.set-shader-mono-color",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "status",
@@ -3004,20 +3061,38 @@ function buildSelectedVisualizationGroup(
             label: "Vectors on/off",
             checked: effectiveSettings?.vectorsVisible ?? false,
             disabled: !enabled || passControlsDisabled,
-            onCheckedChange: (checked) => patch({ vectorsVisible: checked }),
+            commandId: "visualization.target.set-vectors-visible",
+            commandInput: (checked: boolean) => checked,
+          },
+          {
+            type: "radio-group",
+            id: "selected-texture:vector-scope",
+            label: "Vector extent",
+            value: settings?.geometryScope ?? "full",
+            items: GEOMETRY_SCOPE_ITEMS.map((item) => ({
+              ...item,
+            })),
+            disabled:
+              !enabled ||
+              passControlsDisabled ||
+              !effectiveSettings?.vectorsVisible,
+            commandId: "visualization.target.set-geometry-scope",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "radio-group",
             id: "selected-texture:vector-coloring",
             label: "Vector coloring",
             value: settings?.vectorColorMode ?? "orientation",
-            items: VECTOR_COLOR_ITEMS,
+            items: VECTOR_COLOR_ITEMS.map((item) => ({
+              ...item,
+            })),
             disabled:
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.vectorsVisible,
-            onValueChange: (value) =>
-              patch({ vectorColorMode: value as VisualizationColorMode }),
+            commandId: "visualization.target.set-vector-color-mode",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "color",
@@ -3028,7 +3103,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.vectorsVisible,
-            onValueChange: (value) => patch({ vectorMonoColor: value }),
+            commandId: "visualization.target.set-vector-mono-color",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "slider",
@@ -3043,7 +3119,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.vectorsVisible,
-            onValueChange: (value) => patch({ vectorAlphaPercent: value }),
+            commandId: "visualization.target.set-vector-alpha-percent",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "slider",
@@ -3057,7 +3134,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.vectorsVisible,
-            onValueChange: (value) => patch({ vectorThickness: value }),
+            commandId: "visualization.target.set-vector-thickness",
+            commandInput: (value: unknown) => value,
           },
         ],
       },
@@ -3087,7 +3165,8 @@ function buildSelectedVisualizationGroup(
             label: "Target visible",
             checked: settings?.visible ?? false,
             disabled: !enabled,
-            onCheckedChange: (checked) => patch({ visible: checked }),
+            commandId: "visualization.target.set-visible",
+            commandInput: (checked: boolean) => checked,
           },
           {
             type: "radio-group",
@@ -3095,9 +3174,11 @@ function buildSelectedVisualizationGroup(
             label: "Render mode",
             value: settings?.renderMode ?? "surface",
             disabled: !enabled || passControlsDisabled,
-            items: SELECTED_RENDER_ITEMS,
-            onValueChange: (value) =>
-              patch(renderModePatch(value as VisualizationRenderMode)),
+            items: SELECTED_RENDER_ITEMS.map((item) => ({
+              ...item,
+            })),
+            commandId: "visualization.target.set-render-mode",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "radio-group",
@@ -3105,9 +3186,11 @@ function buildSelectedVisualizationGroup(
             label: "Geometry scope",
             value: settings?.geometryScope ?? "full",
             disabled: !enabled || passControlsDisabled,
-            items: GEOMETRY_SCOPE_ITEMS,
-            onValueChange: (value) =>
-              patch({ geometryScope: value as VisualizationGeometryScope }),
+            items: GEOMETRY_SCOPE_ITEMS.map((item) => ({
+              ...item,
+            })),
+            commandId: "visualization.target.set-geometry-scope",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "checkbox",
@@ -3115,7 +3198,8 @@ function buildSelectedVisualizationGroup(
             label: "Wireframe on/off",
             checked: effectiveSettings?.wireframeVisible ?? false,
             disabled: !enabled || passControlsDisabled,
-            onCheckedChange: (checked) => patch({ wireframeVisible: checked }),
+            commandId: "visualization.target.set-wireframe-visible",
+            commandInput: (checked: boolean) => checked,
           },
           {
             type: "color",
@@ -3126,7 +3210,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.wireframeVisible,
-            onValueChange: (value) => patch({ wireframeColor: value }),
+            commandId: "visualization.target.set-wireframe-color",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "slider",
@@ -3141,7 +3226,8 @@ function buildSelectedVisualizationGroup(
               !enabled ||
               passControlsDisabled ||
               !effectiveSettings?.wireframeVisible,
-            onValueChange: (value) => patch({ wireframeOpacityPercent: value }),
+            commandId: "visualization.target.set-wireframe-opacity-percent",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "checkbox",
@@ -3149,7 +3235,8 @@ function buildSelectedVisualizationGroup(
             label: "Frame on/off",
             checked: effectiveSettings?.boundsVisible ?? false,
             disabled: !enabled || passControlsDisabled,
-            onCheckedChange: (checked) => patch({ boundsVisible: checked }),
+            commandId: "visualization.target.set-bounds-visible",
+            commandInput: (checked: boolean) => checked,
           },
           {
             type: "checkbox",
@@ -3157,16 +3244,15 @@ function buildSelectedVisualizationGroup(
             label: "Points on/off",
             checked: effectiveSettings?.pointsVisible ?? false,
             disabled: !enabled || passControlsDisabled,
-            onCheckedChange: (checked) => patch({ pointsVisible: checked }),
+            commandId: "visualization.target.set-points-visible",
+            commandInput: (checked: boolean) => checked,
           },
           {
             type: "item",
             id: "selected:clear",
             label: "Clear per-object overrides",
             disabled: !enabled,
-            onSelect: () => {
-              if (target) visualization.clearTarget(target);
-            },
+            commandId: "visualization.target.clear-overrides",
           },
         ],
       },
@@ -3198,35 +3284,40 @@ function buildSelectedVisualizationGroup(
             step: 1,
             unit: "%",
             disabled: !enabled,
-            onValueChange: (value) => patch({ opacityPercent: value }),
+            commandId: "visualization.target.set-opacity-percent",
+            commandInput: (value: unknown) => value,
           },
           {
             type: "item",
             id: "selected-opacity:100",
             label: "100%",
             disabled: !enabled,
-            onSelect: () => patch({ opacityPercent: 100 }),
+            commandId: "visualization.target.set-opacity-percent",
+            commandInput: 100,
           },
           {
             type: "item",
             id: "selected-opacity:70",
             label: "70%",
             disabled: !enabled,
-            onSelect: () => patch({ opacityPercent: 70 }),
+            commandId: "visualization.target.set-opacity-percent",
+            commandInput: 70,
           },
           {
             type: "item",
             id: "selected-opacity:35",
             label: "35%",
             disabled: !enabled,
-            onSelect: () => patch({ opacityPercent: 35 }),
+            commandId: "visualization.target.set-opacity-percent",
+            commandInput: 35,
           },
           {
             type: "item",
             id: "selected-opacity:15",
             label: "Ghost 15%",
             disabled: !enabled,
-            onSelect: () => patch({ opacityPercent: 15 }),
+            commandId: "visualization.target.set-opacity-percent",
+            commandInput: 15,
           },
         ],
       },

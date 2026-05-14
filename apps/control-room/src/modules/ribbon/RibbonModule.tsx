@@ -6,6 +6,7 @@ import {
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type { ModuleProps } from "@/kernel/types";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -69,6 +70,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
           [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
           [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+          [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
       }),
     [
@@ -76,6 +78,7 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       geometryValidation.data,
       kernel,
       meshBuildCurrent.data,
+      visualizationState.data,
     ],
   );
 
@@ -118,8 +121,8 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   );
   const groups = tabContent?.groups ?? [];
 
-  function handleAction(actionId: string): void {
-    void kernel.commands.execute(actionId, commandContext);
+  function handleAction(actionId: string, input?: unknown): void {
+    void kernel.commands.execute(actionId, commandContext, input);
   }
 
   return (

@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use tokio::sync::{Mutex, RwLock, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
@@ -1826,7 +1826,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 3);
+    assert_eq!(json["schema_version"], 4);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -1845,6 +1845,18 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["trim"]["enabled"], false);
     assert_eq!(json["trim"]["axes"]["x"]["min_percent"], 0.0);
     assert_eq!(json["trim"]["axes"]["x"]["max_percent"], 100.0);
+    assert_eq!(json["camera"]["projection"], "perspective");
+    assert_eq!(
+        json["camera"]["position"],
+        serde_json::json!([2e-6, 1.4e-6, 2e-6])
+    );
+    assert_eq!(json["camera"]["target"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(json["camera"]["up"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(json["camera"]["fov_degrees"], 45.0);
+    assert_eq!(
+        json["camera"]["orthographic_scale"],
+        serde_json::Value::Null
+    );
     assert!(json["overrides"].as_array().is_some());
     assert!(json["diagnostics"]["warnings"].as_array().is_some());
 }
@@ -1889,7 +1901,40 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                             "show_airbox_vectors": true,
                             "show_vectors": true,
                             "render_mode": "vectors"
-                        }
+                        },
+                        "camera": {
+                            "projection": "orthographic",
+                            "position": [1.0e-6, 2.0e-6, 3.0e-6],
+                            "target": [0.0, 0.0, 0.0],
+                            "up": [0.0, 0.0, 1.0],
+                            "fov_degrees": 35.0,
+                            "orthographic_scale": 2.5e-6
+                        },
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "free-layer",
+                                "visible": true,
+                                "display": {
+                                    "visible": true,
+                                    "surface": { "visible": true },
+                                    "wireframe": { "visible": true, "opacity": 0.65 },
+                                    "points": { "visible": false },
+                                    "vectors": { "visible": false },
+                                    "opacity": 0.55,
+                                    "geometry_scope": "surface"
+                                },
+                                "style": {
+                                    "surface_color_source": "orientation",
+                                    "surface_mono_color": "#00ffaa",
+                                    "vector_color_mode": "orientation",
+                                    "vector_mono_color": "#ff00aa",
+                                    "vector_alpha": 0.45,
+                                    "vector_thickness": 2.0,
+                                    "wireframe_color": "#111111"
+                                }
+                            }
+                        ]
                     })
                     .to_string(),
                 ))
@@ -1900,7 +1945,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 3);
+    assert_eq!(json["schema_version"], 4);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -1915,6 +1960,21 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["slice"]["airbox_render_mode"], "points");
     assert_eq!(json["slice"]["show_airbox_vectors"], true);
     assert_eq!(json["slice"]["render_mode"], "vectors");
+    assert_eq!(json["camera"]["projection"], "orthographic");
+    assert_eq!(
+        json["camera"]["position"],
+        serde_json::json!([1.0e-6, 2.0e-6, 3.0e-6])
+    );
+    assert_eq!(json["camera"]["orthographic_scale"], 2.5e-6);
+    assert_eq!(json["overrides"][0]["scope"], "object");
+    assert_eq!(json["overrides"][0]["scope_id"], "free-layer");
+    assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
+    assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
+    assert_eq!(
+        json["overrides"][0]["style"]["surface_color_source"],
+        "orientation"
+    );
+    assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
 }
 
 #[tokio::test]
@@ -1949,6 +2009,83 @@ async fn visualization_state_rejects_invalid_airbox_vector_domain() {
     assert_eq!(
         json["error"],
         "layers.airbox.vectors.domain must be airbox_only"
+    );
+}
+
+#[tokio::test]
+async fn visualization_state_rejects_invalid_camera_patch() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "camera": {
+                            "projection": "perspective",
+                            "position": [0.0, 0.0, 0.0],
+                            "target": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "camera.position must not equal camera.target"
+    );
+}
+
+#[tokio::test]
+async fn visualization_camera_patch_publishes_visualization_state_invalidation() {
+    let state = test_app_state_with_live_session().await;
+    let mut events = state.current_live_realtime_events.subscribe();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "camera": {
+                            "position": [1.0e-6, 2.0e-6, 3.0e-6],
+                            "target": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("camera patch should publish a realtime event")
+        .expect("realtime channel should stay open");
+    let json: serde_json::Value =
+        serde_json::from_str(&event.json).expect("event payload should be valid JSON");
+    let changes = json["payload"]["changes"]
+        .as_array()
+        .expect("resource.batch_changed should include changes");
+    assert!(
+        changes.iter().any(|change| {
+            change["recommended_fetch"] == "/v2/sessions/current/visualization/state"
+        }),
+        "camera patch must invalidate the visualization state resource: {json:#}"
     );
 }
 
@@ -2861,8 +2998,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
+            ["body"]["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -2874,7 +3011,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -4279,12 +4417,10 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(
-        json["source"]
-            .as_str()
-            .expect("source string")
-            .contains("from fullmag import *")
-    );
+    assert!(json["source"]
+        .as_str()
+        .expect("source string")
+        .contains("from fullmag import *"));
 }
 
 #[tokio::test]
@@ -4421,27 +4557,21 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
-    );
-    assert!(
-        json["primitive_capabilities"]
-            .as_array()
-            .expect("primitive capabilities")
-            .iter()
-            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
-    );
-    assert!(
-        json["csg_capabilities"]
-            .as_array()
-            .expect("csg capabilities")
-            .iter()
-            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
-    );
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
+    assert!(json["primitive_capabilities"]
+        .as_array()
+        .expect("primitive capabilities")
+        .iter()
+        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
+    assert!(json["csg_capabilities"]
+        .as_array()
+        .expect("csg capabilities")
+        .iter()
+        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
 }
 
 #[tokio::test]
@@ -4557,13 +4687,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(
-        created_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(created_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -4627,13 +4755,11 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(
-        !delete_json["committed_scene"]["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "box_001")
-    );
+    assert!(!delete_json["committed_scene"]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "box_001"));
 }
 
 #[tokio::test]
@@ -4738,13 +4864,11 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(
-        json["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
-    );
+    assert!(json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
 }
 
 #[tokio::test]
@@ -4840,12 +4964,10 @@ async fn authoring_regions_returns_object_derived_regions() {
     assert_eq!(json["regions"][0]["name"], "free_layer");
     assert_eq!(json["regions"][0]["source"], "object");
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
-    assert!(
-        json["regions"][0]["source_body_ids"][0]
-            .as_str()
-            .unwrap()
-            .starts_with("body:body:")
-    );
+    assert!(json["regions"][0]["source_body_ids"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("body:body:"));
     assert_eq!(
         json["regions"][0]["mesh_part_ids"]
             .as_array()
@@ -4889,13 +5011,11 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(
-        object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 }
 
 #[tokio::test]
@@ -5159,13 +5279,11 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(
-        create_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(create_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 
     let patch_response = app
         .clone()
@@ -5196,13 +5314,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(
-        patched_object["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|tag| tag == "mesh:dirty")
-    );
+    assert!(patched_object["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag == "mesh:dirty"));
 
     let delete_response = app
         .oneshot(
@@ -5216,13 +5332,11 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(
-        !delete_json["objects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|object| object["id"] == "object_crud")
-    );
+    assert!(!delete_json["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|object| object["id"] == "object_crud"));
 }
 
 #[tokio::test]
@@ -6189,11 +6303,9 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(
-        json["fms_base64"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(json["fms_base64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -7698,11 +7810,9 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -7733,11 +7843,9 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(
-        finite_values
-            .iter()
-            .all(|value| (*value - 2.0).abs() < 1.0e-12)
-    );
+    assert!(finite_values
+        .iter()
+        .all(|value| (*value - 2.0).abs() < 1.0e-12));
 }
 
 #[tokio::test]
@@ -8426,6 +8534,10 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         .and_then(|value| value.as_object())
         .expect("OpenAPI schemas must be present");
     let state_props = schema_property_names(schemas, "VisualizationStateResource");
+    let override_props = schema_property_names(schemas, "VisualizationOverrideState");
+    let override_display_props =
+        schema_property_names(schemas, "VisualizationTargetDisplayOverride");
+    let override_style_props = schema_property_names(schemas, "VisualizationTargetStyleOverride");
 
     for required in [
         "revision",
@@ -8437,6 +8549,7 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "fdm",
         "fem",
         "slice",
+        "camera",
         "clip",
         "vector_style",
         "overrides",
@@ -8458,6 +8571,41 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         assert!(
             state_props.contains(compatibility_field),
             "VisualizationStateResource must retain compatibility projection `{compatibility_field}`"
+        );
+    }
+
+    for required in ["scope", "scope_id", "visible", "display", "style"] {
+        assert!(
+            override_props.contains(required),
+            "VisualizationOverrideState missing target override field `{required}`"
+        );
+    }
+    for required in [
+        "visible",
+        "surface",
+        "wireframe",
+        "points",
+        "vectors",
+        "opacity",
+        "geometry_scope",
+    ] {
+        assert!(
+            override_display_props.contains(required),
+            "VisualizationTargetDisplayOverride missing field `{required}`"
+        );
+    }
+    for required in [
+        "surface_color_source",
+        "surface_mono_color",
+        "vector_color_mode",
+        "vector_mono_color",
+        "vector_alpha",
+        "vector_thickness",
+        "wireframe_color",
+    ] {
+        assert!(
+            override_style_props.contains(required),
+            "VisualizationTargetStyleOverride missing field `{required}`"
         );
     }
 }

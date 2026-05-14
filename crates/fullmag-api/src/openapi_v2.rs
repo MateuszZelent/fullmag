@@ -1,6 +1,6 @@
 //! Native OpenAPI v2 spec assembly.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -204,6 +204,9 @@ use utoipa::OpenApi;
         crate::schemas::visualization_state::TrimAxisVisualizationAxesPatch,
         crate::schemas::visualization_state::TrimAxisVisualizationState,
         crate::schemas::visualization_state::TrimAxisVisualizationPatch,
+        crate::schemas::visualization_state::VisualizationCameraState,
+        crate::schemas::visualization_state::VisualizationCameraPatch,
+        crate::schemas::visualization_state::VisualizationCameraProjection,
         crate::schemas::visualization_state::ClipVisualizationState,
         crate::schemas::visualization_state::ClipVisualizationPatch,
         crate::schemas::visualization_state::ClipAxis,

@@ -10,6 +10,7 @@ export interface VectorGlyphInstanceOptions {
   colorMode?: string;
   headLengthRatio?: number;
   headRadiusRatio?: number;
+  /** Deprecated compatibility flag; vector colors are keyed to physical XYZ. */
   orientationFrame?: "physical" | "hud";
   shaftRadiusRatio?: number;
 }
@@ -50,7 +51,6 @@ export function buildVectorGlyphInstances(
       : 6;
   const count = Math.floor(segments.length / segmentStride);
   const colorMode = normalizeViewport3DVectorColorMode(options.colorMode);
-  const orientationFrame = options.orientationFrame ?? "physical";
   const headLengthRatio =
     options.headLengthRatio ?? DEFAULT_HEAD_LENGTH_RATIO;
   const headRadiusRatio = options.headRadiusRatio ?? DEFAULT_HEAD_RADIUS_RATIO;
@@ -66,7 +66,6 @@ export function buildVectorGlyphInstances(
         count,
         segmentStride,
         colorMode,
-        orientationFrame,
       )
     : null;
   const directions = new Float32Array(count * 3);
@@ -88,12 +87,6 @@ export function buildVectorGlyphInstances(
     const dx = ex - sx;
     const dy = ey - sy;
     const dz = ez - sz;
-    const [colorDx, colorDy, colorDz] = resolveOrientationFrameVector(
-      dx,
-      dy,
-      dz,
-      orientationFrame,
-    );
     const length = Math.hypot(dx, dy, dz);
     const ux = length > 0 ? dx / length : 0;
     const uy = length > 0 ? dy / length : 1;
@@ -126,9 +119,9 @@ export function buildVectorGlyphInstances(
     if (colors && colorRange) {
       const rgb = resolveViewport3DVectorColorRgb(
         colorMode,
-        colorDx,
-        colorDy,
-        colorDz,
+        dx,
+        dy,
+        dz,
         colorRange,
         relMag,
       );
@@ -152,7 +145,6 @@ function resolveSegmentColorRange(
   count: number,
   segmentStride: number,
   colorMode: Viewport3DVectorColorMode,
-  orientationFrame: NonNullable<VectorGlyphInstanceOptions["orientationFrame"]>,
 ): Viewport3DScalarColorRange {
   // Magnitude coloring uses the pre-normalised relMag channel directly
   // (range is always [0, 1]).
@@ -168,18 +160,12 @@ function resolveSegmentColorRange(
       const dx = (segments[source + 3] ?? 0) - (segments[source] ?? 0);
       const dy = (segments[source + 4] ?? 0) - (segments[source + 1] ?? 0);
       const dz = (segments[source + 5] ?? 0) - (segments[source + 2] ?? 0);
-      const [colorDx, colorDy, colorDz] = resolveOrientationFrameVector(
-        dx,
-        dy,
-        dz,
-        orientationFrame,
-      );
       const value = Math.abs(
         resolveViewport3DVectorColorScalar(
           colorMode,
-          colorDx,
-          colorDy,
-          colorDz,
+          dx,
+          dy,
+          dz,
         ),
       );
       if (value > maxAbs) maxAbs = value;
@@ -190,14 +176,4 @@ function resolveSegmentColorRange(
 
   // orientation: range not used, return identity.
   return { min: 0, max: 1 };
-}
-
-function resolveOrientationFrameVector(
-  dx: number,
-  dy: number,
-  dz: number,
-  orientationFrame: NonNullable<VectorGlyphInstanceOptions["orientationFrame"]>,
-): [number, number, number] {
-  if (orientationFrame === "hud") return [dx, dy, -dz];
-  return [dx, dy, dz];
 }

@@ -3,16 +3,16 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
-    GeometryBackendTarget, GeometryRealizationSnapshot, SceneDocument, SceneObject,
-    geometry_blocks_solver_run, realize_geometry_scene,
+    geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
+    GeometryRealizationSnapshot, SceneDocument, SceneObject,
 };
 use fullmag_ir::{GeometryEntryIR, InitialMagnetizationIR, MagnetIR, MaterialIR, RegionIR};
 

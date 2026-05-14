@@ -51,15 +51,15 @@ The HTTP base URL and websocket URL are resolved from the same API target. A bro
 
 | Legacy area | v2 action |
 |---|---|
-| `apps/web/src/api/generated/openapi-v2-*` | Regenerate in v2 app from backend. |
-| `apps/web/src/api/client/modules/*` | Port endpoint-module pattern after removing compatibility branches. |
-| `apps/web/src/api/client/interceptors/*` | Port request-id, retry, version check, diagnostics. |
-| `apps/web/src/api/codecs/*` | Port with malformed-payload and transferability tests. |
-| `apps/web/src/api/realtime/LiveRealtimeClient.ts` | Port as invalidation/event stream only. |
-| `apps/web/src/hooks/resources/*` | Rebuild. Keep names only where the contract is still correct. |
-| `apps/web/lib/session/normalize.ts` | Do not port. |
-| `apps/web/lib/session/merge.ts` | Do not port. |
-| `apps/web/lib/session/types.ts` | Do not port. Generated v2 types and narrow domain models replace it. |
+| `apps/legacy_web/src/api/generated/openapi-v2-*` | Regenerate in v2 app from backend. |
+| `apps/legacy_web/src/api/client/modules/*` | Port endpoint-module pattern after removing compatibility branches. |
+| `apps/legacy_web/src/api/client/interceptors/*` | Port request-id, retry, version check, diagnostics. |
+| `apps/legacy_web/src/api/codecs/*` | Port with malformed-payload and transferability tests. |
+| `apps/legacy_web/src/api/realtime/LiveRealtimeClient.ts` | Port as invalidation/event stream only. |
+| `apps/legacy_web/src/hooks/resources/*` | Rebuild. Keep names only where the contract is still correct. |
+| `apps/legacy_web/lib/session/normalize.ts` | Do not port. |
+| `apps/legacy_web/lib/session/merge.ts` | Do not port. |
+| `apps/legacy_web/lib/session/types.ts` | Do not port. Generated v2 types and narrow domain models replace it. |
 
 ## 4. Resource Hook Rule
 
@@ -97,7 +97,7 @@ No module uses `useEffect(() => fetch(...))`. No module constructs endpoint URLs
 | `meshing` | mesh config, build status, topology, quality, reports | mesh and viewport hooks |
 | `simulation` | runs, stages, commands, solver state | runtime modules |
 | `data` | field vectors, field catalog, scalar histories, slices | data-plane hooks and codecs |
-| `visualization` | quantity, layers, color range, clip state | viewport modules |
+| `visualization` | quantity, layers, color range, clip state, session-wide camera | viewport modules |
 | `analysis` | eigenmodes, frequency response, derived datasets | charts/results modules |
 | `diagnostics` | request log, cache stats, server health | diagnostics module |
 

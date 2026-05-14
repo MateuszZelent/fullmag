@@ -603,13 +603,17 @@ export function buildVectorLineSegmentsFromPositions(
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
     const length = Math.hypot(vx, vy, vz) || 1;
+    const ux = vx / length;
+    const uy = vy / length;
+    const uz = vz / length;
+    const halfScale = scale / 2;
 
-    segments[target] = x;
-    segments[target + 1] = y;
-    segments[target + 2] = z;
-    segments[target + 3] = x + (vx / length) * scale;
-    segments[target + 4] = y + (vy / length) * scale;
-    segments[target + 5] = z + (vz / length) * scale;
+    segments[target] = x - ux * halfScale;
+    segments[target + 1] = y - uy * halfScale;
+    segments[target + 2] = z - uz * halfScale;
+    segments[target + 3] = x + ux * halfScale;
+    segments[target + 4] = y + uy * halfScale;
+    segments[target + 5] = z + uz * halfScale;
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 
@@ -696,13 +700,17 @@ export function buildVectorLineSegmentsForNodeSelectionFromPositions(
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
     const length = Math.hypot(vx, vy, vz) || 1;
+    const ux = vx / length;
+    const uy = vy / length;
+    const uz = vz / length;
+    const halfScale = scale / 2;
 
-    segments[target] = x;
-    segments[target + 1] = y;
-    segments[target + 2] = z;
-    segments[target + 3] = x + (vx / length) * scale;
-    segments[target + 4] = y + (vy / length) * scale;
-    segments[target + 5] = z + (vz / length) * scale;
+    segments[target] = x - ux * halfScale;
+    segments[target + 1] = y - uy * halfScale;
+    segments[target + 2] = z - uz * halfScale;
+    segments[target + 3] = x + ux * halfScale;
+    segments[target + 4] = y + uy * halfScale;
+    segments[target + 5] = z + uz * halfScale;
     segments[target + 6] = length / scaleMag; // relative magnitude [0..1]
   }
 

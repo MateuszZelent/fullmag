@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a clean modular Fullmag control-room frontend in `apps/control-room` and retire `apps/web` as active frontend after validated parity.
+**Goal:** Build a clean modular Fullmag control-room frontend in `apps/control-room` and retire `apps/legacy_web` as active frontend after validated parity.
 
 **Architecture:** A thin kernel hosts manifest-driven modules in stable slots. Data flows from OpenAPI v2 through generated transport, handwritten API facade, resource hooks, codecs, and domain adapters. UI commands flow through one command registry rendered by menu, ribbon, toolbars, shortcuts, and palette.
 
@@ -112,7 +112,7 @@ Phase 2 local gate status on 2026-05-11:
 - [ ] Run side-by-side workflow comparison against legacy.
 - [ ] Visual polish review: Catppuccin Mocha/Latte themes, transitions, typography, shadcn consistency.
 - [ ] Switch default dev/deploy scripts to v2 only after acceptance passes.
-- [ ] Freeze `apps/web`, then remove it after the release-cycle criteria pass.
+- [ ] Freeze `apps/legacy_web`, then remove it after the release-cycle criteria pass.
 
 ## Phase 8 - Desktop Packaging (Tauri)
 

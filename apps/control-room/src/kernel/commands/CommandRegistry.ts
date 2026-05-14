@@ -75,22 +75,31 @@ export class CommandRegistry {
   async execute(
     id: CommandId,
     context: CommandContext,
+    input?: unknown,
   ): Promise<CommandResult> {
     const cmd = this.commands.get(id);
     if (!cmd) {
       return { status: "failed", message: `Unknown command: ${id}` };
     }
-    if (cmd.isEnabled && !cmd.isEnabled(context)) {
+    const commandContext =
+      input === undefined
+        ? context
+        : {
+            ...context,
+            input,
+          };
+    if (cmd.isEnabled && !cmd.isEnabled(commandContext)) {
       return {
         status: "failed",
-        message: cmd.disabledReason?.(context) ?? `Command disabled: ${id}`,
+        message:
+          cmd.disabledReason?.(commandContext) ?? `Command disabled: ${id}`,
       };
     }
 
     this.bus?.emit("command:submitted", { commandId: id });
 
     try {
-      const result = await cmd.run(context);
+      const result = await cmd.run(commandContext);
       this.bus?.emit("command:completed", {
         commandId: id,
         status: result.status,

@@ -4,23 +4,96 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ALL_TAB_CONTENT } from "./ribbonContributions";
 import { buildRibbonTabContent } from "./ribbonContributions";
+import {
+  RIBBON_COMMANDS,
+  RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+  RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+  visualizationTargetCommandInput,
+} from "./ribbonCommands";
 import { resolveRibbonIconColor } from "./RibbonGroupsRow";
-import { RIBBON_TABS } from "./ribbonTypes";
+import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_TARGET_COMMANDS } from "@/kernel/visualization/visualizationCommandContributions";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K];
 };
+
+function createRibbonCommandRegistry(): CommandRegistry {
+  const registry = new CommandRegistry();
+  for (const command of [...RIBBON_COMMANDS, ...VISUALIZATION_TARGET_COMMANDS]) {
+    registry.register(command);
+  }
+  return registry;
+}
+
+type RibbonNodeTestContext = Omit<
+  Partial<CommandContext>,
+  "api" | "resources" | "selection"
+> & {
+  api?: unknown;
+  resources?: unknown;
+  selection?: unknown;
+  visualizationState?: VisualizationStateResource | null;
+};
+
+async function runRibbonNode(
+  node: RibbonMenuNode,
+  value: unknown,
+  context: RibbonNodeTestContext,
+) {
+  const registry = createRibbonCommandRegistry();
+  const staticSelection =
+    context.selection &&
+    typeof context.selection === "object" &&
+    !("get" in context.selection) &&
+    !("set" in context.selection);
+  const selection = staticSelection
+    ? ({
+        get: () => context.selection,
+      } as unknown as CommandContext["selection"])
+    : (context.selection as CommandContext["selection"]);
+  const resourceData =
+    context.visualizationState &&
+    !context.resourceData?.[VISUALIZATION_STATE_PATH]
+      ? {
+          ...context.resourceData,
+          [VISUALIZATION_STATE_PATH]: context.visualizationState,
+        }
+      : context.resourceData;
+  const commandId =
+    "commandId" in node && typeof node.commandId === "string"
+      ? node.commandId
+      : node.id;
+  const commandInput =
+    "commandInput" in node && typeof node.commandInput === "function"
+      ? node.commandInput(value as never)
+      : "commandInput" in node && node.commandInput !== undefined
+        ? node.commandInput
+        : value;
+  const result = await registry.execute(
+    commandId,
+    {
+      source: "test",
+      ...context,
+      resourceData,
+      selection,
+    } as CommandContext,
+    commandInput,
+  );
+  expect(result, result.message).toMatchObject({ status: "completed" });
+}
 
 describe("ribbon structure", () => {
   it("defines visible content and dropdown structure for every ribbon tab", () => {
@@ -81,7 +154,7 @@ describe("ribbon structure", () => {
     expect(source).toContain(".fm-ribbon-group::before");
   });
 
-  it("enables selected display controls from the object visualization registry", () => {
+  it("enables selected display controls from the object visualization registry", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
       selection: {
@@ -155,11 +228,24 @@ describe("ribbon structure", () => {
       throw new Error("Expected selected display style controls");
     }
 
-    frameNode.onCheckedChange?.(true);
-    surfaceColoringNode.onValueChange?.("solid");
-    solidColorNode.onValueChange?.("#ff0000");
-    vectorAlphaNode.onValueChange?.(48);
-    wireframeOpacityNode.onValueChange?.(64);
+    const commandContext = {
+      selection: {
+        get: () => ({
+          kind: "object.visualization",
+          label: "Free layer",
+          moduleSource: "test",
+          nodeId: "model:object:free-layer:visualization",
+          objectId: "free-layer",
+          ref: null,
+        }),
+      } as never,
+      visualization,
+    };
+    await runRibbonNode(frameNode, true, commandContext);
+    await runRibbonNode(surfaceColoringNode, "solid", commandContext);
+    await runRibbonNode(solidColorNode, "#ff0000", commandContext);
+    await runRibbonNode(vectorAlphaNode, 48, commandContext);
+    await runRibbonNode(wireframeOpacityNode, 64, commandContext);
 
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({
@@ -172,9 +258,178 @@ describe("ribbon structure", () => {
       });
   });
 
-  it("wires global Surface and Texture ribbon menus to object and part display defaults", () => {
+  it("resolves selected object vectors from the canonical global visualization state", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      layers: {
+        vectors: {
+          density: 512,
+          domain: "full_domain",
+          visible: true,
+        },
+      },
+      vector_glyphs: true,
+    });
+    const selection = {
+      kind: "object.visualization" as const,
+      label: "Free layer",
+      moduleSource: "test",
+      nodeId: "model:object:free-layer:visualization",
+      objectId: "free-layer",
+      ref: null,
+    };
+    const content = buildRibbonTabContent("view", {
+      ...context,
+      selection,
+    });
+    const selectedGroup = content?.groups.find(
+      (group) => group.id === "view-selected-display",
+    );
+    const textureAction = selectedGroup?.actions.find(
+      (action) => action.id === "view-selected-texture",
+    );
+    const vectorNode = textureAction?.menu?.find(
+      (node) => node.type === "checkbox" && node.id === "selected-texture:vectors",
+    );
+    const vectorScopeNode = textureAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" &&
+        node.id === "selected-texture:vector-scope",
+    );
+
+    expect(vectorNode).toMatchObject({
+      checked: true,
+      commandId: "visualization.target.set-vectors-visible",
+      disabled: false,
+    });
+    expect(vectorScopeNode).toMatchObject({
+      disabled: false,
+      value: "full",
+    });
+    if (vectorScopeNode?.type !== "radio-group") {
+      throw new Error("Expected selected target vector scope control");
+    }
+
+    await runRibbonNode(vectorScopeNode, "surface", { ...context, selection });
+
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: { geometry_scope: "surface" },
+            scope: "object",
+            scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]),
+    );
+  });
+
+  it("keeps the explicit ribbon target command backed by visualization overrides", async () => {
+    const { context, invalidations, patches } = createVisualizationRibbonContext({
+      overrides: [],
+      revision: 7,
+    });
+
+    const result = await context.commands.execute(
+      RIBBON_VISUALIZATION_PATCH_TARGET_COMMAND,
+      context.commandContext as CommandContext,
+      visualizationTargetCommandInput(
+        { id: "free-layer", kind: "object", label: "Free layer" },
+        { vectorsVisible: false },
+      ),
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "object",
+            scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
+  });
+
+  it("routes physics interaction choices through the command registry", async () => {
+    const content = buildRibbonTabContent("physics", {
+      commands: createRibbonCommandRegistry(),
+      selection: {
+        kind: "object.physics",
+        label: "Free layer physics",
+        moduleSource: "test",
+        nodeId: "model:object:free-layer:physics",
+        objectId: "free-layer",
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+    const coreGroup = content?.groups.find((group) => group.id === "physics-core");
+    const interactionAction = coreGroup?.actions.find(
+      (action) => action.id === "physics-interactions",
+    );
+    const interactionItems = interactionAction?.menu?.filter(
+      (node) => node.type === "item" && node.commandId === RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+    );
+
+    expect(interactionItems?.map((node) => node.type === "item" ? node.commandInput : null)).toEqual([
+      { interactionId: "exchange" },
+      { interactionId: "demag" },
+      { interactionId: "zeeman" },
+      { interactionId: "current_transport" },
+      { interactionId: "spin_torque" },
+      { interactionId: "interfacial_dmi" },
+      { interactionId: "bulk_dmi" },
+      { interactionId: "uniaxial_anisotropy" },
+      { interactionId: "cubic_anisotropy" },
+      { interactionId: "oersted_field" },
+      { interactionId: "magnetoelastic" },
+    ]);
+
+    const registry = createRibbonCommandRegistry();
+    const selections: unknown[] = [];
+    const result = await registry.execute(
+      RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
+      {
+        selection: {
+          get: () => ({
+            kind: "object.physics",
+            label: "Free layer physics",
+            moduleSource: "test",
+            nodeId: "model:object:free-layer:physics",
+            objectId: "free-layer",
+            ref: null,
+          }),
+          set: (selection: unknown) => selections.push(selection),
+        } as never,
+        source: "test",
+      },
+      { interactionId: "oersted_field" },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(selections).toEqual([
+      expect.objectContaining({
+        kind: "object.physics",
+        label: "Regional field source",
+        nodeId: "model:object:free-layer:physics:oersted_field",
+        objectId: "free-layer",
+      }),
+    ]);
+  });
+
+  it("wires global Surface and Texture ribbon menus to object and part display defaults", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
+      commandContext: { source: "test", visualization },
+      commands: createRibbonCommandRegistry(),
       selection: {
         kind: null,
         label: null,
@@ -221,8 +476,9 @@ describe("ribbon structure", () => {
       throw new Error("Expected global surface and texture controls");
     }
 
-    surfaceVisibleNode.onCheckedChange?.(false);
-    textureSourceNode.onValueChange?.("component_y");
+    const commandContext = { visualization };
+    await runRibbonNode(surfaceVisibleNode, false, commandContext);
+    await runRibbonNode(textureSourceNode, "component_y", commandContext);
 
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({
@@ -253,16 +509,17 @@ describe("ribbon structure", () => {
         },
         revision: 7,
       });
+    const selection = {
+      kind: "airbox.visualization" as const,
+      label: "Airbox Visualization",
+      moduleSource: "test",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+      ref: null,
+    };
     const content = buildRibbonTabContent("view", {
       ...context,
-      selection: {
-        kind: "airbox.visualization",
-        label: "Airbox Visualization",
-        moduleSource: "test",
-        nodeId: "model:airbox:visualization",
-        objectId: null,
-        ref: null,
-      },
+      selection,
     });
     const selectedGroup = content?.groups.find(
       (group) => group.id === "view-selected-display",
@@ -309,10 +566,11 @@ describe("ribbon structure", () => {
       throw new Error("Expected selected airbox style controls");
     }
 
-    surfaceColoringNode.onValueChange?.("component_x");
-    vectorThicknessNode.onValueChange?.(2.4);
-    wireframeColorNode.onValueChange?.("#ffffff");
-    visibleNode.onCheckedChange?.(false);
+    const commandContext = { ...context, selection };
+    await runRibbonNode(surfaceColoringNode, "component_x", commandContext);
+    await runRibbonNode(vectorThicknessNode, 2.4, commandContext);
+    await runRibbonNode(wireframeColorNode, "#ffffff", commandContext);
+    await runRibbonNode(visibleNode, false, commandContext);
 
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({
@@ -335,9 +593,11 @@ describe("ribbon structure", () => {
     );
   });
 
-  it("wires the global Airbox ribbon menu to the airbox visualization target", () => {
+  it("wires the global Airbox ribbon menu to the airbox visualization target", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
+      commandContext: { source: "test", visualization },
+      commands: createRibbonCommandRegistry(),
       selection: {
         kind: null,
         label: null,
@@ -373,8 +633,8 @@ describe("ribbon structure", () => {
       throw new Error("Expected airbox checkbox controls");
     }
 
-    visibleNode.onCheckedChange?.(false);
-    vectorsNode.onCheckedChange?.(true);
+    await runRibbonNode(visibleNode, false, { visualization });
+    await runRibbonNode(vectorsNode, true, { visualization });
 
     expect(visualization.getSettings(AIRBOX_VISUALIZATION_TARGET)).toMatchObject({
       vectorsVisible: true,
@@ -414,8 +674,8 @@ describe("ribbon structure", () => {
       throw new Error("Expected airbox checkbox controls");
     }
 
-    visibleNode.onCheckedChange?.(false);
-    vectorsNode.onCheckedChange?.(true);
+    await runRibbonNode(visibleNode, false, context);
+    await runRibbonNode(vectorsNode, true, context);
 
     expect(patches).toEqual([
       {
@@ -444,7 +704,7 @@ describe("ribbon structure", () => {
     );
   });
 
-  it("patches airbox vector controls through canonical visualization state", () => {
+  it("patches airbox vector controls through canonical visualization state", async () => {
     const { context, patches } = createVisualizationRibbonContext({
       layers: {
         airbox: {
@@ -467,6 +727,9 @@ describe("ribbon structure", () => {
     const airboxAction = content?.groups
       .find((group) => group.id === "view-global-display")
       ?.actions.find((action) => action.id === "view-airbox");
+    const vectorScopeNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:vectors-scope",
+    );
     const vectorSizeNode = airboxAction?.menu?.find(
       (node) => node.type === "submenu" && node.id === "airbox:vectors-submenu",
     );
@@ -489,21 +752,26 @@ describe("ribbon structure", () => {
     );
 
     expect(densityNode).toMatchObject({ value: 128 });
+    expect(vectorScopeNode).toMatchObject({ disabled: false, value: "full" });
     expect(thicknessNode).toMatchObject({ value: 1 });
     expect(coloringNode).toMatchObject({ value: "orientation" });
 
     if (
       densityNode?.type !== "slider" ||
+      vectorScopeNode?.type !== "radio-group" ||
       thicknessNode?.type !== "slider" ||
       coloringNode?.type !== "radio-group"
     ) {
       throw new Error("Expected airbox vector controls");
     }
 
-    densityNode.onValueChange?.(256);
-    thicknessNode.onValueChange?.(1.6);
-    coloringNode.onValueChange?.("x");
+    await runRibbonNode(vectorScopeNode, "surface", context);
+    await runRibbonNode(densityNode, 256, context);
+    await runRibbonNode(thicknessNode, 1.6, context);
+    await runRibbonNode(coloringNode, "x", context);
 
+    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
+      .toMatchObject({ geometryScope: "surface" });
     expect(patches).toEqual([
       {
         layers: {
@@ -539,16 +807,17 @@ describe("ribbon structure", () => {
         },
         revision: 7,
       });
+    const selection = {
+      kind: "airbox.visualization" as const,
+      label: "Airbox Visualization",
+      moduleSource: "test",
+      nodeId: "model:airbox:visualization",
+      objectId: null,
+      ref: null,
+    };
     const content = buildRibbonTabContent("view", {
       ...context,
-      selection: {
-        kind: "airbox.visualization",
-        label: "Airbox Visualization",
-        moduleSource: "test",
-        nodeId: "model:airbox:visualization",
-        objectId: null,
-        ref: null,
-      },
+      selection,
     });
     const selectedGroup = content?.groups.find(
       (group) => group.id === "view-selected-display",
@@ -581,8 +850,9 @@ describe("ribbon structure", () => {
       throw new Error("Expected selected airbox display controls");
     }
 
-    visibleNode.onCheckedChange?.(true);
-    frameNode.onCheckedChange?.(true);
+    const commandContext = { ...context, selection };
+    await runRibbonNode(visibleNode, true, commandContext);
+    await runRibbonNode(frameNode, true, commandContext);
 
     expect(patches).toEqual([
       {
@@ -636,9 +906,11 @@ describe("ribbon structure", () => {
     expect(vectorsNode).toMatchObject({ checked: false, disabled: true });
   });
 
-  it("wires the global Frame ribbon menu to object and part display defaults", () => {
+  it("wires the global Frame ribbon menu to object and part display defaults", async () => {
     const visualization = new ObjectVisualizationController();
     const content = buildRibbonTabContent("view", {
+      commandContext: { source: "test", visualization },
+      commands: createRibbonCommandRegistry(),
       selection: {
         kind: null,
         label: null,
@@ -666,7 +938,7 @@ describe("ribbon structure", () => {
       throw new Error("Expected object frame checkbox control");
     }
 
-    frameNode.onCheckedChange?.(true);
+    await runRibbonNode(frameNode, true, { visualization });
 
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({ boundsVisible: true });
@@ -674,13 +946,14 @@ describe("ribbon structure", () => {
       .toMatchObject({ boundsVisible: true });
   });
 
-  it("focuses the airbox ribbon action by selecting the airbox visualization node", () => {
+  it("focuses the airbox ribbon action by selecting the airbox visualization node", async () => {
     const selectionSet = vi.fn();
     const content = buildRibbonTabContent("view", {
       commandContext: {
         selection: { set: selectionSet } as never,
         source: "ribbon",
       },
+      commands: createRibbonCommandRegistry(),
       selection: {
         kind: null,
         label: null,
@@ -704,7 +977,10 @@ describe("ribbon structure", () => {
       throw new Error("Expected airbox focus menu item");
     }
 
-    focusNode.onSelect?.();
+    await runRibbonNode(focusNode, undefined, {
+      selection: { set: selectionSet } as never,
+      source: "ribbon",
+    });
 
     expect(selectionSet).toHaveBeenCalledWith(
       {
@@ -749,8 +1025,8 @@ describe("ribbon structure", () => {
       throw new Error("Expected quantity source and overlay controls");
     }
 
-    sourceNode.onValueChange?.("H_demag");
-    overlayNode.onCheckedChange?.(false);
+    await runRibbonNode(sourceNode, "H_demag", context);
+    await runRibbonNode(overlayNode, false, context);
 
     expect(patches).toEqual([
       {
@@ -769,16 +1045,16 @@ describe("ribbon structure", () => {
     );
   });
 
-  it("patches canonical visualization state from global Vectors controls", () => {
+  it("patches canonical visualization state from global Vectors controls", async () => {
     const { context, patches } = createVisualizationRibbonContext({
       field_component: "magnitude",
       layers: {
         vectors: {
-          density: 1200,
           domain: "auto",
           visible: false,
         },
       },
+      sampling: { max_glyphs: 58 },
       vector_style: {
         alpha: 0.9,
         color_mode: "orientation",
@@ -796,15 +1072,25 @@ describe("ribbon structure", () => {
     const densityNode = vectorsAction?.menu?.find(
       (node) => node.type === "slider" && node.id === "vectors:density",
     );
+    const scopeNode = vectorsAction?.menu?.find(
+      (node) =>
+        node.type === "radio-group" && node.id === "vectors:geometry-scope",
+    );
 
     expect(visibleNode).toMatchObject({ checked: false });
-    expect(densityNode).toMatchObject({ value: 1200 });
-    if (visibleNode?.type !== "checkbox" || densityNode?.type !== "slider") {
-      throw new Error("Expected vector visibility and density controls");
+    expect(densityNode).toMatchObject({ value: 58 });
+    expect(scopeNode).toMatchObject({ value: "full" });
+    if (
+      visibleNode?.type !== "checkbox" ||
+      densityNode?.type !== "slider" ||
+      scopeNode?.type !== "radio-group"
+    ) {
+      throw new Error("Expected vector visibility, density and scope controls");
     }
 
-    visibleNode.onCheckedChange?.(true);
-    densityNode.onValueChange?.(2048);
+    await runRibbonNode(visibleNode, true, context);
+    await runRibbonNode(densityNode, 2048, context);
+    await runRibbonNode(scopeNode, "surface", context);
 
     expect(patches).toEqual([
       {
@@ -817,9 +1103,15 @@ describe("ribbon structure", () => {
         vector_density: 2048,
       },
     ]);
+    expect(context.visualization.getDefaultSettings("object")).toMatchObject({
+      geometryScope: "surface",
+    });
+    expect(context.visualization.getDefaultSettings("part")).toMatchObject({
+      geometryScope: "surface",
+    });
   });
 
-  it("patches canonical visualization state from global Mesh View controls", () => {
+  it("patches canonical visualization state from global Mesh View controls", async () => {
     const { context, patches } = createVisualizationRibbonContext({
       layers: {
         points: { opacity: 1, visible: false },
@@ -844,8 +1136,8 @@ describe("ribbon structure", () => {
       throw new Error("Expected mesh render-mode and opacity controls");
     }
 
-    renderModeNode.onValueChange?.("points");
-    opacityNode.onValueChange?.(45);
+    await runRibbonNode(renderModeNode, "points", context);
+    await runRibbonNode(opacityNode, 45, context);
 
     expect(patches).toEqual([
       {
@@ -1003,7 +1295,7 @@ describe("ribbon structure", () => {
       commands,
       commandContext: {
         api: { commands: { submit: vi.fn() } } as never,
-        source: "test",
+        source: "test" as const,
       },
       selection: {
         kind: null,
@@ -1046,25 +1338,38 @@ function createVisualizationRibbonContext(
 ) {
   const patches: VisualizationStatePatch[] = [];
   const invalidations: Array<[string, number | string]> = [];
+  const api = {
+    visualization: {
+      patch: async (patch: VisualizationStatePatch) => {
+        patches.push(patch);
+        return {
+          ...visualizationState,
+          revision: 40 + patches.length,
+        } as VisualizationStateResource;
+      },
+    },
+  };
+  const resources = {
+    invalidate: (resourceKey: string, revision: number | string) => {
+      invalidations.push([resourceKey, revision]);
+    },
+  };
+  const visualization = new ObjectVisualizationController();
 
   return {
     context: {
-      api: {
-        visualization: {
-          patch: async (patch: VisualizationStatePatch) => {
-            patches.push(patch);
-            return {
-              ...visualizationState,
-              revision: 40 + patches.length,
-            } as VisualizationStateResource;
-          },
+      api,
+      commandContext: {
+        api: api as never,
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: visualizationState,
         },
+        resources: resources as never,
+        source: "test" as const,
+        visualization,
       },
-      resources: {
-        invalidate: (resourceKey: string, revision: number | string) => {
-          invalidations.push([resourceKey, revision]);
-        },
-      },
+      commands: createRibbonCommandRegistry(),
+      resources,
       selection: {
         kind: null,
         label: null,
@@ -1073,8 +1378,8 @@ function createVisualizationRibbonContext(
         objectId: null,
         ref: null,
       },
-      visualization: new ObjectVisualizationController(),
-      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+      visualization,
+      visualizationSnapshot: visualization.getSnapshot(),
       visualizationState: visualizationState as VisualizationStateResource,
     },
     invalidations,

@@ -1,14 +1,16 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, type ComponentProps } from "react";
+import { useCallback, useMemo, type ComponentProps } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
   AIRBOX_VISUALIZATION_TARGET,
-  resolveVisualizationSettings,
+  resolveDefaultVisualizationSettings,
+  resolveGlobalObjectVisualizationSettings,
+  resolveTargetVisualization,
   surfaceColorSourceToColorMode,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -19,8 +21,6 @@ import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import {
   FULL_FIELD_QUERY,
-  resolveAirboxBaseVisualizationSettings,
-  resolveGlobalObjectVisualizationSettings,
   resolveViewport3DSelectionBounds,
   targetForMeshPart,
 } from "./model/viewport3DTargets";
@@ -70,34 +70,13 @@ import { buildViewport3DResourceFrameKey } from "./viewport3dInvalidation";
 import {
   resolveHslReferenceVisible,
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+  resolveViewport3DCameraProjection,
+  resolveViewport3DCameraState,
   useViewport3DCommandState,
-  viewport3dStore,
 } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
-
-function unitHash(seed: number): number {
-  let value = seed | 0;
-  value = Math.imul(value ^ (value >>> 16), 2246822507);
-  value = Math.imul(value ^ (value >>> 13), 3266489909);
-  return ((value ^ (value >>> 16)) >>> 0) / 0x100000000;
-}
-
-function mockUnitVector(index: number, tick: number): [number, number, number] {
-  const base =
-    Math.imul(index + 1, 374761393) ^ Math.imul(tick + 1, 668265263);
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const x = unitHash(base + attempt * 2) * 2 - 1;
-    const y = unitHash(base + attempt * 2 + 1) * 2 - 1;
-    const s = x * x + y * y;
-    if (s > 0 && s < 1) {
-      const r = 2 * Math.sqrt(1 - s);
-      return [x * r, y * r, 1 - 2 * s];
-    }
-  }
-  return [0, 0, 1];
-}
 
 interface Viewport3DFrameProps
   extends Omit<Viewport3DSceneProps, "colors"> {
@@ -127,6 +106,7 @@ export default function Viewport3DModule({
   const commandState = useViewport3DCommandState();
   const { domainId, ...sceneModel } = useViewport3DSceneModel({
     commandState,
+    colors,
     objectVisualizationSnapshot,
     resourceCounts,
     selection,
@@ -137,13 +117,9 @@ export default function Viewport3DModule({
       select,
     });
 
-  useRegisterViewportProjectionCommand(kernel);
-
   return (
     <Viewport3DFrame
       {...sceneModel}
-      cameraProjection={commandState.widgets.cameraProjection}
-      cameraState={commandState.camera}
       clientReady={clientReady}
       colors={colors}
       fitRevision={commandState.fitRevision}
@@ -160,37 +136,15 @@ export default function Viewport3DModule({
   );
 }
 
-function useRegisterViewportProjectionCommand(
-  kernel: ModuleProps["kernel"],
-): void {
-  useEffect(() => {
-    const { commands } = kernel;
-    commands.register({
-      id: "view-projection",
-      title: "Toggle projection",
-      group: "viewport",
-      category: "viewport",
-      scope: "viewport",
-      isActive: () =>
-        viewport3dStore.getSnapshot().widgets.cameraProjection === "orthographic",
-      run: () => {
-        viewport3dStore.toggleCameraProjection();
-        return Promise.resolve({ status: "completed" as const });
-      },
-    });
-    return () => {
-      commands.unregister("view-projection");
-    };
-  }, [kernel]);
-}
-
 function useViewport3DSceneModel({
   commandState,
+  colors,
   objectVisualizationSnapshot,
   resourceCounts,
   selection,
 }: {
   commandState: ReturnType<typeof useViewport3DCommandState>;
+  colors: Viewport3DSceneProps["colors"] | null;
   objectVisualizationSnapshot: ReturnType<typeof useObjectVisualizationRegistry>["snapshot"];
   resourceCounts: ReturnType<typeof useViewport3DResourceCounts>;
   selection: ReturnType<typeof useSelection>["selection"];
@@ -205,10 +159,13 @@ function useViewport3DSceneModel({
   const vectorStyle = useMemo(
     () => ({
       alpha: visualizationState.data?.vector_style.alpha ?? 1,
-      monoColor: visualizationState.data?.vector_style.mono_color ?? "#00c2ff",
+      monoColor:
+        visualizationState.data?.vector_style.mono_color ??
+        String(colors?.field ?? "white"),
       thickness: visualizationState.data?.vector_style.thickness ?? 1,
     }),
     [
+      colors?.field,
       visualizationState.data?.vector_style.alpha,
       visualizationState.data?.vector_style.mono_color,
       visualizationState.data?.vector_style.thickness,
@@ -281,15 +238,8 @@ function useViewport3DSceneModel({
   // airbox-specific API patches cannot inadvertently alter the appearance
   // of regular mesh objects.
   const globalLayers = visualizationState.data?.layers;
-  const objectKindDefaults = objectVisualizationSnapshot.defaults.object;
-  const fallbackSettings = useMemo(
-    () => ({
-      ...resolveGlobalObjectVisualizationSettings(visualizationState.data),
-      // Overlay local per-kind defaults (e.g. boundsVisible from the ribbon's
-      // "Object frame" toggle) so that DomainBoxLayer and other consumers that
-      // read fallbackSettings directly get the correct frame visibility.
-      ...(objectKindDefaults ?? {}),
-    }),
+  const globalObjectBaseSettings = useMemo(
+    () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
     // Explicit deps on global layer fields only – airbox sub-fields excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -298,7 +248,6 @@ function useViewport3DSceneModel({
       globalLayers?.wireframe?.visible,
       globalLayers?.points?.visible,
       globalLayers?.vectors?.visible,
-      objectKindDefaults,
       visualizationState.data?.vector_style.alpha,
       visualizationState.data?.vector_style.color_mode,
       visualizationState.data?.vector_style.mono_color,
@@ -306,40 +255,45 @@ function useViewport3DSceneModel({
       visualizationState.data?.vector_glyphs,
     ],
   );
-  const airboxBaseSettings = useMemo(
-    () => resolveAirboxBaseVisualizationSettings(visualizationState.data),
-    [visualizationState.data],
+  const fallbackSettings = useMemo(
+    () =>
+      resolveDefaultVisualizationSettings(
+        objectVisualizationSnapshot,
+        "object",
+        globalObjectBaseSettings,
+      ),
+    [globalObjectBaseSettings, objectVisualizationSnapshot],
   );
   const airboxSettings = useMemo(
     () =>
-      resolveVisualizationSettings(
-        objectVisualizationSnapshot,
-        AIRBOX_VISUALIZATION_TARGET,
-        airboxBaseSettings,
-      ),
-    [airboxBaseSettings, objectVisualizationSnapshot],
+      resolveTargetVisualization({
+        snapshot: objectVisualizationSnapshot,
+        target: AIRBOX_VISUALIZATION_TARGET,
+        visualizationState: visualizationState.data,
+      }).settings,
+    [objectVisualizationSnapshot, visualizationState.data],
   );
   const getPartSettings = useCallback(
     (part: Viewport3DMeshPart) =>
-      resolveVisualizationSettings(
-        objectVisualizationSnapshot,
-        targetForMeshPart(part),
-        fallbackSettings,
-      ),
-    [fallbackSettings, objectVisualizationSnapshot],
+      resolveTargetVisualization({
+        snapshot: objectVisualizationSnapshot,
+        target: targetForMeshPart(part),
+        visualizationState: visualizationState.data,
+      }).settings,
+    [objectVisualizationSnapshot, visualizationState.data],
   );
   const getObjectSettings = useCallback(
     (object: Viewport3DPrimitiveObject) =>
-      resolveVisualizationSettings(
-        objectVisualizationSnapshot,
-        {
+      resolveTargetVisualization({
+        snapshot: objectVisualizationSnapshot,
+        target: {
           id: object.objectId,
           kind: "object",
           label: object.label,
         },
-        fallbackSettings,
-      ),
-    [fallbackSettings, objectVisualizationSnapshot],
+        visualizationState: visualizationState.data,
+      }).settings,
+    [objectVisualizationSnapshot, visualizationState.data],
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
@@ -351,50 +305,22 @@ function useViewport3DSceneModel({
     vectorColorMode,
     vectorDomain,
   });
-  const mockField = commandState.mockField;
-  // When mock animation is running, generate random unit-vector field data
-  // instead of fetching from the API. The tick counter causes this memo to
-  // re-run on every animation frame (~8 fps) so the viewport gets fresh data.
-  const mockFieldVector = useMemo(() => {
-    if (!mockField.running || !topologyRenderModel) return null;
-    const pointCount = topologyRenderModel.nodeCount;
-    if (pointCount === 0) return null;
-    const tick = mockField.tick;
-    const values = new Float64Array(pointCount * 3);
-    for (let i = 0; i < pointCount; i++) {
-      const [x, y, z] = mockUnitVector(i, tick);
-      values[i * 3] = x;
-      values[i * 3 + 1] = y;
-      values[i * 3 + 2] = z;
-    }
-    return {
-      dtype: "float64" as const,
-      grid: [pointCount, 1, 1] as [number, number, number],
-      nComp: 3,
-      pointCount,
-      quantityId: "m",
-      valueCount: pointCount * 3,
-      values,
-    };
-  }, [mockField.running, mockField.tick, topologyRenderModel]);
-
   const fieldVectorEnabled =
-    !mockField.running && viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
+    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
   const fieldVector = useViewport3DFieldVector(
     quantityId,
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
-  const effectiveFieldData = mockFieldVector ?? fieldVector.data;
   const fieldRenderModel = useMemo(
     () =>
       buildViewport3DFieldRenderModel(
         topologyRenderModel,
-        effectiveFieldData,
+        fieldVector.data,
         vectorScale,
         fieldRenderOptions,
       ),
-    [fieldRenderOptions, effectiveFieldData, topologyRenderModel, vectorScale],
+    [fieldRenderOptions, fieldVector.data, topologyRenderModel, vectorScale],
   );
   const selectedLabel = selection.label ?? "No selection";
   const status =
@@ -470,6 +396,8 @@ function useViewport3DSceneModel({
   return {
     airboxSettings,
     bounds,
+    cameraProjection: resolveViewport3DCameraProjection(visualizationState.data),
+    cameraState: resolveViewport3DCameraState(visualizationState.data),
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,

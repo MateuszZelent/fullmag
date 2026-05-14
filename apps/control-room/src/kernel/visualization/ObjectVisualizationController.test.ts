@@ -10,6 +10,9 @@ import {
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
   resolveEffectiveVisualizationSettings,
+  resolveGlobalObjectVisualizationSettings,
+  resolveTargetVisualization,
+  visualizationStateOverrideFromTargetPatch,
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationTargetKey,
@@ -275,6 +278,215 @@ describe("ObjectVisualizationController", () => {
       shaderVisible: false,
       vectorsVisible: true,
       wireframeVisible: true,
+    });
+  });
+
+  it("resolves object targets from canonical global vector state before local overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    const visualizationState = {
+      layers: {
+        vectors: {
+          density: 512,
+          domain: "full_domain",
+          visible: true,
+        },
+      },
+      revision: 11,
+      vector_glyphs: true,
+    };
+
+    expect(
+      resolveGlobalObjectVisualizationSettings(visualizationState as never),
+    ).toMatchObject({
+      vectorsVisible: true,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: visualizationState as never,
+      }),
+    ).toMatchObject({
+      effectiveSettings: {
+        vectorsVisible: true,
+      },
+      override: null,
+      revision: "0:11",
+      settings: {
+        vectorsVisible: true,
+      },
+    });
+
+    controller.patchTarget(target, { vectorsVisible: false });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: visualizationState as never,
+      }),
+    ).toMatchObject({
+      effectiveSettings: {
+        vectorsVisible: false,
+      },
+      override: {
+        vectorsVisible: false,
+      },
+      revision: "1:11",
+      settings: {
+        vectorsVisible: false,
+      },
+    });
+  });
+
+  it("applies backend-owned visibility overrides before local target overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    const visualizationState = {
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "free-layer",
+          visible: false,
+        },
+      ],
+      revision: 12,
+    };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: visualizationState as never,
+      }),
+    ).toMatchObject({
+      effectiveSettings: {
+        shaderVisible: false,
+        vectorsVisible: false,
+      },
+      override: {
+        visible: false,
+      },
+      settings: {
+        visible: false,
+      },
+    });
+
+    controller.patchTarget(target, { visible: true });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: visualizationState as never,
+      }),
+    ).toMatchObject({
+      override: {
+        visible: true,
+      },
+      settings: {
+        visible: true,
+      },
+    });
+  });
+
+  it("maps backend-owned display and style overrides into target settings", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          overrides: [
+            {
+              display: {
+                geometry_scope: "surface",
+                opacity: 0.35,
+                surface: { visible: false },
+                vectors: { visible: true },
+                visible: true,
+                wireframe: { opacity: 0.45, visible: true },
+              },
+              scope: "object",
+              scope_id: "free-layer",
+              style: {
+                surface_color_source: "solid",
+                surface_mono_color: "#00ffaa",
+                vector_alpha: 0.4,
+                vector_color_mode: "x",
+                vector_mono_color: "#ff00aa",
+                vector_thickness: 2,
+                wireframe_color: "#111111",
+              },
+            },
+          ],
+          revision: 13,
+        } as never,
+      }),
+    ).toMatchObject({
+      settings: {
+        geometryScope: "surface",
+        opacityPercent: 35,
+        shaderMonoColor: "#00ffaa",
+        shaderVisible: false,
+        surfaceColorSource: "solid",
+        vectorAlphaPercent: 40,
+        vectorColorMode: "x",
+        vectorMonoColor: "#ff00aa",
+        vectorThickness: 2,
+        vectorsVisible: true,
+        visible: true,
+        wireframeColor: "#111111",
+        wireframeOpacityPercent: 45,
+        wireframeVisible: true,
+      },
+    });
+  });
+
+  it("serializes target patches into backend-owned display and style overrides", () => {
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        { id: "free-layer", kind: "object" },
+        {
+          geometryScope: "surface",
+          opacityPercent: 35,
+          shaderMonoColor: "#00ffaa",
+          surfaceColorSource: "solid",
+          vectorAlphaPercent: 40,
+          vectorColorMode: "x",
+          vectorMonoColor: "#ff00aa",
+          vectorThickness: 2,
+          vectorsVisible: false,
+          visible: true,
+          wireframeColor: "#111111",
+          wireframeOpacityPercent: 45,
+          wireframeVisible: true,
+        },
+      ),
+    ).toMatchObject({
+      display: {
+        geometry_scope: "surface",
+        opacity: 0.35,
+        vectors: { visible: false },
+        visible: true,
+        wireframe: { opacity: 0.45, visible: true },
+      },
+      scope: "object",
+      scope_id: "free-layer",
+      style: {
+        surface_color_source: "solid",
+        surface_mono_color: "#00ffaa",
+        vector_alpha: 0.4,
+        vector_color_mode: "x",
+        vector_mono_color: "#ff00aa",
+        vector_thickness: 2,
+        wireframe_color: "#111111",
+      },
+      visible: true,
     });
   });
 

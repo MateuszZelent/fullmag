@@ -4,7 +4,8 @@ use crate::schemas::commands::CommandResponse;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
-    VectorStyleVisualizationState, VisualizationLayerState, VisualizationOverrideState,
+    VectorStyleVisualizationState, VisualizationCameraState, VisualizationLayerState,
+    VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -18,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use tokio::sync::{Mutex, RwLock, broadcast, watch};
+use std::sync::Arc;
+use tokio::sync::{broadcast, watch, Mutex, RwLock};
 use utoipa::ToSchema;
 
 pub(crate) type CurrentPreviewConfig = LivePreviewRequest;
@@ -48,6 +49,8 @@ pub(crate) struct DisplayPresentationState {
     #[serde(default)]
     pub visualization_trim: Option<TrimVisualizationState>,
     #[serde(default)]
+    pub visualization_camera: Option<VisualizationCameraState>,
+    #[serde(default)]
     pub visualization_clip: Option<ClipVisualizationState>,
     #[serde(default)]
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
@@ -68,6 +71,7 @@ impl Default for DisplayPresentationState {
             visualization_fem: None,
             visualization_slice: None,
             visualization_trim: None,
+            visualization_camera: None,
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,

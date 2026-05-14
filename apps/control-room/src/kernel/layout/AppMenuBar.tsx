@@ -229,15 +229,24 @@ function HeaderDropdown({
   );
 }
 
-function QuickActionButton({ action }: { action: HeaderQuickAction }) {
+function QuickActionButton({
+  action,
+  disabled,
+  onCommand,
+}: {
+  action: HeaderQuickAction;
+  disabled: boolean;
+  onCommand: (commandId: string) => void;
+}) {
   return (
     <Button
       className="fm-header__quick-action"
-      disabled={action.disabled}
+      disabled={action.disabled || disabled}
       size="sm"
       title={action.label}
       type="button"
       variant="ghost"
+      onClick={() => onCommand(action.id)}
     >
       {action.icon}
       <span>{action.label}</span>
@@ -416,7 +425,12 @@ export function AppMenuBar() {
 
       <div className="fm-header__quick-actions">
         {QUICK_ACTIONS.map((action) => (
-          <QuickActionButton key={action.id} action={action} />
+          <QuickActionButton
+            key={action.id}
+            action={action}
+            disabled={isCommandDisabled(action.id)}
+            onCommand={runCommand}
+          />
         ))}
       </div>
 

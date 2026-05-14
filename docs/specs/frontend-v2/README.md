@@ -4,7 +4,7 @@
 **Date:** 2026-05-11
 **Decision record:** `docs/adr/0013-frontend-v2-module-kernel.md`
 
-Frontend v2 is a clean control-room frontend line for Fullmag. It retires the old `apps/web` architecture as a reference source and builds a new modular app root under `apps/control-room`.
+Frontend v2 is a clean control-room frontend line for Fullmag. It retires the old `apps/legacy_web` architecture as a reference source and builds a new modular app root under `apps/control-room`.
 
 This is not a second Fullmag product and not an FDM/FEM fork. It is one browser control room, one v2 resource-first API contract, one command vocabulary, one module kernel, and replaceable modules mounted into stable slots.
 

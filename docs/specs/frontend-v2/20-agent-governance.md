@@ -28,7 +28,7 @@ For any frontend v2 task:
 
 Agents must not:
 
-- modify `apps/web` while implementing `apps/control-room` unless explicitly asked;
+- modify `apps/legacy_web` while implementing `apps/control-room` unless explicitly asked;
 - copy legacy files without naming what debt was removed;
 - add compatibility shims without a removal condition;
 - leave dead registrations, unused modules, or unreferenced commands;

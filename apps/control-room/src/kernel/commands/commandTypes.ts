@@ -13,6 +13,7 @@ export type CommandCategory = string;
 export interface CommandContext {
   source: "menu" | "ribbon" | "shortcut" | "palette" | "test";
   api?: ControlRoomApi;
+  input?: unknown;
   layout?: LayoutController;
   resourceData?: Readonly<Record<string, unknown>>;
   resources?: ResourceInvalidationController;

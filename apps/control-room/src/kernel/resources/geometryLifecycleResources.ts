@@ -614,6 +614,7 @@ export function useUniverseMeshPolicyResource() {
 export function useObjectInteractionResource(
   objectId: string | null | undefined,
   interactionKind: ObjectInteractionKind,
+  options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const resourceKey = objectId
@@ -644,6 +645,7 @@ export function useObjectInteractionResource(
   );
 
   return useResource<ObjectInteractionResource>({
+    enabled: options.enabled,
     load,
     resourceKey,
   });

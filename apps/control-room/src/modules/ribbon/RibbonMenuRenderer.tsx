@@ -27,14 +27,14 @@ export function RibbonMenuRenderer({
   onCommand,
 }: {
   nodes: RibbonMenuNode[];
-  onCommand?: (commandId: string) => void;
+  onCommand?: (commandId: string, input?: unknown) => void;
 }) {
   return <>{nodes.map((node) => renderNode(node, onCommand))}</>;
 }
 
 function renderNode(
   node: RibbonMenuNode,
-  onCommand?: (commandId: string) => void,
+  onCommand?: (commandId: string, input?: unknown) => void,
 ): ReactNode {
   switch (node.type) {
     case "label":
@@ -56,11 +56,7 @@ function renderNode(
           key={node.id}
           disabled={node.disabled}
           onSelect={() => {
-            if (node.commandId) {
-              onCommand?.(node.commandId);
-            } else {
-              node.onSelect?.();
-            }
+            onCommand?.(node.commandId ?? node.id, node.commandInput);
           }}
         >
           {node.icon}
@@ -78,14 +74,15 @@ function renderNode(
           checked={node.checked}
           disabled={node.disabled}
           onCheckedChange={(checked) => {
+            const next = Boolean(checked);
             if (node.commandId) {
-              onCommand?.(node.commandId);
-            } else if (node.onCheckedChange) {
-              node.onCheckedChange(Boolean(checked));
-            } else {
-              // Fall back to node.id as the command id — mirrors applyCommandStateToMenuNode.
-              onCommand?.(node.id);
+              onCommand?.(
+                node.commandId,
+                resolveCommandInput(node.commandInput, next),
+              );
+              return;
             }
+            onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
           }}
           onSelect={(event) => event.preventDefault()}
         >
@@ -102,10 +99,21 @@ function renderNode(
             onValueChange={(value) => {
               const item = node.items.find((entry) => entry.value === value);
               if (item?.commandId) {
-                onCommand?.(item.commandId);
-              } else {
-                node.onValueChange?.(value);
+                onCommand?.(
+                  item.commandId,
+                  item.commandInput ??
+                    resolveCommandInput(node.commandInput, value),
+                );
+                return;
               }
+              if (node.commandId) {
+                onCommand?.(
+                  node.commandId,
+                  resolveCommandInput(node.commandInput, value),
+                );
+                return;
+              }
+              onCommand?.(node.id, resolveCommandInput(node.commandInput, value));
             }}
           >
             {node.items.map((item) => (
@@ -146,17 +154,38 @@ function renderNode(
       );
 
     case "slider":
-      return <SliderMenuItem key={`${node.id}:${node.value}`} node={node} />;
+      return (
+        <SliderMenuItem
+          key={`${node.id}:${node.value}`}
+          node={node}
+          onCommand={onCommand}
+        />
+      );
 
     case "color":
-      return <ColorMenuItem key={node.id} node={node} />;
+      return <ColorMenuItem key={node.id} node={node} onCommand={onCommand} />;
   }
+}
+
+function resolveCommandInput<T>(
+  input: unknown | ((value: T) => unknown),
+  value: T,
+): unknown {
+  return typeof input === "function"
+    ? (input as (value: T) => unknown)(value)
+    : input ?? value;
 }
 
 // ── Slider ────────────────────────────────────────────────────────────────────
 type SliderNode = Extract<RibbonMenuNode, { type: "slider" }>;
 
-function SliderMenuItem({ node }: { node: SliderNode }) {
+function SliderMenuItem({
+  node,
+  onCommand,
+}: {
+  node: SliderNode;
+  onCommand?: (commandId: string, input?: unknown) => void;
+}) {
   const pct = ((node.value - node.min) / (node.max - node.min)) * 100;
 
   return (
@@ -182,7 +211,14 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
         style={{ "--pct": `${pct}%` } as CSSProperties}
         onChange={(e) => {
           const next = Number(e.target.value);
-          node.onValueChange?.(next);
+          if (node.commandId) {
+            onCommand?.(
+              node.commandId,
+              resolveCommandInput(node.commandInput, next),
+            );
+            return;
+          }
+          onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
         }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
@@ -194,9 +230,17 @@ function SliderMenuItem({ node }: { node: SliderNode }) {
 // ── Color picker ──────────────────────────────────────────────────────────────
 type ColorNode = Extract<RibbonMenuNode, { type: "color" }>;
 
-function ColorMenuItem({ node }: { node: ColorNode }) {
+function ColorMenuItem({
+  node,
+  onCommand,
+}: {
+  node: ColorNode;
+  onCommand?: (commandId: string, input?: unknown) => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const pickerValue = isColorPickerValue(node.value) ? node.value : "#ffffff";
+  const pickerValue = isColorPickerValue(node.value)
+    ? node.value
+    : colorInputValue(255, 255, 255);
 
   const handleSwatchClick = useCallback(
     (e: MouseEvent) => {
@@ -233,9 +277,19 @@ function ColorMenuItem({ node }: { node: ColorNode }) {
           className="fm-dropdown-color__input"
           value={pickerValue}
           disabled={node.disabled}
-          readOnly={!node.onValueChange}
+          readOnly={!node.commandId}
           tabIndex={-1}
-          onChange={(e) => node.onValueChange?.(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            if (node.commandId) {
+              onCommand?.(
+                node.commandId,
+                resolveCommandInput(node.commandInput, next),
+              );
+              return;
+            }
+            onCommand?.(node.id, resolveCommandInput(node.commandInput, next));
+          }}
           onClick={(e) => e.stopPropagation()}
         />
       </span>
@@ -245,4 +299,10 @@ function ColorMenuItem({ node }: { node: ColorNode }) {
 
 function isColorPickerValue(value: string): boolean {
   return /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function colorInputValue(red: number, green: number, blue: number): string {
+  return `#${[red, green, blue]
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
 }

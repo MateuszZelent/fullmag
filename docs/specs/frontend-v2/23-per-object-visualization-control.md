@@ -32,6 +32,8 @@ When a new object is committed but no current mesh exists yet, the target id sti
 
 The long-term owner is the v2 visualization resource. Airbox display now reads and writes `visualization/state.layers.airbox` through the typed v2 facade. Until the backend exposes full per-target object/part fields beyond narrow overrides, object and part display details still use a kernel visualization controller as a temporary client-owned display-preference registry. Modules consume it through kernel hooks/controllers, not through cross-module imports.
 
+Global camera state is not a per-target override. It belongs to `visualization/state.camera`, is shared by all clients in the session, and changes through HTTP patches followed by WebSocket resource invalidation.
+
 The registry stores only small display preferences:
 
 - visible;

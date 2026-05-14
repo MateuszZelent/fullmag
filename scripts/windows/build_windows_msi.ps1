@@ -214,7 +214,7 @@ Import-VsEnvironment
 Push-Location $RepoRoot
 try {
   pnpm install --frozen-lockfile
-  pnpm --dir apps/web build
+  pnpm --dir apps/control-room build
   rustup target add $TargetTriple
 
   cargo build --release --target $TargetTriple -p fullmag-cli

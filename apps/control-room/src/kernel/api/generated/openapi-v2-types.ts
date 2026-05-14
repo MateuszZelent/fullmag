@@ -3590,6 +3590,8 @@ export interface components {
             requested_mode: string;
             requested_precision: string;
         };
+        /** @enum {string} */
+        SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
             y: components["schemas"]["TrimAxisVisualizationState"];
@@ -3682,6 +3684,28 @@ export interface components {
             /** Format: double */
             thickness: number;
         };
+        VisualizationCameraPatch: {
+            /** Format: double */
+            fov_degrees?: number | null;
+            /** Format: double */
+            orthographic_scale?: number | null;
+            position?: number[] | null;
+            projection?: null | components["schemas"]["VisualizationCameraProjection"];
+            target?: number[] | null;
+            up?: number[] | null;
+        };
+        /** @enum {string} */
+        VisualizationCameraProjection: "perspective" | "orthographic";
+        VisualizationCameraState: {
+            /** Format: double */
+            fov_degrees: number;
+            /** Format: double */
+            orthographic_scale?: number | null;
+            position: number[];
+            projection: components["schemas"]["VisualizationCameraProjection"];
+            target: number[];
+            up: number[];
+        };
         VisualizationDiagnostics: {
             degraded_reasons: string[];
             warnings: string[];
@@ -3707,8 +3731,11 @@ export interface components {
             wireframe: components["schemas"]["BasicLayerState"];
         };
         VisualizationOverrideState: {
+            display?: null | components["schemas"]["VisualizationTargetDisplayOverride"];
             scope: components["schemas"]["VisualizationScopeKind"];
             scope_id: string;
+            style?: null | components["schemas"]["VisualizationTargetStyleOverride"];
+            /** @description Compatibility target visibility override. Prefer `display.visible` for new clients. */
             visible?: boolean | null;
         };
         /** @enum {string} */
@@ -3716,6 +3743,7 @@ export interface components {
         VisualizationStatePatch: {
             active_quantity_id?: string | null;
             auto_contrast?: boolean | null;
+            camera?: null | components["schemas"]["VisualizationCameraPatch"];
             clip?: null | components["schemas"]["ClipVisualizationPatch"];
             colormap?: string | null;
             /** Format: double */
@@ -3729,6 +3757,7 @@ export interface components {
             layers?: null | components["schemas"]["VisualizationLayerPatch"];
             /** Format: int32 */
             max_points?: number | null;
+            overrides?: components["schemas"]["VisualizationOverrideState"][] | null;
             quantity?: null | components["schemas"]["QuantityVisualizationPatch"];
             sampling?: null | components["schemas"]["SamplingVisualizationPatch"];
             slice?: null | components["schemas"]["SliceVisualizationPatch"];
@@ -3751,6 +3780,8 @@ export interface components {
             active_quantity_id: string;
             /** @description Compatibility projection for current display clients. Prefer `quantity.auto_contrast`. */
             auto_contrast: boolean;
+            /** @description Session-wide viewport camera. All connected clients should converge to this view. */
+            camera: components["schemas"]["VisualizationCameraState"];
             /** @description Compatibility projection of the legacy single clip plane. */
             clip: components["schemas"]["ClipVisualizationState"];
             /** @description Compatibility projection for current display clients. Prefer `quantity.colormap`. */
@@ -3826,6 +3857,29 @@ export interface components {
              * @description Compatibility projection for current display clients. Prefer `fdm.y_chosen_size`.
              */
             y_chosen_size: number;
+        };
+        VisualizationTargetDisplayOverride: {
+            geometry_scope?: null | components["schemas"]["VisualizationTargetGeometryScope"];
+            /** Format: double */
+            opacity?: number | null;
+            points?: null | components["schemas"]["BasicLayerPatch"];
+            surface?: null | components["schemas"]["BasicLayerPatch"];
+            vectors?: null | components["schemas"]["VectorLayerPatch"];
+            visible?: boolean | null;
+            wireframe?: null | components["schemas"]["BasicLayerPatch"];
+        };
+        /** @enum {string} */
+        VisualizationTargetGeometryScope: "surface" | "full";
+        VisualizationTargetStyleOverride: {
+            surface_color_source?: null | components["schemas"]["SurfaceColorSource"];
+            surface_mono_color?: string | null;
+            /** Format: double */
+            vector_alpha?: number | null;
+            vector_color_mode?: null | components["schemas"]["VectorColorMode"];
+            vector_mono_color?: string | null;
+            /** Format: double */
+            vector_thickness?: number | null;
+            wireframe_color?: string | null;
         };
         WorkspaceActiveNodeReplaceRequest: {
             node_id?: string | null;

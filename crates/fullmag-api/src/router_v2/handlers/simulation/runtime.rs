@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::Json;
 use fullmag_authoring::{MagnetizationAsset, SceneDocument, SceneObject};
 use serde::Deserialize;
 use serde_json::Value;

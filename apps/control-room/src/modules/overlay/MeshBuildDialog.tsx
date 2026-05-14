@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer } from "react";
 
 import {
   useMeshBuildCurrent,
@@ -37,10 +37,43 @@ function commandIsMeshBuild(commandId: string): boolean {
   return commandId === "mesh.build-selected" || commandId === "mesh.build-shared-domain";
 }
 
+interface MeshBuildDialogState {
+  lastCommandId: string | null;
+  lastCommandStatus: string;
+  open: boolean;
+}
+
+type MeshBuildDialogAction =
+  | {
+      commandId: string;
+      status: string;
+      type: "command";
+    }
+  | {
+      open: boolean;
+      type: "open";
+    };
+
+function meshBuildDialogReducer(
+  state: MeshBuildDialogState,
+  action: MeshBuildDialogAction,
+): MeshBuildDialogState {
+  if (action.type === "open") {
+    return { ...state, open: action.open };
+  }
+  return {
+    lastCommandId: action.commandId,
+    lastCommandStatus: action.status,
+    open: true,
+  };
+}
+
 export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
-  const [open, setOpen] = useState(false);
-  const [lastCommandId, setLastCommandId] = useState<string | null>(null);
-  const [lastCommandStatus, setLastCommandStatus] = useState<string>("pending");
+  const [state, dispatch] = useReducer(meshBuildDialogReducer, {
+    lastCommandId: null,
+    lastCommandStatus: "pending",
+    open: false,
+  });
   const activeBuild = useMeshBuildCurrent();
   const latestBuild = useMeshBuildLatestSuccessful();
   const summary = useMeshSummaryResource();
@@ -55,15 +88,11 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   useEffect(() => {
     const offSubmitted = kernel.bus.on("command:submitted", ({ commandId }) => {
       if (!commandIsMeshBuild(commandId)) return;
-      setLastCommandId(commandId);
-      setLastCommandStatus("submitted");
-      setOpen(true);
+      dispatch({ commandId, status: "submitted", type: "command" });
     });
     const offCompleted = kernel.bus.on("command:completed", ({ commandId, status }) => {
       if (!commandIsMeshBuild(commandId)) return;
-      setLastCommandId(commandId);
-      setLastCommandStatus(status);
-      setOpen(true);
+      dispatch({ commandId, status, type: "command" });
     });
     return () => {
       offSubmitted();
@@ -72,7 +101,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   }, [kernel.bus]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={state.open}
+      onOpenChange={(open) => dispatch({ open, type: "open" })}
+    >
       <DialogContent aria-describedby="fm-mesh-build-dialog-description">
         <DialogHeader>
           <DialogTitle>Mesh Build</DialogTitle>
@@ -84,11 +116,11 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
           <dl className="fm-dialog__details">
             <div className="fm-dialog__details-row">
               <dt className="fm-dialog__details-label">Command</dt>
-              <dd className="fm-dialog__details-value">{lastCommandId ?? "none"}</dd>
+              <dd className="fm-dialog__details-value">{state.lastCommandId ?? "none"}</dd>
             </div>
             <div className="fm-dialog__details-row">
               <dt className="fm-dialog__details-label">Command state</dt>
-              <dd className="fm-dialog__details-value">{lastCommandStatus}</dd>
+              <dd className="fm-dialog__details-value">{state.lastCommandStatus}</dd>
             </div>
             <div className="fm-dialog__details-row">
               <dt className="fm-dialog__details-label">Build resource</dt>
@@ -140,7 +172,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             size="sm"
             type="button"
             variant="secondary"
-            onClick={() => setOpen(false)}
+            onClick={() => dispatch({ open: false, type: "open" })}
           >
             Keep Running
           </Button>

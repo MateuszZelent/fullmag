@@ -1,13 +1,7 @@
-import type {
-  FieldVectorQuery,
-  VisualizationStateResource,
-} from "@/kernel/api/apiTypes";
+import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
-  resolveAirboxVisualizationSettingsFromState,
-  surfaceColorSourceFromColorMode,
-  type VisualizationRenderMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -26,63 +20,6 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
 
 export const FALLBACK_OBJECT_VISUALIZATION: VisualizationTargetSettings =
   DEFAULT_OBJECT_VISUALIZATION;
-
-export function resolveGlobalObjectVisualizationSettings(
-  state: VisualizationStateResource | null | undefined,
-): VisualizationTargetSettings {
-  const surfaceVisible =
-    state?.layers?.surface?.visible ?? DEFAULT_OBJECT_VISUALIZATION.shaderVisible;
-  const wireframeVisible =
-    state?.layers?.wireframe?.visible ??
-    DEFAULT_OBJECT_VISUALIZATION.wireframeVisible;
-  const pointsVisible =
-    state?.layers?.points?.visible ?? DEFAULT_OBJECT_VISUALIZATION.pointsVisible;
-  const vectorColorMode =
-    state?.vector_style?.color_mode ??
-    DEFAULT_OBJECT_VISUALIZATION.vectorColorMode;
-  const vectorMonoColor =
-    state?.vector_style?.mono_color ??
-    DEFAULT_OBJECT_VISUALIZATION.vectorMonoColor;
-
-  return {
-    ...DEFAULT_OBJECT_VISUALIZATION,
-    opacityPercent: layerOpacityToPercent(
-      state?.layers?.surface?.opacity ??
-        DEFAULT_OBJECT_VISUALIZATION.opacityPercent / 100,
-    ),
-    pointsVisible,
-    renderMode: resolveRenderMode({
-      pointsVisible,
-      shaderVisible: surfaceVisible,
-      wireframeVisible,
-    }),
-    shaderVisible: surfaceVisible,
-    shaderColorMode: vectorColorMode,
-    shaderMonoColor: vectorMonoColor,
-    surfaceColorSource:
-      surfaceColorSourceFromColorMode(vectorColorMode) ??
-      DEFAULT_OBJECT_VISUALIZATION.surfaceColorSource,
-    vectorAlphaPercent: layerOpacityToPercent(
-      state?.vector_style?.alpha ?? 1,
-    ),
-    vectorColorMode,
-    vectorMonoColor,
-    vectorThickness:
-      state?.vector_style?.thickness ??
-      DEFAULT_OBJECT_VISUALIZATION.vectorThickness,
-    vectorsVisible:
-      state?.layers?.vectors?.visible ??
-      state?.vector_glyphs ??
-      DEFAULT_OBJECT_VISUALIZATION.vectorsVisible,
-    wireframeVisible,
-  };
-}
-
-export function resolveAirboxBaseVisualizationSettings(
-  state: VisualizationStateResource | null | undefined,
-): VisualizationTargetSettings {
-  return resolveAirboxVisualizationSettingsFromState(state);
-}
 
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
@@ -177,23 +114,4 @@ function combineBounds(
     radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
     size,
   };
-}
-
-function resolveRenderMode({
-  pointsVisible,
-  shaderVisible,
-  wireframeVisible,
-}: {
-  pointsVisible: boolean;
-  shaderVisible: boolean;
-  wireframeVisible: boolean;
-}): VisualizationRenderMode {
-  if (pointsVisible && !shaderVisible && !wireframeVisible) return "points";
-  if (!shaderVisible && wireframeVisible) return "wireframe";
-  if (shaderVisible && wireframeVisible) return "surface+edges";
-  return "surface";
-}
-
-function layerOpacityToPercent(opacity: number): number {
-  return Math.round(Math.max(0, Math.min(1, opacity)) * 100);
 }

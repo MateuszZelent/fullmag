@@ -40,6 +40,9 @@ export interface Viewport3DPrimitiveRenderModel {
 }
 
 type JsonRecord = Record<string, unknown>;
+const VORTEX_PREVIEW_RGB: [number, number, number] = [0.1529, 0.7686, 0.9098];
+const RANDOM_SEEDED_PREVIEW_RGB: [number, number, number] = [0.2627, 0.8196, 0.4784];
+const DEFAULT_PREVIEW_RGB: [number, number, number] = [0.6235, 0.7098, 1];
 
 function asRecord(value: unknown): JsonRecord | null {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -197,9 +200,9 @@ function magnetizationPreviewColor(
       ),
     );
   }
-  if (presetKind === "vortex") return "#27c4e8";
-  if (presetKind === "random_seeded") return "#43d17a";
-  return "#9fb5ff";
+  if (presetKind === "vortex") return rgbToHex(VORTEX_PREVIEW_RGB);
+  if (presetKind === "random_seeded") return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
+  return rgbToHex(DEFAULT_PREVIEW_RGB);
 }
 
 function rgbToHex([red, green, blue]: [number, number, number]): string {

@@ -50,7 +50,7 @@ The renderer receives render models, not API payloads.
 | selected quantity | visualization resource or command state |
 | field/topology revisions | session resource revisions |
 | decoded buffers | resource cache and renderer/resource tracker |
-| camera | viewport module store |
+| camera | visualization resource; viewport module store is only a transient interaction fallback |
 | pointer hover | viewport module store or local ref |
 | selected object | kernel selection store |
 | layer visibility | visualization resource for canonical state, local store for transient panels |
@@ -62,6 +62,7 @@ The renderer receives render models, not API payloads.
 Idle means no continuous rendering. Frames are allowed for:
 
 - camera interaction;
+- changed session-wide visualization camera;
 - resize;
 - new topology;
 - new field buffer;
