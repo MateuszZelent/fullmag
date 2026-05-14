@@ -8,7 +8,9 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
-use crate::schemas::commands::{CommandResponse, StructuredCommandRequest};
+use crate::schemas::commands::{
+    CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, StructuredCommandRequest,
+};
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
 use fullmag_authoring::{
     geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
@@ -61,9 +63,9 @@ async fn validate_authoring_gate_for_command(
         req,
         StructuredCommandRequest::Run { .. }
             | StructuredCommandRequest::Relax { .. }
-            | StructuredCommandRequest::Solve
-            | StructuredCommandRequest::ComputeFields
-            | StructuredCommandRequest::ComputeEnergies
+            | StructuredCommandRequest::Solve { .. }
+            | StructuredCommandRequest::ComputeFields { .. }
+            | StructuredCommandRequest::ComputeEnergies { .. }
     );
     if !should_check_mesh && !should_check_run {
         return Ok(None);
@@ -608,6 +610,11 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
         command_id,
         kind: kind.to_string(),
         created_at_unix_ms,
+        target: None,
+        reason: None,
+        precondition: None,
+        client_intent_id: None,
+        requested_at_unix_ms: None,
         until_seconds: None,
         max_steps: None,
         torque_tolerance: None,
@@ -637,12 +644,14 @@ fn command_from_structured(
 ) -> SessionCommand {
     match req {
         StructuredCommandRequest::Run {
+            intent,
             until_seconds,
             max_steps,
             integrator,
             fixed_timestep,
         } => {
             let mut command = new_session_command(command_id, "run", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
             command.until_seconds = Some(until_seconds);
             command.max_steps = max_steps;
             command.integrator = integrator;
@@ -650,6 +659,7 @@ fn command_from_structured(
             command
         }
         StructuredCommandRequest::Relax {
+            intent,
             until_seconds,
             max_steps,
             torque_tolerance,
@@ -660,6 +670,7 @@ fn command_from_structured(
             max_error,
         } => {
             let mut command = new_session_command(command_id, "relax", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
             command.until_seconds = until_seconds;
             command.max_steps = max_steps;
             command.torque_tolerance = torque_tolerance;
@@ -670,43 +681,75 @@ fn command_from_structured(
             command.max_error = max_error;
             command
         }
-        StructuredCommandRequest::Pause => {
-            new_session_command(command_id, "pause", created_at_unix_ms)
+        StructuredCommandRequest::Pause { intent } => {
+            let mut command = new_session_command(command_id, "pause", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            command
         }
-        StructuredCommandRequest::Resume => {
-            new_session_command(command_id, "resume", created_at_unix_ms)
+        StructuredCommandRequest::Resume { intent } => {
+            let mut command = new_session_command(command_id, "resume", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            command
         }
-        StructuredCommandRequest::Stop => {
-            new_session_command(command_id, "stop", created_at_unix_ms)
+        StructuredCommandRequest::Stop { intent } => {
+            let mut command = new_session_command(command_id, "stop", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            command
         }
-        StructuredCommandRequest::Skip => {
-            new_session_command(command_id, "skip", created_at_unix_ms)
+        StructuredCommandRequest::Skip { intent } => {
+            let mut command = new_session_command(command_id, "skip", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            command
         }
-        StructuredCommandRequest::SaveVtk => {
-            new_session_command(command_id, "save_vtk", created_at_unix_ms)
+        StructuredCommandRequest::SaveVtk { intent } => {
+            let mut command = new_session_command(command_id, "save_vtk", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            command
         }
-        StructuredCommandRequest::Solve => {
-            new_session_command(command_id, "solve", created_at_unix_ms)
+        StructuredCommandRequest::Solve { intent } => {
+            let mut command = new_session_command(command_id, "solve", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
+            command
         }
-        StructuredCommandRequest::ComputeFields => {
-            new_session_command(command_id, "compute_fields", created_at_unix_ms)
+        StructuredCommandRequest::ComputeFields { intent } => {
+            let mut command = new_session_command(command_id, "compute_fields", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
+            command
         }
-        StructuredCommandRequest::ComputeEnergies => {
-            new_session_command(command_id, "compute_energies", created_at_unix_ms)
+        StructuredCommandRequest::ComputeEnergies { intent } => {
+            let mut command = new_session_command(command_id, "compute_energies", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
+            command
         }
-        StructuredCommandRequest::Close => {
-            new_session_command(command_id, "close", created_at_unix_ms)
+        StructuredCommandRequest::Close { intent } => {
+            let mut command = new_session_command(command_id, "close", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
+            command
         }
         StructuredCommandRequest::MeshBuild {
+            intent,
             mesh_options,
             mesh_target,
             mesh_reason,
         } => {
             let mut command = new_session_command(command_id, "remesh", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
             command.mesh_options = mesh_options;
             command.mesh_target = mesh_target;
             command.mesh_reason = mesh_reason;
             command
         }
     }
+}
+
+fn apply_command_intent(
+    command: &mut SessionCommand,
+    intent: RuntimeCommandIntent,
+    default_target: RuntimeCommandTarget,
+) {
+    command.target = Some(intent.target.unwrap_or(default_target));
+    command.reason = Some(intent.reason.unwrap_or_else(|| "unspecified".to_string()));
+    command.precondition = intent.precondition;
+    command.client_intent_id = intent.client_intent_id;
+    command.requested_at_unix_ms = intent.requested_at_unix_ms;
 }

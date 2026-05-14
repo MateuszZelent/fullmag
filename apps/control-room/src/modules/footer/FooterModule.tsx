@@ -18,6 +18,7 @@ import {
   type FooterDirectionFilter,
 } from "./footerModel";
 import { TransportLogTable } from "./TransportLogTable";
+import { FooterTelemetry } from "./FooterTelemetry";
 
 export default function FooterModule({ kernel }: ModuleProps) {
   const entries = useTransportDiagnostics(kernel);
@@ -36,7 +37,7 @@ export default function FooterModule({ kernel }: ModuleProps) {
   const txCount = entries.filter((entry) => entry.direction === "tx").length;
 
   return (
-    <Tabs defaultValue="logs" className="fm-footer">
+    <Tabs defaultValue="telemetry" className="fm-footer">
       <div className="fm-footer__bar">
         <TabsList className="fm-footer__tabs" aria-label="Bottom diagnostics">
           <TabsTrigger value="logs" className="fm-footer__tab">
@@ -109,9 +110,7 @@ export default function FooterModule({ kernel }: ModuleProps) {
       </TabsContent>
 
       <TabsContent value="telemetry" className="fm-footer__content">
-        <div className="fm-footer__placeholder" role="status">
-          Runtime telemetry will use this dock after the transport log stabilizes.
-        </div>
+        <FooterTelemetry />
       </TabsContent>
     </Tabs>
   );

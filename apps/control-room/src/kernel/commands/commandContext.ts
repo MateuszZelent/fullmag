@@ -16,5 +16,6 @@ export function createCommandContext(
     resources: kernel.resources,
     selection: kernel.selection,
     visualization: kernel.visualization,
+    visualizationSync: kernel.visualizationSync,
   };
 }

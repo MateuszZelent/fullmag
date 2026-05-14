@@ -12,6 +12,7 @@ import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidation
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 
 export type SlotId =
   | "app-menu"
@@ -61,5 +62,6 @@ export interface KernelApi {
   readonly resources: ResourceInvalidationController;
   readonly selection: SelectionController;
   readonly visualization: ObjectVisualizationController;
+  readonly visualizationSync: VisualizationRegistrySyncController;
   readonly layout: LayoutController;
 }

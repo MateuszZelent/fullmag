@@ -94,8 +94,8 @@ describe("visualization target commands", () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
-    const patches: VisualizationStatePatch[] = [];
-    const invalidations: Array<[string, number]> = [];
+    const queuedPatches: VisualizationStatePatch[] = [];
+    const immediatePatches: VisualizationStatePatch[] = [];
     const visualizationState = {
       overrides: [],
       revision: 7,
@@ -119,7 +119,7 @@ describe("visualization target commands", () => {
         api: {
           visualization: {
             patch: async (patch: VisualizationStatePatch) => {
-              patches.push(patch);
+              immediatePatches.push(patch);
               return {
                 ...visualizationState,
                 ...patch,
@@ -132,19 +132,23 @@ describe("visualization target commands", () => {
           [VISUALIZATION_STATE_PATH]: visualizationState,
         },
         resources: {
-          invalidate: (key: string, revision: number) => {
-            invalidations.push([key, revision]);
-          },
+          invalidate: () => undefined,
         } as never,
         selection,
         source: "test",
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => {
+            queuedPatches.push(patch);
+          },
+        } as never,
       },
       false,
     );
 
     expect(result.status).toBe("completed");
-    expect(patches).toEqual([
+    expect(immediatePatches).toEqual([]);
+    expect(queuedPatches).toEqual([
       {
         overrides: [
           {
@@ -159,6 +163,5 @@ describe("visualization target commands", () => {
         ],
       },
     ]);
-    expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 8]]);
   });
 });

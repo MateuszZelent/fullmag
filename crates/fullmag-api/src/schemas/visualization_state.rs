@@ -66,6 +66,51 @@ pub struct VisualizationStateResource {
     pub y_chosen_size: u32,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualizationClientAckStatus {
+    Applied,
+    Rendered,
+    Failed,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct VisualizationClientAckRequest {
+    pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_id: Option<String>,
+    pub revision: u64,
+    pub status: VisualizationClientAckStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_render_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct VisualizationClientAckEntry {
+    pub client_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_id: Option<String>,
+    pub revision: u64,
+    pub status: VisualizationClientAckStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_render_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub received_at_unix_ms: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct VisualizationClientAckResource {
+    pub revision: u64,
+    pub entries: Vec<VisualizationClientAckEntry>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct VisualizationStatePatch {
     #[serde(skip_serializing_if = "Option::is_none")]

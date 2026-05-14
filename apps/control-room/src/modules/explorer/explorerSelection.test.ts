@@ -12,6 +12,7 @@ import { ResourceInvalidationController } from "@/kernel/resources/ResourceInval
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
+import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 
 import { selectExplorerNode } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
@@ -22,8 +23,9 @@ function makeKernel(): KernelApi {
   const commands = new CommandRegistry();
   commands.attach(bus);
 
+  const api = new ControlRoomApi({ fetchImpl: async () => new Response("{}") });
   return {
-    api: new ControlRoomApi({ fetchImpl: async () => new Response("{}") }),
+    api,
     bus,
     commands,
     diagnostics: new RequestDiagnosticsController(),
@@ -33,6 +35,10 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),
+    visualizationSync: new VisualizationRegistrySyncController({
+      api: api.visualization,
+      resources,
+    }),
   };
 }
 

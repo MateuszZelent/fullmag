@@ -674,6 +674,48 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("posts visualization client acknowledgements through the typed v2 facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse({
+          client_id: "browser-1",
+          revision: 41,
+          status: "rendered",
+        });
+      },
+    });
+
+    const result = await api.visualization.ack({
+      client_id: "browser-1",
+      effective_render_mode: "surface",
+      revision: 41,
+      status: "rendered",
+      viewport_id: "viewport-main",
+    });
+
+    expect(result).toEqual({
+      client_id: "browser-1",
+      revision: 41,
+      status: "rendered",
+    });
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/visualization/client-acks",
+    );
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestBody(observedInit?.body)).toEqual({
+      client_id: "browser-1",
+      effective_render_mode: "surface",
+      revision: 41,
+      status: "rendered",
+      viewport_id: "viewport-main",
+    });
+  });
+
   it("exposes scene, universe, and shared-domain manifest through facade methods", async () => {
     const seenUrls: string[] = [];
     const api = new ControlRoomApi({

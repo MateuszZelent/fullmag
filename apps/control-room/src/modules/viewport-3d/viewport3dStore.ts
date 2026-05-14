@@ -30,6 +30,7 @@ export type Viewport3DCameraProjection = "perspective" | "orthographic";
 export interface Viewport3DWidgetState {
   cameraProjection: Viewport3DCameraProjection;
   hslReferenceMode: Viewport3DHslReferenceMode;
+  settingsDialogOpen: boolean;
   viewCubeVisible: boolean;
 }
 
@@ -50,6 +51,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   widgets: {
     cameraProjection: "perspective",
     hslReferenceMode: "auto",
+    settingsDialogOpen: false,
     viewCubeVisible: true,
   },
 };
@@ -175,6 +177,18 @@ class Viewport3DStore {
       widgets: {
         ...this.snapshot.widgets,
         viewCubeVisible: !this.snapshot.widgets.viewCubeVisible,
+      },
+    };
+    this.notify();
+  }
+
+  setSettingsDialogOpen(open: boolean): void {
+    if (this.snapshot.widgets.settingsDialogOpen === open) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        settingsDialogOpen: open,
       },
     };
     this.notify();

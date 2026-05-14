@@ -6,6 +6,7 @@ import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
   buildPartSurfaceIndices,
+  buildPartVolumeEdgeIndices,
   buildTetraSurfaceIndices,
   buildTetraVolumeEdgeIndices,
   buildVectorLineSegments,
@@ -179,6 +180,37 @@ describe("viewport3dRenderModel", () => {
         ) ?? [],
       ),
     ).toEqual([1, 2, 3]);
+  });
+
+  it("builds part volume edges from the part element range", () => {
+    expect(
+      Array.from(
+        buildPartVolumeEdgeIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 1,
+            element_start: 1,
+          },
+          {
+            ...topologyFixture(),
+            elementCount: 2,
+            indices: new Uint32Array([
+              0, 1, 2, 3,
+              0, 1, 2, 4,
+            ]),
+            nodeCount: 5,
+          },
+        ) ?? [],
+      ),
+    ).toEqual([
+      0, 1,
+      0, 2,
+      0, 4,
+      1, 2,
+      1, 4,
+      2, 4,
+    ]);
   });
 
   it("builds vector segments for a selected object node range", () => {

@@ -11,6 +11,7 @@ import {
   buildVertexScalarColors,
   type ScalarColorBuffer,
 } from "./viewport3dFieldMapping";
+import { buildSurfaceEdgeIndices } from "./viewport3dSurfaceEdges";
 
 export interface Viewport3DNodeSelection {
   nodeCount?: number;
@@ -25,6 +26,8 @@ export interface Viewport3DSurfacePart extends Viewport3DNodeSelection {
   boundary_face_count: number;
   boundary_face_indices?: readonly number[];
   boundary_face_start: number;
+  element_count?: number;
+  element_start?: number;
   surface_faces?: readonly (readonly number[])[];
 }
 
@@ -41,9 +44,11 @@ export interface Viewport3DBounds {
 export interface Viewport3DTopologyPartRenderModel<
   TPart extends Viewport3DRenderablePart = Viewport3DRenderablePart,
 > {
+  edgeIndices: Uint32Array | null;
   part: TPart;
   surfaceIndices: Uint32Array | null;
   surfaceNodeSelection: Viewport3DNodeSelection | null;
+  volumeEdgeIndices: Uint32Array | null;
 }
 
 export interface Viewport3DTopologyRenderModel<
@@ -476,19 +481,46 @@ export function buildPartSurfaceIndices(
   );
 }
 
+export function buildPartVolumeEdgeIndices(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): Uint32Array | null {
+  const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
+  const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
+  if (elementCount <= 0) return null;
+
+  const indexStart = elementStart * 4;
+  const indexEnd = Math.min(
+    topology.indices.length,
+    indexStart + elementCount * 4,
+  );
+  if (indexStart >= topology.indices.length || indexEnd <= indexStart) {
+    return null;
+  }
+
+  return buildTetraVolumeEdgeIndices(
+    topology.indices.subarray(indexStart, indexEnd),
+  );
+}
+
 function buildPartTopologyModel(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
 ): Pick<
   Viewport3DTopologyPartRenderModel,
-  "surfaceIndices" | "surfaceNodeSelection"
+  | "edgeIndices"
+  | "surfaceIndices"
+  | "surfaceNodeSelection"
+  | "volumeEdgeIndices"
 > {
   const surfaceIndices = buildPartSurfaceIndices(part, topology);
   return {
+    edgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
     surfaceIndices,
     surfaceNodeSelection: surfaceIndices
       ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }
       : null,
+    volumeEdgeIndices: buildPartVolumeEdgeIndices(part, topology),
   };
 }
 

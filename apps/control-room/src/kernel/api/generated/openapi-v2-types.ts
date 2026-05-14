@@ -1652,6 +1652,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/visualization/client-acks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["visualization_get_sessions_current_visualization_client_acks"];
+        put?: never;
+        post: operations["visualization_post_sessions_current_visualization_client_acks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/visualization/display": {
         parameters: {
             query?: never;
@@ -3716,6 +3732,35 @@ export interface components {
             target: number[];
             up: number[];
         };
+        VisualizationClientAckEntry: {
+            client_id: string;
+            client_label?: string | null;
+            effective_render_mode?: string | null;
+            error?: string | null;
+            /** Format: int64 */
+            received_at_unix_ms: number;
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["VisualizationClientAckStatus"];
+            viewport_id?: string | null;
+        };
+        VisualizationClientAckRequest: {
+            client_id: string;
+            client_label?: string | null;
+            effective_render_mode?: string | null;
+            error?: string | null;
+            /** Format: int64 */
+            revision: number;
+            status: components["schemas"]["VisualizationClientAckStatus"];
+            viewport_id?: string | null;
+        };
+        VisualizationClientAckResource: {
+            entries: components["schemas"]["VisualizationClientAckEntry"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        /** @enum {string} */
+        VisualizationClientAckStatus: "applied" | "rendered" | "failed";
         VisualizationDiagnostics: {
             degraded_reasons: string[];
             warnings: string[];
@@ -8095,6 +8140,57 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_get_sessions_current_visualization_client_acks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Latest visualization client acknowledgements */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationClientAckResource"];
+                };
+            };
+        };
+    };
+    visualization_post_sessions_current_visualization_client_acks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VisualizationClientAckRequest"];
+            };
+        };
+        responses: {
+            /** @description Visualization client acknowledgement recorded */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisualizationClientAckEntry"];
+                };
+            };
+            /** @description Invalid client acknowledgement */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  commitOrbitCameraEnd,
   resolveViewport3DCameraFit,
   shouldAutoFitViewport3DBoundsChange,
 } from "./CameraControls";
+import {
+  DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+  viewport3dStore,
+} from "../viewport3dStore";
 
 describe("resolveViewport3DCameraFit", () => {
   it("fits nanoscale micromagnetic bounds without meter-scale clipping", () => {
@@ -53,5 +58,24 @@ describe("resolveViewport3DCameraFit", () => {
         previousBoundsSignature: "previous",
       }),
     ).toBe(false);
+  });
+
+  it("does not write orbit drag-end camera into the module store", () => {
+    viewport3dStore.resetForTest();
+    const onCameraChange = vi.fn();
+
+    commitOrbitCameraEnd({
+      cameraPosition: [3, 2, 1],
+      controlTarget: [0.5, 0.25, 0],
+      onCameraChange,
+    });
+
+    expect(viewport3dStore.getSnapshot().camera).toEqual(
+      DEFAULT_VIEWPORT_3D_CAMERA_STATE,
+    );
+    expect(onCameraChange).toHaveBeenCalledWith({
+      position: [3, 2, 1],
+      target: [0.5, 0.25, 0],
+    });
   });
 });

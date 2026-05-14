@@ -54,6 +54,7 @@ import {
   SIMULATION_SOLVER_ENERGIES_HISTORY_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
+  VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
 import type {
@@ -119,6 +120,9 @@ import type {
   StudyRuntimeResource,
   UniversePatchRequest,
   UniverseResource,
+  VisualizationClientAckEntry,
+  VisualizationClientAckRequest,
+  VisualizationClientAckResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
@@ -586,6 +590,17 @@ export class ControlRoomApi {
   };
 
   readonly visualization = {
+    ack: (ack: VisualizationClientAckRequest, options?: RequestOptions) =>
+      this.postJson<VisualizationClientAckEntry, VisualizationClientAckRequest>(
+        VISUALIZATION_CLIENT_ACKS_PATH,
+        ack,
+        options,
+      ),
+    acks: (options?: RequestOptions) =>
+      this.requestJson<VisualizationClientAckResource>(
+        VISUALIZATION_CLIENT_ACKS_PATH,
+        options,
+      ),
     patch: (patch: VisualizationStatePatch, options?: RequestOptions) =>
       this.patchJson<VisualizationStateResource, VisualizationStatePatch>(
         VISUALIZATION_STATE_PATH,

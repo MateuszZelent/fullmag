@@ -69,11 +69,17 @@ interface Viewport3DSceneProps {
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
-  getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
+  getObjectSettings: (
+    object: Viewport3DPrimitiveObject,
+  ) => VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
-  magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
+  magnetizationTexturePreviews: Map<
+    string,
+    Viewport3DMagnetizationTexturePreview
+  >;
   maxVectorGlyphs: number;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+  onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
@@ -88,6 +94,7 @@ interface Viewport3DSceneProps {
   vectorColorMode: string;
   vectorScale: number;
   vectorStyle: VectorFieldLayerVectorStyle;
+  visualizationRevision: number | null;
   hslReferenceVisible: boolean;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
@@ -197,6 +204,7 @@ export function Viewport3DScene({
   magnetizationTexturePreviews,
   maxVectorGlyphs,
   onCameraChange,
+  onVisualizationFrameCommitted,
   onSelectObject,
   onSelectDomain,
   onSelectPart,
@@ -210,6 +218,7 @@ export function Viewport3DScene({
   vectorColorMode,
   vectorScale,
   vectorStyle,
+  visualizationRevision,
   hslReferenceVisible,
   viewCubeVisible,
   visualProfileId,
@@ -233,7 +242,19 @@ export function Viewport3DScene({
   useEffect(() => {
     tracker.recordDirtyFrame("resources-updated");
     invalidate();
-  }, [invalidate, resourceFrameKey, tracker]);
+    if (visualizationRevision === null || typeof window === "undefined") return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      onVisualizationFrameCommitted(visualizationRevision);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    invalidate,
+    onVisualizationFrameCommitted,
+    resourceFrameKey,
+    tracker,
+    visualizationRevision,
+  ]);
 
   return (
     <>

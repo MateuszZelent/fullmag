@@ -29,6 +29,7 @@ import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributio
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { ALL_MODULES } from "@/modules";
 
@@ -48,10 +49,17 @@ function createKernel(): KernelApi {
 
   const modules = new ModuleRegistry();
   const resources = new ResourceInvalidationController(bus);
-  const realtime = new RealtimeInvalidationBridge(resources);
   const selection = new SelectionController(bus);
   const layout = new LayoutController(bus);
   const visualization = new ObjectVisualizationController();
+  const visualizationSync = new VisualizationRegistrySyncController({
+    api: api.visualization,
+    resources,
+  });
+  const realtime = new RealtimeInvalidationBridge(resources, {
+    shouldSuppressInvalidation: (resourceKey, revision) =>
+      visualizationSync.shouldSuppressInvalidation(resourceKey, revision),
+  });
 
   for (const cmd of SHELL_COMMANDS) {
     commands.register(cmd);
@@ -90,6 +98,7 @@ function createKernel(): KernelApi {
     resources,
     selection,
     visualization,
+    visualizationSync,
   };
 }
 
@@ -134,6 +143,15 @@ function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
   return null;
 }
 
+function VisualizationRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
+  useEffect(() => {
+    kernel.visualizationSync.start();
+    return () => kernel.visualizationSync.stop();
+  }, [kernel]);
+
+  return null;
+}
+
 export function KernelProvider({ children }: KernelProviderProps) {
   const kernel = useMemo(() => createKernel(), []);
 
@@ -141,6 +159,7 @@ export function KernelProvider({ children }: KernelProviderProps) {
     <KernelContext.Provider value={kernel}>
       <RealtimeConnector kernel={kernel} />
       <CommandShortcutConnector kernel={kernel} />
+      <VisualizationRegistrySyncConnector kernel={kernel} />
       {children}
     </KernelContext.Provider>
   );

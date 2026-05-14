@@ -7796,6 +7796,130 @@
         ],
         "type": "object"
       },
+      "VisualizationClientAckEntry": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_render_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "received_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VisualizationClientAckStatus"
+          },
+          "viewport_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "revision",
+          "status",
+          "received_at_unix_ms"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckRequest": {
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_render_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VisualizationClientAckStatus"
+          },
+          "viewport_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "client_id",
+          "revision",
+          "status"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckResource": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/VisualizationClientAckEntry"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "entries"
+        ],
+        "type": "object"
+      },
+      "VisualizationClientAckStatus": {
+        "enum": [
+          "applied",
+          "rendered",
+          "failed"
+        ],
+        "type": "string"
+      },
       "VisualizationDiagnostics": {
         "properties": {
           "degraded_reasons": {
@@ -14022,6 +14146,57 @@
         },
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v2/sessions/current/visualization/client-acks": {
+      "get": {
+        "operationId": "visualization_get_sessions_current_visualization_client_acks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationClientAckResource"
+                }
+              }
+            },
+            "description": "Latest visualization client acknowledgements"
+          }
+        },
+        "tags": [
+          "visualization"
+        ]
+      },
+      "post": {
+        "operationId": "visualization_post_sessions_current_visualization_client_acks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisualizationClientAckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualizationClientAckEntry"
+                }
+              }
+            },
+            "description": "Visualization client acknowledgement recorded"
+          },
+          "400": {
+            "description": "Invalid client acknowledgement"
+          }
+        },
+        "tags": [
+          "visualization"
         ]
       }
     },

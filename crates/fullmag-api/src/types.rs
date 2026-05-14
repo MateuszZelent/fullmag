@@ -1,11 +1,13 @@
 //! API request/response types and view models.
 
-use crate::schemas::commands::CommandResponse;
+use crate::schemas::commands::{
+    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget,
+};
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
-    VectorStyleVisualizationState, VisualizationCameraState, VisualizationLayerState,
-    VisualizationOverrideState,
+    VectorStyleVisualizationState, VisualizationCameraState, VisualizationClientAckEntry,
+    VisualizationLayerState, VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -104,6 +106,11 @@ pub(crate) struct AppState {
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.
     pub current_display_presentation: Arc<RwLock<DisplayPresentationState>>,
+    /// Latest viewport client acknowledgements for visualization state revisions.
+    pub current_visualization_client_acks:
+        Arc<RwLock<BTreeMap<String, VisualizationClientAckEntry>>>,
+    /// Monotonic revision of the visualization client acknowledgement resource.
+    pub current_visualization_client_ack_revision: Arc<AtomicU64>,
     /// Workspace-only selection state for the local control room.
     pub current_workspace_selection: Arc<RwLock<CurrentWorkspaceSelection>>,
     /// Workspace-only ribbon state for the local control room.
@@ -900,6 +907,16 @@ pub(crate) struct SessionCommand {
     pub command_id: String,
     pub kind: String,
     pub created_at_unix_ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<RuntimeCommandTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precondition: Option<RuntimeCommandPrecondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_intent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at_unix_ms: Option<u128>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

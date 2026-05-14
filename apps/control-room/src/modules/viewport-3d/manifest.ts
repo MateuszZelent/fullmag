@@ -91,6 +91,17 @@ export const viewport3dManifest: ModuleManifest = {
         },
       },
       {
+        id: "workspace.visualization-settings",
+        title: "Visualization Settings",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        run: () => {
+          viewport3dStore.setSettingsDialogOpen(true);
+          return { status: "completed" };
+        },
+      },
+      {
         id: "view-projection",
         title: "Toggle projection",
         group: "viewport-3d",
@@ -112,7 +123,11 @@ export const viewport3dManifest: ModuleManifest = {
             viewport3dStore.getSnapshot().widgets.cameraProjection;
           const nextProjection =
             currentProjection === "orthographic" ? "perspective" : "orthographic";
-          if (context.api) {
+          if (context.visualizationSync) {
+            context.visualizationSync.queuePatch({
+              camera: { projection: nextProjection },
+            });
+          } else if (context.api) {
             const state = await context.api.visualization.patch({
               camera: { projection: nextProjection },
             });

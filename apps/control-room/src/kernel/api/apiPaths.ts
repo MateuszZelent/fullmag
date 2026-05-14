@@ -191,6 +191,10 @@ export const VISUALIZATION_STATE_PATH = openApiV2Path(
   "/v2/sessions/current/visualization/state",
 );
 
+export const VISUALIZATION_CLIENT_ACKS_PATH = openApiV2Path(
+  "/v2/sessions/current/visualization/client-acks",
+);
+
 export const SIMULATION_COMMANDS_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands",
 );

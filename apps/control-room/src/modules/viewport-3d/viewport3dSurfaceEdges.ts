@@ -7,7 +7,7 @@ export function buildSurfaceEdgeIndices(
     return null;
   }
 
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   const edges: number[] = [];
 
   for (let index = 0; index < surfaceIndices.length; index += 3) {
@@ -71,16 +71,26 @@ export function buildSurfaceEdgeGeometryFromBufferGeometry(
   return geometry;
 }
 
+/**
+ * Szudzik pairing function — maps two non-negative integers to a unique
+ * non-negative integer.  Collision-free for indices < 2^23 (~8M vertices).
+ * Used instead of string keys to eliminate per-edge string allocation and
+ * GC pressure on large meshes.
+ */
+function szudzikPair(a: number, b: number): number {
+  return a >= b ? a * a + a + b : b * b + a;
+}
+
 function appendEdge(
   edges: number[],
-  seen: Set<string>,
+  seen: Set<number>,
   first: number,
   second: number,
 ): void {
   if (first === second) return;
   const a = Math.min(first, second);
   const b = Math.max(first, second);
-  const key = `${a}:${b}`;
+  const key = szudzikPair(a, b);
   if (seen.has(key)) return;
   seen.add(key);
   edges.push(a, b);

@@ -437,6 +437,25 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     coalesced: bool,
     window_ms: u32,
 ) -> Result<(), ApiError> {
+    publish_current_live_realtime_resource_changes(
+        state,
+        realtime_state.session_id.clone(),
+        realtime_state.run_id.clone(),
+        current_live_realtime_changes(realtime_state),
+        coalesced,
+        window_ms,
+    )
+    .await
+}
+
+pub(crate) async fn publish_current_live_realtime_resource_changes(
+    state: &AppState,
+    session_id: String,
+    run_id: Option<String>,
+    changes: Vec<RealtimeResourceChange>,
+    coalesced: bool,
+    window_ms: u32,
+) -> Result<(), ApiError> {
     let seq = state
         .current_live_realtime_next_seq
         .fetch_add(1, Ordering::Relaxed)
@@ -446,11 +465,11 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
         LiveRealtimeServerEvent::ResourceBatchChanged {
             seq,
             ts: realtime_timestamp_now(),
-            session_id: realtime_state.session_id.clone(),
-            run_id: realtime_state.run_id.clone(),
+            session_id,
+            run_id,
             contract_version: current_live_realtime_contract_version().to_string(),
             payload: ResourceBatchChangedPayload {
-                changes: current_live_realtime_changes(realtime_state),
+                changes,
                 coalesced,
                 window_ms,
             },
@@ -512,6 +531,8 @@ async fn main() {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(BTreeMap::new())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),

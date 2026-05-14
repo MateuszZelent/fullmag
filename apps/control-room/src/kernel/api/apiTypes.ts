@@ -212,6 +212,12 @@ export type VisualizationStatePatch =
   components["schemas"]["VisualizationStatePatch"];
 export type VisualizationStateResource =
   components["schemas"]["VisualizationStateResource"];
+export type VisualizationClientAckEntry =
+  components["schemas"]["VisualizationClientAckEntry"];
+export type VisualizationClientAckRequest =
+  components["schemas"]["VisualizationClientAckRequest"];
+export type VisualizationClientAckResource =
+  components["schemas"]["VisualizationClientAckResource"];
 
 export type BinaryResourceResult<TData> =
   | {

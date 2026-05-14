@@ -718,16 +718,30 @@ describe("ribbon structure", () => {
     const vectorsNode = airboxAction?.menu?.find(
       (node) => node.type === "checkbox" && node.id === "airbox:vectors",
     );
+    const wireframeScopeNode = airboxAction?.menu?.find(
+      (node) => node.type === "radio-group" && node.id === "airbox:wireframe-scope",
+    );
 
     expect(visibleNode).toMatchObject({ checked: true });
     expect(vectorsNode).toMatchObject({ checked: false });
-    if (visibleNode?.type !== "checkbox" || vectorsNode?.type !== "checkbox") {
-      throw new Error("Expected airbox checkbox controls");
+    expect(wireframeScopeNode).toMatchObject({
+      disabled: false,
+      value: "full",
+    });
+    if (
+      visibleNode?.type !== "checkbox" ||
+      vectorsNode?.type !== "checkbox" ||
+      wireframeScopeNode?.type !== "radio-group"
+    ) {
+      throw new Error("Expected airbox display controls");
     }
 
+    await runRibbonNode(wireframeScopeNode, "surface", context);
     await runRibbonNode(visibleNode, false, context);
     await runRibbonNode(vectorsNode, true, context);
 
+    expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
+      .toMatchObject({ geometryScope: "surface" });
     expect(patches).toEqual([
       {
         layers: {

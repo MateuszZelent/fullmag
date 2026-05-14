@@ -2,6 +2,8 @@ import type { Viewport3DCameraState } from "../viewport3dStore";
 
 export type Direction3 = [number, number, number];
 
+export const VIEWPORT_3D_SYSTEM_CENTER: Direction3 = [0, 0, 0];
+
 export function snapCameraToDirection(
   current: Viewport3DCameraState,
   direction: Direction3,
@@ -24,6 +26,38 @@ export function snapCameraToDirection(
     ],
     target: current.target,
   };
+}
+
+export function rotateCameraAroundCenter(
+  current: Viewport3DCameraState,
+  center: Direction3,
+  radians: number,
+): Viewport3DCameraState {
+  const x = current.position[0] - center[0];
+  const y = current.position[1] - center[1];
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+
+  return {
+    position: [
+      center[0] + x * cos - y * sin,
+      center[1] + x * sin + y * cos,
+      current.position[2],
+    ],
+    target: [center[0], center[1], center[2]],
+  };
+}
+
+export function orbitCameraAroundTarget(
+  current: Viewport3DCameraState,
+  deltaX: number,
+  sensitivity: number,
+): Viewport3DCameraState {
+  return rotateCameraAroundCenter(
+    current,
+    current.target,
+    -deltaX * sensitivity,
+  );
 }
 
 export function normalizeDirection(direction: Direction3): Direction3 {

@@ -1,12 +1,11 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
-import { VISUALIZATION_STATE_RESOURCE_KEY } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
@@ -16,6 +15,10 @@ import {
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
+import {
+  resolveVisualizationEffectiveRenderMode,
+  useVisualizationClientAck,
+} from "@/kernel/visualization/useVisualizationClientAck";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import {
@@ -57,6 +60,7 @@ import {
   type Viewport3DTopologyRenderModel,
   type Viewport3DVectorBudgetTarget,
 } from "./viewport3dRenderModel";
+import { createViewport3DEventManager } from "./viewport3dEventManager";
 import {
   buildViewport3DMagnetizationTexturePreviewMap,
   buildViewport3DPrimitiveRenderModel,
@@ -97,7 +101,10 @@ import {
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 
 interface Viewport3DFrameProps
-  extends Omit<Viewport3DSceneProps, "colors"> {
+  extends Omit<
+    Viewport3DSceneProps,
+    "colors" | "onVisualizationFrameCommitted"
+  > {
   clientReady: boolean;
   colors: Viewport3DSceneProps["colors"] | null;
   captureRevision: number;
@@ -109,6 +116,8 @@ interface Viewport3DFrameProps
   selectedLabel: string;
   slotId: ModuleProps["slotId"];
   status: string;
+  visualizationEffectiveRenderMode: string;
+  visualizationError: string | null;
 }
 
 export default function Viewport3DModule({
@@ -136,20 +145,19 @@ export default function Viewport3DModule({
       select,
   });
   const saveCameraState = useCallback(
-    async (camera: {
+    (camera: {
       position: [number, number, number];
       target: [number, number, number];
     }) => {
-      const next = await kernel.api.visualization.patch({
+      kernel.visualizationSync.queuePatch({
         camera: {
           position: camera.position,
           target: camera.target,
           up: VIEWPORT_3D_WORLD_UP,
         },
       });
-      kernel.resources.invalidate(VISUALIZATION_STATE_RESOURCE_KEY, next.revision);
     },
-    [kernel.api, kernel.resources],
+    [kernel.visualizationSync],
   );
 
   return (
@@ -188,33 +196,39 @@ function useViewport3DSceneModel({
 }) {
   const visualizationState = useViewport3DVisualizationState();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
-  const quantityId = visualizationState.data?.active_quantity_id ?? "m";
+  const renderingState = visualizationState.data;
+  const visualizationRevision = renderingState?.revision ?? null;
+  const visualizationError = visualizationState.error?.message ?? null;
+  const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
+    layers: renderingState?.layers,
+  });
+  const quantityId = renderingState?.active_quantity_id ?? "m";
   const vectorColorMode =
-    visualizationState.data?.vector_style.color_mode ?? "orientation";
+    renderingState?.vector_style.color_mode ?? "orientation";
   const vectorLengthScale =
-    visualizationState.data?.vector_style.length_scale ?? 1;
-  const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
+    renderingState?.vector_style.length_scale ?? 1;
+  const vectorDomain = renderingState?.layers?.vectors?.domain ?? "auto";
   const vectorStyle = useMemo(
     () => ({
-      alpha: visualizationState.data?.vector_style.alpha ?? 1,
+      alpha: renderingState?.vector_style.alpha ?? 1,
       monoColor:
-        visualizationState.data?.vector_style.mono_color ??
+        renderingState?.vector_style.mono_color ??
         String(colors?.field ?? "white"),
-      thickness: visualizationState.data?.vector_style.thickness ?? 1,
+      thickness: renderingState?.vector_style.thickness ?? 1,
     }),
     [
       colors?.field,
-      visualizationState.data?.vector_style.alpha,
-      visualizationState.data?.vector_style.mono_color,
-      visualizationState.data?.vector_style.thickness,
+      renderingState?.vector_style.alpha,
+      renderingState?.vector_style.mono_color,
+      renderingState?.vector_style.thickness,
     ],
   );
   const maxVectorGlyphs = resolveViewport3DMaxVectorGlyphs(
-    visualizationState.data,
+    renderingState,
     visualProfile.glyphBudget,
   );
   const maxAirboxVectorGlyphs = resolveViewport3DAirboxMaxVectorGlyphs(
-    visualizationState.data,
+    renderingState,
     maxVectorGlyphs,
   );
   const domainMeta = useViewport3DDomainMeta();
@@ -294,9 +308,9 @@ function useViewport3DSceneModel({
   // Derive fallback settings only from global (non-airbox) layers so that
   // airbox-specific API patches cannot inadvertently alter the appearance
   // of regular mesh objects.
-  const globalLayers = visualizationState.data?.layers;
+  const globalLayers = renderingState?.layers;
   const globalObjectBaseSettings = useMemo(
-    () => resolveGlobalObjectVisualizationSettings(visualizationState.data),
+    () => resolveGlobalObjectVisualizationSettings(renderingState),
     // Explicit deps on global layer fields only – airbox sub-fields excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -305,11 +319,11 @@ function useViewport3DSceneModel({
       globalLayers?.wireframe?.visible,
       globalLayers?.points?.visible,
       globalLayers?.vectors?.visible,
-      visualizationState.data?.vector_style.alpha,
-      visualizationState.data?.vector_style.color_mode,
-      visualizationState.data?.vector_style.mono_color,
-      visualizationState.data?.vector_style.thickness,
-      visualizationState.data?.vector_glyphs,
+      renderingState?.vector_style.alpha,
+      renderingState?.vector_style.color_mode,
+      renderingState?.vector_style.mono_color,
+      renderingState?.vector_style.thickness,
+      renderingState?.vector_glyphs,
     ],
   );
   const fallbackSettings = useMemo(
@@ -327,32 +341,32 @@ function useViewport3DSceneModel({
     return resolveTargetVisualization({
       snapshot: objectVisualizationSnapshot,
       target: { id: fdmDomainId, kind: "object" },
-      visualizationState: visualizationState.data,
+      visualizationState: renderingState,
     }).settings;
   }, [
     domainMeta.data?.domain_id,
     fallbackSettings,
     fdmDomain,
     objectVisualizationSnapshot,
-    visualizationState.data,
+    renderingState,
   ]);
   const airboxSettings = useMemo(
     () =>
       resolveTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: AIRBOX_VISUALIZATION_TARGET,
-        visualizationState: visualizationState.data,
+        visualizationState: renderingState,
       }).settings,
-    [objectVisualizationSnapshot, visualizationState.data],
+    [objectVisualizationSnapshot, renderingState],
   );
   const getPartSettings = useCallback(
     (part: Viewport3DMeshPart) =>
       resolveTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: targetForMeshPart(part),
-        visualizationState: visualizationState.data,
+        visualizationState: renderingState,
       }).settings,
-    [objectVisualizationSnapshot, visualizationState.data],
+    [objectVisualizationSnapshot, renderingState],
   );
   const getObjectSettings = useCallback(
     (object: Viewport3DPrimitiveObject) =>
@@ -363,9 +377,9 @@ function useViewport3DSceneModel({
           kind: "object",
           label: object.label,
         },
-        visualizationState: visualizationState.data,
+        visualizationState: renderingState,
       }).settings,
-    [objectVisualizationSnapshot, visualizationState.data],
+    [objectVisualizationSnapshot, renderingState],
   );
   const fieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,
@@ -557,7 +571,10 @@ function useViewport3DSceneModel({
     vectorColorMode,
     vectorScale,
     vectorStyle,
+    visualizationEffectiveRenderMode,
+    visualizationError,
     visualProfileId: commandState.visualProfileId,
+    visualizationRevision,
   };
 }
 
@@ -785,12 +802,17 @@ function Viewport3DFrame({
   selectedLabel,
   slotId,
   status,
+  visualizationEffectiveRenderMode,
+  visualizationError,
   ...sceneProps
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [renderedVisualizationRevision, setRenderedVisualizationRevision] =
+    useState<number | null>(null);
   const primitiveObjectIds =
-    sceneProps.primitiveModel?.objects.map((object) => object.objectId).join(" ") ??
-    "";
+    sceneProps.primitiveModel?.objects
+      .map((object) => object.objectId)
+      .join(" ") ?? "";
   const visualProfile = getViewport3DVisualProfile(
     sceneProps.visualProfileId,
   );
@@ -805,6 +827,26 @@ function Viewport3DFrame({
     : sceneProps.femDomain.magneticParts.length > 0
       ? "FEM"
       : null;
+  const onVisualizationFrameCommitted = useCallback((revision: number) => {
+    setRenderedVisualizationRevision(revision);
+  }, []);
+  useVisualizationClientAck({
+    api: kernel.api,
+    effectiveRenderMode: visualizationEffectiveRenderMode,
+    enabled: clientReady,
+    error: visualizationError,
+    revision: sceneProps.visualizationRevision,
+    status: visualizationError ? "failed" : "applied",
+    viewportId: slotId,
+  });
+  useVisualizationClientAck({
+    api: kernel.api,
+    effectiveRenderMode: visualizationEffectiveRenderMode,
+    enabled: clientReady && !visualizationError,
+    revision: renderedVisualizationRevision,
+    status: "rendered",
+    viewportId: slotId,
+  });
   useEffect(() => {
     if (captureRevision <= 0 || typeof window === "undefined") return;
     let disposed = false;
@@ -852,6 +894,7 @@ function Viewport3DFrame({
           }}
           className="fm-viewport-3d__canvas"
           dpr={canvasDpr}
+          events={createViewport3DEventManager}
           frameloop={VIEWPORT_3D_FRAMELOOP}
           gl={canvasGlOptions}
           onCreated={({ gl }) => {
@@ -863,6 +906,7 @@ function Viewport3DFrame({
           <Viewport3DScene
             {...sceneProps}
             colors={colors}
+            onVisualizationFrameCommitted={onVisualizationFrameCommitted}
             visualProfileId={visualProfile.id}
           />
         </Canvas>

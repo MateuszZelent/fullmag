@@ -179,6 +179,21 @@ export function FallbackTopologyMeshLayer({
           />
         </lineSegments>
       ) : null}
+      {fallbackSettings.wireframeVisible && fallbackSettings.shaderVisible && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
+          renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder}
+        >
+          <lineBasicMaterial
+            color={wireframeColorFromSettings(fallbackSettings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(
+              fallbackSettings,
+              materialProfile.featureEdges,
+            ) * 0.25}
+            {...materialPolicyProps("hiddenEdges")}
+          />
+        </lineSegments>
+      ) : null}
       {fallbackSettings.pointsVisible ? (
         <points
           geometry={geometry}

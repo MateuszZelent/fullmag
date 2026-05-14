@@ -13,6 +13,7 @@ import { ResourceInvalidationController } from "../resources/ResourceInvalidatio
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 import { LayoutController } from "./LayoutController";
 import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
@@ -20,8 +21,9 @@ import { WorkspaceDockLayout } from "./WorkspaceDockLayout";
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
+  const api = new ControlRoomApi({ fetchImpl: async () => new Response("{}") });
   return {
-    api: new ControlRoomApi({ fetchImpl: async () => new Response("{}") }),
+    api,
     bus,
     commands: new CommandRegistry(),
     diagnostics: new RequestDiagnosticsController(),
@@ -31,6 +33,10 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),
+    visualizationSync: new VisualizationRegistrySyncController({
+      api: api.visualization,
+      resources,
+    }),
   };
 }
 

@@ -109,7 +109,13 @@ export async function buildVertexScalarColorsChunked(
     "magnitude",
   );
   const yieldToMain = options.yieldToMain ?? (() => Promise.resolve());
-  const range = resolveScalarRange(fieldVector, colorMode);
+  const range = await resolveScalarRangeChunked(
+    fieldVector,
+    colorMode,
+    chunkSize,
+    options.signal,
+    yieldToMain,
+  );
   const colors = new Float32Array(fieldVector.pointCount * 3);
 
   for (let start = 0; start < fieldVector.pointCount; start += chunkSize) {
@@ -123,6 +129,45 @@ export async function buildVertexScalarColorsChunked(
 
   throwIfAborted(options.signal);
   return { colors, range };
+}
+
+/**
+ * Chunked version of resolveScalarRange that yields to main thread between
+ * chunks.  Prevents the synchronous O(N) range scan from blocking the UI
+ * for large meshes (> 50K points).
+ */
+export async function resolveScalarRangeChunked(
+  fieldVector: DecodedFieldVector,
+  colorMode: string,
+  chunkSize: number,
+  signal?: AbortSignal,
+  yieldToMain?: () => Promise<void>,
+): Promise<ScalarRange> {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  let min = Infinity;
+  let max = -Infinity;
+
+  for (let start = 0; start < fieldVector.pointCount; start += chunkSize) {
+    throwIfAborted(signal);
+    const end = Math.min(start + chunkSize, fieldVector.pointCount);
+    for (let index = start; index < end; index += 1) {
+      const value = scalarAt(fieldVector, index, resolvedColorMode);
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    if (end < fieldVector.pointCount && yieldToMain) {
+      await yieldToMain();
+    }
+  }
+
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return { max: 0, min: 0 };
+  }
+
+  return { max, min };
 }
 
 export function resolveScalarRange(

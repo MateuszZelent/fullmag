@@ -1,12 +1,15 @@
 //! Display mutation endpoints.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;
+use crate::schemas::realtime::{RealtimeResourceChange, RealtimeResourceName};
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::schemas::visualization_state::{
     AirboxLayerPatch, AirboxLayerState, BasicLayerPatch, BasicLayerState, ClipAxis,
@@ -17,7 +20,8 @@ use crate::schemas::visualization_state::{
     TrimAxisVisualizationPatch, TrimAxisVisualizationState, TrimVisualizationState,
     VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
     VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
-    VisualizationCameraState, VisualizationDiagnostics, VisualizationLayerPatch,
+    VisualizationCameraState, VisualizationClientAckEntry, VisualizationClientAckRequest,
+    VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
     VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
     VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
     VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
@@ -68,6 +72,59 @@ pub async fn get_visualization_state(
         &presentation,
         live_snapshot.as_ref(),
     )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/visualization/client-acks",
+    responses(
+        (status = 200, description = "Latest visualization client acknowledgements", body = VisualizationClientAckResource),
+    ),
+    tag = "visualization"
+)]
+pub async fn get_visualization_client_acks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<VisualizationClientAckResource>, ApiError> {
+    let entries = state.current_visualization_client_acks.read().await;
+    Ok(Json(VisualizationClientAckResource {
+        revision: state
+            .current_visualization_client_ack_revision
+            .load(Ordering::Relaxed),
+        entries: entries.values().cloned().collect(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/visualization/client-acks",
+    request_body = VisualizationClientAckRequest,
+    responses(
+        (status = 200, description = "Visualization client acknowledgement recorded", body = VisualizationClientAckEntry),
+        (status = 400, description = "Invalid client acknowledgement"),
+    ),
+    tag = "visualization"
+)]
+pub async fn post_visualization_client_ack(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<VisualizationClientAckRequest>,
+) -> Result<Json<VisualizationClientAckEntry>, ApiError> {
+    let entry = build_visualization_client_ack_entry(&request)?;
+    {
+        let mut entries = state.current_visualization_client_acks.write().await;
+        entries.insert(visualization_client_ack_key(&entry), entry.clone());
+        while entries.len() > 128 {
+            let Some(oldest_key) = entries.keys().next().cloned() else {
+                break;
+            };
+            entries.remove(&oldest_key);
+        }
+    }
+    let ack_revision = state
+        .current_visualization_client_ack_revision
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    emit_visualization_client_ack_realtime_change(&state, ack_revision).await?;
+    Ok(Json(entry))
 }
 
 #[utoipa::path(
@@ -1168,6 +1225,107 @@ async fn emit_display_realtime_change(
             .await?;
     }
     Ok(())
+}
+
+async fn emit_visualization_client_ack_realtime_change(
+    state: &Arc<AppState>,
+    ack_revision: u64,
+) -> Result<(), ApiError> {
+    let (session_id, run_id) = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|snapshot| {
+            (
+                snapshot.session.session_id.clone(),
+                snapshot.run.as_ref().map(|run| run.run_id.clone()),
+            )
+        })
+        .unwrap_or_else(|| ("current".to_string(), None));
+    crate::publish_current_live_realtime_resource_changes(
+        state,
+        session_id,
+        run_id,
+        vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::VisualizationClientAcks,
+            revision: ack_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/visualization/client-acks".to_string()),
+        }],
+        false,
+        0,
+    )
+    .await
+}
+
+fn build_visualization_client_ack_entry(
+    request: &VisualizationClientAckRequest,
+) -> Result<VisualizationClientAckEntry, ApiError> {
+    let client_id = validated_ack_string("client_id", &request.client_id, 128)?;
+    let client_label =
+        validated_optional_ack_string("client_label", request.client_label.as_deref(), 128)?;
+    let viewport_id =
+        validated_optional_ack_string("viewport_id", request.viewport_id.as_deref(), 96)?;
+    let effective_render_mode = validated_optional_ack_string(
+        "effective_render_mode",
+        request.effective_render_mode.as_deref(),
+        128,
+    )?;
+    let error = validated_optional_ack_string("error", request.error.as_deref(), 512)?;
+
+    Ok(VisualizationClientAckEntry {
+        client_id,
+        client_label,
+        viewport_id,
+        revision: request.revision,
+        status: request.status,
+        effective_render_mode,
+        error,
+        received_at_unix_ms: unix_ms_now(),
+    })
+}
+
+fn visualization_client_ack_key(entry: &VisualizationClientAckEntry) -> String {
+    match entry.viewport_id.as_deref() {
+        Some(viewport_id) => format!("{}\u{1f}{viewport_id}", entry.client_id),
+        None => entry.client_id.clone(),
+    }
+}
+
+fn validated_ack_string(
+    field: &'static str,
+    value: &str,
+    max_len: usize,
+) -> Result<String, ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::bad_request(format!("{field} must not be empty")));
+    }
+    if trimmed.len() > max_len {
+        return Err(ApiError::bad_request(format!(
+            "{field} must be at most {max_len} bytes"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validated_optional_ack_string(
+    field: &'static str,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<Option<String>, ApiError> {
+    value
+        .map(|value| validated_ack_string(field, value, max_len))
+        .transpose()
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn visualization_state_to_display_selection(

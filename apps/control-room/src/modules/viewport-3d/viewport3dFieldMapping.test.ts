@@ -160,7 +160,7 @@ describe("viewport3dFieldMapping", () => {
       min: 0,
     });
     expect(result.colors).toHaveLength(9);
-    expect(yieldToMain).toHaveBeenCalledTimes(2);
+    expect(yieldToMain).toHaveBeenCalledTimes(4);
   });
 
   it("aborts stale chunked field transforms", async () => {

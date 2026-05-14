@@ -43,6 +43,32 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
   });
 
+  it("suppresses invalidations that were already satisfied locally", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources, {
+      shouldSuppressInvalidation: (resourceKey, revision) =>
+        resourceKey === VISUALIZATION_STATE_PATH && revision === 44,
+    });
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: VISUALIZATION_STATE_PATH,
+            resource: "visualization",
+            revision: 44,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision("session:status")).toBe(44);
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBeNull();
+  });
+
   it("maps resource family changes to subscribed child resources", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

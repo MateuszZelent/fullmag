@@ -19,7 +19,6 @@ import {
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
-import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
 import {
   applyVertexScalarColorBuffer,
   canApplyVertexScalarColorBuffer,
@@ -87,13 +86,12 @@ export function MeshPartLayer({
     return next;
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
-    if (!topologyModel) return null;
-    const next = buildSurfaceEdgeGeometry(
-      topologyModel.positions,
-      partModel.surfaceIndices,
-    );
-    return next ? tracker.track("geometry", next) : null;
-  }, [partModel.surfaceIndices, topologyModel, tracker]);
+    if (!topologyModel || !partModel.edgeIndices) return null;
+    const next = new BufferGeometry();
+    next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
+    next.setIndex(new BufferAttribute(partModel.edgeIndices, 1));
+    return tracker.track("geometry", next);
+  }, [partModel.edgeIndices, topologyModel, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -168,6 +166,21 @@ export function MeshPartLayer({
               materialProfile.featureEdges,
             )}
             {...materialPolicyProps("featureEdges")}
+          />
+        </lineSegments>
+      ) : null}
+      {settings.wireframeVisible && settings.shaderVisible && edgeGeometry ? (
+        <lineSegments
+          geometry={edgeGeometry}
+          renderOrder={RENDER_POLICIES.hiddenEdges.renderOrder}
+        >
+          <lineBasicMaterial
+            color={wireframeColorFromSettings(settings, colors.wire)}
+            opacity={wireframeOpacityFromSettings(
+              settings,
+              materialProfile.featureEdges,
+            ) * 0.25}
+            {...materialPolicyProps("hiddenEdges")}
           />
         </lineSegments>
       ) : null}

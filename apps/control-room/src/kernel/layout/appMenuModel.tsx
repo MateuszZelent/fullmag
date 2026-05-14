@@ -82,6 +82,7 @@ export const MAIN_MENUS: AppMenuNode[] = [
           { id: "panels:footer:toggle", label: "Bottom Dock" },
         ],
       },
+      { id: "workspace.visualization-settings", label: "Visualization Settings" },
     ],
   },
   {

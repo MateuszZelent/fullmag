@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::types::MeshCommandTarget;
+use crate::schemas::commands::{
+    RuntimeCommandPrecondition, RuntimeCommandTarget,
+};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CurrentRunResource {
@@ -70,6 +73,14 @@ pub struct StageExecutionResource {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StageExecutionRecordResource {
+    pub stage_id: String,
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -194,6 +205,10 @@ pub struct CommandStatusResource {
     pub command_id: String,
     pub seq: u64,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<RuntimeCommandTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub status: String,
     pub created_at_unix_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -211,6 +226,20 @@ pub struct CommandDetailResource {
     pub command_id: String,
     pub seq: u64,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<RuntimeCommandTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precondition: Option<RuntimeCommandPrecondition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_intent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_index: Option<u32>,
     pub status: String,
     pub created_at_unix_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]

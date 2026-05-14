@@ -21,6 +21,28 @@ interface OrbitControlsEndEvent {
   };
 }
 
+export function commitOrbitCameraEnd({
+  cameraPosition,
+  controlTarget,
+  onCameraChange,
+}: {
+  cameraPosition: [number, number, number];
+  controlTarget: number[];
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
+}): void {
+  if (controlTarget.length < 3) return;
+
+  const nextCamera = {
+    position: cameraPosition,
+    target: [
+      controlTarget[0] ?? 0,
+      controlTarget[1] ?? 0,
+      controlTarget[2] ?? 0,
+    ] as [number, number, number],
+  };
+  void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
+}
+
 interface Viewport3DCameraFit {
   far: number;
   near: number;
@@ -256,19 +278,12 @@ export function OrbitCameraControls({
     (event?: unknown) => {
       const controls = event as OrbitControlsEndEvent | undefined;
       const target = controls?.target?.target?.toArray();
-      if (!target || target.length < 3) return;
-
-      const nextTarget: [number, number, number] = [
-        target[0] ?? 0,
-        target[1] ?? 0,
-        target[2] ?? 0,
-      ];
-      const nextCamera = {
-        position: camera.position.toArray() as [number, number, number],
-        target: nextTarget,
-      };
-      viewport3dStore.setCamera(nextCamera);
-      void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
+      if (!target) return;
+      commitOrbitCameraEnd({
+        cameraPosition: camera.position.toArray() as [number, number, number],
+        controlTarget: target,
+        onCameraChange,
+      });
     },
     [camera, onCameraChange],
   );

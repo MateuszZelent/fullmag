@@ -9,7 +9,13 @@ import {
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import type { Viewport3DTopologyRenderModel } from "../viewport3dRenderModel";
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
-import { AirboxLayer, SelectionHighlightLayer } from "./BoundsLayers";
+import {
+  AirboxLayer,
+  SelectionHighlightLayer,
+  resolveAirboxTopologyVisualizationSettings,
+  resolveAirboxWireframeEdgeIndices,
+  resolveAirboxWireframeSemantic,
+} from "./BoundsLayers";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
 const colors = {
@@ -54,7 +60,15 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
   } as Viewport3DMeshPart;
 
   return {
-    airboxParts: [{ part, surfaceIndices: null, surfaceNodeSelection: null }],
+    airboxParts: [
+      {
+        edgeIndices: null,
+        part,
+        surfaceIndices: null,
+        surfaceNodeSelection: null,
+        volumeEdgeIndices: null,
+      },
+    ],
     fallbackSurfaceIndices: new Uint32Array(),
     fallbackVolumeEdgeIndices: new Uint32Array(),
     magneticParts: [],
@@ -64,6 +78,58 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
 }
 
 describe("AirboxLayer", () => {
+  it("renders wireframe-only airbox edges as hidden-edge overlays", () => {
+    expect(resolveAirboxWireframeSemantic(visibleWireframeAirbox)).toBe(
+      "hiddenEdges",
+    );
+    expect(
+      resolveAirboxWireframeSemantic({
+        ...visibleWireframeAirbox,
+        shaderVisible: true,
+      }),
+    ).toBe("featureEdges");
+  });
+
+  it("keeps full airbox wireframe scope when topology freshness is unknown", () => {
+    expect(
+      resolveAirboxTopologyVisualizationSettings(
+        {
+          ...visibleWireframeAirbox,
+          geometryScope: "full",
+          shaderVisible: true,
+        },
+        "unknown",
+      ),
+    ).toMatchObject({
+      geometryScope: "full",
+      renderMode: "wireframe",
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+  });
+
+  it("uses volume edges for full airbox wireframe and surface edges for surface mode", () => {
+    const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
+    const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3]);
+    const partModel = {
+      edgeIndices: surfaceEdges,
+      volumeEdgeIndices: volumeEdges,
+    };
+
+    expect(
+      resolveAirboxWireframeEdgeIndices(
+        "full",
+        partModel,
+      ),
+    ).toBe(volumeEdges);
+    expect(
+      resolveAirboxWireframeEdgeIndices(
+        "surface",
+        partModel,
+      ),
+    ).toBe(surfaceEdges);
+  });
+
   it("passes the airbox selection handler into mesh part layers", () => {
     const onSelectPart = vi.fn();
     const topologyModel = airboxTopology();

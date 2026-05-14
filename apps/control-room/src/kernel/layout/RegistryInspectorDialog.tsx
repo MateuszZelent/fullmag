@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { ObjectVisualizationSnapshot } from "@/kernel/visualization/ObjectVisualizationController";
+import type { VisualizationRegistrySyncSnapshot } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import {
   Dialog,
   DialogClose,
@@ -126,6 +127,7 @@ function JsonNode({
 interface RegistryInspectorDialogProps {
   open: boolean;
   snapshot: ObjectVisualizationSnapshot;
+  syncSnapshot: VisualizationRegistrySyncSnapshot;
   visualizationState: VisualizationStateResource | null | undefined;
   onOpenChange: (open: boolean) => void;
 }
@@ -133,6 +135,7 @@ interface RegistryInspectorDialogProps {
 export function RegistryInspectorDialog({
   open,
   snapshot,
+  syncSnapshot,
   visualizationState,
   onOpenChange,
 }: RegistryInspectorDialogProps) {
@@ -145,6 +148,15 @@ export function RegistryInspectorDialog({
     version: snapshot.version,
     defaults: snapshot.defaults as unknown as JsonValue,
     overrides: snapshot.overrides as unknown as JsonValue,
+    sync: {
+      error: syncSnapshot.error?.message ?? null,
+      inflightPatch: syncSnapshot.inflightPatch as unknown as JsonValue,
+      lastLocalChangedAt: syncSnapshot.lastLocalChangedAt,
+      lastRemoteRevision: syncSnapshot.lastRemoteRevision,
+      pendingFingerprint: syncSnapshot.pendingFingerprint,
+      pendingPatch: syncSnapshot.pendingPatch as unknown as JsonValue,
+      version: syncSnapshot.version,
+    },
   };
 
   const backendData: JsonValue = visualizationState

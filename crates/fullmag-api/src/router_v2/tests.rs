@@ -358,6 +358,8 @@ fn test_app_state() -> Arc<AppState> {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
@@ -851,6 +853,8 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
@@ -2129,6 +2133,106 @@ async fn visualization_camera_patch_publishes_visualization_state_invalidation()
         }),
         "camera patch must invalidate the visualization state resource: {json:#}"
     );
+}
+
+#[tokio::test]
+async fn visualization_client_ack_records_frontend_feedback() {
+    let state = test_app_state_with_live_session().await;
+    let mut events = state.current_live_realtime_events.subscribe();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "client_id": "browser-1",
+                        "client_label": "operator viewport",
+                        "viewport_id": "slot-main",
+                        "revision": 41,
+                        "status": "rendered",
+                        "effective_render_mode": "surface"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["client_id"], "browser-1");
+    assert_eq!(json["viewport_id"], "slot-main");
+    assert_eq!(json["revision"], 41);
+    assert_eq!(json["status"], "rendered");
+    assert_eq!(json["effective_render_mode"], "surface");
+    assert!(json["received_at_unix_ms"].as_u64().unwrap_or(0) > 0);
+
+    let resource_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resource_response.status(), StatusCode::OK);
+
+    let resource_json = body_json(resource_response).await;
+    assert_eq!(resource_json["revision"], 1);
+    assert_eq!(resource_json["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(resource_json["entries"][0]["client_id"], "browser-1");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("client ack should publish a realtime event")
+        .expect("realtime channel should stay open");
+    let event_json: serde_json::Value =
+        serde_json::from_str(&event.json).expect("event payload should be valid JSON");
+    let changes = event_json["payload"]["changes"]
+        .as_array()
+        .expect("resource.batch_changed should include changes");
+    assert!(
+        changes.iter().any(|change| {
+            change["resource"] == "visualization_client_acks"
+                && change["recommended_fetch"] == "/v2/sessions/current/visualization/client-acks"
+        }),
+        "client ACK must invalidate the acknowledgement resource: {event_json:#}"
+    );
+}
+
+#[tokio::test]
+async fn visualization_client_ack_rejects_empty_client_id() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "client_id": " ",
+                        "revision": 41,
+                        "status": "applied"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let json = body_json(response).await;
+    assert_eq!(json["error"], "client_id must not be empty");
 }
 
 // ─── scalar history endpoints ───────────────────────────────────────────────

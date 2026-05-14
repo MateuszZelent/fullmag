@@ -1,7 +1,7 @@
 # Resource-first Control Room API v2
 
 - Status: canonical control-room API contract
-- Last updated: 2026-05-12
+- Last updated: 2026-05-14
 - Compatibility reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -51,6 +51,7 @@ The default frontend base path is `/v2/sessions/current`.
 - `data/fields` describes materialized field resources; an empty field catalog does not make a quantity unsupported.
 - `visualization/display` owns the legacy display-selection projection.
 - `visualization/state` owns canonical session-wide renderer state. Its schema version 4 exposes `quantity`, independent `layers`, `domains`, `sampling`, FDM/FEM view policy, trim/clip state, global camera state, vector glyph style, object/part `overrides`, a complete effective target registry for current scene objects/mesh parts, and diagnostics while retaining flat display fields as a compatibility projection.
+- `visualization/client-acks` owns bounded, diagnostic frontend feedback for renderer state revisions. Clients `POST` `applied`, `rendered`, or `failed` acknowledgements after consuming `visualization/state`; operators and scripts can `GET` the resource to confirm whether a visible browser applied a requested mode such as `surface` versus `wireframe`.
 - `workspace/*` owns shell state only and must not mutate physics semantics.
 - `status.capabilities` is the UI gating source of truth; discretization details may drive adapters but must not synthesize capabilities.
 
@@ -77,6 +78,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/semantics` | solver-domain mesh semantics: universe/shared-domain/object configs and solver mesh identity |
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed quality, report, and realized size-field diagnostics |
+| `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
 
 Transitional duplicate fields in meshing schemas are allowed only for current frontend adapters and
 must be documented as transitional in OpenAPI schema descriptions. New consumers should read from the
@@ -204,6 +206,10 @@ The frontend should use:
 
 React components must not call `fetch()` directly and must not hand-roll `/v1` or `/v2` endpoint
 strings outside the central API client/facade layer.
+
+Visualization client acknowledgement writes also go through the central facade. The realtime websocket
+may invalidate `visualization/client-acks`, but it remains an invalidation stream; the ACK payload
+itself is an HTTP resource and is diagnostic feedback, not the source of renderer truth.
 
 For Geometry object authoring, the frontend facade must provide typed handwritten adapters around the current loose `Value` payloads. Generated OpenAPI transport owns path/request/response plumbing only; object forms should use narrow domain models and validators before sending model transactions.
 

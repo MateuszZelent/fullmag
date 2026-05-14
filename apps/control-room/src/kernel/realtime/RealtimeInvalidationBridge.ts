@@ -38,6 +38,13 @@ interface RealtimeResyncRequiredEvent {
   type: string;
 }
 
+interface RealtimeInvalidationBridgeOptions {
+  shouldSuppressInvalidation?: (
+    resourceKey: string,
+    revision: ResourceRevision,
+  ) => boolean;
+}
+
 function isRealtimeResourceEvent(event: unknown): event is RealtimeResourceEvent {
   if (!event || typeof event !== "object") {
     return false;
@@ -94,7 +101,10 @@ function resourceFamilyPrefix(pathWithObjectId: string): string {
 }
 
 export class RealtimeInvalidationBridge {
-  constructor(private readonly resources: ResourceInvalidationController) {}
+  constructor(
+    private readonly resources: ResourceInvalidationController,
+    private readonly options: RealtimeInvalidationBridgeOptions = {},
+  ) {}
 
   handleEvent(event: unknown): boolean {
     if (isRealtimeResyncRequiredEvent(event)) {
@@ -118,7 +128,7 @@ export class RealtimeInvalidationBridge {
 
         this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, change.revision);
         if (change.recommended_fetch) {
-          this.resources.invalidate(change.recommended_fetch, change.revision);
+          this.invalidateResource(change.recommended_fetch, change.revision);
           this.resources.invalidatePrefix(change.recommended_fetch, change.revision);
           this.invalidateMeshBuildCompletionDependents(
             change.recommended_fetch,
@@ -143,8 +153,18 @@ export class RealtimeInvalidationBridge {
       return false;
     }
 
-    this.resources.invalidate(event.resource_key, event.revision);
+    this.invalidateResource(event.resource_key, event.revision);
     return true;
+  }
+
+  private invalidateResource(
+    resourceKey: string,
+    revision: ResourceRevision,
+  ): void {
+    if (this.options.shouldSuppressInvalidation?.(resourceKey, revision)) {
+      return;
+    }
+    this.resources.invalidate(resourceKey, revision);
   }
 
   private invalidateMeshBuildCompletionDependents(

@@ -501,7 +501,7 @@ export const viewTab: RibbonTabContent = {
             { type: "label",    id: "airbox:primitive-section", label: "Surface", badge: "off" },
             { type: "checkbox", id: "airbox:shaded",            label: "Shaded on/off",    checked: false },
             { type: "checkbox", id: "airbox:wireframe",         label: "Wireframe on/off", checked: true },
-            { type: "radio-group", id: "airbox:wireframe-scope",label: "Wireframe extent", value: "surface", items: AIRBOX_EXTENT_ITEMS },
+            { type: "radio-group", id: "airbox:wireframe-scope",label: "Wireframe extent", value: "full", items: AIRBOX_EXTENT_ITEMS },
             { type: "separator",id: "airbox:s-points" },
             { type: "label",    id: "airbox:points-section",    label: "Points", badge: "off" },
             { type: "checkbox", id: "airbox:points",            label: "Points on/off",  checked: false },
@@ -509,7 +509,7 @@ export const viewTab: RibbonTabContent = {
             { type: "separator",id: "airbox:s-vectors" },
             { type: "label",    id: "airbox:vectors-section",   label: "Vectors", badge: "off" },
             { type: "checkbox", id: "airbox:vectors",           label: "Vectors on/off", checked: false },
-            { type: "radio-group", id: "airbox:vectors-scope",  label: "Vectors extent", value: "surface", items: AIRBOX_EXTENT_ITEMS },
+            { type: "radio-group", id: "airbox:vectors-scope",  label: "Vectors extent", value: "full", items: AIRBOX_EXTENT_ITEMS },
             {
               type: "submenu",
               id: "airbox:vectors-submenu",
@@ -2836,9 +2836,14 @@ function buildAirboxAction(
         type: "radio-group",
         id: "airbox:wireframe-scope",
         label: "Wireframe extent",
-        value: "surface",
-        items: AIRBOX_EXTENT_ITEMS,
-        disabled: true,
+        value: settings.geometryScope,
+        items: GEOMETRY_SCOPE_ITEMS,
+        disabled: passControlsDisabled || !effectiveSettings.wireframeVisible,
+        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+        commandInput: (value: string) =>
+          visualizationAirboxCommandInput({
+            geometryScope: value as VisualizationGeometryScope,
+          }),
       },
       { type: "separator", id: "airbox:s-points" },
       {

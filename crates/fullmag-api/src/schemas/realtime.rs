@@ -42,6 +42,7 @@ pub enum RealtimeResourceName {
     Stages,
     SceneDocument,
     VisualizationState,
+    VisualizationClientAcks,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -22,6 +22,7 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import { applyViewport3DWorldUp } from "../layers/CameraControls";
 
 import {
+  orbitCameraAroundTarget,
   snapCameraToDirection,
   type Direction3,
 } from "./cameraOrientation";
@@ -45,6 +46,7 @@ interface OrientationHudLayerProps {
 }
 
 type OrbitControlsHandle = {
+  enabled?: boolean;
   target?: Vector3;
   update?: (delta?: number) => void;
 };
@@ -68,6 +70,10 @@ const VIEW_CUBE_FACE_GRID_POINTS = buildViewCubeFaceGridPoints(
   VIEW_CUBE_HALF,
   VIEW_CUBE_EDGE_SIZE,
 );
+// ── Orbit ring constants (depend on VIEW_CUBE_HALF) ──────────────────────────
+const ORBIT_RING_RADIUS = VIEW_CUBE_HALF * 1.52;
+const ORBIT_RING_TUBE = 3.2;
+const ORBIT_SENSITIVITY = 0.0045;
 const VIEW_CUBE_FACE_PLACEMENTS: Record<ViewCubeFaceModel["id"], {
   axis: "x" | "y" | "z";
   position: [number, number, number];
@@ -114,14 +120,12 @@ const VIEW_CUBE_FACE_LABELS: Record<ViewCubeFaceModel["id"], string> = {
   back: "BACK",
 };
 
+// Monochrome: all axes share the same neutral wire color (theme-aware)
 function viewCubeAxisColors(
   colors: Viewport3DColors,
 ): Record<"x" | "y" | "z", string> {
-  return {
-    x: String(colors.danger ?? colors.accent),
-    y: String(colors.success ?? colors.field),
-    z: String(colors.accentStrong ?? colors.accent),
-  };
+  const c = String(colors.wire);
+  return { x: c, y: c, z: c };
 }
 
 export function OrientationHudLayer({
@@ -161,6 +165,30 @@ export function OrientationHudLayer({
     [camera, controls, getTarget, invalidate],
   );
 
+  const onOrbit = useCallback(
+    (deltaX: number) => {
+      const target = getTarget();
+      const nextCamera = orbitCameraAroundTarget(
+        {
+          position: camera.position.toArray() as [number, number, number],
+          target: target.toArray() as [number, number, number],
+        },
+        deltaX,
+        ORBIT_SENSITIVITY,
+      );
+
+      applyViewport3DWorldUp(camera);
+      camera.position.set(nextCamera.position[0], nextCamera.position[1], nextCamera.position[2]);
+      camera.lookAt(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
+      camera.updateProjectionMatrix();
+      controls?.target?.set(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
+      controls?.update?.();
+      viewport3dStore.setCamera(nextCamera);
+      invalidate();
+    },
+    [camera, controls, getTarget, invalidate],
+  );
+
   if (!viewCubeVisible && !hslReferenceVisible) {
     return null;
   }
@@ -169,7 +197,12 @@ export function OrientationHudLayer({
     <>
       {viewCubeVisible ? (
         <ScreenAnchoredGroup anchor="viewCube" pixelScale={1.15}>
-          <ViewCube3DBox colors={colors} onSnap={snapToDirection} />
+          <ViewCube3DBox
+            colors={colors}
+            controls={controls}
+            onOrbit={onOrbit}
+            onSnap={snapToDirection}
+          />
         </ScreenAnchoredGroup>
       ) : null}
       {hslReferenceVisible ? (
@@ -239,19 +272,22 @@ function ScreenAnchoredGroup({
 
 export function ViewCube3DBox({
   colors,
+  controls,
+  onOrbit,
   onSnap,
 }: {
   colors: Viewport3DColors;
+  controls?: OrbitControlsHandle;
+  onOrbit: (deltaX: number) => void;
   onSnap: (direction: Direction3) => void;
 }) {
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
   const axisLabels = getViewCubeAxisLabels();
-  const axisColors = viewCubeAxisColors(colors);
   const faces = useMemo(() => buildViewCubeFaces(), []);
 
   return (
     <group>
-      {/* Solid dark cube body */}
+      {/* Monolithic cube body — uses theme-aware panel color */}
       <mesh renderOrder={WIDGET_RENDER_ORDER}>
         <boxGeometry
           args={[
@@ -261,10 +297,10 @@ export function ViewCube3DBox({
           ]}
         />
         <meshBasicMaterial
-          color={colors.panelRaised ?? colors.mesh}
+          color={String(colors.panelRaised ?? colors.panel ?? colors.mesh)}
           depthTest={false}
           depthWrite={false}
-          opacity={0.95}
+          opacity={0.97}
           toneMapped={false}
           transparent
         />
@@ -283,21 +319,25 @@ export function ViewCube3DBox({
           />
         );
       })}
-      {/* Bright colored cube edges based on axis */}
+      {/* Uniform monochrome cube edges — theme-aware wire color */}
       {VIEW_CUBE_EDGE_LINES.map((edge) => (
         <Line
           key={viewCubeSegmentKey(edge.points)}
-          color={axisColors[edge.axis]}
+          color={String(colors.wire)}
           depthTest={false}
-          lineWidth={2.5}
-          opacity={0.65}
+          lineWidth={1.8}
+          opacity={0.55}
           points={edge.points}
           renderOrder={WIDGET_RENDER_ORDER + 2}
           transparent
         />
       ))}
+      {/* 3D orbit ring at the base of the box */}
+      <group position={[0, 0, -VIEW_CUBE_HALF]}>
+        <OrbitRing3D controls={controls} onOrbit={onOrbit} />
+      </group>
       <AxisLabelSprite
-        color={axisColors.x}
+        color={String(colors.textPrimary ?? "#e4e4e7")}
         label={trimPositiveAxisLabel(axisLabels.x)}
         outlineColor={String(colors.background)}
         position={[VIEW_CUBE_LABEL_DISTANCE, 0, 0]}
@@ -305,7 +345,7 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={axisColors.y}
+        color={String(colors.textPrimary ?? "#e4e4e7")}
         label={trimPositiveAxisLabel(axisLabels.y)}
         outlineColor={String(colors.background)}
         position={[0, VIEW_CUBE_LABEL_DISTANCE, 0]}
@@ -313,13 +353,133 @@ export function ViewCube3DBox({
         scale={[32, 20, 1]}
       />
       <AxisLabelSprite
-        color={axisColors.z}
+        color={String(colors.textPrimary ?? "#e4e4e7")}
         label={trimPositiveAxisLabel(axisLabels.z)}
         outlineColor={String(colors.background)}
         position={[0, 0, VIEW_CUBE_LABEL_DISTANCE]}
         renderOrder={WIDGET_RENDER_ORDER + 4}
         scale={[32, 20, 1]}
       />
+    </group>
+  );
+}
+
+// ── Orbit ring ─────────────────────────────────────────────────────────────────
+
+function OrbitRing3D({
+  controls,
+  onOrbit,
+}: {
+  controls?: OrbitControlsHandle;
+  onOrbit: (dx: number) => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const isDragging = useRef(false);
+  const lastPointer = useRef({ x: 0, y: 0 });
+  const gl = useThree((s) => s.gl);
+  const controlsRef = useRef(controls);
+  const onOrbitRef = useRef(onOrbit);
+  const previousControlsEnabledRef = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    onOrbitRef.current = onOrbit;
+  });
+
+  useEffect(() => {
+    controlsRef.current = controls;
+  }, [controls]);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const restoreOrbitControls = () => {
+      const orbitControls = controlsRef.current;
+      if (
+        orbitControls &&
+        previousControlsEnabledRef.current !== null &&
+        typeof orbitControls.enabled === "boolean"
+      ) {
+        orbitControls.enabled = previousControlsEnabledRef.current;
+      }
+      previousControlsEnabledRef.current = null;
+    };
+    const handleMove = (e: PointerEvent) => {
+      if (!isDragging.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dx = e.clientX - lastPointer.current.x;
+      lastPointer.current = { x: e.clientX, y: e.clientY };
+      onOrbitRef.current(dx);
+    };
+    const handleUp = () => {
+      isDragging.current = false;
+      restoreOrbitControls();
+    };
+    canvas.addEventListener("pointermove", handleMove);
+    canvas.addEventListener("pointerup", handleUp);
+    canvas.addEventListener("pointercancel", handleUp);
+    window.addEventListener("pointerup", handleUp);
+    return () => {
+      canvas.removeEventListener("pointermove", handleMove);
+      canvas.removeEventListener("pointerup", handleUp);
+      canvas.removeEventListener("pointercancel", handleUp);
+      window.removeEventListener("pointerup", handleUp);
+      restoreOrbitControls();
+    };
+  }, [gl]);
+
+  return (
+    <group renderOrder={WIDGET_RENDER_ORDER + 1}>
+      {/* Main torus */}
+      <mesh
+        renderOrder={WIDGET_RENDER_ORDER + 1}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          e.nativeEvent.preventDefault();
+          e.nativeEvent.stopImmediatePropagation();
+          if (
+            controlsRef.current &&
+            previousControlsEnabledRef.current === null &&
+            typeof controlsRef.current.enabled === "boolean"
+          ) {
+            previousControlsEnabledRef.current = controlsRef.current.enabled;
+            controlsRef.current.enabled = false;
+          }
+          isDragging.current = true;
+          lastPointer.current = {
+            x: e.nativeEvent.clientX,
+            y: e.nativeEvent.clientY,
+          };
+        }}
+      >
+        <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE, 20, 80]} />
+        <meshBasicMaterial
+          color={hovered ? "#fb923c" : "#6b7280"}
+          depthTest={false}
+          depthWrite={false}
+          opacity={hovered ? 0.92 : 0.42}
+          toneMapped={false}
+          transparent
+        />
+      </mesh>
+      {/* Soft glow halo on hover */}
+      {hovered ? (
+        <mesh renderOrder={WIDGET_RENDER_ORDER}>
+          <torusGeometry args={[ORBIT_RING_RADIUS, ORBIT_RING_TUBE + 2.5, 20, 80]} />
+          <meshBasicMaterial
+            color="#f97316"
+            depthTest={false}
+            depthWrite={false}
+            opacity={0.22}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      ) : null}
     </group>
   );
 }
@@ -383,7 +543,7 @@ function ViewCubeFacePanel({
         return (
           <mesh
             key={`${face.id}:${target.id}`}
-            onClick={(event) => {
+            onPointerDown={(event) => {
               event.stopPropagation();
               onSnap(target.direction as Direction3);
             }}
@@ -476,26 +636,28 @@ function viewCubeCellMaterial(
   kind: ViewCubeTargetKind,
   hovered: boolean,
   faceHovered: boolean,
-  accent: string,
+  _accent: string,
   colors: Viewport3DColors,
 ): { color: string; opacity: number } {
   if (kind === "face") {
+    // Face appearance driven entirely by texture
     return {
-      color: String(colors.textPrimary ?? colors.field),
-      opacity: hovered ? 1 : (faceHovered ? 0.95 : 0.85),
+      color: "#ffffff",
+      opacity: hovered ? 1 : (faceHovered ? 0.97 : 0.88),
     };
   }
 
   if (hovered) {
+    // Fire amber on hover
     return {
-      color: accent,
-      opacity: kind === "edge" ? 0.8 : 0.9,
+      color: "#fb923c",
+      opacity: kind === "edge" ? 0.85 : 0.95,
     };
   }
 
   return {
-    color: String(colors.panelRaised ?? colors.mesh),
-    opacity: faceHovered ? 0.3 : 0.05,
+    color: String(colors.panelRaised ?? colors.panel ?? colors.mesh),
+    opacity: faceHovered ? 0.35 : 0.08,
   };
 }
 
@@ -757,8 +919,8 @@ function buildAxisLabelTexture(
 
 function buildViewCubeFaceTexture(
   label: string,
-  accentColor: string,
-  colors: Viewport3DColors,
+  _accentColor: string,
+  _colors: Viewport3DColors,
   hovered: boolean,
 ): CanvasTexture {
   const size = 256;
@@ -770,29 +932,56 @@ function buildViewCubeFaceTexture(
     ctx.clearRect(0, 0, size, size);
 
     if (hovered) {
-      // Glow fill
-      ctx.fillStyle = accentColor;
-      ctx.globalAlpha = 0.25;
+      // ── Fiery hover: warm radial gradient from center out ──────────────
+      ctx.globalAlpha = 1.0;
+      const fireGrad = ctx.createRadialGradient(
+        size * 0.5, size * 0.5, 0,
+        size * 0.5, size * 0.5, size * 0.72,
+      );
+      fireGrad.addColorStop(0.0, "rgba(253, 186, 116, 0.55)");   // orange-300
+      fireGrad.addColorStop(0.45, "rgba(234, 88, 12, 0.45)");    // orange-600
+      fireGrad.addColorStop(1.0, "rgba(124, 45, 18, 0.72)");     // orange-950
+      ctx.fillStyle = fireGrad;
       ctx.fillRect(0, 0, size, size);
 
-      // Neon border
-      ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = accentColor;
-      ctx.lineWidth = 12;
-      ctx.strokeRect(6, 6, size - 12, size - 12);
+      // Ember border
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = "rgba(251, 146, 60, 0.95)";
+      ctx.lineWidth = 10;
+      ctx.strokeRect(5, 5, size - 10, size - 10);
+
+      // Inner bright edge accent
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "rgba(253, 224, 167, 0.9)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(12, 12, size - 24, size - 24);
     } else {
-      // Subtle background
-      ctx.fillStyle = String(colors.panel ?? colors.background);
-      ctx.globalAlpha = 0.85;
+      // ── Normal state: theme-aware panel fill + corner vignette ──────────────
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = String(_colors.panelRaised ?? _colors.panel ?? "#52525b");
       ctx.fillRect(0, 0, size, size);
 
-      // Subtle border
-      ctx.globalAlpha = 0.3;
-      ctx.strokeStyle = String(colors.wire);
+      // Corner darkening vignette (darker at corners = "darker corners")
+      const vignette = ctx.createRadialGradient(
+        size * 0.5, size * 0.5, size * 0.2,
+        size * 0.5, size * 0.5, size * 0.84,
+      );
+      vignette.addColorStop(0.0, "rgba(0, 0, 0, 0.0)");
+      vignette.addColorStop(0.7, "rgba(0, 0, 0, 0.16)");
+      vignette.addColorStop(1.0, "rgba(0, 0, 0, 0.38)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, size, size);
+
+      // Subtle border using wire color
+      ctx.globalAlpha = 0.38;
+      ctx.strokeStyle = String(_colors.wire);
       ctx.lineWidth = 4;
       ctx.strokeRect(2, 2, size - 4, size - 4);
     }
   }
+
+  void label; // label text is rendered separately via AutoOrientText
+
   const texture = new CanvasTexture(canvas);
   texture.needsUpdate = true;
   texture.anisotropy = 4;
@@ -808,7 +997,9 @@ function updateScreenAnchor(
 ): number {
   const near = cameraNear(camera);
   const far = cameraFar(camera);
-  const distance = Math.min(far * 0.99, Math.max(WIDGET_CAMERA_DISTANCE, near * 10));
+  // Place the widget at 90% of far — leaving 10% depth headroom for the
+  // orbit ring, axis labels, and cube faces that extend behind the anchor.
+  const distance = Math.min(far * 0.90, Math.max(WIDGET_CAMERA_DISTANCE, near * 10));
   const worldHeight = visibleWorldHeight(camera, distance);
   const worldWidth = worldHeight * (size.width / Math.max(size.height, 1));
   const worldPerPixel = worldHeight / Math.max(size.height, 1);

@@ -5,6 +5,7 @@ import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import type { SelectionController } from "../selection/SelectionController";
 import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 export type CommandId = string;
 export type CommandGroupId = string;
@@ -19,6 +20,7 @@ export interface CommandContext {
   resources?: ResourceInvalidationController;
   selection?: SelectionController;
   visualization?: ObjectVisualizationController;
+  visualizationSync?: VisualizationRegistrySyncController;
 }
 
 export interface CommandResult {

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import {
+  BufferAttribute,
+  BufferGeometry,
   ConeGeometry,
   CylinderGeometry,
   DynamicDrawUsage,
@@ -80,6 +82,22 @@ export function syncVectorGlyphColorState({
   material.needsUpdate = true;
 }
 
+export function ensureWhiteVertexColorAttribute(
+  geometry: BufferGeometry,
+): BufferGeometry {
+  const position = geometry.getAttribute("position");
+  const vertexCount = position?.count ?? 0;
+  const existing = geometry.getAttribute("color");
+  if (existing?.itemSize === 3 && existing.count === vertexCount) {
+    return geometry;
+  }
+
+  const colors = new Float32Array(vertexCount * 3);
+  colors.fill(1);
+  geometry.setAttribute("color", new BufferAttribute(colors, 3));
+  return geometry;
+}
+
 export function VectorFieldLayer({
   colors,
   colorMode = "orientation",
@@ -136,11 +154,21 @@ export function VectorFieldLayer({
   }, [glyphCount]);
 
   const shaftGeometry = useMemo(
-    () => tracker.track("geometry", new CylinderGeometry(1, 1, 1, 12, 1)),
+    () =>
+      tracker.track(
+        "geometry",
+        ensureWhiteVertexColorAttribute(
+          new CylinderGeometry(1, 1, 1, 12, 1),
+        ),
+      ),
     [tracker],
   );
   const headGeometry = useMemo(
-    () => tracker.track("geometry", new ConeGeometry(1, 1, 12, 1)),
+    () =>
+      tracker.track(
+        "geometry",
+        ensureWhiteVertexColorAttribute(new ConeGeometry(1, 1, 12, 1)),
+      ),
     [tracker],
   );
   const material = useMemo(

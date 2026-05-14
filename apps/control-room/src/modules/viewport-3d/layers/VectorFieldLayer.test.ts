@@ -9,6 +9,7 @@ import {
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
+  ensureWhiteVertexColorAttribute,
   resolveVectorFieldLayerStyle,
   syncVectorGlyphColorState,
 } from "./VectorFieldLayer";
@@ -129,5 +130,18 @@ describe("VectorFieldLayer style mapping", () => {
 
     geometry.dispose();
     material.dispose();
+  });
+
+  it("keeps glyph vertex colors white so instance colors are not multiplied to black", () => {
+    const geometry = ensureWhiteVertexColorAttribute(new BoxGeometry(1, 1, 1));
+    const color = geometry.getAttribute("color");
+
+    expect(color?.itemSize).toBe(3);
+    expect(color?.count).toBe(geometry.getAttribute("position").count);
+    expect(Array.from(color.array)).toEqual(
+      new Array(color.count * color.itemSize).fill(1),
+    );
+
+    geometry.dispose();
   });
 });

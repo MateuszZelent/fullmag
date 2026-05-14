@@ -63,15 +63,14 @@ async function patchSelectedTarget(
   if (!hasVisualizationStatePatch(statePatch)) {
     return { status: "completed" as const };
   }
-  if (!context.api || !context.resources) {
+  if (!context.visualizationSync && (!context.api || !context.resources)) {
     return {
       status: "failed" as const,
       message: "Visualization API is unavailable.",
     };
   }
 
-  const next = await context.api.visualization.patch(statePatch);
-  context.resources.invalidate(VISUALIZATION_STATE_PATH, next.revision);
+  await patchVisualizationState(context, statePatch);
   return { status: "completed" as const };
 }
 
@@ -82,11 +81,11 @@ async function patchTargetOverrideResource(
   basePatch: VisualizationStatePatch = {},
 ): Promise<boolean> {
   const state = visualizationStateFromContext(context);
-  if (!context.api || !context.resources || !state) {
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  const next = await context.api.visualization.patch({
+  await patchVisualizationState(context, {
     ...basePatch,
     overrides: mergeVisualizationStateTargetOverride(
       state.overrides ?? [],
@@ -94,7 +93,6 @@ async function patchTargetOverrideResource(
       patch,
     ),
   });
-  context.resources.invalidate(VISUALIZATION_STATE_PATH, next.revision);
   return true;
 }
 
@@ -103,17 +101,31 @@ async function clearTargetOverrideResource(
   target: VisualizationTargetRef,
 ): Promise<boolean> {
   const state = visualizationStateFromContext(context);
-  if (!context.api || !context.resources || !state) {
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  const next = await context.api.visualization.patch({
+  await patchVisualizationState(context, {
     overrides: (state.overrides ?? []).filter(
       (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
     ),
   });
-  context.resources.invalidate(VISUALIZATION_STATE_PATH, next.revision);
   return true;
+}
+
+async function patchVisualizationState(
+  context: CommandContext,
+  patch: VisualizationStatePatch,
+): Promise<void> {
+  if (context.visualizationSync) {
+    context.visualizationSync.queuePatch(patch);
+    return;
+  }
+
+  const next = await context.api?.visualization.patch(patch);
+  if (next) {
+    context.resources?.invalidate(VISUALIZATION_STATE_PATH, next.revision);
+  }
 }
 
 function visualizationStateFromContext(

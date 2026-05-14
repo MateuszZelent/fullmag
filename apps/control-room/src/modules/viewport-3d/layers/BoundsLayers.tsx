@@ -6,6 +6,7 @@ import { BufferAttribute, BufferGeometry } from "three";
 import type { ColorRepresentation } from "three";
 import {
   RENDER_POLICIES,
+  type RenderSemantic,
   materialPolicyProps,
 } from "./viewport3DRenderPolicy";
 
@@ -18,7 +19,6 @@ import {
   type Viewport3DPartSelection,
 } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import { buildSurfaceEdgeGeometry } from "../viewport3dSurfaceEdges";
 import {
   isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
@@ -30,6 +30,7 @@ import type {
   Viewport3DTopologyPartRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import { buildLineIndexGeometry } from "../viewport3dSurfaceEdges";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
@@ -47,14 +48,17 @@ export function BoundsBox({
   bounds,
   color,
   opacity,
+  policySemantic,
   wireframe = true,
 }: {
   bounds: Viewport3DBounds | null;
   color: ColorRepresentation;
   opacity: number;
+  policySemantic?: RenderSemantic;
   wireframe?: boolean;
 }) {
   if (!bounds) return null;
+  const policyProps = policySemantic ? materialPolicyProps(policySemantic) : {};
 
   return (
     <mesh position={bounds.center}>
@@ -70,6 +74,7 @@ export function BoundsBox({
         opacity={opacity}
         transparent
         wireframe={wireframe}
+        {...policyProps}
       />
     </mesh>
   );
@@ -126,9 +131,7 @@ function AirboxMeshPartLayer({
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
   const resolvedSettings =
-    isViewport3DTopologyCurrent(topologyFreshness)
-      ? settings
-      : resolveStaleTopologyVisualizationSettings(settings);
+    resolveAirboxTopologyVisualizationSettings(settings, topologyFreshness);
   const geometry = useMemo(() => {
     const { surfaceIndices } = partModel;
     if (!surfaceIndices?.length) return null;
@@ -139,12 +142,18 @@ function AirboxMeshPartLayer({
     return next;
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
-    const next = buildSurfaceEdgeGeometry(
-      topologyModel.positions,
-      partModel.surfaceIndices,
+    const edgeIndices = resolveAirboxWireframeEdgeIndices(
+      resolvedSettings.geometryScope,
+      partModel,
     );
+    const next = buildLineIndexGeometry(topologyModel.positions, edgeIndices);
     return next ? tracker.track("geometry", next) : null;
-  }, [partModel.surfaceIndices, topologyModel.positions, tracker]);
+  }, [
+    partModel,
+    resolvedSettings.geometryScope,
+    topologyModel.positions,
+    tracker,
+  ]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -154,6 +163,8 @@ function AirboxMeshPartLayer({
 
   const opacity = opacityFromSettings(resolvedSettings);
   const part = partModel.part;
+  const airboxWireframeSemantic =
+    resolveAirboxWireframeSemantic(resolvedSettings);
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -176,6 +187,7 @@ function AirboxMeshPartLayer({
             bounds={resolveMeshPartBounds(part)}
             color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(resolvedSettings)}
+            policySemantic={airboxWireframeSemantic}
           />
         ) : null}
         {resolvedSettings.boundsVisible ? (
@@ -183,6 +195,7 @@ function AirboxMeshPartLayer({
             bounds={resolveMeshPartBounds(part)}
             color={colors.accent}
             opacity={Math.max(opacity, 0.35)}
+            policySemantic="hiddenEdges"
           />
         ) : null}
         {resolvedSettings.pointsVisible ? (
@@ -223,10 +236,10 @@ function AirboxMeshPartLayer({
         </mesh>
       ) : null}
       {resolvedSettings.wireframeVisible ? (
-        resolvedSettings.geometryScope === "surface" && edgeGeometry ? (
+        edgeGeometry ? (
           <lineSegments
             geometry={edgeGeometry}
-            renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
+            renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
           >
             <lineBasicMaterial
               color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
@@ -234,7 +247,7 @@ function AirboxMeshPartLayer({
                 resolvedSettings,
                 materialProfile.featureEdges,
               )}
-              {...materialPolicyProps("featureEdges")}
+              {...materialPolicyProps(airboxWireframeSemantic)}
             />
           </lineSegments>
         ) : (
@@ -242,6 +255,7 @@ function AirboxMeshPartLayer({
             bounds={resolveMeshPartBounds(part)}
             color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
             opacity={wireframeOpacityFromSettings(resolvedSettings)}
+            policySemantic={airboxWireframeSemantic}
           />
         )
       ) : null}
@@ -250,6 +264,7 @@ function AirboxMeshPartLayer({
           bounds={resolveMeshPartBounds(part)}
           color={colors.accent}
           opacity={Math.max(opacity, 0.35)}
+          policySemantic="hiddenEdges"
         />
       ) : null}
       {resolvedSettings.pointsVisible ? (
@@ -279,6 +294,40 @@ function AirboxMeshPartLayer({
       ) : null}
     </group>
   );
+}
+
+export function resolveAirboxWireframeSemantic(
+  settings: VisualizationTargetSettings,
+): Extract<RenderSemantic, "featureEdges" | "hiddenEdges"> {
+  return settings.shaderVisible ? "featureEdges" : "hiddenEdges";
+}
+
+export function resolveAirboxTopologyVisualizationSettings(
+  settings: VisualizationTargetSettings,
+  topologyFreshness: Viewport3DTopologyFreshness,
+): VisualizationTargetSettings {
+  if (isViewport3DTopologyCurrent(topologyFreshness)) {
+    return settings;
+  }
+
+  return {
+    ...resolveStaleTopologyVisualizationSettings(settings),
+    geometryScope: settings.geometryScope,
+  };
+}
+
+export function resolveAirboxWireframeEdgeIndices(
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+  partModel: Pick<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+    "edgeIndices" | "volumeEdgeIndices"
+  >,
+): Uint32Array | null {
+  if (geometryScope === "full") {
+    return partModel.volumeEdgeIndices ?? partModel.edgeIndices;
+  }
+
+  return partModel.edgeIndices;
 }
 
 export function DomainBoxLayer({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { VisualizationStateResource } from "../api/apiTypes";
@@ -18,16 +18,32 @@ export function resolveVisualizationStateRevision(
 export function useVisualizationStateResource({
   enabled = true,
 }: { enabled?: boolean } = {}) {
-  const { api } = useKernel();
+  const { api, visualizationSync } = useKernel();
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) => api.visualization.state({ signal }),
     [api],
   );
+  useSyncExternalStore(
+    (onStoreChange) => visualizationSync.subscribe(onStoreChange),
+    () => visualizationSync.getSnapshot().version,
+    () => visualizationSync.getSnapshot().version,
+  );
 
-  return useResource({
+  const resource = useResource({
     enabled,
     load,
     resolveRevision: resolveVisualizationStateRevision,
     resourceKey: VISUALIZATION_STATE_RESOURCE_KEY,
   });
+
+  useEffect(() => {
+    visualizationSync.observeRemoteState(resource.data);
+  }, [resource.data, visualizationSync]);
+
+  const optimisticData = visualizationSync.applyOptimisticState(resource.data);
+
+  return {
+    ...resource,
+    data: optimisticData,
+  };
 }

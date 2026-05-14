@@ -14,6 +14,7 @@ import { ResourceInvalidationController } from "../resources/ResourceInvalidatio
 import { SelectionController } from "../selection/SelectionController";
 import type { KernelApi } from "../types";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
 
 import { SlotHost } from "./SlotHost";
@@ -25,8 +26,9 @@ function TestModule() {
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
+  const api = new ControlRoomApi({ fetchImpl: async () => new Response("{}") });
   return {
-    api: new ControlRoomApi({ fetchImpl: async () => new Response("{}") }),
+    api,
     bus,
     commands: new CommandRegistry(),
     diagnostics: new RequestDiagnosticsController(),
@@ -36,6 +38,10 @@ function makeKernel(): KernelApi {
     selection: new SelectionController(bus),
     layout: new LayoutController(bus),
     visualization: new ObjectVisualizationController(),
+    visualizationSync: new VisualizationRegistrySyncController({
+      api: api.visualization,
+      resources,
+    }),
   };
 }
 

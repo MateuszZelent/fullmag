@@ -165,7 +165,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
 async function patchVisualizationStateFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
-  if (!context.api) {
+  if (!context.visualizationSync && !context.api) {
     return { message: "Control Room API is not available.", status: "failed" };
   }
   const patch = asRecord(context.input) as VisualizationStatePatch | null;
@@ -173,8 +173,7 @@ async function patchVisualizationStateFromCommand(
     return { message: "Visualization state patch is missing.", status: "failed" };
   }
 
-  const state = await context.api.visualization.patch(patch);
-  invalidateVisualizationState(context, state);
+  await patchVisualizationState(context, patch);
   return { status: "completed" };
 }
 
@@ -193,9 +192,11 @@ async function patchVisualizationDefaultsFromCommand(
     context.visualization.patchDefaults(kind, input.patch);
   }
   const statePatch = visualizationStatePatchFromDefaultTargetPatch(input.patch);
-  if (context.api && hasVisualizationStatePatch(statePatch)) {
-    const state = await context.api.visualization.patch(statePatch);
-    invalidateVisualizationState(context, state);
+  if (
+    (context.visualizationSync || context.api) &&
+    hasVisualizationStatePatch(statePatch)
+  ) {
+    await patchVisualizationState(context, statePatch);
   }
   return { status: "completed" };
 }
@@ -245,11 +246,11 @@ async function patchAirboxVisualizationFromCommand(
 async function resetAirboxVisualizationFromCommand(
   context: CommandContext,
 ): Promise<CommandResult> {
-  if (context.api) {
-    const state = await context.api.visualization.patch(
+  if (context.visualizationSync || context.api) {
+    await patchVisualizationState(
+      context,
       airboxVisualizationStatePatchFromTargetPatch(DEFAULT_AIRBOX_VISUALIZATION),
     );
-    invalidateVisualizationState(context, state);
   }
   context.visualization?.clearTarget(AIRBOX_VISUALIZATION_TARGET);
   return { status: "completed" };
@@ -329,14 +330,28 @@ async function patchAirboxVisualization(
     return { status: "completed" };
   }
 
-  if (!context.api) {
+  if (!context.visualizationSync && !context.api) {
     context.visualization?.patchTarget(AIRBOX_VISUALIZATION_TARGET, patch);
     return { status: "completed" };
   }
 
-  const state = await context.api.visualization.patch(statePatch);
-  invalidateVisualizationState(context, state);
+  await patchVisualizationState(context, statePatch);
   return { status: "completed" };
+}
+
+async function patchVisualizationState(
+  context: CommandContext,
+  patch: VisualizationStatePatch,
+): Promise<void> {
+  if (context.visualizationSync) {
+    context.visualizationSync.queuePatch(patch);
+    return;
+  }
+
+  const state = await context.api?.visualization.patch(patch);
+  if (state) {
+    invalidateVisualizationState(context, state);
+  }
 }
 
 function invalidateVisualizationState(
@@ -352,18 +367,17 @@ async function patchTargetOverrideResource(
   patch: VisualizationTargetPatch,
 ): Promise<boolean> {
   const state = visualizationStateFromContext(context);
-  if (!context.api || !context.resources || !state) {
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  const next = await context.api.visualization.patch({
+  await patchVisualizationState(context, {
     overrides: mergeVisualizationStateTargetOverride(
       state.overrides ?? [],
       target,
       patch,
     ),
   });
-  invalidateVisualizationState(context, next);
   return true;
 }
 
@@ -372,16 +386,15 @@ async function clearTargetOverrideResource(
   target: VisualizationTargetRef,
 ): Promise<boolean> {
   const state = visualizationStateFromContext(context);
-  if (!context.api || !context.resources || !state) {
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  const next = await context.api.visualization.patch({
+  await patchVisualizationState(context, {
     overrides: (state.overrides ?? []).filter(
       (entry) => !(entry.scope === target.kind && entry.scope_id === target.id),
     ),
   });
-  invalidateVisualizationState(context, next);
   return true;
 }
 

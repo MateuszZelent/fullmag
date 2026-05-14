@@ -15,6 +15,7 @@ import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { FullmagMark } from "@/shared/brand/FullmagLogo";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -383,6 +384,11 @@ export function AppMenuBar() {
   const [registryOpen, setRegistryOpen] = useState(false);
   const { snapshot: visualizationSnapshot } = useObjectVisualizationRegistry();
   const visualizationState = useVisualizationStateResource({ enabled: true });
+  const visualizationSyncSnapshot = useSyncExternalStore(
+    (onStoreChange) => kernel.visualizationSync.subscribe(onStoreChange),
+    () => kernel.visualizationSync.getSnapshot(),
+    () => kernel.visualizationSync.getSnapshot(),
+  );
   const apiErrorDetails = useMemo(() => {
     if (!hydrated || !sessionStatus.error) return null;
 
@@ -423,7 +429,7 @@ export function AppMenuBar() {
   return (
     <header className="fm-header">
       <div className="fm-header__brand">
-        <div className="fm-header__logo" aria-hidden="true" />
+        <FullmagMark size={20} className="fm-header__logo" />
         <div className="fm-header__brand-copy">
           <span className="fm-header__title">Fullmag</span>
           <span className="fm-header__subtitle">{sessionDisplay.subtitle}</span>
@@ -524,6 +530,7 @@ export function AppMenuBar() {
       <RegistryInspectorDialog
         open={registryOpen}
         snapshot={visualizationSnapshot}
+        syncSnapshot={visualizationSyncSnapshot}
         visualizationState={visualizationState.data}
         onOpenChange={setRegistryOpen}
       />
