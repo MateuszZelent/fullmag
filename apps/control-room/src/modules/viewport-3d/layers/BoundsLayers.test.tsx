@@ -104,6 +104,7 @@ describe("SelectionHighlightLayer", () => {
         size: [5, 6, 7],
       },
       colors,
+      materialProfile,
     });
 
     expect(isValidElement(element)).toBe(true);
@@ -123,12 +124,16 @@ describe("SelectionHighlightLayer", () => {
         size: [5, 6, 7],
       },
       color: colors.accent,
-      opacity: 0.72,
+      opacity: materialProfile.selectionShell.opacity,
     });
   });
 
   it("passes null bounds through to the bounds renderer for no selection", () => {
-    const element = SelectionHighlightLayer({ bounds: null, colors });
+    const element = SelectionHighlightLayer({
+      bounds: null,
+      colors,
+      materialProfile,
+    });
     const boundsBox = element as ReactElement<{ bounds: null }>;
 
     expect(boundsBox.props.bounds).toBeNull();

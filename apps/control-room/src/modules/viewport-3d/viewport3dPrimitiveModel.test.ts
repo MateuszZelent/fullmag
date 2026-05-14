@@ -121,6 +121,39 @@ describe("viewport3dPrimitiveModel", () => {
     });
   });
 
+  it("attaches texture pivot metadata for v2 pivot gizmo layers", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        magnetization_assets: [
+          {
+            id: "mag-vortex",
+            kind: "preset_texture",
+            preset_kind: "vortex",
+            texture_transform: { pivot: [1e-9, 2e-9, 3e-9] },
+          },
+        ],
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "box",
+            magnetization_ref: "mag-vortex",
+            name: "Box",
+          },
+        ],
+        revision: 7,
+      },
+      null,
+    );
+
+    expect(model.objects[0]?.magnetizationTexturePreview).toMatchObject({
+      assetId: "mag-vortex",
+      pivot: [1e-9, 2e-9, 3e-9],
+    });
+  });
+
   it("colors uniform +Z magnetization preview as HSL orientation white", () => {
     const model = buildViewport3DPrimitiveRenderModel(
       {
@@ -151,6 +184,40 @@ describe("viewport3dPrimitiveModel", () => {
 
     expect(model.objects[0]?.magnetizationTexturePreview).toMatchObject({
       color: "#ffffff",
+      presetKind: "uniform",
+    });
+  });
+
+  it("colors uniform +X magnetization preview as the same full-bright HSL red", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        magnetization_assets: [
+          {
+            id: "mag-uniform-x",
+            kind: "preset_texture",
+            preset_kind: "uniform",
+            preset_params: { direction: [1, 0, 0] },
+            ui_label: "In-plane",
+          },
+        ],
+        objects: [
+          {
+            geometry: {
+              geometry_kind: "Box",
+              geometry_params: { size: [1, 1, 1] },
+            },
+            id: "arch_waveguide",
+            magnetization_ref: "mag-uniform-x",
+            name: "Arch waveguide",
+          },
+        ],
+        revision: 9,
+      },
+      null,
+    );
+
+    expect(model.objects[0]?.magnetizationTexturePreview).toMatchObject({
+      color: "#ff0000",
       presetKind: "uniform",
     });
   });

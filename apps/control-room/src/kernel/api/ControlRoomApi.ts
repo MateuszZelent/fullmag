@@ -772,6 +772,20 @@ export class ControlRoomApi {
     }
 
     const buffer = await response.arrayBuffer();
+    this.diagnostics?.record({
+      byteLength: buffer.byteLength,
+      channel: "http",
+      contentType: response.headers.get("content-type"),
+      detail: "decoded binary payload",
+      direction: "rx",
+      durationMs: null,
+      method: "GET",
+      outcome: "ok",
+      path: path as string,
+      requestId: response.headers.get("x-request-id") ?? "binary-payload",
+      status: response.status,
+    });
+
     return {
       byteLength: buffer.byteLength,
       data: decode(buffer),
@@ -805,6 +819,20 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        this.diagnostics?.record({
+          byteLength: byteLengthFromBody(init.body),
+          channel: "http",
+          contentType: headers.get("content-type"),
+          detail: `attempt ${attempt}`,
+          direction: "tx",
+          durationMs: null,
+          method,
+          outcome: "sent",
+          path,
+          requestId,
+          status: null,
+        });
+
         const fetchImpl = this.fetchImpl;
         const response = await fetchImpl(url, {
           ...init,
@@ -813,15 +841,16 @@ export class ControlRoomApi {
           method,
         });
 
-        if (attempt < maxAttempts && response.status >= 500) {
-          continue;
-        }
-
         const contractVersionError = resolveContractVersionError(response);
         const accepted =
           (response.ok || acceptedStatuses.has(response.status)) &&
           !contractVersionError;
         this.diagnostics?.record({
+          byteLength: byteLengthFromHeaders(response.headers),
+          channel: "http",
+          contentType: response.headers.get("content-type"),
+          detail: `attempt ${attempt}`,
+          direction: "rx",
           durationMs: Date.now() - started,
           method,
           outcome: accepted ? "ok" : "error",
@@ -829,6 +858,10 @@ export class ControlRoomApi {
           requestId,
           status: response.status,
         });
+
+        if (attempt < maxAttempts && response.status >= 500) {
+          continue;
+        }
 
         if (contractVersionError) {
           throw contractVersionError;
@@ -851,6 +884,11 @@ export class ControlRoomApi {
     }
 
     this.diagnostics?.record({
+      byteLength: null,
+      channel: "http",
+      contentType: null,
+      detail: null,
+      direction: "rx",
       durationMs: Date.now() - started,
       method,
       outcome:
@@ -929,6 +967,44 @@ function pathFromUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function byteLengthFromHeaders(headers: Headers): number | null {
+  const contentLength = headers.get("content-length");
+  if (!contentLength) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(contentLength, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function byteLengthFromBody(body: BodyInit | null | undefined): number | null {
+  if (body == null) {
+    return 0;
+  }
+
+  if (typeof body === "string") {
+    return new TextEncoder().encode(body).byteLength;
+  }
+
+  if (body instanceof ArrayBuffer) {
+    return body.byteLength;
+  }
+
+  if (ArrayBuffer.isView(body)) {
+    return body.byteLength;
+  }
+
+  if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+    return new TextEncoder().encode(body.toString()).byteLength;
+  }
+
+  if (typeof Blob !== "undefined" && body instanceof Blob) {
+    return body.size;
+  }
+
+  return null;
 }
 
 function buildApiUrl(

@@ -53,4 +53,37 @@ describe("viewport3D material profile", () => {
       lite.featureEdges.opacity,
     );
   });
+
+  it("centralizes non-surface semantic layer material settings", () => {
+    const interactive = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+    );
+    const figure = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("figure"),
+    );
+
+    expect(interactive.glyphs).toEqual({
+      opacityScale: 0.92,
+      toneMapped: false,
+    });
+    expect(interactive.grid).toMatchObject({
+      depthWrite: false,
+      opacity: 0.34,
+      toneMapped: false,
+    });
+    expect(interactive.axes.opacity).toBe(0.75);
+    expect(figure.selectionShell.opacity).toBeGreaterThan(
+      interactive.selectionShell.opacity,
+    );
+  });
+
+  it("keeps render pass policy out of material appearance profiles", () => {
+    const profile = resolveViewport3DMaterialProfile(
+      getViewport3DVisualProfile("interactive"),
+    );
+
+    expect(profile.magneticSurface).not.toHaveProperty("polygonOffset");
+    expect(profile.airSurface).not.toHaveProperty("polygonOffset");
+    expect(profile.primitivePreview).not.toHaveProperty("polygonOffset");
+  });
 });

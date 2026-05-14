@@ -13,31 +13,25 @@ export function magnetizationHslRgb(
   const nz = mz / magnitude;
   const hueRadians = Math.atan2(ny, nx);
   const saturation = clamp(Math.hypot(nx, ny), 0, 1);
-  const value = clamp(nz * 0.5 + 0.5, 0, 1);
-  return orientationHsvToRgb(hueRadians, saturation, value);
+  const lightness = clamp(nz * 0.5 + 0.5, 0, 1);
+  return orientationHslToRgb(hueRadians, saturation, lightness);
 }
-
-const AXIS_RGB = {
-  x: [1, 0, 0],
-  y: [0x50 / 255, 0xc8 / 255, 0x50 / 255],
-  z: [0x50 / 255, 0x90 / 255, 0xe6 / 255],
-} satisfies Record<"x" | "y" | "z", [number, number, number]>;
 
 export const HSL_REFERENCE_AXES = [
   {
-    color: AXIS_RGB.x,
+    color: magnetizationHslRgb(1, 0, 0),
     direction: [1, 0, 0],
     id: "x",
     label: "+X",
   },
   {
-    color: AXIS_RGB.y,
+    color: magnetizationHslRgb(0, 1, 0),
     direction: [0, 1, 0],
     id: "y",
     label: "+Y",
   },
   {
-    color: AXIS_RGB.z,
+    color: magnetizationHslRgb(0, 0, 1),
     direction: [0, 0, 1],
     id: "z",
     label: "+Z",
@@ -49,15 +43,15 @@ export const HSL_REFERENCE_AXES = [
   label: string;
 }>;
 
-function orientationHsvToRgb(
+function orientationHslToRgb(
   hueRadians: number,
   saturation: number,
-  value: number,
+  lightness: number,
 ): [number, number, number] {
   const h = positiveModulo((hueRadians * 180) / Math.PI / 60, 6);
-  const c = value * saturation;
+  const c = (1 - Math.abs(2 * lightness - 1)) * saturation;
   const x = c * (1 - Math.abs(positiveModulo(h, 2) - 1));
-  const m = value - c;
+  const m = lightness - c / 2;
 
   if (h < 1) return [c + m, x + m, m];
   if (h < 2) return [x + m, c + m, m];

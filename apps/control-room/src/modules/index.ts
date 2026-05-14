@@ -2,6 +2,7 @@ import type { ModuleManifest } from "@/kernel/types";
 
 import { appMenuManifest } from "./app-menu/manifest";
 import { explorerManifest } from "./explorer/manifest";
+import { footerManifest } from "./footer/manifest";
 import { inspectorManifest } from "./inspector/manifest";
 import { overlayManifest } from "./overlay/manifest";
 import { ribbonManifest } from "./ribbon/manifest";
@@ -14,6 +15,7 @@ export const ALL_MODULES: ModuleManifest[] = [
   explorerManifest,
   viewport3dManifest,
   inspectorManifest,
+  footerManifest,
   overlayManifest,
   statusBarManifest,
 ];

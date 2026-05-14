@@ -436,6 +436,29 @@ describe("ControlRoomApi", () => {
     expect(seenRequestIds).toEqual(["req-retry", "req-retry"]);
     expect(diagnostics.list()).toMatchObject([
       {
+        direction: "tx",
+        method: "GET",
+        outcome: "sent",
+        path: "/v2/sessions/current/status",
+        requestId: "req-retry",
+      },
+      {
+        direction: "rx",
+        method: "GET",
+        outcome: "error",
+        path: "/v2/sessions/current/status",
+        requestId: "req-retry",
+        status: 503,
+      },
+      {
+        direction: "tx",
+        method: "GET",
+        outcome: "sent",
+        path: "/v2/sessions/current/status",
+        requestId: "req-retry",
+      },
+      {
+        direction: "rx",
         method: "GET",
         outcome: "ok",
         path: "/v2/sessions/current/status",
@@ -469,6 +492,14 @@ describe("ControlRoomApi", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(diagnostics.list()).toMatchObject([
       {
+        direction: "tx",
+        method: "POST",
+        outcome: "sent",
+        path: "/v2/sessions/current/simulation/commands",
+        requestId: "req-post",
+      },
+      {
+        direction: "rx",
         method: "POST",
         outcome: "error",
         path: "/v2/sessions/current/simulation/commands",
@@ -479,10 +510,12 @@ describe("ControlRoomApi", () => {
   });
 
   it("loads and decodes domain topology through the v2 binary facade", async () => {
+    const diagnostics = new RequestDiagnosticsController();
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
       fetchImpl: async (url, init) => {
         observedUrl = String(url);
         observedInit = init;
@@ -509,6 +542,32 @@ describe("ControlRoomApi", () => {
     const headers = new Headers(observedInit?.headers);
     expect(headers.get("if-none-match")).toBe('"topology-1"');
     expect(headers.get("x-request-id")).toBe("req-topology");
+    expect(diagnostics.list()).toMatchObject([
+      {
+        direction: "tx",
+        method: "GET",
+        outcome: "sent",
+        path: "/v2/sessions/current/data/domain/topology",
+        requestId: "req-topology",
+      },
+      {
+        direction: "rx",
+        method: "GET",
+        outcome: "ok",
+        path: "/v2/sessions/current/data/domain/topology",
+        requestId: "req-topology",
+        status: 200,
+      },
+      {
+        byteLength: makeTopologyBuffer().byteLength,
+        detail: "decoded binary payload",
+        direction: "rx",
+        method: "GET",
+        outcome: "ok",
+        path: "/v2/sessions/current/data/domain/topology",
+        status: 200,
+      },
+    ]);
   });
 
   it("returns not-modified for fresh binary topology resources", async () => {

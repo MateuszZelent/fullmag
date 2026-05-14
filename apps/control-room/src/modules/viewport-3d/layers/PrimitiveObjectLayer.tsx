@@ -4,6 +4,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useMemo } from "react";
 import {
   BoxGeometry,
+  BufferAttribute,
   BufferGeometry,
   CylinderGeometry,
   SphereGeometry,
@@ -45,6 +46,20 @@ export function releasePrimitiveObjectGeometry(
   geometry: BufferGeometry,
 ): void {
   tracker.release("geometry", geometry);
+}
+
+export function buildPrimitiveTransformGizmoSegments(
+  object: Viewport3DPrimitiveObject,
+): Float32Array {
+  const length = Math.max(Math.max(...object.bounds.size) * 0.36, 1e-12);
+  return Float32Array.from([
+    0, 0, 0,
+    length, 0, 0,
+    0, 0, 0,
+    0, length, 0,
+    0, 0, 0,
+    0, 0, length,
+  ]);
 }
 
 export function PrimitiveObjectLayer({
@@ -194,7 +209,90 @@ function PrimitiveObject({
           />
         </mesh>
       ) : null}
+      <PrimitiveObjectGizmo
+        colors={colors}
+        materialProfile={materialProfile}
+        object={object}
+        tracker={tracker}
+      />
     </group>
+  );
+}
+
+function PrimitiveObjectGizmo({
+  colors,
+  materialProfile,
+  object,
+  tracker,
+}: {
+  colors: Viewport3DColors;
+  materialProfile: Viewport3DMaterialProfile;
+  object: Viewport3DPrimitiveObject;
+  tracker: Viewport3DResourceTracker;
+}) {
+  const axisGeometry = useMemo(() => {
+    const next = tracker.track("geometry", new BufferGeometry());
+    next.setAttribute(
+      "position",
+      new BufferAttribute(buildPrimitiveTransformGizmoSegments(object), 3),
+    );
+    return next;
+  }, [object, tracker]);
+  const pivotGeometry = useMemo(
+    () =>
+      object.magnetizationTexturePreview?.pivot
+        ? tracker.track("geometry", new SphereGeometry(object.bounds.radius * 0.045, 12, 6))
+        : null,
+    [object, tracker],
+  );
+
+  useEffect(
+    () => () => tracker.release("geometry", axisGeometry),
+    [axisGeometry, tracker],
+  );
+  useEffect(
+    () => () => tracker.release("geometry", pivotGeometry),
+    [pivotGeometry, tracker],
+  );
+
+  return (
+    <>
+      <lineSegments
+        geometry={axisGeometry}
+        renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+        userData={{ gizmo: "transform", objectId: object.objectId }}
+      >
+        <lineBasicMaterial
+          color={colors.accent}
+          depthTest={materialProfile.axes.depthTest}
+          depthWrite={materialProfile.axes.depthWrite}
+          opacity={materialProfile.axes.opacity}
+          toneMapped={materialProfile.axes.toneMapped}
+          transparent={materialProfile.axes.opacity < 1}
+        />
+      </lineSegments>
+      {pivotGeometry && object.magnetizationTexturePreview?.pivot ? (
+        <mesh
+          geometry={pivotGeometry}
+          position={object.magnetizationTexturePreview.pivot}
+          renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
+          userData={{
+            gizmo: "texture-pivot",
+            objectId: object.objectId,
+            textureAssetId: object.magnetizationTexturePreview.assetId,
+          }}
+        >
+          <meshBasicMaterial
+            color={object.magnetizationTexturePreview.color}
+            depthTest={false}
+            depthWrite={false}
+            opacity={materialProfile.selectionShell.opacity}
+            toneMapped={false}
+            transparent
+          />
+        </mesh>
+      ) : null}
+    </>
   );
 }
 

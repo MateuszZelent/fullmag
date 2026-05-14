@@ -49,6 +49,9 @@ describe("viewport3dManifest", () => {
       before.captureRevision + 1,
     );
     expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
+    expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe(
+      "interactive",
+    );
   });
 
   it("contributes orientation widget commands for ribbon and palette", async () => {
@@ -95,6 +98,30 @@ describe("viewport3dManifest", () => {
 
     await registry.execute("viewport-3d.profile-capture", { source: "test" });
     expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
+    expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBeNull();
+  });
+
+  it("restores the previous visual profile after one-shot capture", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+
+    await registry.execute("viewport-3d.profile-figure", { source: "test" });
+    await registry.execute("viewport-3d.capture-frame", { source: "test" });
+
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
+    expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBe("figure");
+
+    viewport3dStore.completeCapture();
+
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("figure");
+    expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBeNull();
+
+    await registry.execute("viewport-3d.profile-capture", { source: "test" });
+    await registry.execute("viewport-3d.capture-frame", { source: "test" });
+    viewport3dStore.completeCapture();
+
+    expect(viewport3dStore.getSnapshot().visualProfileId).toBe("capture");
+    expect(viewport3dStore.getSnapshot().captureReturnProfileId).toBeNull();
   });
 
   it("uses demand rendering instead of an always-on R3F loop", () => {

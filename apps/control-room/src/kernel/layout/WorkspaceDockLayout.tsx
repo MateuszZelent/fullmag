@@ -105,6 +105,11 @@ export function WorkspaceDockLayout() {
     if (column.slotId === "panel-right") return kernelLayout.panelVisible.right;
     return true;
   });
+  const mainPanelCount = kernelLayout.panelVisible.bottom ? 2 : 1;
+  const mainAutoSaveId = `fullmag-workspace-main:${mainPanelCount}`;
+  const columnAutoSaveId = `fullmag-workspace-columns:${visibleColumns
+    .map((column) => column.slotId)
+    .join("|")}`;
 
   if (!restored) {
     return (
@@ -142,8 +147,9 @@ export function WorkspaceDockLayout() {
   return (
     <div className="fm-workspace-body">
       <ResizablePanelGroup
-        autoSaveId="fullmag-workspace-main"
+        autoSaveId={mainAutoSaveId}
         direction="vertical"
+        panelCount={mainPanelCount}
       >
         <ResizablePanel defaultSize={78} id="workspace-main" minSize={42}>
           <SortableList
@@ -152,8 +158,9 @@ export function WorkspaceDockLayout() {
             onMove={handleMoveColumn}
           >
             <ResizablePanelGroup
-              autoSaveId="fullmag-workspace-columns"
+              autoSaveId={columnAutoSaveId}
               direction="horizontal"
+              panelCount={visibleColumns.length}
             >
               {visibleColumns.map((column, index) => (
                 <Fragment key={column.slotId}>

@@ -29,6 +29,7 @@ export interface Viewport3DMagnetizationTexturePreview {
   assetId: string;
   color: string;
   label: string;
+  pivot?: [number, number, number];
   presetKind: string;
   regionId?: string;
   source: "object" | "region-override";
@@ -225,6 +226,7 @@ function magnetizationTexturePreview(
   if (!assetId || !asset) return null;
   const presetKind =
     asString(asset.preset_kind) ?? asString(asset.kind) ?? "texture";
+  const pivot = asVec3(asRecord(asset.texture_transform)?.pivot);
   return {
     assetId,
     color: magnetizationPreviewColor(presetKind, asset),
@@ -233,6 +235,7 @@ function magnetizationTexturePreview(
       asString(asset.name) ??
       asString(asset.preset_kind) ??
       assetId,
+    ...(pivot ? { pivot } : {}),
     presetKind,
     regionId: regionOverride?.regionId,
     source: regionOverride ? "region-override" : "object",

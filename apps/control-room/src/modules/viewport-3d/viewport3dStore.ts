@@ -15,6 +15,7 @@ export interface Viewport3DCameraState {
 
 export interface Viewport3DCommandState {
   camera: Viewport3DCameraState;
+  captureReturnProfileId: Viewport3DVisualProfileId | null;
   captureRevision: number;
   fitRevision: number;
   resetCameraRevision: number;
@@ -41,6 +42,7 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   camera: {
     ...DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   },
+  captureReturnProfileId: null,
   captureRevision: 0,
   fitRevision: 0,
   resetCameraRevision: 0,
@@ -69,10 +71,25 @@ class Viewport3DStore {
   }
 
   requestCapture(): void {
+    const captureReturnProfileId =
+      this.snapshot.visualProfileId === "capture"
+        ? null
+        : this.snapshot.visualProfileId;
     this.snapshot = {
       ...this.snapshot,
+      captureReturnProfileId,
       captureRevision: this.snapshot.captureRevision + 1,
       visualProfileId: "capture",
+    };
+    this.notify();
+  }
+
+  completeCapture(): void {
+    if (this.snapshot.captureReturnProfileId === null) return;
+    this.snapshot = {
+      ...this.snapshot,
+      visualProfileId: this.snapshot.captureReturnProfileId,
+      captureReturnProfileId: null,
     };
     this.notify();
   }
@@ -104,9 +121,15 @@ class Viewport3DStore {
   }
 
   setVisualProfile(profileId: Viewport3DVisualProfileId): void {
-    if (this.snapshot.visualProfileId === profileId) return;
+    if (
+      this.snapshot.visualProfileId === profileId &&
+      this.snapshot.captureReturnProfileId === null
+    ) {
+      return;
+    }
     this.snapshot = {
       ...this.snapshot,
+      captureReturnProfileId: null,
       visualProfileId: profileId,
     };
     this.notify();

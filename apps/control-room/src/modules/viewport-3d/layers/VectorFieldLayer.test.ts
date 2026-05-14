@@ -33,6 +33,21 @@ describe("VectorFieldLayer style mapping", () => {
     });
   });
 
+  it("applies glyph material profile opacity to vector style", () => {
+    expect(
+      resolveVectorFieldLayerStyle({
+        colorMode: "monochrome",
+        fallbackColor: "#55ccff",
+        opacity: 0.5 * 0.8,
+        style: {
+          alpha: 0.5,
+          monoColor: "#ff3366",
+          thickness: 1,
+        },
+      }).materialOpacity,
+    ).toBe(0.2);
+  });
+
   it("maps target display settings into shader wireframe and vector layer styles", () => {
     const settings = {
       ...DEFAULT_OBJECT_VISUALIZATION,

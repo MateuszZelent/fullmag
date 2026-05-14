@@ -31,7 +31,7 @@ export const VISUALIZATION_COLOR_MODE_ITEMS: Array<{
 ];
 
 export function colorPickerInputValue(value: string): string {
-  return /^#[0-9a-f]{6}$/i.test(value) ? value : "#ffffff";
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : rgbToHex(255, 255, 255);
 }
 
 export function surfaceSolidColorPatch(value: string): VisualizationTargetPatch {
@@ -39,6 +39,12 @@ export function surfaceSolidColorPatch(value: string): VisualizationTargetPatch 
     shaderMonoColor: value,
     surfaceColorSource: "solid",
   };
+}
+
+function rgbToHex(red: number, green: number, blue: number): string {
+  return `#${[red, green, blue]
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
 }
 
 export interface VisualizationPanelField {

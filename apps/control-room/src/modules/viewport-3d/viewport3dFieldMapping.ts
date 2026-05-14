@@ -57,6 +57,48 @@ export function buildVertexScalarColors(
   return buildVertexScalarColorsUnchecked(fieldVector, vertexCount, resolvedColorMode);
 }
 
+export function buildSampledScalarColors(
+  fieldVector: DecodedFieldVector | null | undefined,
+  pointIndices: Uint32Array | null | undefined,
+  colorMode = "magnitude",
+): ScalarColorBuffer | null {
+  const resolvedColorMode = normalizeViewport3DVectorColorMode(
+    colorMode,
+    "magnitude",
+  );
+  if (
+    !fieldVector ||
+    !pointIndices ||
+    pointIndices.length === 0 ||
+    fieldVector.pointCount === 0 ||
+    resolvedColorMode === "monochrome"
+  ) {
+    return null;
+  }
+
+  const range = resolveScalarRange(fieldVector, resolvedColorMode);
+  const colors = new Float32Array(pointIndices.length * 3);
+
+  for (let index = 0; index < pointIndices.length; index += 1) {
+    const pointIndex = pointIndices[index] ?? 0;
+    if (pointIndex >= fieldVector.pointCount) {
+      return null;
+    }
+    const [red, green, blue] = colorAt(
+      fieldVector,
+      pointIndex,
+      resolvedColorMode,
+      range,
+    );
+    const target = index * 3;
+    colors[target] = red;
+    colors[target + 1] = green;
+    colors[target + 2] = blue;
+  }
+
+  return { colors, range };
+}
+
 export async function buildVertexScalarColorsChunked(
   fieldVector: DecodedFieldVector,
   options: ChunkedFieldTransformOptions = {},

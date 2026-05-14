@@ -110,6 +110,7 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
 
     const client = new RealtimeClient({
       bridge: kernel.realtime,
+      diagnostics: kernel.diagnostics,
       url,
     });
     client.connect();

@@ -144,7 +144,7 @@ function latestRequestForPath(
 ): RequestDiagnosticEntry | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    if (entry?.path === path) return entry;
+    if (entry?.path === path && entry.direction === "rx") return entry;
   }
 
   return null;

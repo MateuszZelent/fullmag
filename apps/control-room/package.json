@@ -15,6 +15,7 @@
     "generate:openapi-v2": "cargo run -p fullmag-api -- --print-openapi-v2 > src/kernel/api/generated/openapi-v2.json",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
+    "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",
     "test": "vitest run",
     "typecheck": "next typegen . && tsc --noEmit"

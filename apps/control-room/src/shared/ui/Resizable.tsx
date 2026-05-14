@@ -17,9 +17,63 @@ type ResizablePanelGroupProps = Omit<
 > & {
   autoSaveId?: string;
   direction?: "horizontal" | "vertical";
+  panelCount?: number;
 };
 
-function readStoredPanelLayout(autoSaveId: string | undefined): Layout | undefined {
+const PANEL_LAYOUT_TOTAL = 100;
+const PANEL_LAYOUT_TOTAL_TOLERANCE = 0.01;
+
+export function normalizeStoredPanelLayout(
+  storedLayout: unknown,
+  panelCount: number | undefined,
+): Layout | undefined {
+  if (
+    !storedLayout ||
+    typeof storedLayout !== "object" ||
+    Array.isArray(storedLayout)
+  ) {
+    return undefined;
+  }
+
+  const entries = Object.entries(storedLayout);
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  if (
+    typeof panelCount === "number" &&
+    Number.isInteger(panelCount) &&
+    panelCount > 0 &&
+    entries.length !== panelCount
+  ) {
+    return undefined;
+  }
+
+  const layout: Layout = {};
+  for (const [panelId, value] of entries) {
+    if (typeof value !== "number") {
+      return undefined;
+    }
+    layout[panelId] = value;
+  }
+
+  const sizes = Object.values(layout);
+  if (sizes.some((value) => !Number.isFinite(value) || value <= 0)) {
+    return undefined;
+  }
+
+  const total = sizes.reduce((sum, value) => sum + value, 0);
+  if (Math.abs(total - PANEL_LAYOUT_TOTAL) > PANEL_LAYOUT_TOTAL_TOLERANCE) {
+    return undefined;
+  }
+
+  return layout;
+}
+
+function readStoredPanelLayout(
+  autoSaveId: string | undefined,
+  panelCount: number | undefined,
+): Layout | undefined {
   if (!autoSaveId || typeof window === "undefined") {
     return undefined;
   }
@@ -37,7 +91,7 @@ function readStoredPanelLayout(autoSaveId: string | undefined): Layout | undefin
       return undefined;
     }
 
-    return parsedLayout as Layout;
+    return normalizeStoredPanelLayout(parsedLayout, panelCount);
   } catch {
     return undefined;
   }
@@ -48,6 +102,7 @@ export function ResizablePanelGroup({
   className,
   direction = "horizontal",
   onLayoutChanged,
+  panelCount,
   ...props
 }: ResizablePanelGroupProps) {
   const groupRef = useRef<GroupImperativeHandle | null>(null);
@@ -59,13 +114,21 @@ export function ResizablePanelGroup({
       return;
     }
 
-    const storedLayout = readStoredPanelLayout(autoSaveId);
+    const storedLayout = readStoredPanelLayout(autoSaveId, panelCount);
     canPersistLayoutRef.current = true;
 
     if (storedLayout) {
-      groupRef.current?.setLayout(storedLayout);
+      try {
+        groupRef.current?.setLayout(storedLayout);
+      } catch {
+        try {
+          window.localStorage.removeItem(autoSaveId);
+        } catch {
+          return;
+        }
+      }
     }
-  }, [autoSaveId]);
+  }, [autoSaveId, panelCount]);
 
   function handleLayoutChanged(layout: Layout): void {
     if (autoSaveId && canPersistLayoutRef.current) {

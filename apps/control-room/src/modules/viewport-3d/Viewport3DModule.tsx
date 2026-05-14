@@ -22,6 +22,7 @@ import {
   mergeViewport3DFieldScalarColors,
   useViewport3DChunkedScalarColors,
 } from "./hooks/useViewport3DChunkedScalarColors";
+import { buildFdmCuboidInstanceModel } from "./layers/FdmCuboidLayer";
 import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import {
@@ -40,6 +41,7 @@ import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
+import { buildSampledScalarColors } from "./viewport3dFieldMapping";
 import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
@@ -78,6 +80,7 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
+  viewport3dStore,
   useViewport3DCommandState,
 } from "./viewport3dStore";
 import { VIEWPORT_3D_FRAMELOOP } from "./viewport3dTypes";
@@ -357,13 +360,55 @@ function useViewport3DSceneModel({
     vectorColorMode,
     vectorDomain,
   });
+  const fdmSurfaceColorMode =
+    fdmDomain && fallbackSettings.visible && fallbackSettings.shaderVisible
+      ? surfaceColorSourceToColorMode(fallbackSettings.surfaceColorSource)
+      : null;
+  const fdmVoxelMagnitudeThreshold =
+    fdmDomain && fallbackSettings.visible && fallbackSettings.shaderVisible
+      ? visualProfile.voxelMagnitudeThreshold
+      : 0;
+  const fdmTopographyEnabled = Boolean(
+    fdmDomain &&
+      fallbackSettings.visible &&
+      fallbackSettings.shaderVisible &&
+      visualProfile.voxelTopography.enabled,
+  );
+  const fdmVectorsVisible = Boolean(
+    fdmDomain && fallbackSettings.visible && fallbackSettings.vectorsVisible,
+  );
   const fieldVectorEnabled =
-    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions);
+    viewport3DFieldRenderOptionsNeedFieldData(fieldRenderOptions) ||
+    Boolean(fdmSurfaceColorMode) ||
+    fdmVectorsVisible ||
+    fdmVoxelMagnitudeThreshold > 0 ||
+    fdmTopographyEnabled;
   const fieldVector = useViewport3DFieldVector(
     quantityId,
     FULL_FIELD_QUERY,
     fieldVectorEnabled,
   );
+  const fdmSurfaceColors = useMemo(() => {
+    if (!fdmSurfaceColorMode) return null;
+    const model = buildFdmCuboidInstanceModel(fdmDomain, {
+      fieldVector: fieldVector.data,
+      voxelFillRatio: visualProfile.voxelFillRatio,
+      voxelMagnitudeThreshold: fdmVoxelMagnitudeThreshold,
+      voxelTopography: visualProfile.voxelTopography,
+    });
+    return buildSampledScalarColors(
+      fieldVector.data,
+      model?.cellIndices,
+      fdmSurfaceColorMode,
+    );
+  }, [
+    fdmDomain,
+    fdmSurfaceColorMode,
+    fdmVoxelMagnitudeThreshold,
+    fieldVector.data,
+    visualProfile.voxelFillRatio,
+    visualProfile.voxelTopography,
+  ]);
   const chunkedScalarColors = useViewport3DChunkedScalarColors({
     colorModes: fieldRenderOptions.scalarColorModes,
     enabled: fieldRenderOptions.scalarColorsVisible !== false,
@@ -474,12 +519,15 @@ function useViewport3DSceneModel({
     domainSummary,
     fallbackSettings,
     fdmDomain,
+    fdmSurfaceColors,
     femDomain,
     fieldModel: fieldRenderModel,
+    fieldVector: fieldVector.data,
     getObjectSettings,
     getPartSettings,
     hslReferenceVisible,
     magnetizationTexturePreviews,
+    maxVectorGlyphs,
     primitiveModel,
     quantityId,
     resourceFrameKey,
@@ -489,6 +537,7 @@ function useViewport3DSceneModel({
     topologyFreshness,
     topologyModel: topologyRenderModel,
     vectorColorMode,
+    vectorScale,
     vectorStyle,
     visualProfileId: commandState.visualProfileId,
   };
@@ -744,6 +793,7 @@ function Viewport3DFrame({
       link.download = "fullmag-viewport-3d.png";
       link.href = canvas.toDataURL("image/png");
       link.click();
+      viewport3dStore.completeCapture();
     };
     const captureTimer = window.setTimeout(captureFrame, 80);
     return () => {
@@ -758,6 +808,7 @@ function Viewport3DFrame({
       className="fm-viewport-3d"
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}
+      data-visual-profile-id={sceneProps.visualProfileId}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">

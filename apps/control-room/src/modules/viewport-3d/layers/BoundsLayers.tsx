@@ -195,6 +195,7 @@ function AirboxMeshPartLayer({
           <VectorFieldLayer
             colors={colors}
             colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
+            materialProfile={materialProfile.glyphs}
             opacity={opacity}
             segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
             style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
@@ -268,6 +269,7 @@ function AirboxMeshPartLayer({
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(resolvedSettings, vectorColorMode)}
+          materialProfile={materialProfile.glyphs}
           opacity={opacity}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
           style={vectorStyleFromSettings(resolvedSettings, vectorStyle)}
@@ -366,9 +368,17 @@ export function AirboxLayer({
 export function SelectionHighlightLayer({
   bounds,
   colors,
+  materialProfile,
 }: {
   bounds: Viewport3DBounds | null;
   colors: Viewport3DColors;
+  materialProfile: Viewport3DMaterialProfile;
 }) {
-  return <BoundsBox bounds={bounds} color={colors.accent} opacity={0.72} />;
+  return (
+    <BoundsBox
+      bounds={bounds}
+      color={colors.accent}
+      opacity={materialProfile.selectionShell.opacity}
+    />
+  );
 }

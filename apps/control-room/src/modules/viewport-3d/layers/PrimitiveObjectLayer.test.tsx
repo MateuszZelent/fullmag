@@ -4,6 +4,7 @@ import { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DPrimitiveObject } from "../viewport3dPrimitiveModel";
 
 import {
+  buildPrimitiveTransformGizmoSegments,
   createPrimitiveObjectGeometry,
   releasePrimitiveObjectGeometry,
   trackPrimitiveObjectGeometry,
@@ -53,5 +54,17 @@ describe("PrimitiveObjectLayer geometry resources", () => {
 
     expect(dispose).toHaveBeenCalledOnce();
     expect(tracker.getSnapshot().geometries).toBe(0);
+  });
+
+  it("builds a local transform gizmo from primitive bounds", () => {
+    expect(Array.from(buildPrimitiveTransformGizmoSegments(primitiveObject("box"))))
+      .toEqual([
+        0, 0, 0,
+        expect.closeTo(2.16), 0, 0,
+        0, 0, 0,
+        0, expect.closeTo(2.16), 0,
+        0, 0, 0,
+        0, 0, expect.closeTo(2.16),
+      ]);
   });
 });

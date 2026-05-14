@@ -200,6 +200,7 @@ export function FallbackTopologyMeshLayer({
             fallbackSettings,
             vectorColorMode,
           )}
+          materialProfile={materialProfile.glyphs}
           opacity={opacityFromSettings(fallbackSettings)}
           segments={fieldModel?.fullVectorSegments ?? null}
           style={vectorStyleFromSettings(fallbackSettings, vectorStyle)}

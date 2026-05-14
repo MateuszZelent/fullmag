@@ -196,6 +196,7 @@ export function MeshPartLayer({
         <VectorFieldLayer
           colors={colors}
           colorMode={vectorColorModeFromSettings(settings, vectorColorMode)}
+          materialProfile={materialProfile.glyphs}
           opacity={opacityFromSettings(settings)}
           segments={fieldModel?.partVectorSegments.get(part.id) ?? null}
           style={vectorStyleFromSettings(settings, vectorStyle)}

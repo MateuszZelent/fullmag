@@ -22,6 +22,28 @@ describe("viewport3d visual profiles", () => {
       antialias: true,
       preserveDrawingBuffer: false,
       toneMapping: "aces",
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "z",
+        enabled: false,
+      },
+    });
+  });
+
+  it("defines profile-owned FDM voxel gap and threshold settings", () => {
+    expect(getViewport3DVisualProfile("interactive-lite").voxelFillRatio).toBe(
+      0.88,
+    );
+    expect(getViewport3DVisualProfile("figure").voxelFillRatio).toBe(0.96);
+    expect(
+      getViewport3DVisualProfile("capture").voxelMagnitudeThreshold,
+    ).toBe(0);
+    expect(getViewport3DVisualProfile("figure").voxelTopography).toEqual({
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
     });
   });
 
@@ -87,4 +109,3 @@ describe("viewport3d visual profiles", () => {
     expect(renderer.toneMappingExposure).toBe(1);
   });
 });
-

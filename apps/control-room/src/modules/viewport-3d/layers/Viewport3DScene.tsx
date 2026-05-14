@@ -1,8 +1,10 @@
 "use client";
 
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import type { AxesHelper, GridHelper, Material } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -18,6 +20,7 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
+import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DTopologyFreshness } from "../viewport3dTopologyStaleness";
 import type {
   Viewport3DMagnetizationTexturePreview,
@@ -48,7 +51,10 @@ import {
   getViewport3DVisualProfile,
   type Viewport3DVisualProfileId,
 } from "../viewport3dVisualProfile";
-import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import {
+  resolveViewport3DMaterialProfile,
+  type Viewport3DMaterialProfile,
+} from "./viewport3DMaterialProfile";
 
 interface Viewport3DSceneProps {
   bounds: Viewport3DBounds | null;
@@ -57,12 +63,15 @@ interface Viewport3DSceneProps {
   colors: Viewport3DColors;
   airboxSettings: VisualizationTargetSettings;
   fdmDomain: FdmGridRenderDomain | null;
+  fdmSurfaceColors: ScalarColorBuffer | null;
+  fieldVector: DecodedFieldVector | null | undefined;
   femDomain: FemManifestRenderDomain;
   fieldModel: Viewport3DFieldRenderModel | null;
   fitRevision: number;
   getObjectSettings: (object: Viewport3DPrimitiveObject) => VisualizationTargetSettings;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
+  maxVectorGlyphs: number;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectDomain: () => void;
@@ -76,6 +85,7 @@ interface Viewport3DSceneProps {
   topologyFreshness: Viewport3DTopologyFreshness;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
   vectorColorMode: string;
+  vectorScale: number;
   vectorStyle: VectorFieldLayerVectorStyle;
   hslReferenceVisible: boolean;
   viewCubeVisible: boolean;
@@ -174,6 +184,8 @@ export function Viewport3DScene({
   colors,
   airboxSettings,
   fdmDomain,
+  fdmSurfaceColors,
+  fieldVector,
   femDomain,
   fieldModel,
   fitRevision,
@@ -181,6 +193,7 @@ export function Viewport3DScene({
   getObjectSettings,
   getPartSettings,
   magnetizationTexturePreviews,
+  maxVectorGlyphs,
   onCameraChange,
   onSelectObject,
   onSelectDomain,
@@ -193,6 +206,7 @@ export function Viewport3DScene({
   topologyFreshness,
   topologyModel,
   vectorColorMode,
+  vectorScale,
   vectorStyle,
   hslReferenceVisible,
   viewCubeVisible,
@@ -251,10 +265,21 @@ export function Viewport3DScene({
       <FdmCuboidLayer
         colors={colors}
         domain={fdmDomain}
+        fieldVector={fieldVector}
+        maxVectorGlyphs={maxVectorGlyphs}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}
         settings={fallbackSettings}
+        surfaceColors={fdmSurfaceColors}
         tracker={tracker}
+        vectorColorMode={vectorColorMode}
+        vectorScale={vectorScale}
+        vectorStyle={vectorStyle}
+        voxelFillRatio={getViewport3DVisualProfile(visualProfileId).voxelFillRatio}
+        voxelMagnitudeThreshold={
+          getViewport3DVisualProfile(visualProfileId).voxelMagnitudeThreshold
+        }
+        voxelTopography={getViewport3DVisualProfile(visualProfileId).voxelTopography}
       />
       <AirboxLayer
         colors={colors}
@@ -292,14 +317,16 @@ export function Viewport3DScene({
         vectorColorMode={vectorColorMode}
         vectorStyle={vectorStyle}
       />
-      <SelectionHighlightLayer bounds={selectionBounds} colors={colors} />
-      <group position={gridSpec.center}>
-        <gridHelper
-          args={[gridSpec.size, gridSpec.divisions, colors.wire, colors.wire]}
-          rotation={[Math.PI / 2, 0, 0]}
-        />
-        <axesHelper args={[gridSpec.axesLength]} />
-      </group>
+      <SelectionHighlightLayer
+        bounds={selectionBounds}
+        colors={colors}
+        materialProfile={materialProfile}
+      />
+      <AxesGridLayer
+        colors={colors}
+        gridSpec={gridSpec}
+        materialProfile={materialProfile}
+      />
       <OrbitCameraControls
         cameraState={cameraState}
         onCameraChange={onCameraChange}
@@ -312,4 +339,54 @@ export function Viewport3DScene({
       />
     </>
   );
+}
+
+function AxesGridLayer({
+  colors,
+  gridSpec,
+  materialProfile,
+}: {
+  colors: Viewport3DColors;
+  gridSpec: Viewport3DGridSpec;
+  materialProfile: Viewport3DMaterialProfile;
+}) {
+  const invalidate = useThree((state) => state.invalidate);
+  const gridRef = useRef<GridHelper>(null);
+  const axesRef = useRef<AxesHelper>(null);
+
+  useEffect(() => {
+    applyHelperMaterialProfile(gridRef.current?.material, materialProfile.grid);
+    applyHelperMaterialProfile(axesRef.current?.material, materialProfile.axes);
+    invalidate();
+  }, [invalidate, materialProfile.axes, materialProfile.grid]);
+
+  return (
+    <group position={gridSpec.center}>
+      <gridHelper
+        args={[gridSpec.size, gridSpec.divisions, colors.wire, colors.wire]}
+        ref={gridRef}
+        rotation={[Math.PI / 2, 0, 0]}
+      />
+      <axesHelper args={[gridSpec.axesLength]} ref={axesRef} />
+    </group>
+  );
+}
+
+function applyHelperMaterialProfile(
+  materialOrMaterials: Material | Material[] | undefined,
+  profile: Viewport3DMaterialProfile["grid" | "axes"],
+): void {
+  const materials = Array.isArray(materialOrMaterials)
+    ? materialOrMaterials
+    : materialOrMaterials
+      ? [materialOrMaterials]
+      : [];
+  for (const material of materials) {
+    material.opacity = profile.opacity;
+    material.transparent = profile.opacity < 1;
+    material.depthTest = profile.depthTest;
+    material.depthWrite = profile.depthWrite;
+    material.toneMapped = profile.toneMapped;
+    material.needsUpdate = true;
+  }
 }

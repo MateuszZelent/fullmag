@@ -374,10 +374,17 @@ async function clickExplorerRow(explorerRow) {
 }
 
 async function verifyObjectInViewportRenderModel(page, objectId) {
-  const viewport = page.locator(
-    `.fm-viewport-3d[data-primitive-object-ids~="${cssAttributeValue(objectId)}"]`,
-  );
-  await viewport.waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+  await waitForCondition("Viewport primitive render model", async () => {
+    const ids = await page
+      .locator(".fm-viewport-3d")
+      .first()
+      .getAttribute("data-primitive-object-ids")
+      .catch(() => "");
+    if (String(ids ?? "").split(/\s+/).includes(objectId)) {
+      return ids;
+    }
+    throw new Error(`primitive ids: ${ids ?? ""}`);
+  });
 }
 
 function logGeometryFlowSuccess(transaction, objectId, externalObjectId) {

@@ -25,6 +25,13 @@ export interface Viewport3DVisualProfile {
   preserveDrawingBuffer: boolean;
   toneMapping: "none" | "aces";
   toneMappingExposure: number;
+  voxelFillRatio: number;
+  voxelMagnitudeThreshold: number;
+  voxelTopography: {
+    amplitudeCells: number;
+    component: "magnitude" | "x" | "y" | "z";
+    enabled: boolean;
+  };
 }
 
 export const DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID: Viewport3DVisualProfileId =
@@ -47,6 +54,13 @@ export const VIEWPORT_3D_VISUAL_PROFILES: Record<
     preserveDrawingBuffer: false,
     toneMapping: "none",
     toneMappingExposure: 1,
+    voxelFillRatio: 0.88,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
+    },
   },
   interactive: {
     id: "interactive",
@@ -61,6 +75,13 @@ export const VIEWPORT_3D_VISUAL_PROFILES: Record<
     preserveDrawingBuffer: false,
     toneMapping: "aces",
     toneMappingExposure: 1.05,
+    voxelFillRatio: 0.92,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
+    },
   },
   balanced: {
     id: "balanced",
@@ -75,6 +96,13 @@ export const VIEWPORT_3D_VISUAL_PROFILES: Record<
     preserveDrawingBuffer: false,
     toneMapping: "aces",
     toneMappingExposure: 1.05,
+    voxelFillRatio: 0.94,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
+    },
   },
   figure: {
     id: "figure",
@@ -89,6 +117,13 @@ export const VIEWPORT_3D_VISUAL_PROFILES: Record<
     preserveDrawingBuffer: false,
     toneMapping: "aces",
     toneMappingExposure: 1.08,
+    voxelFillRatio: 0.96,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
+    },
   },
   capture: {
     id: "capture",
@@ -103,6 +138,13 @@ export const VIEWPORT_3D_VISUAL_PROFILES: Record<
     preserveDrawingBuffer: true,
     toneMapping: "aces",
     toneMappingExposure: 1.08,
+    voxelFillRatio: 0.96,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "z",
+      enabled: false,
+    },
   },
 };
 
@@ -156,4 +198,3 @@ export function configureViewport3DRenderer(
   }
   renderer.outputColorSpace = SRGBColorSpace;
 }
-

@@ -28,7 +28,7 @@ describe("vectorGlyphGeometry", () => {
       { colorMode: "orientation" },
     );
 
-    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [0.5, 0, 0]);
+    expectFloatArrayClose(glyphs.colors ?? new Float32Array(), [1, 0, 0]);
   });
 
   it("uses canonical physical XYZ for orientation coloring", () => {

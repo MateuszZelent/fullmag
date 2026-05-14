@@ -17,6 +17,7 @@ import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import { buildVectorGlyphInstances } from "./vectorGlyphGeometry";
+import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 
 const UNIT_Y = new Vector3(0, 1, 0);
@@ -59,10 +60,12 @@ export function VectorFieldLayer({
   opacity = 1,
   segments,
   style,
+  materialProfile,
   tracker,
 }: {
   colors: Viewport3DColors;
   colorMode?: string;
+  materialProfile?: Viewport3DMaterialProfile["glyphs"];
   opacity?: number;
   segments: Float32Array | null;
   style?: VectorFieldLayerVectorStyle;
@@ -75,7 +78,7 @@ export function VectorFieldLayer({
   const resolvedStyle = resolveVectorFieldLayerStyle({
     colorMode,
     fallbackColor: String(colors.field),
-    opacity,
+    opacity: opacity * (materialProfile?.opacityScale ?? 1),
     style,
   });
   const glyphs = useMemo(
@@ -124,7 +127,7 @@ export function VectorFieldLayer({
           depthTest: glyphPolicy.depthTest,
           opacity: resolvedStyle.materialOpacity,
           side: glyphPolicy.side,
-          toneMapped: false,
+          toneMapped: materialProfile?.toneMapped ?? false,
           transparent:
             glyphPolicy.transparent ||
             resolvedStyle.materialOpacity < 0.99,
@@ -137,6 +140,7 @@ export function VectorFieldLayer({
       resolvedStyle.materialOpacity,
       tracker,
       useInstanceColors,
+      materialProfile?.toneMapped,
     ],
   );
 

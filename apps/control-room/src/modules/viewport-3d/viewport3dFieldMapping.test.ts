@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
+  buildSampledScalarColors,
   buildVertexScalarColors,
   buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
@@ -40,13 +41,19 @@ describe("viewport3dFieldMapping", () => {
 
   it("maps orientation mode through canonical physical XYZ", () => {
     const result = buildVertexScalarColors(
-      vectorField([0, 0, 1]),
-      1,
+      vectorField([
+        1, 0, 0,
+        0, 0, 1,
+      ]),
+      2,
       undefined,
       "orientation",
     );
 
-    expect(Array.from(result?.colors ?? [])).toEqual([1, 1, 1]);
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      1, 0, 0,
+      1, 1, 1,
+    ]);
   });
 
   it("accepts HSLSPHERE aliases for surface orientation coloring", () => {
@@ -76,6 +83,34 @@ describe("viewport3dFieldMapping", () => {
       0, expect.closeTo(0.38), 1,
       1, expect.closeTo(0.38), 0,
     ]);
+  });
+
+  it("maps sampled point indices to compact scalar colors", () => {
+    const result = buildSampledScalarColors(
+      vectorField([
+        -1, 0, 0,
+        0, 0, 1,
+        1, 0, 0,
+      ]),
+      Uint32Array.from([0, 2]),
+      "x",
+    );
+
+    expect(result?.range).toEqual({ max: 1, min: -1 });
+    expect(Array.from(result?.colors ?? [])).toEqual([
+      0, expect.closeTo(0.38), 1,
+      1, expect.closeTo(0.38), 0,
+    ]);
+  });
+
+  it("rejects sampled indices outside field coverage", () => {
+    expect(
+      buildSampledScalarColors(
+        vectorField([1, 0, 0]),
+        Uint32Array.from([0, 1]),
+        "orientation",
+      ),
+    ).toBeNull();
   });
 
   it("keeps monochrome mode on the material color", () => {
