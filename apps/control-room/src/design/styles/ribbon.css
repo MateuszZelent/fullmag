@@ -240,6 +240,34 @@
   padding-right: 10px;
 }
 
+.fm-ribbon-action-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.fm-ribbon-action-detail {
+  max-width: var(--fm-ribbon-action-width);
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 2px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-ribbon-action-detail:hover {
+  border-color: var(--fm-accent);
+  color: var(--fm-accent);
+}
+
 .fm-ribbon-action__icon {
   position: relative;
   display: flex;

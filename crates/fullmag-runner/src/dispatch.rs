@@ -2770,6 +2770,7 @@ fn execute_native_fem(
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
+    let mut paused = false;
     let mut current_stats = backend.snapshot_step_stats(node_count)?;
     ensure_fem_object_scalars(&mut current_stats, plan);
 
@@ -2852,11 +2853,22 @@ fn execute_native_fem(
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
                     }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
+                    match action {
+                        StepAction::Continue => {}
+                        StepAction::Stop => {
+                            cancelled = true;
+                            break;
+                        }
+                        StepAction::Pause => {
+                            paused = true;
+                            break;
+                        }
                     }
                 }
+            }
+
+            if paused {
+                break;
             }
 
             let max_torque = max_torque_from_field(&m, &h_eff);
@@ -3105,13 +3117,23 @@ fn execute_native_fem(
                     if preview_due {
                         last_preview_revision = Some(display_selection.revision);
                     }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
+                    match action {
+                        StepAction::Continue => {}
+                        StepAction::Stop => {
+                            cancelled = true;
+                            break;
+                        }
+                        StepAction::Pause => {
+                            paused = true;
+                            break;
+                        }
                     }
                 }
             }
 
+            if paused {
+                break;
+            }
             let dt_step = dt.min(until_seconds - current_time);
             let interrupt_requested = live
                 .as_ref()
@@ -3206,11 +3228,17 @@ fn execute_native_fem(
                             .revision,
                     );
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                    }
                 }
             }
-            if cancelled {
+            if cancelled || paused {
                 break;
             }
             if default_scalar_trace || scalar_schedules.is_empty() {
@@ -3327,7 +3355,9 @@ fn execute_native_fem(
 
     let final_magnetization = backend.copy_m(node_count)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed

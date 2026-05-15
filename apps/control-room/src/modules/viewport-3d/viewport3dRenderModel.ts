@@ -123,13 +123,20 @@ export function buildViewport3DTopologyRenderModel<
 ): Viewport3DTopologyRenderModel<TPart> | null {
   if (!topology) return null;
 
+  const fallbackVolumeEdgeIndices = buildTetraVolumeEdgeIndices(topology.indices);
+  const airboxVolumeEdgeFallback =
+    airboxParts.length > 0
+      ? buildUnclaimedVolumeEdgeIndices(topology, magneticParts) ??
+        fallbackVolumeEdgeIndices
+      : null;
+
   return {
     airboxParts: airboxParts.map((part) => ({
       part,
-      ...buildPartTopologyModel(part, topology),
+      ...buildPartTopologyModel(part, topology, airboxVolumeEdgeFallback),
     })),
     fallbackSurfaceIndices: buildTetraSurfaceIndices(topology.indices),
-    fallbackVolumeEdgeIndices: buildTetraVolumeEdgeIndices(topology.indices),
+    fallbackVolumeEdgeIndices,
     magneticParts: magneticParts.map((part) => ({
       part,
       ...buildPartTopologyModel(part, topology),
@@ -487,25 +494,152 @@ export function buildPartVolumeEdgeIndices(
 ): Uint32Array | null {
   const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
   const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
-  if (elementCount <= 0) return null;
-
-  const indexStart = elementStart * 4;
-  const indexEnd = Math.min(
-    topology.indices.length,
-    indexStart + elementCount * 4,
-  );
-  if (indexStart >= topology.indices.length || indexEnd <= indexStart) {
-    return null;
+  if (elementCount > 0) {
+    const indexStart = elementStart * 4;
+    const indexEnd = Math.min(
+      topology.indices.length,
+      indexStart + elementCount * 4,
+    );
+    if (indexStart < topology.indices.length && indexEnd > indexStart) {
+      return buildTetraVolumeEdgeIndices(
+        topology.indices.subarray(indexStart, indexEnd),
+      );
+    }
   }
 
-  return buildTetraVolumeEdgeIndices(
-    topology.indices.subarray(indexStart, indexEnd),
-  );
+  return buildPartVolumeEdgeIndicesFromNodes(part, topology);
+}
+
+function buildPartVolumeEdgeIndicesFromNodes(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): Uint32Array | null {
+  const nodeSet = buildPartNodeSet(part, topology.nodeCount);
+  if (!nodeSet) return null;
+
+  const selectedTetraIndices: number[] = [];
+  for (let source = 0; source + 3 < topology.indices.length; source += 4) {
+    const a = topology.indices[source] ?? 0;
+    const b = topology.indices[source + 1] ?? 0;
+    const c = topology.indices[source + 2] ?? 0;
+    const d = topology.indices[source + 3] ?? 0;
+    if (
+      nodeSet.has(a) &&
+      nodeSet.has(b) &&
+      nodeSet.has(c) &&
+      nodeSet.has(d)
+    ) {
+      selectedTetraIndices.push(a, b, c, d);
+    }
+  }
+
+  return selectedTetraIndices.length
+    ? buildTetraVolumeEdgeIndices(new Uint32Array(selectedTetraIndices))
+    : null;
+}
+
+function buildUnclaimedVolumeEdgeIndices(
+  topology: DecodedTopology,
+  claimedParts: readonly Viewport3DSurfacePart[],
+): Uint32Array | null {
+  if (topology.indices.length < 4) return null;
+  if (claimedParts.length === 0) {
+    return buildTetraVolumeEdgeIndices(topology.indices);
+  }
+
+  const claimedElements = new Set<number>();
+  for (const part of claimedParts) {
+    markClaimedElements(part, topology, claimedElements);
+  }
+  if (claimedElements.size === 0) return null;
+
+  const selectedTetraIndices: number[] = [];
+  for (
+    let elementIndex = 0, source = 0;
+    source + 3 < topology.indices.length;
+    elementIndex += 1, source += 4
+  ) {
+    if (claimedElements.has(elementIndex)) continue;
+    selectedTetraIndices.push(
+      topology.indices[source] ?? 0,
+      topology.indices[source + 1] ?? 0,
+      topology.indices[source + 2] ?? 0,
+      topology.indices[source + 3] ?? 0,
+    );
+  }
+
+  return selectedTetraIndices.length
+    ? buildTetraVolumeEdgeIndices(new Uint32Array(selectedTetraIndices))
+    : null;
+}
+
+function markClaimedElements(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+  claimedElements: Set<number>,
+): void {
+  const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
+  const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
+  const topologyElementCount = Math.floor(topology.indices.length / 4);
+  if (elementCount > 0 && elementStart < topologyElementCount) {
+    const end = Math.min(topologyElementCount, elementStart + elementCount);
+    for (let elementIndex = elementStart; elementIndex < end; elementIndex += 1) {
+      claimedElements.add(elementIndex);
+    }
+    return;
+  }
+
+  const nodeSet = buildPartNodeSet(part, topology.nodeCount);
+  if (!nodeSet) return;
+  for (
+    let elementIndex = 0, source = 0;
+    source + 3 < topology.indices.length;
+    elementIndex += 1, source += 4
+  ) {
+    const a = topology.indices[source] ?? 0;
+    const b = topology.indices[source + 1] ?? 0;
+    const c = topology.indices[source + 2] ?? 0;
+    const d = topology.indices[source + 3] ?? 0;
+    if (
+      nodeSet.has(a) &&
+      nodeSet.has(b) &&
+      nodeSet.has(c) &&
+      nodeSet.has(d)
+    ) {
+      claimedElements.add(elementIndex);
+    }
+  }
+}
+
+function buildPartNodeSet(
+  part: Viewport3DSurfacePart,
+  nodeCount: number,
+): Set<number> | null {
+  if (part.node_indices?.length) {
+    return new Set(
+      part.node_indices.filter(
+        (nodeIndex) =>
+          Number.isInteger(nodeIndex) && nodeIndex >= 0 && nodeIndex < nodeCount,
+      ),
+    );
+  }
+
+  const start = Math.max(0, Math.floor(part.node_start ?? 0));
+  const count = Math.max(0, Math.floor(part.node_count ?? 0));
+  if (count <= 0 || start >= nodeCount) return null;
+
+  const end = Math.min(nodeCount, start + count);
+  const nodes = new Set<number>();
+  for (let nodeIndex = start; nodeIndex < end; nodeIndex += 1) {
+    nodes.add(nodeIndex);
+  }
+  return nodes;
 }
 
 function buildPartTopologyModel(
   part: Viewport3DSurfacePart,
   topology: DecodedTopology,
+  fallbackVolumeEdgeIndices: Uint32Array | null = null,
 ): Pick<
   Viewport3DTopologyPartRenderModel,
   | "edgeIndices"
@@ -520,7 +654,8 @@ function buildPartTopologyModel(
     surfaceNodeSelection: surfaceIndices
       ? { nodeIndices: uniqueSortedIndices(surfaceIndices) }
       : null,
-    volumeEdgeIndices: buildPartVolumeEdgeIndices(part, topology),
+    volumeEdgeIndices:
+      buildPartVolumeEdgeIndices(part, topology) ?? fallbackVolumeEdgeIndices,
   };
 }
 

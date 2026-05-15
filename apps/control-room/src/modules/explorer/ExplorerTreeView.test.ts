@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  SIMULATION_COMMANDS_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+} from "@/kernel/api/apiPaths";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
+import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
+import type { KernelApi } from "@/kernel/types";
+
 import type { ExplorerNode } from "./explorerTypes";
 import {
+  contextCommandItemsForNode,
   flattenVisibleExplorerRows,
   sliceVisibleExplorerRows,
 } from "./ExplorerTreeView";
@@ -73,6 +85,126 @@ describe("flattenVisibleExplorerRows", () => {
       bottomPadding: 710,
       start: 24,
       topPadding: 240,
+    });
+  });
+
+  it("resolves context command disabled state from the command registry", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+    const kernel = {
+      api: { commands: { submit: async () => ({ accepted: true }) } },
+      commands,
+    } as unknown as KernelApi;
+    const node: ExplorerNode = {
+      contextCommands: ["study.pause", "study.run"],
+      id: "model:study",
+      kind: "study.root",
+      label: "Study",
+      parentId: null,
+    };
+
+    const items = contextCommandItemsForNode({
+      kernel,
+      node,
+      resourceData: {
+        [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: {
+            binary_fields: true,
+            explicit_topology: false,
+          },
+          domain: {
+            discretization: "fdm",
+          },
+          resources: {
+            mesh_revision: 0,
+            scene_revision: 1,
+          },
+        },
+        [SIMULATION_COMMANDS_PATH]: { commands: [] },
+        [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+        [SIMULATION_STAGES_EXECUTION_PATH]: {
+          active_stage_index: null,
+          revision: 1,
+          runtime_state: "idle",
+          stages: [],
+        },
+      },
+    });
+
+    expect(
+      items.find((item) => item.command.id === "study.pause"),
+    ).toMatchObject({
+      disabled: true,
+      disabledReason: "Runtime is not running.",
+    });
+    expect(items.find((item) => item.command.id === "study.run")).toMatchObject({
+      disabled: false,
+    });
+  });
+
+  it("resolves context command active state from the command registry", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+    const kernel = {
+      api: { commands: { submit: async () => ({ accepted: true }) } },
+      commands,
+    } as unknown as KernelApi;
+    const node: ExplorerNode = {
+      contextCommands: ["study.run"],
+      id: "model:study",
+      kind: "study.root",
+      label: "Study",
+      parentId: null,
+    };
+
+    const items = contextCommandItemsForNode({
+      kernel,
+      node,
+      resourceData: {
+        [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          capabilities: {
+            binary_fields: true,
+            explicit_topology: false,
+          },
+          domain: {
+            discretization: "fdm",
+          },
+          resources: {
+            mesh_revision: 0,
+            scene_revision: 1,
+          },
+        },
+        [SIMULATION_COMMANDS_PATH]: {
+          commands: [
+            {
+              command_id: "cmd-run",
+              kind: "solve",
+              status: "running",
+            },
+          ],
+        },
+        [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+        [SIMULATION_STAGES_EXECUTION_PATH]: {
+          active_stage_index: null,
+          revision: 1,
+          runtime_state: "idle",
+          stages: [],
+        },
+      },
+    });
+
+    expect(items.find((item) => item.command.id === "study.run")).toMatchObject({
+      active: true,
+      activeResource: expect.objectContaining({
+        commandId: "cmd-run",
+        kind: "command",
+      }),
     });
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isViewport3DTopologyCurrent,
   resolveStaleTopologyVisualizationSettings,
+  resolveUnknownTopologyProvenanceRefreshKey,
   resolveViewport3DTopologyFreshness,
 } from "./viewport3dTopologyStaleness";
 import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
@@ -59,5 +60,20 @@ describe("viewport3dTopologyStaleness", () => {
       visible: false,
       wireframeVisible: false,
     });
+  });
+
+  it("requests one manifest refresh when loaded topology provenance is unknown", () => {
+    expect(
+      resolveUnknownTopologyProvenanceRefreshKey(
+        { revision: 12 },
+        { revision: 4, source_scene_revision: null },
+      ),
+    ).toBe("12:4");
+    expect(
+      resolveUnknownTopologyProvenanceRefreshKey(
+        { revision: 12 },
+        { revision: 4, source_scene_revision: 12 },
+      ),
+    ).toBeNull();
   });
 });

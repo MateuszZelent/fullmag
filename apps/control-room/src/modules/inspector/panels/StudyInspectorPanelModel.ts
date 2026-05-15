@@ -1,4 +1,5 @@
 import type {
+  CommandQueueStatusResource,
   CurrentRunResource,
   JsonObject,
   SceneResource,
@@ -12,6 +13,7 @@ export interface StudyStageSnapshot {
   index: number;
   kind: string;
   maxSteps: string | null;
+  stageId: string | null;
   status: string;
   torqueTolerance: string | null;
   untilSeconds: string | null;
@@ -41,6 +43,10 @@ export interface StudyInspectorModel {
   requested: StudyInspectorSnapshot["requested"];
   runtime: {
     activeStageLabel: string;
+    commandBadge: string;
+    commandError: string | null;
+    commandId: string | null;
+    commandLabel: string;
     maxTorque: string;
     progressPercent: number;
     runId: string;
@@ -51,6 +57,7 @@ export interface StudyInspectorModel {
 }
 
 interface ResolveStudyInspectorModelInput {
+  commandQueue?: CommandQueueStatusResource | null;
   currentRun: CurrentRunResource | null;
   selectedNodeId: string | null;
   snapshot: StudyInspectorSnapshot;
@@ -82,6 +89,7 @@ export function studySnapshotFromScene(
 }
 
 export function resolveStudyInspectorModel({
+  commandQueue,
   currentRun,
   selectedNodeId,
   snapshot,
@@ -90,28 +98,37 @@ export function resolveStudyInspectorModel({
 }: ResolveStudyInspectorModelInput): StudyInspectorModel {
   const activeStageIndex =
     stageExecution?.active_stage_index ?? currentRun?.active_stage_index ?? null;
-  const selectedStageIndex = selectedStageIndexFromNode(selectedNodeId);
+  const selectedStageIndex = selectedStageIndexFromNode(
+    selectedNodeId,
+    stageExecution,
+  );
+  const activeStageSnapshot = snapshot.stages[activeStageIndex ?? -1] ?? null;
   const progressPercent = resolveProgressPercent({
     currentRun,
     solverStatus,
-    selectedStage:
-      snapshot.stages[selectedStageIndex ?? activeStageIndex ?? -1] ?? null,
+    selectedStage: activeStageSnapshot,
   });
   const stages = snapshot.stages.map((stage) => ({
     ...stage,
     label: stageLabel(stage),
     progressPercent: stage.index === activeStageIndex ? progressPercent : 0,
+    stageId: stageExecution?.stages[stage.index]?.stage_id ?? stage.stageId,
     status: stageExecution?.stage_statuses[stage.index] ?? stage.status,
   }));
   const selectedStage =
     stages[selectedStageIndex ?? activeStageIndex ?? -1] ?? null;
   const activeStage = stages[activeStageIndex ?? -1] ?? null;
+  const commandSummary = resolveCommandSummary(commandQueue);
 
   return {
     boundary: snapshot.boundary,
     requested: snapshot.requested,
     runtime: {
       activeStageLabel: activeStage ? activeStage.label : "No active stage",
+      commandBadge: commandSummary.badge,
+      commandError: commandSummary.error,
+      commandId: commandSummary.commandId,
+      commandLabel: commandSummary.label,
       maxTorque: formatTorque(solverStatus?.max_torque),
       progressPercent,
       runId: currentRun?.run_id ?? "none",
@@ -126,6 +143,71 @@ export function resolveStudyInspectorModel({
   };
 }
 
+type CommandQueueEntry = CommandQueueStatusResource["commands"][number];
+
+interface CommandSummary {
+  badge: string;
+  commandId: string | null;
+  error: string | null;
+  label: string;
+}
+
+const ACTIVE_COMMAND_STATUSES = new Set([
+  "accepted",
+  "dispatched",
+  "pending",
+  "queued",
+  "running",
+]);
+const PROBLEM_COMMAND_STATUSES = new Set(["failed", "rejected"]);
+
+export function resolveCommandSummary(
+  commandQueue: CommandQueueStatusResource | null | undefined,
+): CommandSummary {
+  if (!commandQueue) {
+    return {
+      badge: "pending",
+      commandId: null,
+      error: null,
+      label: "Command queue pending",
+    };
+  }
+
+  const commands = [...commandQueue.commands].reverse();
+  const problem = commands.find((command) =>
+    PROBLEM_COMMAND_STATUSES.has(command.status),
+  );
+  if (problem) {
+    return commandSummaryFromEntry(problem);
+  }
+
+  const active = commands.find((command) =>
+    ACTIVE_COMMAND_STATUSES.has(command.status),
+  );
+  if (active) {
+    return commandSummaryFromEntry(active);
+  }
+
+  const latest = commands[0] ?? null;
+  return latest
+    ? commandSummaryFromEntry(latest)
+    : {
+        badge: "idle",
+        commandId: null,
+        error: null,
+        label: "No queued commands",
+      };
+}
+
+function commandSummaryFromEntry(command: CommandQueueEntry): CommandSummary {
+  return {
+    badge: command.status,
+    commandId: command.command_id,
+    error: command.error ?? null,
+    label: `${titleCase(command.kind)} ${command.status}`,
+  };
+}
+
 function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
   const stage = asRecord(value);
   const kind = stringValue(stage?.kind ?? stage?.entrypoint_kind, "stage");
@@ -136,6 +218,7 @@ function stageSnapshot(value: unknown, index: number): StudyStageSnapshot {
     index,
     kind,
     maxSteps: optionalScalarText(stage?.max_steps),
+    stageId: optionalString(stage?.stage_id ?? stage?.id),
     status: "queued",
     torqueTolerance: optionalScalarText(stage?.torque_tolerance),
     untilSeconds: optionalScalarText(stage?.until_seconds),
@@ -170,11 +253,20 @@ function resolveProgressPercent({
   return Math.max(0, Math.min(100, (steps / maxSteps) * 100));
 }
 
-function selectedStageIndexFromNode(nodeId: string | null): number | null {
-  const match = nodeId?.match(/:stage:(\d+)$/);
+function selectedStageIndexFromNode(
+  nodeId: string | null,
+  stageExecution: StageExecutionResource | null,
+): number | null {
+  const match = nodeId?.match(/:stage:([^:]+)$/);
   if (!match) return null;
-  const index = Number(match[1]);
-  return Number.isInteger(index) && index >= 0 ? index : null;
+  const token = match[1];
+  const index = Number(token);
+  if (Number.isInteger(index) && index >= 0) return index;
+  const runtimeIndex = stageExecution?.stages.findIndex(
+    (stage) => stage.stage_id === token,
+  );
+  if (runtimeIndex !== undefined && runtimeIndex >= 0) return runtimeIndex;
+  return null;
 }
 
 function formatExternalField(value: unknown): string {

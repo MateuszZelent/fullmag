@@ -68,6 +68,18 @@ export const viewport3dManifest: ModuleManifest = {
         },
       },
       {
+        id: "viewport-3d.open-camera-dialog",
+        title: "Open 3D Camera Controls",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () => viewport3dStore.getSnapshot().widgets.cameraDialogOpen,
+        run: () => {
+          viewport3dStore.setCameraDialogOpen(true);
+          return { status: "completed" };
+        },
+      },
+      {
         id: "viewport-3d.capture-frame",
         title: "Capture 3D Frame",
         group: "viewport-3d",
@@ -123,6 +135,7 @@ export const viewport3dManifest: ModuleManifest = {
             viewport3dStore.getSnapshot().widgets.cameraProjection;
           const nextProjection =
             currentProjection === "orthographic" ? "perspective" : "orthographic";
+          viewport3dStore.setCameraProjection(nextProjection);
           if (context.visualizationSync) {
             context.visualizationSync.queuePatch({
               camera: { projection: nextProjection },

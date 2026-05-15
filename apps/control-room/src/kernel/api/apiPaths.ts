@@ -15,6 +15,10 @@ export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );
 
+export const DATA_SCALARS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/scalars",
+);
+
 export const DATA_DOMAIN_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/meta",
 );
@@ -25,6 +29,14 @@ export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
 
 export const DATA_FIELD_VECTOR_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/samples/vector",
+);
+
+export const DIAGNOSTICS_ENGINE_LOG_PATH = openApiV2Path(
+  "/v2/sessions/current/diagnostics/engine-log",
+);
+
+export const DIAGNOSTICS_GPU_PATH = openApiV2Path(
+  "/v2/sessions/current/diagnostics/gpu",
 );
 
 export const MESHING_SHARED_DOMAIN_MANIFEST_PATH = openApiV2Path(
@@ -229,4 +241,28 @@ export const SIMULATION_SOLVER_ENERGIES_CURRENT_PATH = openApiV2Path(
 
 export const SIMULATION_SOLVER_ENERGIES_HISTORY_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/solver/energies/history",
+);
+
+export const PERSISTENCE_CHECKPOINTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/checkpoints",
+);
+
+export const PERSISTENCE_CHECKPOINT_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}",
+);
+
+export const PERSISTENCE_CHECKPOINT_RESTORE_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore",
+);
+
+export const PERSISTENCE_EXPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/exports",
+);
+
+export const PERSISTENCE_IMPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/imports",
+);
+
+export const PERSISTENCE_IMPORT_INSPECTIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/persistence/imports/inspections",
 );

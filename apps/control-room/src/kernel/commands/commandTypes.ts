@@ -28,6 +28,12 @@ export interface CommandResult {
   message?: string;
 }
 
+export interface CommandActiveResource {
+  kind: "command";
+  commandId: string;
+  label?: string;
+}
+
 export interface CommandContribution {
   id: CommandId;
   title: string;
@@ -42,5 +48,7 @@ export interface CommandContribution {
   disabledReason?: (context: CommandContext) => string | null;
   /** When absent the command is rendered inactive. */
   isActive?: (context: CommandContext) => boolean;
+  /** Optional resource backing the active command state. */
+  activeResource?: (context: CommandContext) => CommandActiveResource | null;
   run: (context: CommandContext) => CommandResult | Promise<CommandResult>;
 }

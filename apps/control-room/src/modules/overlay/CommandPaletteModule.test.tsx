@@ -8,6 +8,7 @@ import {
   CommandPaletteView,
   executePaletteCommand,
   filterPaletteCommands,
+  resolvePaletteCommandItems,
 } from "./CommandPaletteModule";
 import { overlayManifest } from "./manifest";
 
@@ -44,6 +45,34 @@ describe("CommandPaletteModule", () => {
     expect(html).toContain("Command Palette");
     expect(html).toContain("Expand Explorer");
     expect(html).toContain("Ctrl+Shift+P");
+  });
+
+  it("renders disabled command reasons from the active command context", () => {
+    const commands = new CommandRegistry();
+    commands.register({
+      disabledReason: () => "Session status is unavailable.",
+      group: "study",
+      id: "study.run",
+      isEnabled: () => false,
+      scope: "runtime",
+      title: "Compute Study",
+      run: () => ({ status: "completed" }),
+    });
+
+    const html = renderToStaticMarkup(
+      <CommandPaletteView
+        commandContext={{ source: "palette" }}
+        commands={commands.all()}
+        isOpen
+        query=""
+        onClose={() => undefined}
+        onExecute={() => undefined}
+        onQueryChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Compute Study");
+    expect(html).toContain("Session status is unavailable.");
   });
 
   it("filters by title, group, shortcut, and id", () => {
@@ -88,6 +117,91 @@ describe("CommandPaletteModule", () => {
     });
 
     expect(run).toHaveBeenCalledWith({ source: "palette" });
+  });
+
+  it("resolves disabled command state for palette parity with other renderers", () => {
+    const items = resolvePaletteCommandItems(
+      [
+        {
+          disabledReason: () => "Runtime is already active.",
+          group: "study",
+          id: "study.run",
+          isEnabled: () => false,
+          scope: "runtime",
+          title: "Compute Study",
+          run: () => ({ status: "completed" }),
+        },
+      ],
+      { source: "palette" },
+    );
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        disabled: true,
+        disabledReason: "Runtime is already active.",
+      }),
+    ]);
+  });
+
+  it("resolves active command state for palette parity with other renderers", () => {
+    const items = resolvePaletteCommandItems(
+      [
+        {
+          activeResource: () => ({
+            commandId: "cmd-run",
+            kind: "command",
+          }),
+          group: "study",
+          id: "study.run",
+          isActive: () => true,
+          scope: "runtime",
+          title: "Compute Study",
+          run: () => ({ status: "completed" }),
+        },
+      ],
+      { source: "palette" },
+    );
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        active: true,
+        activeResource: expect.objectContaining({ commandId: "cmd-run" }),
+        disabled: false,
+      }),
+    ]);
+  });
+
+  it("renders active command badges in the palette", () => {
+    const commands = new CommandRegistry();
+    commands.register({
+      group: "study",
+      id: "study.run",
+      activeResource: () => ({
+        commandId: "cmd-run",
+        kind: "command",
+      }),
+      isActive: () => true,
+      scope: "runtime",
+      title: "Compute Study",
+      run: () => ({ status: "completed" }),
+    });
+
+    const html = renderToStaticMarkup(
+      <CommandPaletteView
+        commandContext={{ source: "palette" }}
+        commands={commands.all()}
+        isOpen
+        query=""
+        onClose={() => undefined}
+        onExecute={() => undefined}
+        onQueryChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Compute Study");
+    expect(html).toContain("active");
+    expect(html).toContain("Detail");
+    expect(html).toContain('data-active="true"');
   });
 
   it("keeps the command palette shortcut as a toggle command", () => {

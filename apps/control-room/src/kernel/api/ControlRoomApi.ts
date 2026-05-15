@@ -4,6 +4,9 @@ import {
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_VECTOR_PATH,
   EXPECTED_API_CONTRACT_VERSION,
+  DATA_SCALARS_PATH,
+  DIAGNOSTICS_ENGINE_LOG_PATH,
+  DIAGNOSTICS_GPU_PATH,
   MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -44,6 +47,12 @@ import {
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_UNIVERSE_PATH,
+  PERSISTENCE_CHECKPOINT_PATH,
+  PERSISTENCE_CHECKPOINT_RESTORE_PATH,
+  PERSISTENCE_CHECKPOINTS_PATH,
+  PERSISTENCE_EXPORTS_PATH,
+  PERSISTENCE_IMPORT_INSPECTIONS_PATH,
+  PERSISTENCE_IMPORTS_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
@@ -62,17 +71,25 @@ import type {
   BinaryResourceResult,
   AuthoringTransactionRequest,
   AuthoringTransactionResponse,
+  CheckpointCreateRequest,
+  CheckpointCreateResponse,
+  CheckpointEntry,
+  CheckpointListResource,
+  CheckpointRestoreRequest,
+  CheckpointRestoreResponse,
   CommandDetailResource,
   CommandQueueStatusResource,
   CommandResponse,
   CurrentRunResource,
   DomainMetaResource,
+  EngineLogResource,
   FieldVectorQuery,
   GeometryCapabilitiesResource,
   GeometryDiagnosticsResource,
   GeometryRealizationRequest,
   GeometryRealizationResource,
   GeometryValidationResource,
+  GpuTelemetryResource,
   LiveStatusResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
@@ -110,7 +127,15 @@ import type {
   RegionListResource,
   RegionPatchRequest,
   RequestOptions,
+  ScalarWindowQuery,
+  ScalarWindowResource,
   SceneResource,
+  SessionExportRequest,
+  SessionExportResponse,
+  SessionImportCommitRequest,
+  SessionImportCommitResponse,
+  SessionImportInspectRequest,
+  SessionImportInspectResponse,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverStatusResource,
@@ -163,7 +188,7 @@ export class ControlRoomApiError extends Error {
 
 export class ControlRoomApi {
   private readonly baseUrl: string;
-  private readonly diagnostics: RequestDiagnosticsController | null;
+  private readonly requestDiagnostics: RequestDiagnosticsController | null;
   private readonly fetchImpl: FetchLike;
   private readonly maxGetRetries: number;
   private readonly requestIdFactory: () => string;
@@ -216,6 +241,27 @@ export class ControlRoomApi {
           options,
         ),
     },
+    scalars: {
+      window: (
+        query: ScalarWindowQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<ScalarWindowResource>(
+          DATA_SCALARS_PATH,
+          options,
+          { query: scalarWindowQueryParams(query) },
+        ),
+    },
+  };
+
+  readonly diagnostics = {
+    engineLog: (options?: RequestOptions) =>
+      this.requestJson<EngineLogResource>(
+        DIAGNOSTICS_ENGINE_LOG_PATH,
+        options,
+      ),
+    gpuTelemetry: (options?: RequestOptions) =>
+      this.requestJson<GpuTelemetryResource>(DIAGNOSTICS_GPU_PATH, options),
   };
 
   readonly meshing = {
@@ -540,6 +586,63 @@ export class ControlRoomApi {
       ),
   };
 
+  readonly persistence = {
+    checkpoints: {
+      create: (request: CheckpointCreateRequest, options?: RequestOptions) =>
+        this.postJson<CheckpointCreateResponse, CheckpointCreateRequest>(
+          PERSISTENCE_CHECKPOINTS_PATH,
+          request,
+          options,
+        ),
+      detail: (checkpointId: string, options?: RequestOptions) =>
+        this.requestJson<CheckpointEntry>(
+          PERSISTENCE_CHECKPOINT_PATH,
+          options,
+          { path: { checkpoint_id: checkpointId } },
+        ),
+      list: (options?: RequestOptions) =>
+        this.requestJson<CheckpointListResource>(
+          PERSISTENCE_CHECKPOINTS_PATH,
+          options,
+        ),
+      restore: (
+        checkpointId: string,
+        request: CheckpointRestoreRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<CheckpointRestoreResponse, CheckpointRestoreRequest>(
+          PERSISTENCE_CHECKPOINT_RESTORE_PATH,
+          request,
+          options,
+          { path: { checkpoint_id: checkpointId } },
+        ),
+    },
+    exports: {
+      create: (request: SessionExportRequest, options?: RequestOptions) =>
+        this.postJson<SessionExportResponse, SessionExportRequest>(
+          PERSISTENCE_EXPORTS_PATH,
+          request,
+          options,
+        ),
+    },
+    imports: {
+      commit: (request: SessionImportCommitRequest, options?: RequestOptions) =>
+        this.postJson<SessionImportCommitResponse, SessionImportCommitRequest>(
+          PERSISTENCE_IMPORTS_PATH,
+          request,
+          options,
+        ),
+      inspect: (
+        request: SessionImportInspectRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<
+          SessionImportInspectResponse,
+          SessionImportInspectRequest
+        >(PERSISTENCE_IMPORT_INSPECTIONS_PATH, request, options),
+    },
+  };
+
   readonly simulation = {
     currentRun: (options?: RequestOptions) =>
       this.requestJson<CurrentRunResource>(
@@ -622,7 +725,7 @@ export class ControlRoomApi {
     requestIdFactory = () => crypto.randomUUID(),
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
-    this.diagnostics = diagnostics ?? null;
+    this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
     this.maxGetRetries = maxGetRetries;
     this.requestIdFactory = requestIdFactory;
@@ -787,7 +890,7 @@ export class ControlRoomApi {
     }
 
     const buffer = await response.arrayBuffer();
-    this.diagnostics?.record({
+    this.requestDiagnostics?.record({
       byteLength: buffer.byteLength,
       channel: "http",
       contentType: response.headers.get("content-type"),
@@ -834,7 +937,7 @@ export class ControlRoomApi {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        this.diagnostics?.record({
+        this.requestDiagnostics?.record({
           byteLength: byteLengthFromBody(init.body),
           channel: "http",
           contentType: headers.get("content-type"),
@@ -860,11 +963,17 @@ export class ControlRoomApi {
         const accepted =
           (response.ok || acceptedStatuses.has(response.status)) &&
           !contractVersionError;
-        this.diagnostics?.record({
+        const responseDetail = await resolveResponseDiagnosticDetail({
+          attempt,
+          method,
+          path,
+          response,
+        });
+        this.requestDiagnostics?.record({
           byteLength: byteLengthFromHeaders(response.headers),
           channel: "http",
           contentType: response.headers.get("content-type"),
-          detail: `attempt ${attempt}`,
+          detail: responseDetail,
           direction: "rx",
           durationMs: Date.now() - started,
           method,
@@ -898,7 +1007,7 @@ export class ControlRoomApi {
       }
     }
 
-    this.diagnostics?.record({
+    this.requestDiagnostics?.record({
       byteLength: null,
       channel: "http",
       contentType: null,
@@ -984,6 +1093,17 @@ function pathFromUrl(url: string): string {
   }
 }
 
+function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
+  return {
+    columns:
+      query.columns && query.columns.length > 0
+        ? query.columns.join(",")
+        : undefined,
+    limit: query.limit,
+    since_revision: query.sinceRevision,
+  };
+}
+
 function byteLengthFromHeaders(headers: Headers): number | null {
   const contentLength = headers.get("content-length");
   if (!contentLength) {
@@ -1020,6 +1140,46 @@ function byteLengthFromBody(body: BodyInit | null | undefined): number | null {
   }
 
   return null;
+}
+
+async function resolveResponseDiagnosticDetail({
+  attempt,
+  method,
+  path,
+  response,
+}: {
+  attempt: number;
+  method: string;
+  path: string;
+  response: Response;
+}): Promise<string> {
+  const base = `attempt ${attempt}`;
+  if (method !== "POST" || path !== SIMULATION_COMMANDS_PATH) {
+    return base;
+  }
+
+  try {
+    const payload = (await response.clone().json()) as Record<string, unknown>;
+    const details = [base];
+    const commandId = stringField(payload.command_id);
+    if (commandId) {
+      details.push(`command_id=${commandId}`);
+    }
+    if (typeof payload.accepted === "boolean") {
+      details.push(`accepted=${payload.accepted}`);
+    }
+    const error = stringField(payload.error);
+    if (error) {
+      details.push(`error=${error}`);
+    }
+    return details.join("; ");
+  } catch {
+    return base;
+  }
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function buildApiUrl(

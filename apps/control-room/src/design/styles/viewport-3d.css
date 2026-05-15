@@ -104,3 +104,153 @@
   white-space: nowrap;
   backdrop-filter: blur(4px);
 }
+
+.fm-viewport-camera-dialog.fm-dialog {
+  width: min(520px, calc(100vw - 24px));
+  max-height: min(760px, calc(100vh - 24px));
+  transform: none;
+}
+
+.fm-viewport-camera-dialog__header {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.fm-viewport-camera-dialog__header:active {
+  cursor: grabbing;
+}
+
+.fm-viewport-camera-dialog__close {
+  width: 2rem;
+  height: 2rem;
+}
+
+.fm-viewport-camera-dialog__body {
+  display: grid;
+  gap: var(--fm-space-4);
+  min-width: 0;
+  overflow: auto;
+  padding: 0 var(--fm-space-5);
+}
+
+.fm-viewport-camera-dialog__live {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--fm-space-2);
+}
+
+.fm-viewport-camera-dialog__live-item {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-2);
+}
+
+.fm-viewport-camera-dialog__live-item span {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-viewport-camera-dialog__live-item strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.fm-viewport-camera-dialog__form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--fm-space-3);
+}
+
+.fm-viewport-camera-dialog__vector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--fm-space-2);
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  padding: var(--fm-space-3);
+}
+
+.fm-viewport-camera-dialog__vector legend {
+  padding: 0 var(--fm-space-1);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 650;
+}
+
+.fm-viewport-camera-dialog__axis-field,
+.fm-viewport-camera-dialog__field {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+}
+
+.fm-viewport-camera-dialog__field {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-3);
+}
+
+.fm-viewport-camera-dialog__axis-field input,
+.fm-viewport-camera-dialog__field input,
+.fm-viewport-camera-dialog__field select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-2);
+}
+
+.fm-viewport-camera-dialog__input-with-unit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--fm-space-2);
+  align-items: center;
+}
+
+.fm-viewport-camera-dialog__input-with-unit small {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-viewport-camera-dialog__error {
+  border: 1px solid var(--fm-danger);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-danger) 12%, var(--fm-bg-panel));
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  padding: var(--fm-space-3);
+}
+
+@media (max-width: 720px) {
+  .fm-viewport-camera-dialog__live,
+  .fm-viewport-camera-dialog__form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fm-viewport-camera-dialog__vector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

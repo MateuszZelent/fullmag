@@ -22,8 +22,20 @@ export type CommandDetailResource = components["schemas"]["CommandDetailResource
 export type CommandQueueStatusResource =
   components["schemas"]["CommandQueueStatusResource"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
+export type CheckpointCreateRequest =
+  components["schemas"]["CheckpointCreateRequest"];
+export type CheckpointCreateResponse =
+  components["schemas"]["CheckpointCreateResponse"];
+export type CheckpointEntry = components["schemas"]["CheckpointEntry"];
+export type CheckpointListResource =
+  components["schemas"]["CheckpointListResponse"];
+export type CheckpointRestoreRequest =
+  components["schemas"]["CheckpointRestoreRequest"];
+export type CheckpointRestoreResponse =
+  components["schemas"]["CheckpointRestoreResponse"];
 export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
+export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
 export type GeometryCapabilitiesResource = JsonValue;
 export type GeometryDiagnosticsResource = JsonValue;
@@ -31,6 +43,8 @@ export type GeometryRealizationRequest =
   components["schemas"]["GeometryRealizationRequest"];
 export type GeometryRealizationResource = JsonValue;
 export type GeometryValidationResource = JsonValue;
+export type GpuTelemetryResource =
+  components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
@@ -204,6 +218,28 @@ export interface ObjectMetricsResource {
   time_seconds: number;
 }
 export type SceneResource = JsonObject;
+export type RuntimeCommandPrecondition =
+  components["schemas"]["RuntimeCommandPrecondition"];
+export type RuntimeCommandTarget =
+  components["schemas"]["RuntimeCommandTarget"];
+export type ScalarWindowResource = components["schemas"]["ScalarWindow"];
+export interface ScalarWindowQuery {
+  columns?: string[];
+  limit?: number;
+  sinceRevision?: number;
+}
+export type SessionExportRequest =
+  components["schemas"]["SessionExportRequest"];
+export type SessionExportResponse =
+  components["schemas"]["SessionExportResponse"];
+export type SessionImportCommitRequest =
+  components["schemas"]["SessionImportCommitRequest"];
+export type SessionImportCommitResponse =
+  components["schemas"]["SessionImportCommitResponse"];
+export type SessionImportInspectRequest =
+  components["schemas"]["SessionImportInspectRequest"];
+export type SessionImportInspectResponse =
+  components["schemas"]["SessionImportInspectResponse"];
 export type StructuredCommandRequest =
   components["schemas"]["StructuredCommandRequest"];
 export type UniversePatchRequest = components["schemas"]["UniversePatchRequest"];

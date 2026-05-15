@@ -19,6 +19,7 @@ export interface WorkspaceLayout {
 }
 
 export const WORKSPACE_LAYOUT_STORAGE_KEY = "fullmag.workspace.layout.v1";
+export const WORKSPACE_LAYOUT_RESTORED_EVENT = "fullmag:workspace-layout-restored";
 
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
   columns: [

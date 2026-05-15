@@ -185,6 +185,38 @@
   font-family: var(--fm-font-ui);
 }
 
+.fm-study-command-link {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--fm-space-1);
+  border: 0;
+  background: transparent;
+  color: var(--fm-accent);
+  cursor: pointer;
+  font: inherit;
+  overflow: hidden;
+  padding: 0;
+}
+
+.fm-study-command-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-study-command-link:hover {
+  color: var(--fm-accent-strong);
+}
+
+.fm-study-command-link:focus-visible {
+  border-radius: var(--fm-radius-sm);
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+  outline-offset: 2px;
+}
+
 /* Status-colored values */
 .fm-inspector-field-row__value[data-status="ready"],
 .fm-inspector-field-row__value[data-status="success"] {
@@ -847,6 +879,67 @@
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
   padding: 1px var(--fm-space-1);
+}
+
+.fm-study-checkpoint-list {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin-bottom: var(--fm-space-3);
+}
+
+.fm-study-checkpoint-list__item {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  padding: var(--fm-space-2);
+  text-align: left;
+}
+
+.fm-study-checkpoint-list__item[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 60%, var(--fm-border-subtle));
+  box-shadow: inset 2px 0 0 var(--fm-accent);
+}
+
+.fm-study-checkpoint-list__item span,
+.fm-study-checkpoint-list__item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-study-checkpoint-list__item small {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: 10px;
+}
+
+.fm-study-file-input {
+  width: 100%;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  padding: var(--fm-space-2);
+}
+
+.fm-study-select {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin-top: var(--fm-space-3);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-study-select select {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  padding: var(--fm-space-2);
 }
 
 .fm-inspector-section__item {

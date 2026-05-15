@@ -15,7 +15,7 @@ pub struct RuntimeCommandIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_intent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_at_unix_ms: Option<u128>,
+    pub requested_at_unix_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -29,6 +29,9 @@ pub enum RuntimeCommandTarget {
     CurrentStage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stage_id: Option<String>,
+    },
+    StageIndex {
+        stage_index: u32,
     },
     StageId {
         stage_id: String,
@@ -56,7 +59,7 @@ pub struct RuntimeCommandPrecondition {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StructuredCommandRequest {
     Run {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
         until_seconds: f64,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,7 +70,7 @@ pub enum StructuredCommandRequest {
         fixed_timestep: Option<f64>,
     },
     Relax {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
         #[serde(skip_serializing_if = "Option::is_none")]
         until_seconds: Option<f64>,
@@ -87,43 +90,43 @@ pub enum StructuredCommandRequest {
         max_error: Option<f64>,
     },
     Pause {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     Resume {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     Stop {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     Skip {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     SaveVtk {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     Solve {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     ComputeFields {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     ComputeEnergies {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     Close {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
     },
     MeshBuild {
-        #[serde(flatten)]
+        #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
         #[schema(value_type = Object, nullable)]
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +142,8 @@ pub enum StructuredCommandRequest {
 pub struct CommandResponse {
     pub accepted: bool,
     pub command_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }

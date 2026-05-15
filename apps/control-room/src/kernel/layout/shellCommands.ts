@@ -91,7 +91,6 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.docs", "Physics Documentation", "Application"),
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
   disabledPlaceholder("workspace.new-problem", "New Problem", "File", "Ctrl+N"),
-  disabledPlaceholder("workspace.open-project", "Open Project", "File", "Ctrl+O"),
   disabledPlaceholder("workspace.save-sync", "Save / Sync", "File", "Ctrl+S"),
   disabledPlaceholder("workspace.export-python", "Export Python DSL", "File"),
   disabledPlaceholder("workspace.undo", "Undo", "Edit", "Ctrl+Z"),

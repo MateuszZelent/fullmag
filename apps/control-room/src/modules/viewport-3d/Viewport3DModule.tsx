@@ -1,9 +1,19 @@
 "use client";
 
 import { Canvas } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -28,6 +38,7 @@ import {
 import { buildFdmCuboidInstanceModel } from "./layers/FdmCuboidLayer";
 import { VIEWPORT_3D_WORLD_UP } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import {
   FULL_FIELD_QUERY,
   resolveViewport3DSelectionBounds,
@@ -69,8 +80,10 @@ import {
 } from "./viewport3dPrimitiveModel";
 import {
   isViewport3DTopologyCurrent,
+  resolveUnknownTopologyProvenanceRefreshKey,
   resolveViewport3DTopologyFreshness,
 } from "./viewport3dTopologyStaleness";
+import { toCameraTuple } from "./viewport3dCameraModel";
 import {
   getViewport3DCacheStats,
   useViewport3DDomainMeta,
@@ -87,6 +100,7 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
+  viewport3DCameraViewSignature,
   viewport3dStore,
   useViewport3DCommandState,
 } from "./viewport3dStore";
@@ -105,12 +119,18 @@ interface Viewport3DFrameProps
     Viewport3DSceneProps,
     "colors" | "onVisualizationFrameCommitted"
   > {
+  cameraDialogOpen: boolean;
+  cameraDialogState: Viewport3DSceneProps["cameraState"];
+  cameraResource: VisualizationStateResource["camera"] | null;
   clientReady: boolean;
   colors: Viewport3DSceneProps["colors"] | null;
   captureRevision: number;
   diagnostics: string;
   domainSummary: string;
   kernel: ModuleProps["kernel"];
+  onCameraPatch: (
+    patch: NonNullable<VisualizationStatePatch["camera"]>,
+  ) => void;
   onClearSelection: () => void;
   quantityId: string;
   selectedLabel: string;
@@ -144,20 +164,35 @@ export default function Viewport3DModule({
       domainId,
       select,
   });
+  const patchCameraState = useCallback(
+    (patch: NonNullable<VisualizationStatePatch["camera"]>) => {
+      kernel.visualizationSync.queuePatch({ camera: patch });
+      if (patch.position && patch.target) {
+        viewport3dStore.setCamera({
+          position: toCameraTuple(patch.position),
+          target: toCameraTuple(patch.target),
+          up: toCameraTuple(patch.up ?? VIEWPORT_3D_WORLD_UP),
+        });
+      }
+      if (patch.projection) {
+        viewport3dStore.setCameraProjection(patch.projection);
+      }
+    },
+    [kernel.visualizationSync],
+  );
   const saveCameraState = useCallback(
     (camera: {
       position: [number, number, number];
       target: [number, number, number];
+      up?: [number, number, number];
     }) => {
-      kernel.visualizationSync.queuePatch({
-        camera: {
-          position: camera.position,
-          target: camera.target,
-          up: VIEWPORT_3D_WORLD_UP,
-        },
+      viewport3dStore.setCamera({
+        position: camera.position,
+        target: camera.target,
+        up: camera.up ?? VIEWPORT_3D_WORLD_UP,
       });
     },
-    [kernel.visualizationSync],
+    [],
   );
 
   return (
@@ -165,8 +200,11 @@ export default function Viewport3DModule({
       {...sceneModel}
       clientReady={clientReady}
       colors={colors}
+      cameraDialogOpen={commandState.widgets.cameraDialogOpen}
+      cameraDialogState={commandState.camera}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
+      onCameraPatch={patchCameraState}
       onClearSelection={clear}
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
@@ -197,6 +235,8 @@ function useViewport3DSceneModel({
   const visualizationState = useViewport3DVisualizationState();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const renderingState = visualizationState.data;
+  const cameraResource = renderingState?.camera ?? null;
+  useViewport3DRemoteCameraSync(cameraResource);
   const visualizationRevision = renderingState?.revision ?? null;
   const visualizationError = visualizationState.error?.message ?? null;
   const visualizationEffectiveRenderMode = resolveVisualizationEffectiveRenderMode({
@@ -235,6 +275,7 @@ function useViewport3DSceneModel({
   const scene = useViewport3DScene();
   const universe = useViewport3DUniverse();
   const sharedDomainManifest = useViewport3DSharedDomainManifest();
+  const unknownTopologyProvenanceRefreshRef = useRef<string | null>(null);
   const topology = useViewport3DDomainTopology();
   const fdmDomain = useMemo(
     () => adaptFdmDomainMeta(domainMeta.data, 120_000),
@@ -269,6 +310,18 @@ function useViewport3DSceneModel({
       ),
     [scene.data, sharedDomainManifest.data],
   );
+  useEffect(() => {
+    const refreshKey = resolveUnknownTopologyProvenanceRefreshKey(
+      scene.data,
+      sharedDomainManifest.data,
+    );
+    if (!refreshKey || unknownTopologyProvenanceRefreshRef.current === refreshKey) {
+      return;
+    }
+
+    unknownTopologyProvenanceRefreshRef.current = refreshKey;
+    sharedDomainManifest.refetch();
+  }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const currentTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
   const magnetizationTexturePreviews = useMemo(
@@ -295,7 +348,7 @@ function useViewport3DSceneModel({
     resourceBounds ??
     primitiveBounds;
   const vectorScale = Math.max(
-    Math.max(...(bounds?.size ?? [1e-6, 1e-6, 1e-6])) * 0.035 * vectorLengthScale,
+    Math.max(...(bounds?.size ?? [1e-6, 1e-6, 1e-6])) * 0.021 * vectorLengthScale,
     1e-12,
   );
   const selectionBounds =
@@ -543,8 +596,9 @@ function useViewport3DSceneModel({
   return {
     airboxSettings,
     bounds,
-    cameraProjection: resolveViewport3DCameraProjection(visualizationState.data),
-    cameraState: resolveViewport3DCameraState(visualizationState.data),
+    cameraProjection: commandState.widgets.cameraProjection,
+    cameraResource,
+    cameraState: commandState.camera,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,
@@ -576,6 +630,23 @@ function useViewport3DSceneModel({
     visualProfileId: commandState.visualProfileId,
     visualizationRevision,
   };
+}
+
+function useViewport3DRemoteCameraSync(
+  cameraResource: VisualizationStateResource["camera"] | null,
+) {
+  const lastRemoteSignatureRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!cameraResource) return;
+    const camera = resolveViewport3DCameraState({ camera: cameraResource });
+    const projection = resolveViewport3DCameraProjection({ camera: cameraResource });
+    const signature = viewport3DCameraViewSignature({ camera, projection });
+    if (lastRemoteSignatureRef.current === signature) return;
+
+    lastRemoteSignatureRef.current = signature;
+    viewport3dStore.setCameraView({ camera, projection });
+  }, [cameraResource]);
 }
 
 function useViewport3DSelectionHandlers({
@@ -792,11 +863,15 @@ function resolveViewport3DAirboxMaxVectorGlyphs(
 
 function Viewport3DFrame({
   captureRevision,
+  cameraDialogOpen,
+  cameraDialogState,
+  cameraResource,
   clientReady,
   colors,
   diagnostics,
   domainSummary,
   kernel,
+  onCameraPatch,
   onClearSelection,
   quantityId,
   selectedLabel,
@@ -921,6 +996,14 @@ function Viewport3DFrame({
           {discretizationKind}
         </div>
       )}
+      <Viewport3DCameraDialog
+        cameraProjection={sceneProps.cameraProjection}
+        cameraResource={cameraResource}
+        cameraState={cameraDialogState}
+        onCameraPatch={onCameraPatch}
+        onOpenChange={(open) => viewport3dStore.setCameraDialogOpen(open)}
+        open={cameraDialogOpen}
+      />
     </section>
   );
 }

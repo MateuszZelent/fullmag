@@ -12,6 +12,7 @@ const VIEWPORT_3D_EVENT_HANDLER_KEYS = [
   "onPointerLeave",
   "onPointerCancel",
   "onLostPointerCapture",
+  "onWheel",
 ] as const satisfies readonly (keyof Events)[];
 
 export function pickViewport3DEventHandlers(

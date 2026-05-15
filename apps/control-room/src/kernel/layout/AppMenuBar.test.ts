@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { MAIN_MENUS } from "./appMenuModel";
+import { SHELL_COMMANDS } from "./shellCommands";
+
 const headerCss = readFileSync(
   join(process.cwd(), "src/design/styles/header.css"),
   "utf8",
@@ -34,5 +37,21 @@ describe("AppMenuBar CSS contract", () => {
 
     // Should use token variables, not hardcoded colors
     expect(headerCss).not.toMatch(/#[0-9a-f]{3,8}/i);
+  });
+});
+
+describe("app menu command model", () => {
+  it("routes File/Open to the .fms import command instead of a dead placeholder", () => {
+    const fileMenu = MAIN_MENUS.find((menu) => menu.id === "file");
+    const openItem = fileMenu?.children?.find(
+      (item) => item.shortcut === "Ctrl+O",
+    );
+
+    expect(openItem).toMatchObject({
+      id: "study.import-state",
+      label: "Import .fms State",
+    });
+    expect(SHELL_COMMANDS.some((command) => command.id === "workspace.open-project"))
+      .toBe(false);
   });
 });

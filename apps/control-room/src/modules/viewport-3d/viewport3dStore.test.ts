@@ -15,11 +15,13 @@ describe("viewport3dStore", () => {
     viewport3dStore.setCamera({
       position: [3, 2, 1],
       target: [0.5, 0.25, 0],
+      up: [0, 0, 1],
     });
 
     expect(viewport3dStore.getSnapshot().camera).toEqual({
       position: [3, 2, 1],
       target: [0.5, 0.25, 0],
+      up: [0, 0, 1],
     });
   });
 
@@ -29,6 +31,7 @@ describe("viewport3dStore", () => {
     viewport3dStore.setCamera({
       position: [9, 9, 9],
       target: [1, 1, 1],
+      up: [0, 1, 0],
     });
 
     viewport3dStore.resetCamera();
@@ -42,7 +45,11 @@ describe("viewport3dStore", () => {
     viewport3dStore.resetForTest();
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
+      cameraDialogOpen: false,
       cameraProjection: "perspective",
+      effectAmbientOcclusion: false,
+      effectAntialias: true,
+      effectBloom: false,
       hslReferenceMode: "auto",
       settingsDialogOpen: false,
       viewCubeVisible: true,
@@ -56,11 +63,47 @@ describe("viewport3dStore", () => {
     viewport3dStore.setHslReferenceMode("off");
 
     expect(viewport3dStore.getSnapshot().widgets).toEqual({
+      cameraDialogOpen: false,
       cameraProjection: "perspective",
+      effectAmbientOcclusion: false,
+      effectAntialias: true,
+      effectBloom: false,
       hslReferenceMode: "off",
       settingsDialogOpen: false,
       viewCubeVisible: false,
     });
+  });
+
+  it("opens and closes the camera dialog from module commands", () => {
+    viewport3dStore.resetForTest();
+
+    viewport3dStore.setCameraDialogOpen(true);
+    expect(viewport3dStore.getSnapshot().widgets.cameraDialogOpen).toBe(true);
+
+    viewport3dStore.setCameraDialogOpen(false);
+    expect(viewport3dStore.getSnapshot().widgets.cameraDialogOpen).toBe(false);
+  });
+
+  it("updates camera position and projection together for remote sync", () => {
+    viewport3dStore.resetForTest();
+
+    viewport3dStore.setCameraView({
+      camera: {
+        position: [4, 5, 6],
+        target: [1, 2, 3],
+        up: [0, 1, 0],
+      },
+      projection: "orthographic",
+    });
+
+    expect(viewport3dStore.getSnapshot().camera).toEqual({
+      position: [4, 5, 6],
+      target: [1, 2, 3],
+      up: [0, 1, 0],
+    });
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "orthographic",
+    );
   });
 
   it("derives HSL reference visibility from mode and vector coloring", () => {
@@ -85,6 +128,7 @@ describe("viewport3dStore", () => {
     expect(resolveViewport3DCameraState(state)).toEqual({
       position: [1e-6, 2e-6, 3e-6],
       target: [0, 0, 0],
+      up: [0, 0, 1],
     });
     expect(resolveViewport3DCameraProjection(state)).toBe("orthographic");
   });

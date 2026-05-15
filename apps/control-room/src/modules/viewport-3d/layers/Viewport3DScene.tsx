@@ -44,6 +44,7 @@ import {
   SelectionHighlightLayer,
 } from "./BoundsLayers";
 import { TopologyMeshLayer } from "./TopologyMeshLayer";
+import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer } from "./FdmCuboidLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
@@ -244,6 +245,7 @@ export function Viewport3DScene({
     invalidate();
     if (visualizationRevision === null || typeof window === "undefined") return;
 
+    // idle-audit-allow-one-shot-raf: demand rendering needs one post-invalidate frame ack.
     const frameId = window.requestAnimationFrame(() => {
       onVisualizationFrameCommitted(visualizationRevision);
     });
@@ -358,8 +360,10 @@ export function Viewport3DScene({
       <OrientationHudLayer
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
+        onCameraChange={onCameraChange}
         viewCubeVisible={viewCubeVisible}
       />
+      <PostProcessingLayer />
     </>
   );
 }

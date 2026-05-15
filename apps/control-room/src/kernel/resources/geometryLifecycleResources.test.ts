@@ -26,6 +26,7 @@ import {
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
+  resolveMeshSharedDomainManifestRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshReportResourceKey,
@@ -82,5 +83,22 @@ describe("geometry lifecycle resources", () => {
     expect(resolveJsonResourceRevision({ revision: "mesh-7" })).toBe("mesh-7");
     expect(resolveJsonResourceRevision(null)).toBeNull();
     expect(resolveVisualizationStateRevision({ revision: 15 } as never)).toBe(15);
+  });
+
+  it("includes mesh provenance in shared-domain manifest revision signatures", () => {
+    expect(
+      resolveMeshSharedDomainManifestRevision({
+        revision: 4,
+        source_scene_revision: 12,
+        geometry_realization_revision: 11,
+      } as never),
+    ).toBe("4:12:11");
+    expect(
+      resolveMeshSharedDomainManifestRevision({
+        revision: 4,
+        source_scene_revision: null,
+        geometry_realization_revision: null,
+      } as never),
+    ).toBe("4:unknown:unknown");
   });
 });

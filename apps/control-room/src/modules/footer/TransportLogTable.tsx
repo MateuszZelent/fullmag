@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import type { CommandDetailResource } from "@/kernel/api/apiTypes";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
+import { useCommandDetailResource } from "@/kernel/resources/studyRuntimeResources";
+import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -32,6 +35,7 @@ import {
   serializeTransportEntry,
   sortTransportEntries,
   summarizeTransportPath,
+  resolveTransportCorrelation,
 } from "./footerModel";
 
 export function TransportLogTable({
@@ -208,9 +212,12 @@ function TransportLogDetailsDialog({
   entry: RequestDiagnosticEntry | null;
   onOpenChange: (open: boolean) => void;
 }) {
+  const correlation = entry ? resolveTransportCorrelation(entry) : null;
+  const commandDetail = useCommandDetailResource(correlation?.commandId);
+
   return (
     <Dialog open={entry !== null} onOpenChange={onOpenChange}>
-      {entry ? (
+      {entry && correlation ? (
         <DialogContent className="fm-footer-log-dialog">
           <DialogHeader>
             <DialogTitle>{buildTransportMessagePreview(entry)}</DialogTitle>
@@ -221,6 +228,9 @@ function TransportLogDetailsDialog({
           <div className="fm-dialog__body">
             <dl className="fm-dialog__details">
               <DetailRow label="Request ID" value={entry.requestId} />
+              <DetailRow label="Resource" value={correlation.resourceKey} />
+              <DetailRow label="Command ID" value={correlation.commandId ?? "—"} />
+              <DetailRow label="Stage ID" value={correlation.stageId ?? "—"} />
               <DetailRow label="Channel" value={entry.channel.toUpperCase()} />
               <DetailRow label="Direction" value={entry.direction.toUpperCase()} />
               <DetailRow label="Method" value={entry.method} />
@@ -240,6 +250,10 @@ function TransportLogDetailsDialog({
             <pre className="fm-footer-log-dialog__raw">
               {serializeTransportEntry(entry)}
             </pre>
+            <CommandCorrelationPanel
+              commandId={correlation.commandId}
+              detail={commandDetail}
+            />
           </div>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>
@@ -250,6 +264,138 @@ function TransportLogDetailsDialog({
       ) : null}
     </Dialog>
   );
+}
+
+export function CommandCorrelationPanel({
+  commandId,
+  detail,
+}: {
+  commandId: string | null;
+  detail: ResourceResult<CommandDetailResource | null>;
+}) {
+  const command = detail.data;
+  if (!commandId) return null;
+
+  if (detail.status === "loading") {
+    return (
+      <p className="fm-dialog__description">
+        Loading correlated command detail.
+      </p>
+    );
+  }
+
+  if (detail.error) {
+    return <pre className="fm-dialog__error">{String(detail.error)}</pre>;
+  }
+
+  if (!command) {
+    return (
+      <p className="fm-dialog__description">
+        Correlated command detail unavailable.
+      </p>
+    );
+  }
+
+  return (
+    <dl className="fm-dialog__details" aria-label="Correlated command detail">
+      <DetailRow label="Command status" value={command.status} />
+      <DetailRow label="Command kind" value={command.kind} />
+      <DetailRow label="Command seq" value={String(command.seq)} />
+      <DetailRow label="Command run" value={command.run_id ?? "—"} />
+      <DetailRow
+        label="Requested execution"
+        value={formatExecutionReadback(command.requested_execution)}
+      />
+      <DetailRow
+        label="Resolved execution"
+        value={formatExecutionReadback(command.resolved_execution)}
+      />
+      <DetailRow label="Command reason" value={command.reason ?? "—"} />
+      <DetailRow label="Completion" value={command.completion_status ?? "—"} />
+      <DetailRow
+        label="Accepted"
+        value={formatCommandTimestamp(command.accepted_at_unix_ms)}
+      />
+      <DetailRow
+        label="Started"
+        value={formatCommandTimestamp(command.started_at_unix_ms)}
+      />
+      <DetailRow
+        label="Terminal"
+        value={formatCommandTimestamp(command.terminal_at_unix_ms)}
+      />
+      <DetailRow label="Stage ID" value={command.stage_id ?? "—"} />
+      <DetailRow
+        label="Stage index"
+        value={command.stage_index == null ? "—" : String(command.stage_index)}
+      />
+      <DetailRow
+        label="Resource invalidations"
+        value={formatResourceInvalidations(command.resource_invalidations)}
+      />
+      <DetailRow
+        label="Diagnostics"
+        value={formatDiagnosticReferences(command.diagnostics)}
+      />
+      <DetailRow label="Checkpoint" value={command.checkpoint_ref ?? "—"} />
+      <DetailRow label="Loaded state" value={command.loaded_state_ref ?? "—"} />
+      <DetailRow
+        label="Resume from"
+        value={command.resume_from_checkpoint_ref ?? "—"}
+      />
+      <DetailRow
+        label="State transition"
+        value={command.state_transition ?? "—"}
+      />
+      <DetailRow label="Command error" value={command.error ?? "—"} />
+    </dl>
+  );
+}
+
+function formatCommandTimestamp(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : "—";
+}
+
+function formatExecutionReadback(
+  value: CommandDetailResource["requested_execution"] | null | undefined,
+): string {
+  if (!value) return "—";
+  const primary = [value.backend, value.device, value.precision, value.mode].filter(
+    Boolean,
+  );
+  const detail = [
+    value.runtime_family ? `runtime=${value.runtime_family}` : null,
+    value.engine_id ? `engine=${value.engine_id}` : null,
+    value.worker ? `worker=${value.worker}` : null,
+  ].filter(Boolean);
+  const parts = [...primary, ...detail];
+  return parts.length > 0 ? parts.join(" / ") : "—";
+}
+
+function formatResourceInvalidations(
+  invalidations: CommandDetailResource["resource_invalidations"] | null | undefined,
+): string {
+  if (!invalidations?.length) return "—";
+  return invalidations
+    .map(
+      (entry) =>
+        `${entry.resource_key}@${entry.revision} ${entry.state}: ${entry.reason}`,
+    )
+    .join("; ");
+}
+
+function formatDiagnosticReferences(
+  diagnostics: CommandDetailResource["diagnostics"] | null | undefined,
+): string {
+  if (!diagnostics?.length) return "—";
+  return diagnostics
+    .map(
+      (entry) =>
+        `${entry.severity}: ${entry.resource_key}@${entry.revision} ${entry.message}`,
+    )
+    .join("; ");
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {

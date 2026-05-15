@@ -603,13 +603,108 @@
         ],
         "type": "object"
       },
+      "CheckpointCreateRequest": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/SaveProfile"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CheckpointCreateResponse": {
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/CheckpointEntry"
+          }
+        },
+        "required": [
+          "checkpoint"
+        ],
+        "type": "object"
+      },
       "CheckpointEntry": {
         "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "backend_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "checkpoint_id": {
+            "type": "string"
+          },
+          "checksum": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "coordinate_frame": {
             "type": "string"
           },
           "created_at": {
             "type": "string"
+          },
+          "dt": {
+            "format": "double",
+            "type": "number"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "resume_class": {
+            "$ref": "#/components/schemas/RestoreClass"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "step": {
             "format": "int64",
@@ -619,13 +714,26 @@
           "time_s": {
             "format": "double",
             "type": "number"
+          },
+          "vector_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "checkpoint_id",
+          "run_id",
           "step",
           "time_s",
-          "created_at"
+          "dt",
+          "created_at",
+          "source",
+          "format",
+          "vector_count",
+          "coordinate_frame",
+          "resume_class",
+          "artifact_ref"
         ],
         "type": "object"
       },
@@ -640,6 +748,51 @@
         },
         "required": [
           "checkpoints"
+        ],
+        "type": "object"
+      },
+      "CheckpointRestoreRequest": {
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CheckpointRestoreResponse": {
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/CheckpointEntry"
+          },
+          "field_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "restore_class": {
+            "$ref": "#/components/schemas/RestoreClass"
+          },
+          "restored_vector_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "checkpoint",
+          "restore_class",
+          "restored_vector_count",
+          "field_revision",
+          "warnings"
         ],
         "type": "object"
       },
@@ -737,6 +890,31 @@
       },
       "CommandDetailResource": {
         "properties": {
+          "accepted_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "command_id": {
             "type": "string"
           },
@@ -756,6 +934,12 @@
           "created_at_unix_ms": {
             "minimum": 0,
             "type": "integer"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/CommandDiagnosticReferenceResource"
+            },
+            "type": "array"
           },
           "dispatched_at_unix_ms": {
             "minimum": 0,
@@ -793,6 +977,12 @@
           "kind": {
             "type": "string"
           },
+          "loaded_state_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_error": {
             "format": "double",
             "type": [
@@ -824,6 +1014,22 @@
               }
             ]
           },
+          "precondition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandPrecondition"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "relax_algorithm": {
             "type": [
               "string",
@@ -837,13 +1043,109 @@
               "null"
             ]
           },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "requested_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionReadbackResource"
+              }
+            ]
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionReadbackResource"
+              }
+            ]
+          },
+          "resource_invalidations": {
+            "items": {
+              "$ref": "#/components/schemas/CommandResourceInvalidationResource"
+            },
+            "type": "array"
+          },
+          "resume_from_checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state_transition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          },
+          "terminal_at_unix_ms": {
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "torque_tolerance": {
             "format": "double",
@@ -867,6 +1169,78 @@
           "status",
           "created_at_unix_ms"
         ],
+        "type": "object"
+      },
+      "CommandDiagnosticReferenceResource": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "severity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_key",
+          "revision",
+          "severity",
+          "message"
+        ],
+        "type": "object"
+      },
+      "CommandExecutionReadbackResource": {
+        "properties": {
+          "backend": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worker": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CommandQueueStatusResource": {
@@ -919,6 +1293,12 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "runtime_controls": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeCommandReadinessResource"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -931,7 +1311,33 @@
           "rejected_count",
           "failed_count",
           "can_accept_commands",
+          "runtime_controls",
           "commands"
+        ],
+        "type": "object"
+      },
+      "CommandResourceInvalidationResource": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource_key",
+          "revision",
+          "reason",
+          "state"
         ],
         "type": "object"
       },
@@ -944,6 +1350,12 @@
             "type": "string"
           },
           "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
             "type": [
               "string",
               "null"
@@ -994,6 +1406,18 @@
           "kind": {
             "type": "string"
           },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
@@ -1001,6 +1425,16 @@
           },
           "status": {
             "type": "string"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
           }
         },
         "required": [
@@ -5748,6 +6182,229 @@
         ],
         "type": "object"
       },
+      "RuntimeCommandIntent": {
+        "properties": {
+          "client_intent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precondition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandPrecondition"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RuntimeCommandPrecondition": {
+        "properties": {
+          "command_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runtime_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "stage_execution_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RuntimeCommandReadinessResource": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "enabled"
+        ],
+        "type": "object"
+      },
+      "RuntimeCommandTarget": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "study"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "run"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "current_stage"
+                ],
+                "type": "string"
+              },
+              "stage_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_index"
+                ],
+                "type": "string"
+              },
+              "stage_index": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "stage_index",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_id"
+                ],
+                "type": "string"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "command_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "command_id"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "command_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SamplingProfile": {
         "enum": [
           "quality",
@@ -6788,6 +7445,61 @@
       },
       "StageExecutionRecordResource": {
         "properties": {
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "index": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loaded_state_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "metric_name": {
             "type": [
               "string",
@@ -6807,6 +7519,29 @@
               "null"
             ]
           },
+          "resume_from_checkpoint_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "started_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state_transition": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
           },
@@ -6819,6 +7554,8 @@
           }
         },
         "required": [
+          "stage_id",
+          "index",
           "status"
         ],
         "type": "object"
@@ -6886,276 +7623,377 @@
       "StructuredCommandRequest": {
         "oneOf": [
           {
-            "properties": {
-              "fixed_timestep": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
               },
-              "integrator": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "run"
-                ],
-                "type": "string"
-              },
-              "max_steps": {
-                "format": "int64",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "until_seconds": {
-                "format": "double",
-                "type": "number"
-              }
-            },
-            "required": [
-              "until_seconds",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "energy_tolerance": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "fixed_timestep": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "kind": {
-                "enum": [
-                  "relax"
-                ],
-                "type": "string"
-              },
-              "max_error": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "max_steps": {
-                "format": "int64",
-                "minimum": 0,
-                "type": [
-                  "integer",
-                  "null"
-                ]
-              },
-              "relax_algorithm": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "relax_alpha": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "torque_tolerance": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "until_seconds": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "pause"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "resume"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "stop"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "skip"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "save_vtk"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "solve"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "compute_fields"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "compute_energies"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "close"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "enum": [
-                  "mesh_build"
-                ],
-                "type": "string"
-              },
-              "mesh_options": {
-                "type": [
-                  "object",
-                  "null"
-                ]
-              },
-              "mesh_reason": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "mesh_target": {
-                "oneOf": [
-                  {
-                    "type": "null"
+              {
+                "properties": {
+                  "fixed_timestep": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
-                  {
-                    "$ref": "#/components/schemas/MeshCommandTarget"
+                  "integrator": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "max_steps": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "until_seconds": {
+                    "format": "double",
+                    "type": "number"
                   }
-                ]
+                },
+                "required": [
+                  "until_seconds"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "run"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
               }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "energy_tolerance": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "fixed_timestep": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "max_error": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "max_steps": {
+                    "format": "int64",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "relax_algorithm": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "relax_alpha": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "torque_tolerance": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "until_seconds": {
+                    "format": "double",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "relax"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "pause"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "resume"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "stop"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "skip"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "save_vtk"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "solve"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "compute_fields"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "compute_energies"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "close"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "mesh_options": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "mesh_reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "mesh_target": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/MeshCommandTarget"
+                      }
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "mesh_build"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
           }
         ]
       },
@@ -13696,6 +14534,121 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      },
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_checkpoints",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointCreateResponse"
+                }
+              }
+            },
+            "description": "Checkpoint captured"
+          },
+          "400": {
+            "description": "No live magnetization to capture"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+      "get": {
+        "operationId": "persistence_get_sessions_current_persistence_checkpoints_checkpoint_id",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointEntry"
+                }
+              }
+            },
+            "description": "Session checkpoint"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore": {
+      "post": {
+        "operationId": "persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore",
+        "parameters": [
+          {
+            "description": "Checkpoint id",
+            "in": "path",
+            "name": "checkpoint_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckpointRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointRestoreResponse"
+                }
+              }
+            },
+            "description": "Checkpoint restored"
+          },
+          "400": {
+            "description": "Checkpoint is incompatible with the active domain"
+          },
+          "404": {
+            "description": "No active workspace or checkpoint not found"
           }
         },
         "tags": [

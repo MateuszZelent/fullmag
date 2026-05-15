@@ -48,6 +48,7 @@ import {
   Square,
   Target,
   Triangle,
+  Upload,
   Zap,
 } from "lucide-react";
 import { createElement } from "react";
@@ -994,6 +995,7 @@ export const viewTab: RibbonTabContent = {
           label: "Camera",
           iconColor: "text-sky-300",
           menu: [
+            { type: "item", id: "camera:parameters", label: "Camera parameters", commandId: "viewport-3d.open-camera-dialog" },
             { type: "item", id: "camera:focus",     label: "Focus selected",  disabled: true },
             { type: "item", id: "camera:frame-all", label: "Frame all",       disabled: true },
             { type: "item", id: "camera:trackball", label: "Trackball navigation", disabled: true },
@@ -1418,6 +1420,11 @@ export const studyTab: RibbonTabContent = {
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
+        { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
+        { id: "study.restore-checkpoint", icon: icon(RotateCcw), label: "Restore", iconColor: C.lavender },
+        { id: "study.import-state", icon: icon(Upload), label: "Import State", iconColor: C.lavender },
+        { id: "study.export-state", icon: icon(Download), label: "Export State", iconColor: C.sapphire },
+        { id: "study.discard-paused-state", icon: icon(Scissors), label: "Discard", iconColor: C.red },
         { id: "study.stop",  icon: icon(Square,      { fill: "currentColor" }), label: "Stop",                   iconColor: C.red },
         { id: "study.skip",  icon: icon(SkipForward),                           label: "Skip",                   iconColor: C.peach },
       ],
@@ -1843,12 +1850,17 @@ function applyCommandState(
         const disabledReason = disabledByCommand
           ? command?.disabledReason?.(commandContext) ?? `Command unavailable: ${action.label}`
           : null;
+        const activeResource = command?.activeResource?.(commandContext) ?? null;
 
         return {
           ...action,
           active:
             action.active ??
             (command ? context.commands?.isActive(action.id, commandContext) : false),
+          activeCommandId:
+            activeResource?.kind === "command"
+              ? activeResource.commandId
+              : action.activeCommandId,
           disabled: action.disabled || disabledByCommand,
           menu: action.menu?.map((node) =>
             applyCommandStateToMenuNode(node, context, commandContext),

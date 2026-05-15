@@ -58,3 +58,7 @@
   font-size: var(--fm-font-size-xs);
   white-space: nowrap;
 }
+
+.fm-command-item[data-active="true"] .fm-command-palette__item-meta {
+  color: var(--fm-accent);
+}

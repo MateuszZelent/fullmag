@@ -16,8 +16,10 @@ use crate::{
 };
 
 use fullmag_session::{
-    inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsRunManifest, FmsSessionManifest,
-    FmsWorkspaceManifest, PackOptions, SaveProfile, SessionInspection, SessionStore,
+    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, unpack_fms, CaptureRequest,
+    CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy, FmsExportProfile,
+    FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SaveProfile,
+    SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -175,12 +177,62 @@ pub(crate) struct CheckpointListResponse {
     pub checkpoints: Vec<CheckpointEntry>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct CheckpointCreateRequest {
+    #[serde(default = "default_checkpoint_profile")]
+    pub profile: SaveProfile,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct CheckpointCreateResponse {
+    pub checkpoint: CheckpointEntry,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct CheckpointRestoreRequest {
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct CheckpointRestoreResponse {
+    pub checkpoint: CheckpointEntry,
+    pub restore_class: fullmag_session::RestoreClass,
+    pub restored_vector_count: u64,
+    pub field_revision: u64,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct CheckpointEntry {
     pub checkpoint_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    pub run_id: String,
     pub step: u64,
     pub time_s: f64,
+    pub dt: f64,
     pub created_at: String,
+    pub source: String,
+    pub format: String,
+    pub vector_count: u64,
+    pub coordinate_frame: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_family: Option<String>,
+    pub resume_class: fullmag_session::RestoreClass,
+    pub artifact_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -209,6 +261,10 @@ fn session_store_root(state: &AppState) -> std::path::PathBuf {
         .join(".fullmag")
         .join("local-live")
         .join("session-store")
+}
+
+fn default_checkpoint_profile() -> SaveProfile {
+    SaveProfile::Resume
 }
 
 fn open_store(state: &AppState) -> Result<SessionStore, ApiError> {
@@ -464,27 +520,163 @@ pub(crate) async fn list_checkpoints(
     let store = open_store(&state)?;
 
     let guard = state.current_live_state.read().await;
-    let run_id = guard
+    let snapshot = guard
         .as_ref()
-        .map(|s| s.session.run_id.clone())
         .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let run_id = snapshot.session.run_id.clone();
+    let current = checkpoint_context_from_snapshot(snapshot, 0);
     drop(guard);
 
-    let cp = store
-        .latest_checkpoint(&run_id)
+    let checkpoints = store
+        .list_checkpoints(&run_id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let checkpoints = match cp {
-        Some(cp) => vec![CheckpointEntry {
-            checkpoint_id: cp.checkpoint_id,
-            step: cp.step,
-            time_s: cp.time_s,
-            created_at: cp.created_at.to_rfc3339(),
-        }],
-        None => vec![],
-    };
+    let checkpoints = checkpoints
+        .into_iter()
+        .map(|checkpoint| checkpoint_entry(checkpoint, &current, None))
+        .collect();
 
     Ok(Json(CheckpointListResponse { checkpoints }))
+}
+
+/// `GET /v2/sessions/current/persistence/checkpoints/{checkpoint_id}`
+pub(crate) async fn get_checkpoint(
+    State(state): State<Arc<AppState>>,
+    checkpoint_id: String,
+) -> Result<Json<CheckpointEntry>, ApiError> {
+    let store = open_store(&state)?;
+
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let run_id = snapshot.session.run_id.clone();
+    let current = checkpoint_context_from_snapshot(snapshot, 0);
+    drop(guard);
+
+    let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
+    Ok(Json(checkpoint_entry(checkpoint, &current, None)))
+}
+
+/// `POST /v2/sessions/current/persistence/checkpoints`
+pub(crate) async fn create_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckpointCreateRequest>,
+) -> Result<Json<CheckpointCreateResponse>, ApiError> {
+    let store = open_store(&state)?;
+
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let provider = LiveCheckpointProvider::from_snapshot(snapshot)?;
+    let mut context =
+        checkpoint_context_from_active_stage(snapshot, provider.vector_count() as u64);
+    let request = CaptureRequest {
+        run_id: snapshot.session.run_id.clone(),
+        profile: req.profile,
+        field_policy: FieldCapturePolicy::PrimaryOnly,
+    };
+    let capture = capture_checkpoint(&store, &provider, &request)
+        .map_err(|error| ApiError::internal(format!("capturing checkpoint: {error}")))?;
+    context.checksum = capture.common_state.magnetization_ref.clone();
+    let checkpoint_id = capture.checkpoint.checkpoint_id.clone();
+    let artifact_ref = capture.checkpoint.common_state_ref.clone();
+    drop(guard);
+
+    let mut guard = state.current_live_state.write().await;
+    let changed = guard.as_mut().is_some_and(|snapshot| {
+        link_active_stage_checkpoint_preserved(snapshot, &checkpoint_id, Some(&artifact_ref))
+    });
+    let changed_snapshot = if changed {
+        if let Some(snapshot) = guard.as_mut() {
+            snapshot.state_version = snapshot.state_version.saturating_add(1);
+            Some(snapshot.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    drop(guard);
+
+    if let Some(snapshot) = changed_snapshot {
+        let realtime_state = current_live_realtime_state_from_snapshot(
+            &state,
+            &snapshot,
+            snapshot.display_selection.revision,
+        )
+        .await;
+        publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+    }
+
+    Ok(Json(CheckpointCreateResponse {
+        checkpoint: checkpoint_entry(capture.checkpoint, &context, req.reason),
+    }))
+}
+
+/// `POST /v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore`
+pub(crate) async fn restore_checkpoint(
+    State(state): State<Arc<AppState>>,
+    checkpoint_id: String,
+    Json(req): Json<CheckpointRestoreRequest>,
+) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
+    let store = open_store(&state)?;
+
+    let mut guard = state.current_live_state.write().await;
+    let snapshot = guard
+        .as_mut()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let run_id = snapshot.session.run_id.clone();
+    let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
+    let common_state = read_checkpoint_common_state(&store, &checkpoint)?;
+    let magnetization = read_checkpoint_magnetization(&store, &common_state)?;
+    validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
+
+    let restore_class = determine_restore_class(
+        &checkpoint.compatibility,
+        &checkpoint_compatibility(snapshot),
+    );
+    let flat_magnetization = flatten_magnetization(&magnetization);
+    let live_state = snapshot
+        .live_state
+        .as_mut()
+        .ok_or_else(|| ApiError::bad_request("checkpoint restore requires live state"))?;
+    live_state.latest_step.step = common_state.step;
+    live_state.latest_step.time = common_state.time_s;
+    live_state.latest_step.dt = common_state.dt;
+    live_state.latest_step.e_ex = common_state.energies.exchange;
+    live_state.latest_step.e_demag = common_state.energies.demag;
+    live_state.latest_step.e_ext = common_state.energies.zeeman;
+    live_state.latest_step.e_ani = common_state.energies.anisotropy;
+    live_state.latest_step.e_dmi = common_state.energies.dmi;
+    live_state.latest_step.e_total = common_state.energies.total;
+    live_state.latest_step.magnetization = Some(flat_magnetization);
+    live_state.status = "paused".to_string();
+    live_state.updated_at_unix_ms = now_unix_ms();
+    let loaded_state_ref = checkpoint.common_state_ref.clone();
+    link_active_stage_checkpoint_restored(snapshot, &checkpoint_id, Some(&loaded_state_ref));
+    snapshot.state_version = snapshot.state_version.saturating_add(1);
+    let field_revision = snapshot.state_version;
+    let context = checkpoint_context_from_active_stage(snapshot, magnetization.len() as u64);
+    let restored_snapshot = snapshot.clone();
+    drop(guard);
+
+    let realtime_state = current_live_realtime_state_from_snapshot(
+        &state,
+        &restored_snapshot,
+        restored_snapshot.display_selection.revision,
+    )
+    .await;
+    publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+
+    Ok(Json(CheckpointRestoreResponse {
+        checkpoint: checkpoint_entry(checkpoint, &context, req.reason),
+        restore_class,
+        restored_vector_count: magnetization.len() as u64,
+        field_revision,
+        warnings: Vec::new(),
+    }))
 }
 
 /// `GET /v2/sessions/current/persistence/recovery`
@@ -523,6 +715,396 @@ pub(crate) async fn clear_recovery(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     Ok(Json(RecoveryClearResponse { cleared: before }))
+}
+
+#[derive(Clone)]
+struct LiveCheckpointProvider {
+    step: u64,
+    time_s: f64,
+    dt: f64,
+    energies: SolverEnergies,
+    magnetization: Vec<[f64; 3]>,
+    compatibility: CheckpointCompatibility,
+}
+
+impl LiveCheckpointProvider {
+    fn from_snapshot(snapshot: &SessionStateResponse) -> Result<Self, ApiError> {
+        let latest = snapshot
+            .live_state
+            .as_ref()
+            .map(|state| &state.latest_step)
+            .ok_or_else(|| ApiError::bad_request("checkpoint capture requires live state"))?;
+        let magnetization = latest
+            .magnetization
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("checkpoint capture requires magnetization"))?;
+        if magnetization.len() % 3 != 0 {
+            return Err(ApiError::bad_request(
+                "checkpoint magnetization length must be divisible by 3",
+            ));
+        }
+
+        let magnetization = magnetization
+            .chunks_exact(3)
+            .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+            .collect::<Vec<_>>();
+        if magnetization.is_empty() {
+            return Err(ApiError::bad_request(
+                "checkpoint capture requires at least one magnetization vector",
+            ));
+        }
+
+        Ok(Self {
+            step: latest.step,
+            time_s: latest.time,
+            dt: latest.dt,
+            energies: SolverEnergies {
+                exchange: latest.e_ex,
+                demag: latest.e_demag,
+                zeeman: latest.e_ext,
+                anisotropy: latest.e_ani,
+                dmi: latest.e_dmi,
+                total: latest.e_total,
+            },
+            magnetization,
+            compatibility: checkpoint_compatibility(snapshot),
+        })
+    }
+
+    fn vector_count(&self) -> usize {
+        self.magnetization.len()
+    }
+}
+
+impl CheckpointSnapshotProvider for LiveCheckpointProvider {
+    fn step(&self) -> u64 {
+        self.step
+    }
+
+    fn time_s(&self) -> f64 {
+        self.time_s
+    }
+
+    fn dt(&self) -> f64 {
+        self.dt
+    }
+
+    fn energies(&self) -> SolverEnergies {
+        self.energies.clone()
+    }
+
+    fn magnetization(&self) -> anyhow::Result<Vec<[f64; 3]>> {
+        Ok(self.magnetization.clone())
+    }
+
+    fn auxiliary_fields(
+        &self,
+        _policy: FieldCapturePolicy,
+    ) -> anyhow::Result<Vec<(String, Vec<[f64; 3]>)>> {
+        Ok(Vec::new())
+    }
+
+    fn backend_state_payload(
+        &self,
+    ) -> anyhow::Result<Option<fullmag_session::BackendStatePayload>> {
+        Ok(None)
+    }
+
+    fn compatibility(&self) -> CheckpointCompatibility {
+        self.compatibility.clone()
+    }
+}
+
+struct CheckpointEntryContext {
+    backend_family: Option<String>,
+    checksum: Option<String>,
+    stage_id: Option<String>,
+    command_id: Option<String>,
+    field_revision: Option<u64>,
+    mesh_revision: Option<u64>,
+    scene_revision: Option<u64>,
+    vector_count: u64,
+}
+
+fn checkpoint_context_from_snapshot(
+    snapshot: &SessionStateResponse,
+    vector_count: u64,
+) -> CheckpointEntryContext {
+    CheckpointEntryContext {
+        backend_family: snapshot
+            .session
+            .resolved_runtime_family
+            .clone()
+            .or_else(|| snapshot.session.resolved_device.clone()),
+        checksum: None,
+        stage_id: None,
+        command_id: None,
+        field_revision: Some(snapshot.state_version),
+        mesh_revision: Some(snapshot.mesh_revision),
+        scene_revision: None,
+        vector_count,
+    }
+}
+
+fn checkpoint_context_from_active_stage(
+    snapshot: &SessionStateResponse,
+    vector_count: u64,
+) -> CheckpointEntryContext {
+    let mut context = checkpoint_context_from_snapshot(snapshot, vector_count);
+    if let Some(stage_execution) = snapshot.stage_execution.as_ref() {
+        if let Some(index) = stage_execution.active_stage_index {
+            context.stage_id = Some(stage_id_for_index(index));
+            context.command_id = stage_execution
+                .stages
+                .get(index)
+                .and_then(|record| record.command_id.clone());
+        }
+    }
+    context
+}
+
+fn checkpoint_entry(
+    checkpoint: fullmag_session::FmsCheckpoint,
+    context: &CheckpointEntryContext,
+    reason: Option<String>,
+) -> CheckpointEntry {
+    CheckpointEntry {
+        checkpoint_id: checkpoint.checkpoint_id.clone(),
+        stage_id: context.stage_id.clone(),
+        command_id: context.command_id.clone(),
+        run_id: checkpoint.run_id.clone(),
+        step: checkpoint.step,
+        time_s: checkpoint.time_s,
+        dt: checkpoint.dt,
+        created_at: checkpoint.created_at.to_rfc3339(),
+        source: reason.unwrap_or_else(|| "manual".to_string()),
+        format: "fmstate".to_string(),
+        vector_count: if context.vector_count > 0 {
+            context.vector_count
+        } else {
+            checkpoint_vector_count(&checkpoint).unwrap_or(0)
+        },
+        coordinate_frame: "solver_domain".to_string(),
+        mesh_revision: context.mesh_revision,
+        field_revision: context.field_revision,
+        scene_revision: context.scene_revision,
+        backend_family: context.backend_family.clone(),
+        resume_class: checkpoint_resume_class(&checkpoint.compatibility),
+        artifact_ref: checkpoint.common_state_ref,
+        checksum: context.checksum.clone(),
+    }
+}
+
+fn link_active_stage_checkpoint_preserved(
+    snapshot: &mut SessionStateResponse,
+    checkpoint_id: &str,
+    artifact_ref: Option<&str>,
+) -> bool {
+    link_active_stage_checkpoint(snapshot, |record| {
+        let mut changed = set_optional_string(&mut record.checkpoint_ref, checkpoint_id);
+        changed |= set_optional_string(&mut record.state_transition, "preserved");
+        if let Some(artifact_ref) = artifact_ref {
+            changed |= push_unique_string(&mut record.artifact_refs, artifact_ref);
+        }
+        changed
+    })
+}
+
+fn link_active_stage_checkpoint_restored(
+    snapshot: &mut SessionStateResponse,
+    checkpoint_id: &str,
+    loaded_state_ref: Option<&str>,
+) -> bool {
+    link_active_stage_checkpoint(snapshot, |record| {
+        let mut changed =
+            set_optional_string(&mut record.resume_from_checkpoint_ref, checkpoint_id);
+        changed |= set_optional_string(&mut record.state_transition, "restored");
+        if let Some(loaded_state_ref) = loaded_state_ref {
+            changed |= set_optional_string(&mut record.loaded_state_ref, loaded_state_ref);
+            changed |= push_unique_string(&mut record.artifact_refs, loaded_state_ref);
+        }
+        changed
+    })
+}
+
+fn link_active_stage_checkpoint(
+    snapshot: &mut SessionStateResponse,
+    update: impl FnOnce(&mut crate::types::StageExecutionRecord) -> bool,
+) -> bool {
+    let Some(stage_execution) = snapshot.stage_execution.as_mut() else {
+        return false;
+    };
+    let Some(index) = stage_execution.active_stage_index else {
+        return false;
+    };
+    let Some(record) = stage_execution.stages.get_mut(index) else {
+        return false;
+    };
+    update(record)
+}
+
+fn set_optional_string(target: &mut Option<String>, value: &str) -> bool {
+    if target.as_deref() == Some(value) {
+        return false;
+    }
+    *target = Some(value.to_string());
+    true
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: &str) -> bool {
+    if values.iter().any(|existing| existing == value) {
+        return false;
+    }
+    values.push(value.to_string());
+    true
+}
+
+fn stage_id_for_index(index: usize) -> String {
+    format!("stage-{index:03}")
+}
+
+fn checkpoint_vector_count(checkpoint: &fullmag_session::FmsCheckpoint) -> Option<u64> {
+    checkpoint
+        .compatibility
+        .field_layout_signature
+        .as_deref()
+        .and_then(|signature| {
+            signature
+                .strip_prefix("magnetization:")
+                .and_then(|suffix| suffix.strip_suffix("x3"))
+        })
+        .and_then(|value| value.parse().ok())
+}
+
+fn read_checkpoint_for_run(
+    store: &SessionStore,
+    run_id: &str,
+    checkpoint_id: &str,
+) -> Result<fullmag_session::FmsCheckpoint, ApiError> {
+    store
+        .read_checkpoint(run_id, checkpoint_id)
+        .map_err(|error| ApiError::internal(format!("reading checkpoint: {error}")))?
+        .ok_or_else(|| ApiError::not_found("checkpoint not found"))
+}
+
+fn read_checkpoint_common_state(
+    store: &SessionStore,
+    checkpoint: &fullmag_session::FmsCheckpoint,
+) -> Result<fullmag_session::CommonSolverState, ApiError> {
+    let raw = store
+        .read_document(&checkpoint.common_state_ref)
+        .map_err(|error| ApiError::internal(format!("reading checkpoint state: {error}")))?
+        .ok_or_else(|| ApiError::not_found("checkpoint state not found"))?;
+    serde_json::from_slice(&raw)
+        .map_err(|error| ApiError::internal(format!("parsing checkpoint state: {error}")))
+}
+
+fn read_checkpoint_magnetization(
+    store: &SessionStore,
+    common_state: &fullmag_session::CommonSolverState,
+) -> Result<Vec<[f64; 3]>, ApiError> {
+    let magnetization_ref = common_state
+        .magnetization_ref
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("checkpoint has no magnetization state"))?;
+    store
+        .load_magnetization(magnetization_ref)
+        .map_err(|error| ApiError::internal(format!("loading checkpoint magnetization: {error}")))?
+        .ok_or_else(|| ApiError::not_found("checkpoint magnetization not found"))
+}
+
+fn validate_checkpoint_restore_shape(
+    snapshot: &SessionStateResponse,
+    vector_count: usize,
+) -> Result<(), ApiError> {
+    let current_count = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len() / 3)
+        .or_else(|| {
+            snapshot.live_state.as_ref().and_then(|state| {
+                let product = state
+                    .latest_step
+                    .grid
+                    .iter()
+                    .try_fold(1usize, |acc, value| {
+                        usize::try_from(*value)
+                            .ok()
+                            .and_then(|item| acc.checked_mul(item))
+                    })?;
+                (product > 0).then_some(product)
+            })
+        });
+
+    if current_count.is_some_and(|count| count != vector_count) {
+        return Err(ApiError::bad_request(format!(
+            "checkpoint vector count {vector_count} does not match active domain vector count {}",
+            current_count.unwrap_or_default()
+        )));
+    }
+    Ok(())
+}
+
+fn flatten_magnetization(magnetization: &[[f64; 3]]) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(magnetization.len() * 3);
+    for vector in magnetization {
+        flat.extend_from_slice(vector);
+    }
+    flat
+}
+
+fn now_unix_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn checkpoint_resume_class(
+    compatibility: &CheckpointCompatibility,
+) -> fullmag_session::RestoreClass {
+    if compatibility.restart_abi.is_some() {
+        fullmag_session::RestoreClass::ExactResume
+    } else if compatibility.discretization_signature.is_some() {
+        fullmag_session::RestoreClass::LogicalResume
+    } else {
+        fullmag_session::RestoreClass::InitialConditionImport
+    }
+}
+
+fn checkpoint_compatibility(snapshot: &SessionStateResponse) -> CheckpointCompatibility {
+    let vector_count = snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .map(|values| values.len() / 3)
+        .unwrap_or(0);
+    CheckpointCompatibility {
+        restart_abi: None,
+        problem_hash: None,
+        plan_hash: None,
+        state_schema_version: Some("fullmag.checkpoint.v1".to_string()),
+        engine_id: snapshot.session.resolved_engine_id.clone(),
+        runtime_family: snapshot
+            .session
+            .resolved_runtime_family
+            .clone()
+            .or_else(|| snapshot.session.resolved_device.clone()),
+        precision: Some(
+            snapshot
+                .session
+                .resolved_precision
+                .clone()
+                .unwrap_or_else(|| snapshot.session.requested_precision.clone()),
+        ),
+        study_kind: None,
+        discretization_signature: Some(format!(
+            "mesh:{};vectors:{}",
+            snapshot.mesh_revision, vector_count
+        )),
+        field_layout_signature: Some(format!("magnetization:{}x3", vector_count)),
+    }
 }
 
 // ── Base64 helpers ─────────────────────────────────────────────────────

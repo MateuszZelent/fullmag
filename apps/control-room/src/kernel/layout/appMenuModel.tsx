@@ -6,7 +6,6 @@ import {
   Cpu,
   FileCode2,
   FilePlus2,
-  FolderOpen,
   Gauge,
   HelpCircle,
   Info,
@@ -22,6 +21,7 @@ import {
   Square,
   TerminalSquare,
   Undo2,
+  Upload,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -53,7 +53,7 @@ export const MAIN_MENUS: AppMenuNode[] = [
     label: "File",
     children: [
       { id: "workspace.new-problem", label: "New Problem", icon: <FilePlus2 size={14} />, shortcut: "Ctrl+N" },
-      { id: "workspace.open-project", label: "Open Project", icon: <FolderOpen size={14} />, shortcut: "Ctrl+O" },
+      { id: "study.import-state", label: "Import .fms State", icon: <Upload size={14} />, shortcut: "Ctrl+O" },
       { id: "workspace.save-sync", label: "Save / Sync", icon: <Save size={14} />, shortcut: "Ctrl+S" },
       { id: "workspace.export-python", label: "Export Python DSL", icon: <FileCode2 size={14} /> },
     ],

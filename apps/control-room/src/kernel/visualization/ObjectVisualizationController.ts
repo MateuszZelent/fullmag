@@ -74,7 +74,12 @@ type AirboxVisualizationStateLike = {
   layers?: {
     airbox?: VisualizationStateResource["layers"]["airbox"] | null;
   } | null;
+  targets?: VisualizationStateResource["targets"] | null;
 };
+
+type ResolvedTargetSettingsResource = NonNullable<
+  NonNullable<VisualizationStateResource["targets"]>["airbox"]
+>["settings"];
 
 type ObjectVisualizationListener = () => void;
 
@@ -715,20 +720,24 @@ export function resolveGlobalObjectVisualizationSettings(
 export function resolveAirboxVisualizationSettingsFromState(
   state: AirboxVisualizationStateLike | null | undefined,
 ): VisualizationTargetSettings {
+  const targetSettings = visualizationSettingsFromResolvedTarget(
+    state?.targets?.airbox?.settings,
+  );
+  const baseSettings = targetSettings ?? DEFAULT_AIRBOX_VISUALIZATION;
   const airbox = state?.layers?.airbox;
   const shaderVisible =
-    airbox?.surface?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.shaderVisible;
+    airbox?.surface?.visible ?? baseSettings.shaderVisible;
   const wireframeVisible =
-    airbox?.wireframe?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.wireframeVisible;
+    airbox?.wireframe?.visible ?? baseSettings.wireframeVisible;
   const pointsVisible =
-    airbox?.points?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.pointsVisible;
+    airbox?.points?.visible ?? baseSettings.pointsVisible;
 
   return {
-    ...DEFAULT_AIRBOX_VISUALIZATION,
+    ...baseSettings,
     boundsVisible:
-      airbox?.bounds?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.boundsVisible,
+      airbox?.bounds?.visible ?? baseSettings.boundsVisible,
     opacityPercent: layerOpacityToPercent(
-      airbox?.opacity ?? DEFAULT_AIRBOX_VISUALIZATION.opacityPercent / 100,
+      airbox?.opacity ?? baseSettings.opacityPercent / 100,
     ),
     pointsVisible,
     renderMode: resolveRenderMode({
@@ -738,10 +747,37 @@ export function resolveAirboxVisualizationSettingsFromState(
     }),
     shaderVisible,
     vectorsVisible:
-      airbox?.vectors?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.vectorsVisible,
-    visible: airbox?.visible ?? DEFAULT_AIRBOX_VISUALIZATION.visible,
+      airbox?.vectors?.visible ?? baseSettings.vectorsVisible,
+    visible: airbox?.visible ?? baseSettings.visible,
     wireframeVisible,
   };
+}
+
+function visualizationSettingsFromResolvedTarget(
+  settings: ResolvedTargetSettingsResource | null | undefined,
+): VisualizationTargetSettings | null {
+  if (!settings) return null;
+
+  return normalizeVisualizationSettings({
+    ...DEFAULT_AIRBOX_VISUALIZATION,
+    boundsVisible: settings.bounds_visible,
+    geometryScope: settings.geometry_scope,
+    opacityPercent: layerOpacityToPercent(settings.opacity),
+    pointsVisible: settings.points_visible,
+    renderMode: settings.render_mode,
+    shaderMonoColor: settings.surface_mono_color,
+    shaderVisible: settings.surface_visible,
+    surfaceColorSource: settings.surface_color_source,
+    vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
+    vectorColorMode: settings.vector_color_mode,
+    vectorMonoColor: settings.vector_mono_color,
+    vectorThickness: settings.vector_thickness,
+    vectorsVisible: settings.vectors_visible,
+    visible: settings.visible,
+    wireframeColor: settings.wireframe_color,
+    wireframeOpacityPercent: layerOpacityToPercent(settings.wireframe_opacity),
+    wireframeVisible: settings.wireframe_visible,
+  });
 }
 
 export function airboxVisualizationStatePatchFromTargetPatch(

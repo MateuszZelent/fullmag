@@ -335,7 +335,14 @@ fn apply_live_step_update_to_workspace_state(
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, update);
+    let previous_step = state.live_state.latest_step.clone();
     state.live_state = live_state_manifest_from_update(update);
+    if state.live_state.latest_step.magnetization.is_none() {
+        state.live_state.latest_step.magnetization = previous_step.magnetization;
+    }
+    if state.live_state.latest_step.fem_mesh.is_none() {
+        state.live_state.latest_step.fem_mesh = previous_step.fem_mesh;
+    }
     merge_cached_preview_fields_from_update(state, update);
     if include_scalar_row {
         set_latest_scalar_row_if_due(state, update);
@@ -1158,7 +1165,9 @@ fn completed_stage_indexes_from_records(stages: &[CurrentLiveStageExecutionRecor
     stages
         .iter()
         .enumerate()
-        .filter_map(|(index, stage)| (stage.status == "completed").then_some(index))
+        .filter_map(|(index, stage)| {
+            matches!(stage.status.as_str(), "completed" | "skipped").then_some(index)
+        })
         .collect()
 }
 
@@ -1192,6 +1201,70 @@ fn stage_execution_from_records(
     }
 }
 
+fn scripted_stage_execution_state(
+    total_stages: usize,
+    active_index: usize,
+    active_stage_kind: &str,
+    runtime_state: &str,
+    command_id: Option<&str>,
+    started_at_unix_ms: Option<u128>,
+    completed_at_unix_ms: Option<u128>,
+    artifact_ref: Option<String>,
+    reason: Option<fullmag_ir::StageStopReason>,
+) -> CurrentLiveStageExecutionState {
+    let mut stages = vec![
+        CurrentLiveStageExecutionRecord {
+            status: "pending".to_string(),
+            command_id: None,
+            started_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            reason: None,
+            artifact_refs: Vec::new(),
+            checkpoint_ref: None,
+            loaded_state_ref: None,
+            resume_from_checkpoint_ref: None,
+            state_transition: None,
+            metric_name: None,
+            metric_value: None,
+            threshold: None,
+        };
+        total_stages
+    ];
+
+    for stage in stages.iter_mut().take(active_index) {
+        stage.status = "completed".to_string();
+    }
+
+    if let Some(stage) = stages.get_mut(active_index) {
+        stage.status = runtime_state.to_string();
+        stage.command_id = command_id.map(str::to_string);
+        stage.started_at_unix_ms = started_at_unix_ms.map(millis_to_u64);
+        stage.completed_at_unix_ms = completed_at_unix_ms.map(millis_to_u64);
+        stage.reason = reason;
+        if let Some(artifact_ref) = artifact_ref {
+            push_unique_artifact_ref(&mut stage.artifact_refs, artifact_ref);
+        }
+    }
+
+    let active_stage_index = matches!(runtime_state, "running" | "paused").then_some(active_index);
+    stage_execution_from_records(
+        &stages,
+        active_stage_index,
+        Some(active_stage_kind),
+        runtime_state,
+    )
+}
+
+fn user_cancelled_stage_completion(status: &str) -> fullmag_ir::StageCompletionIR {
+    fullmag_ir::StageCompletionIR {
+        status: status.to_string(),
+        reason: Some(fullmag_ir::StageStopReason::UserCancelled),
+        metric_name: None,
+        metric_value: None,
+        threshold: None,
+    }
+}
+
 #[derive(Clone)]
 struct ActiveSequenceState {
     remaining_stages: Vec<fullmag_runner::SequenceStage>,
@@ -1208,7 +1281,15 @@ impl ActiveSequenceState {
             stages: vec![
                 CurrentLiveStageExecutionRecord {
                     status: "pending".to_string(),
+                    command_id: None,
+                    started_at_unix_ms: None,
+                    completed_at_unix_ms: None,
                     reason: None,
+                    artifact_refs: Vec::new(),
+                    checkpoint_ref: None,
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: None,
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
@@ -1216,6 +1297,81 @@ impl ActiveSequenceState {
                 total_stages
             ],
         }
+    }
+
+    fn single_current() -> Self {
+        Self {
+            remaining_stages: Vec::new(),
+            current_stage_1based: 1,
+            stages: vec![CurrentLiveStageExecutionRecord {
+                status: "pending".to_string(),
+                command_id: None,
+                started_at_unix_ms: None,
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+        }
+    }
+
+    fn mark_current_started(
+        &mut self,
+        command_id: &str,
+        started_at_unix_ms: u128,
+        artifact_ref: Option<String>,
+    ) {
+        let current_index = self.current_stage_index();
+        if current_index >= self.stages.len() {
+            return;
+        }
+
+        let mut record = self.stages[current_index].clone();
+        record.status = "running".to_string();
+        record.command_id = Some(command_id.to_string());
+        record.started_at_unix_ms = Some(millis_to_u64(started_at_unix_ms));
+        record.completed_at_unix_ms = None;
+        if let Some(artifact_ref) = artifact_ref {
+            push_unique_artifact_ref(&mut record.artifact_refs, artifact_ref);
+        }
+        self.stages[current_index] = record;
+    }
+
+    fn mark_current_checkpoint_preserved(
+        &mut self,
+        checkpoint_id: &str,
+        artifact_ref: Option<String>,
+    ) {
+        let current_index = self.current_stage_index();
+        if current_index >= self.stages.len() {
+            return;
+        }
+
+        let mut record = self.stages[current_index].clone();
+        record.checkpoint_ref = Some(checkpoint_id.to_string());
+        record.state_transition = Some("preserved".to_string());
+        if let Some(artifact_ref) = artifact_ref {
+            push_unique_artifact_ref(&mut record.artifact_refs, artifact_ref);
+        }
+        self.stages[current_index] = record;
+    }
+
+    fn mark_current_resume_from_checkpoint(&mut self, checkpoint_id: &str) {
+        let current_index = self.current_stage_index();
+        if current_index >= self.stages.len() {
+            return;
+        }
+
+        let mut record = self.stages[current_index].clone();
+        record.resume_from_checkpoint_ref = Some(checkpoint_id.to_string());
+        record.state_transition = Some("restored".to_string());
+        self.stages[current_index] = record;
     }
 
     fn total_stages(&self) -> usize {
@@ -1226,12 +1382,33 @@ impl ActiveSequenceState {
         self.current_stage_1based.saturating_sub(1)
     }
 
-    fn mark_current(&mut self, status: &str, completion: Option<&fullmag_ir::StageCompletionIR>) {
+    fn mark_current(
+        &mut self,
+        status: &str,
+        completion: Option<&fullmag_ir::StageCompletionIR>,
+        completed_at_unix_ms: Option<u128>,
+        artifact_ref: Option<String>,
+    ) {
         let current_index = self.current_stage_index();
         if current_index < self.stages.len() {
+            let previous = self.stages[current_index].clone();
+            let mut artifact_refs = previous.artifact_refs;
+            if let Some(artifact_ref) = artifact_ref {
+                push_unique_artifact_ref(&mut artifact_refs, artifact_ref);
+            }
             self.stages[current_index] = CurrentLiveStageExecutionRecord {
                 status: status.to_string(),
+                command_id: previous.command_id,
+                started_at_unix_ms: previous.started_at_unix_ms,
+                completed_at_unix_ms: completed_at_unix_ms
+                    .map(millis_to_u64)
+                    .or(previous.completed_at_unix_ms),
                 reason: completion.and_then(|value| value.reason),
+                artifact_refs,
+                checkpoint_ref: previous.checkpoint_ref,
+                loaded_state_ref: previous.loaded_state_ref,
+                resume_from_checkpoint_ref: previous.resume_from_checkpoint_ref,
+                state_transition: previous.state_transition,
                 metric_name: completion.and_then(|value| value.metric_name.clone()),
                 metric_value: completion.and_then(|value| value.metric_value),
                 threshold: completion.and_then(|value| value.threshold),
@@ -1258,6 +1435,19 @@ impl ActiveSequenceState {
 
     fn completed_stage_execution(&self, runtime_state: &str) -> CurrentLiveStageExecutionState {
         stage_execution_from_records(&self.stages, None, None, runtime_state)
+    }
+}
+
+fn millis_to_u64(value: u128) -> u64 {
+    value.min(u64::MAX as u128) as u64
+}
+
+fn push_unique_artifact_ref(artifact_refs: &mut Vec<String>, artifact_ref: String) {
+    if !artifact_refs
+        .iter()
+        .any(|existing| existing == &artifact_ref)
+    {
+        artifact_refs.push(artifact_ref);
     }
 }
 
@@ -2584,6 +2774,117 @@ pub(crate) fn run_manifest_from_steps(
 struct PausedInteractiveStage {
     command: SessionCommand,
     source_kind: String,
+    checkpoint_ref: Option<String>,
+}
+
+struct PauseCheckpointProvider {
+    step: u64,
+    time_s: f64,
+    dt: f64,
+    energies: fullmag_session::SolverEnergies,
+    magnetization: Vec<[f64; 3]>,
+    compatibility: fullmag_session::CheckpointCompatibility,
+}
+
+impl fullmag_session::CheckpointSnapshotProvider for PauseCheckpointProvider {
+    fn step(&self) -> u64 {
+        self.step
+    }
+
+    fn time_s(&self) -> f64 {
+        self.time_s
+    }
+
+    fn dt(&self) -> f64 {
+        self.dt
+    }
+
+    fn energies(&self) -> fullmag_session::SolverEnergies {
+        self.energies.clone()
+    }
+
+    fn magnetization(&self) -> Result<Vec<[f64; 3]>> {
+        Ok(self.magnetization.clone())
+    }
+
+    fn auxiliary_fields(
+        &self,
+        _policy: fullmag_session::FieldCapturePolicy,
+    ) -> Result<Vec<(String, Vec<[f64; 3]>)>> {
+        Ok(Vec::new())
+    }
+
+    fn backend_state_payload(&self) -> Result<Option<fullmag_session::BackendStatePayload>> {
+        Ok(None)
+    }
+
+    fn compatibility(&self) -> fullmag_session::CheckpointCompatibility {
+        self.compatibility.clone()
+    }
+}
+
+fn capture_pause_checkpoint(
+    run_id: &str,
+    step: Option<&fullmag_runner::StepStats>,
+    magnetization: &[[f64; 3]],
+    backend_plan: &BackendPlanIR,
+) -> Result<fullmag_session::CaptureResult> {
+    let store_root = repo_root()
+        .join(".fullmag")
+        .join("local-live")
+        .join("session-store");
+    let store = fullmag_session::SessionStore::open(store_root)?;
+    let provider = PauseCheckpointProvider {
+        step: step.map(|value| value.step).unwrap_or(0),
+        time_s: step.map(|value| value.time).unwrap_or(0.0),
+        dt: step.map(|value| value.dt).unwrap_or(0.0),
+        energies: fullmag_session::SolverEnergies {
+            exchange: step.map(|value| value.e_ex).unwrap_or(0.0),
+            demag: step.map(|value| value.e_demag).unwrap_or(0.0),
+            zeeman: step.map(|value| value.e_ext).unwrap_or(0.0),
+            anisotropy: step.map(|value| value.e_ani).unwrap_or(0.0),
+            dmi: step.map(|value| value.e_dmi).unwrap_or(0.0),
+            total: step.map(|value| value.e_total).unwrap_or(0.0),
+        },
+        magnetization: magnetization.to_vec(),
+        compatibility: pause_checkpoint_compatibility(backend_plan, magnetization.len()),
+    };
+    fullmag_session::capture_checkpoint(
+        &store,
+        &provider,
+        &fullmag_session::CaptureRequest {
+            run_id: run_id.to_string(),
+            profile: fullmag_session::SaveProfile::Resume,
+            field_policy: fullmag_session::FieldCapturePolicy::PrimaryOnly,
+        },
+    )
+}
+
+fn pause_checkpoint_compatibility(
+    backend_plan: &BackendPlanIR,
+    vector_count: usize,
+) -> fullmag_session::CheckpointCompatibility {
+    fullmag_session::CheckpointCompatibility {
+        state_schema_version: Some("fullmag.checkpoint.v1".to_string()),
+        runtime_family: Some(backend_plan_family(backend_plan).to_string()),
+        precision: Some("double".to_string()),
+        discretization_signature: Some(format!(
+            "backend:{};vectors:{}",
+            backend_plan_family(backend_plan),
+            vector_count
+        )),
+        field_layout_signature: Some(format!("magnetization:{}x3", vector_count)),
+        ..Default::default()
+    }
+}
+
+fn backend_plan_family(backend_plan: &BackendPlanIR) -> &'static str {
+    match backend_plan {
+        BackendPlanIR::Fdm(_) => "fdm",
+        BackendPlanIR::FdmMultilayer(_) => "fdm_multilayer",
+        BackendPlanIR::Fem(_) => "fem",
+        BackendPlanIR::FemEigen(_) => "fem_eigen",
+    }
 }
 
 fn announce_session_start(_session_id: &str, script_path: &Path, backend: &str, headless: bool) {
@@ -3639,6 +3940,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut time_offset = 0.0f64;
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
     let mut continuation_source: Option<ContinuationSource> = None;
+    let mut start_solver_command_id: Option<String> = None;
+    let mut paused_stage: Option<PausedInteractiveStage> = None;
 
     // ── wait_for_solve gate ──────────────────────────────────────────────
     let wait_for_solve_requested = stages
@@ -4059,6 +4362,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 WaitForSolveCommandAction::StartSolver => {
                     eprintln!("[fullmag] compute requested — starting solver");
+                    start_solver_command_id = Some(cmd.command_id.clone());
                     live_workspace.push_log("system", "Compute requested — starting solver");
                     live_workspace.update(|state| {
                         state.session.status = "running".to_string();
@@ -4200,6 +4504,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             time_offset,
             false,
         );
+        let stage_started_at_unix_ms = unix_time_millis()?;
         live_workspace.push_log(
             "system",
             format!(
@@ -4244,6 +4549,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &stage_initial_update,
             );
             state.live_state = live_state_manifest_from_update(&stage_initial_update);
+            state.stage_execution = Some(scripted_stage_execution_state(
+                stage_count,
+                stage_index,
+                &stage.entrypoint_kind,
+                "running",
+                start_solver_command_id.as_deref(),
+                Some(stage_started_at_unix_ms),
+                None,
+                Some(current_stage_artifact_dir.display().to_string()),
+                None,
+            ));
             clear_cached_preview_fields(state);
         });
 
@@ -4668,7 +4984,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             time_offset = last.time;
         }
         aggregated_steps.extend(offset_steps);
-        continuation_magnetization = Some(stage_result.final_magnetization);
+        continuation_magnetization = Some(stage_result.final_magnetization.clone());
         continuation_source = Some(match &execution_plan.backend_plan {
             BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
             _ => ContinuationSource::Fdm,
@@ -4681,6 +4997,75 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         if stage_result.status == fullmag_runner::RunStatus::Cancelled
             || stage_result.status == fullmag_runner::RunStatus::Paused
         {
+            let interrupted_at_unix_ms = unix_time_millis()?;
+            let interrupted_status = if stage_result.status == fullmag_runner::RunStatus::Cancelled
+            {
+                "cancelled"
+            } else {
+                "paused"
+            };
+            if stage_result.status == fullmag_runner::RunStatus::Paused {
+                let stage_command = crate::types::SessionCommand {
+                    seq: 0,
+                    command_id: start_solver_command_id
+                        .clone()
+                        .unwrap_or_else(|| format!("{}_stage_{}", run_id, stage_index + 1)),
+                    kind: match &stage.ir.study {
+                        fullmag_ir::StudyIR::Relaxation { .. } => "relax".to_string(),
+                        _ => "run".to_string(),
+                    },
+                    created_at_unix_ms: stage_started_at_unix_ms,
+                    target: Some(crate::types::RuntimeCommandTarget::StageIndex {
+                        stage_index: stage_index as u32,
+                    }),
+                    reason: Some("scripted_stage_pause".to_string()),
+                    precondition: None,
+                    client_intent_id: None,
+                    requested_at_unix_ms: Some(millis_to_u64(stage_started_at_unix_ms)),
+                    until_seconds: Some(stage.until_seconds),
+                    max_steps: None,
+                    torque_tolerance: None,
+                    energy_tolerance: None,
+                    integrator: None,
+                    fixed_timestep: None,
+                    max_error: None,
+                    relax_algorithm: None,
+                    relax_alpha: None,
+                    mesh_options: None,
+                    mesh_target: None,
+                    mesh_reason: None,
+                    state_path: None,
+                    state_format: None,
+                    state_dataset: None,
+                    state_sample_index: None,
+                    display_selection: None,
+                    preview_config: None,
+                    stages: None,
+                };
+                paused_stage = build_resumable_interactive_command(&stage_command, &stage_result)
+                    .map(|command| PausedInteractiveStage {
+                        command,
+                        source_kind: stage.entrypoint_kind.clone(),
+                        checkpoint_ref: None,
+                    });
+            }
+            live_workspace.update(|state| {
+                state.stage_execution = Some(scripted_stage_execution_state(
+                    stage_count,
+                    stage_index,
+                    &stage.entrypoint_kind,
+                    interrupted_status,
+                    start_solver_command_id.as_deref(),
+                    Some(stage_started_at_unix_ms),
+                    Some(interrupted_at_unix_ms),
+                    Some(current_stage_artifact_dir.display().to_string()),
+                    if stage_result.status == fullmag_runner::RunStatus::Cancelled {
+                        Some(fullmag_ir::StageStopReason::UserCancelled)
+                    } else {
+                        None
+                    },
+                ));
+            });
             live_workspace.push_log(
                 "system",
                 format!(
@@ -4719,6 +5104,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 stage.entrypoint_kind
             ),
         );
+        let completed_at_unix_ms = unix_time_millis()?;
+        live_workspace.update(|state| {
+            state.stage_execution = Some(scripted_stage_execution_state(
+                stage_count,
+                stage_index,
+                &stage.entrypoint_kind,
+                "completed",
+                start_solver_command_id.as_deref(),
+                Some(stage_started_at_unix_ms),
+                Some(completed_at_unix_ms),
+                Some(current_stage_artifact_dir.display().to_string()),
+                None,
+            ));
+        });
     }
 
     if interactive_requested {
@@ -4746,19 +5145,31 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             field_every_n,
         };
 
-        live_workspace.update(|state| {
-            state.session = ctx.build_session(
-                "awaiting_command",
-                &plan_summary_json(&current_plan_summary),
-                awaiting_at_unix_ms,
+        if paused_stage.is_none() {
+            live_workspace.update(|state| {
+                state.session = ctx.build_session(
+                    "awaiting_command",
+                    &plan_summary_json(&current_plan_summary),
+                    awaiting_at_unix_ms,
+                );
+                state.run = ctx.build_run("awaiting_command", &aggregated_steps);
+                set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
+            });
+            live_workspace.push_log(
+                "system",
+                "Scripted stages finished — workspace is awaiting interactive commands",
             );
-            state.run = ctx.build_run("awaiting_command", &aggregated_steps);
-            set_live_state_status(&mut state.live_state, "awaiting_command", Some(false));
-        });
-        live_workspace.push_log(
-            "system",
-            "Scripted stages finished — workspace is awaiting interactive commands",
-        );
+        } else {
+            live_workspace.update(|state| {
+                state.session = ctx.build_session(
+                    "paused",
+                    &plan_summary_json(&current_plan_summary),
+                    awaiting_at_unix_ms,
+                );
+                state.run = ctx.build_run("paused", &aggregated_steps);
+                set_live_state_status(&mut state.live_state, "paused", Some(false));
+            });
+        }
         eprintln!("interactive workspace ready");
         eprintln!("- workspace_id: {}", session_id);
         eprintln!("- queue: submit commands through the control room or API");
@@ -4768,11 +5179,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             interactive_template_ir.clone(),
             &initial_execution_plan.backend_plan,
         );
-        interactive_runtime_host
-            .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
+        if paused_stage.is_some() {
+            interactive_runtime_host
+                .enter_paused(continuation_magnetization.clone(), &live_workspace);
+        } else {
+            interactive_runtime_host
+                .enter_awaiting_command(continuation_magnetization.clone(), &live_workspace);
+        }
 
         let mut interactive_stage_index = stage_count;
-        let mut paused_stage: Option<PausedInteractiveStage> = None;
         // ── Sequence runner state ──
         // When a `run_sequence` command is active, this holds the remaining stages.
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
@@ -4899,6 +5314,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         "system",
                         format!("Resuming paused interactive {} stage", paused.source_kind),
                     );
+                    if let Some(checkpoint_ref) = paused.checkpoint_ref.as_deref() {
+                        if let Some(sequence) = active_sequence.as_mut() {
+                            sequence.mark_current_resume_from_checkpoint(checkpoint_ref);
+                        }
+                    }
                     (
                         paused.command,
                         Some(format!("resume ({})", paused.source_kind)),
@@ -5032,7 +5452,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     if !sequence.remaining_stages.is_empty() {
                         let skipped_label = sequence.remaining_stages[0].label();
                         sequence.remaining_stages.remove(0);
-                        sequence.mark_current("skipped", None);
+                        let skipped_at_unix_ms =
+                            unix_time_millis().unwrap_or(command.created_at_unix_ms);
+                        let skipped_completion = user_cancelled_stage_completion("skipped");
+                        sequence.mark_current(
+                            "skipped",
+                            Some(&skipped_completion),
+                            Some(skipped_at_unix_ms),
+                            None,
+                        );
                         live_workspace.push_log(
                             "system",
                             format!(
@@ -5109,6 +5537,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             else {
                 break;
             };
+            if active_sequence.is_none() && matches!(command.kind.as_str(), "run" | "relax") {
+                active_sequence = Some(ActiveSequenceState::single_current());
+            }
 
             apply_current_fem_overrides(
                 &mut stage.ir,
@@ -5184,6 +5615,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 time_offset,
                 false,
             );
+            if let Some(sequence) = active_sequence.as_mut() {
+                sequence.mark_current_started(
+                    &command.command_id,
+                    running_at_unix_ms,
+                    Some(current_stage_artifact_dir.display().to_string()),
+                );
+            }
             live_workspace.push_log(
                 "system",
                 format!("Executing interactive command: {}", command_kind_label),
@@ -5392,7 +5830,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         threshold: None,
                     };
                     let failed_stage_execution = active_sequence.as_mut().map(|sequence| {
-                        sequence.mark_current("failed", Some(&backend_error_completion));
+                        sequence.mark_current(
+                            "failed",
+                            Some(&backend_error_completion),
+                            Some(failed_ready_at_unix_ms),
+                            Some(current_stage_artifact_dir.display().to_string()),
+                        );
                         sequence.stage_execution(Some(&stage.entrypoint_kind), "failed")
                     });
                     if let Some(sequence) = active_sequence.as_ref() {
@@ -5454,6 +5897,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     step_offset = last.step;
                     time_offset = last.time;
                 }
+                let last_offset_step = offset_steps.last().cloned();
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
                 continuation_source = Some(match &execution_plan.backend_plan {
@@ -5466,9 +5910,41 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let resumable_command =
                     build_resumable_interactive_command(&command, &stage_result);
                 if let Some(resumable_command) = resumable_command {
+                    let pause_checkpoint = match capture_pause_checkpoint(
+                        &run_id,
+                        last_offset_step.as_ref(),
+                        &stage_result.final_magnetization,
+                        &execution_plan.backend_plan,
+                    ) {
+                        Ok(capture) => Some(capture),
+                        Err(error) => {
+                            live_workspace.push_log(
+                                "error",
+                                format!("Failed to capture pause checkpoint: {error}"),
+                            );
+                            None
+                        }
+                    };
+                    if let Some(sequence) = active_sequence.as_mut() {
+                        sequence.mark_current(
+                            "paused",
+                            None,
+                            None,
+                            Some(current_stage_artifact_dir.display().to_string()),
+                        );
+                        if let Some(capture) = pause_checkpoint.as_ref() {
+                            sequence.mark_current_checkpoint_preserved(
+                                &capture.checkpoint.checkpoint_id,
+                                Some(capture.checkpoint.common_state_ref.clone()),
+                            );
+                        }
+                    }
                     paused_stage = Some(PausedInteractiveStage {
                         command: resumable_command,
                         source_kind: command.kind.clone(),
+                        checkpoint_ref: pause_checkpoint
+                            .as_ref()
+                            .map(|capture| capture.checkpoint.checkpoint_id.clone()),
                     });
                     live_workspace.update(|state| {
                         state.session = ctx.build_session(
@@ -5572,6 +6048,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     crate::interactive_runtime_host::InteractiveStageInterrupt::Break => {
                         paused_stage = None;
+                        if let Some(sequence) = active_sequence.as_mut() {
+                            let cancelled_completion = user_cancelled_stage_completion("cancelled");
+                            sequence.mark_current(
+                                "cancelled",
+                                Some(&cancelled_completion),
+                                Some(cancelled_at_unix_ms),
+                                Some(current_stage_artifact_dir.display().to_string()),
+                            );
+                        }
                         // Abort active sequence if any
                         let aborted_sequence = active_sequence.take();
                         if aborted_sequence.is_some() {
@@ -5640,7 +6125,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             ),
                         );
                         if let Some(sequence) = active_sequence.as_mut() {
-                            sequence.mark_current("skipped", None);
+                            let skipped_completion = user_cancelled_stage_completion("skipped");
+                            sequence.mark_current(
+                                "skipped",
+                                Some(&skipped_completion),
+                                Some(cancelled_at_unix_ms),
+                                Some(current_stage_artifact_dir.display().to_string()),
+                            );
                             sequence.advance();
                             if !sequence.remaining_stages.is_empty() {
                                 let next_stage = sequence.remaining_stages.remove(0);
@@ -5697,7 +6188,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 "awaiting_command",
                                 Some(false),
                             );
-                            state.stage_execution = None;
                         });
                         interactive_runtime_host.enter_awaiting_command(
                             continuation_magnetization.clone(),
@@ -5816,7 +6306,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             // ── Sequence continuation: if there are more stages, advance ──
             if let Some(sequence) = active_sequence.as_mut() {
-                sequence.mark_current("completed", stage_result.completion.as_ref());
+                sequence.mark_current(
+                    "completed",
+                    stage_result.completion.as_ref(),
+                    Some(ready_at_unix_ms),
+                    Some(current_stage_artifact_dir.display().to_string()),
+                );
                 sequence.advance();
                 if !sequence.remaining_stages.is_empty() {
                     let next_stage = sequence.remaining_stages.remove(0);
@@ -6097,8 +6592,9 @@ mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
-        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, wait_for_solve_prompt,
-        wait_for_solve_supported, LiveProgressCadence, WaitForSolveCommandAction,
+        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, scripted_stage_execution_state,
+        user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_supported,
+        ActiveSequenceState, LiveProgressCadence, WaitForSolveCommandAction,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::bootstrap_live_state;
@@ -6113,7 +6609,7 @@ mod tests {
         GeometryEntryIR, GeometryIR, GridDimensions, IntegratorChoice, MaterialIR, MeshIR,
         ProblemIR, ProblemMeta, SamplingIR, StudyIR, ValidationProfileIR,
     };
-    use fullmag_runner::{LivePreviewField, StepStats, StepUpdate};
+    use fullmag_runner::{LivePreviewField, SequenceStage, StepStats, StepUpdate};
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
@@ -6281,6 +6777,27 @@ mod tests {
         assert_eq!(
             state.latest_scalar_row.as_ref().map(|row| row.step),
             Some(12)
+        );
+    }
+
+    #[test]
+    fn publish_live_step_update_preserves_previous_magnetization_when_payload_is_thin() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
+
+        let update = test_step_update(13);
+        apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            &update,
+            true,
+        );
+
+        assert_eq!(
+            state.live_state.latest_step.magnetization,
+            Some(vec![1.0, 0.0, 0.0])
         );
     }
 
@@ -6664,6 +7181,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn active_sequence_tracks_pause_checkpoint_and_resume_ref() {
+        let mut sequence = ActiveSequenceState::new(vec![SequenceStage::Run {
+            until_seconds: 1e-9,
+            max_steps: Some(100),
+        }]);
+
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_000_000, None);
+        sequence.mark_current(
+            "paused",
+            None,
+            None,
+            Some("artifacts/stage-000".to_string()),
+        );
+        sequence.mark_current_checkpoint_preserved(
+            "cp-000042",
+            Some("runs/run-1/checkpoints/cp-000042/common_state.json".to_string()),
+        );
+        sequence.mark_current_resume_from_checkpoint("cp-000042");
+        sequence.mark_current_started("cmd-stage-0", 1_700_000_001_000, None);
+
+        let stage = sequence
+            .stage_execution(Some("run"), "running")
+            .stages
+            .into_iter()
+            .next()
+            .expect("stage record should be present");
+        assert_eq!(stage.status, "running");
+        assert_eq!(stage.checkpoint_ref.as_deref(), Some("cp-000042"));
+        assert_eq!(
+            stage.resume_from_checkpoint_ref.as_deref(),
+            Some("cp-000042")
+        );
+        assert_eq!(stage.state_transition.as_deref(), Some("restored"));
+        assert!(stage
+            .artifact_refs
+            .iter()
+            .any(|artifact_ref| artifact_ref.ends_with("common_state.json")));
+    }
+
+    #[test]
+    fn active_sequence_marks_idle_skip_and_keeps_next_stage_active() {
+        let mut sequence = ActiveSequenceState::new(vec![
+            SequenceStage::Run {
+                until_seconds: 1e-9,
+                max_steps: Some(100),
+            },
+            SequenceStage::Run {
+                until_seconds: 2e-9,
+                max_steps: Some(200),
+            },
+        ]);
+
+        let skipped = sequence.remaining_stages.remove(0);
+        assert_eq!(skipped.label(), "run");
+        let skipped_completion = user_cancelled_stage_completion("skipped");
+        sequence.mark_current(
+            "skipped",
+            Some(&skipped_completion),
+            Some(1_700_000_000_000),
+            None,
+        );
+        sequence.advance();
+
+        let execution = sequence.stage_execution(Some("run"), "awaiting_command");
+        assert_eq!(execution.runtime_state, "awaiting_command");
+        assert_eq!(execution.completed_stage_indexes, vec![0]);
+        assert_eq!(execution.active_stage_index, Some(1));
+        assert_eq!(execution.stages[0].status, "skipped");
+        assert_eq!(
+            execution.stages[0].completed_at_unix_ms,
+            Some(1_700_000_000_000)
+        );
+        assert_eq!(
+            execution.stages[0].reason,
+            Some(fullmag_ir::StageStopReason::UserCancelled)
+        );
+        assert_eq!(execution.stages[1].status, "awaiting_command");
+    }
+
+    #[test]
+    fn scripted_stage_execution_records_user_cancel_reason() {
+        let execution = scripted_stage_execution_state(
+            1,
+            0,
+            "run",
+            "cancelled",
+            Some("cmd-stage-0"),
+            Some(1_700_000_000_000),
+            Some(1_700_000_001_000),
+            Some("artifacts/stage-000".to_string()),
+            Some(fullmag_ir::StageStopReason::UserCancelled),
+        );
+
+        let stage = execution.stages.first().expect("stage should exist");
+        assert_eq!(stage.status, "cancelled");
+        assert_eq!(
+            stage.reason,
+            Some(fullmag_ir::StageStopReason::UserCancelled)
+        );
+        assert_eq!(stage.command_id.as_deref(), Some("cmd-stage-0"));
+    }
+
     fn temp_test_dir(label: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -6718,6 +7338,14 @@ mod tests {
         assert_eq!(
             classify_wait_for_solve_command("display_sync"),
             WaitForSolveCommandAction::Ignore
+        );
+    }
+
+    #[test]
+    fn compute_current_energies_command_classifies_as_energy_refresh_not_solver_start() {
+        assert_eq!(
+            classify_wait_for_solve_command("compute_energies"),
+            WaitForSolveCommandAction::RefreshEnergies
         );
     }
 

@@ -26,6 +26,25 @@ export class LayoutController {
     return this.state;
   }
 
+  replace(nextState: LayoutState): void {
+    const next: LayoutState = {
+      activeModuleTab: nextState.activeModuleTab,
+      focusedSlot: nextState.focusedSlot,
+      panelVisible: { ...nextState.panelVisible },
+    };
+    const layoutChanged =
+      this.state.activeModuleTab !== next.activeModuleTab ||
+      this.state.panelVisible.left !== next.panelVisible.left ||
+      this.state.panelVisible.right !== next.panelVisible.right ||
+      this.state.panelVisible.bottom !== next.panelVisible.bottom;
+    const focusChanged = this.state.focusedSlot !== next.focusedSlot;
+    if (!layoutChanged && !focusChanged) return;
+
+    this.state = next;
+    if (layoutChanged) this.notify("workspace:layout-changed");
+    if (focusChanged) this.notify("workspace:focus-changed");
+  }
+
   setActiveTab(tabId: RibbonTabId): void {
     if (this.state.activeModuleTab === tabId) return;
     this.state = { ...this.state, activeModuleTab: tabId };

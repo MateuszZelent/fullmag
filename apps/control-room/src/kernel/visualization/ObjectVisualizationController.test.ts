@@ -547,6 +547,64 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("uses the target registry as the airbox geometry and style source", () => {
+    expect(
+      resolveAirboxVisualizationSettingsFromState({
+        layers: {
+          airbox: {
+            opacity: 0.31,
+            points: { opacity: 1, visible: false },
+            surface: { opacity: 1, visible: false },
+            vectors: { density: 64, domain: "airbox_only", visible: false },
+            visible: true,
+            wireframe: { opacity: 1, visible: true },
+          },
+        },
+        targets: {
+          airbox: {
+            label: "Airbox",
+            scope: "airbox",
+            scope_id: "airbox",
+            settings: {
+              ...DEFAULT_AIRBOX_VISUALIZATION,
+              bounds_visible: true,
+              geometry_scope: "surface",
+              opacity: 0.28,
+              points_visible: false,
+              render_mode: "wireframe",
+              surface_color_source: "solid",
+              surface_mono_color: "#112233",
+              surface_visible: false,
+              vector_alpha: 0.5,
+              vector_color_mode: "x",
+              vector_mono_color: "#445566",
+              vector_thickness: 1.5,
+              vectors_visible: false,
+              visible: true,
+              wireframe_color: "#778899",
+              wireframe_opacity: 0.4,
+              wireframe_visible: true,
+            },
+            source: "airbox",
+          },
+          objects: [],
+          parts: [],
+        },
+      }),
+    ).toMatchObject({
+      boundsVisible: true,
+      geometryScope: "surface",
+      opacityPercent: 31,
+      shaderMonoColor: "#112233",
+      vectorAlphaPercent: 50,
+      vectorColorMode: "x",
+      vectorMonoColor: "#445566",
+      vectorThickness: 1.5,
+      wireframeColor: "#778899",
+      wireframeOpacityPercent: 40,
+    });
+  });
+
   it("derives effective pass visibility from the target master visibility", () => {
     const configured = resolveAirboxVisualizationSettingsFromState({
       layers: {

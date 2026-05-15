@@ -1,11 +1,18 @@
 "use client";
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  PERSISTENCE_CHECKPOINTS_PATH,
+  SIMULATION_COMMANDS_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type { ModuleProps } from "@/kernel/types";
@@ -17,12 +24,24 @@ import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
   useMeshSemanticsResource,
+  useMeshSharedDomainManifestResource,
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import {
+  useCommandQueueResource,
+  useCommandDetailResource,
+  useCheckpointCatalogResource,
+  useSolverStatusResource,
+  useStageExecutionResource,
+} from "@/kernel/resources/studyRuntimeResources";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatus,
+} from "@/kernel/resources/useSessionStatus";
 import { useSelection } from "@/kernel/selection/useSelection";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 
 import { buildRibbonTabContent } from "./ribbonContributions";
 import { RibbonGroupsRow } from "./RibbonGroupsRow";
@@ -30,6 +49,7 @@ import { RibbonTabStrip } from "./RibbonTabStrip";
 import { RIBBON_TABS } from "./ribbonTypes";
 
 export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const { layout, setActiveTab } = useLayout();
   const { selection } = useSelection(moduleId);
   const { snapshot: visualizationSnapshot, visualization } =
@@ -37,19 +57,23 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
   const activeTab = layout.activeModuleTab;
   const needsGeometryResources =
     activeTab === "geometry" || activeTab === "mesh";
-  const needsMeshResources = activeTab === "mesh";
+  const needsRuntimeResources = activeTab === "study";
+  const needsMeshResources = activeTab === "mesh" || needsRuntimeResources;
   const needsVisualizationResources = activeTab === "view";
   const visualizationState = useVisualizationStateResource({
     enabled: needsVisualizationResources,
   });
   const geometryCapabilities = useGeometryCapabilitiesResource({
-    enabled: needsGeometryResources,
+    enabled: needsGeometryResources || needsRuntimeResources,
   });
   const geometryValidation = useGeometryValidationResource({
-    enabled: needsGeometryResources,
+    enabled: needsGeometryResources || needsRuntimeResources,
   });
   const meshBuildCurrent = useMeshBuildCurrent({ enabled: needsMeshResources });
   const meshBuildLatest = useMeshBuildLatestSuccessful({
+    enabled: needsMeshResources,
+  });
+  const meshManifest = useMeshSharedDomainManifestResource({
     enabled: needsMeshResources,
   });
   const meshSummary = useMeshSummaryResource({ enabled: needsMeshResources });
@@ -57,6 +81,19 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
     enabled: needsMeshResources,
   });
   const sessionStatus = useSessionStatus();
+  const commandQueue = useCommandQueueResource({
+    enabled: needsRuntimeResources,
+  });
+  const solverStatus = useSolverStatusResource({
+    enabled: needsRuntimeResources,
+  });
+  const stageExecution = useStageExecutionResource({
+    enabled: needsRuntimeResources,
+  });
+  const checkpointCatalog = useCheckpointCatalogResource({
+    enabled: needsRuntimeResources,
+  });
+  const commandDetail = useCommandDetailResource(selectedCommandId);
   const commandVersion = useSyncExternalStore(
     (listener) => kernel.commands.subscribe(listener),
     () => kernel.commands.getVersion(),
@@ -68,8 +105,26 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       createCommandContext("ribbon", kernel, {
         resourceData: {
           [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
+          [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
+          [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
+          [MESHING_SUMMARY_PATH]: meshSummary.data,
           [MODEL_GEOMETRY_CAPABILITIES_PATH]: geometryCapabilities.data,
           [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation.data,
+          [PERSISTENCE_CHECKPOINTS_PATH]: needsRuntimeResources
+            ? checkpointCatalog.data
+            : null,
+          [SIMULATION_COMMANDS_PATH]: needsRuntimeResources
+            ? commandQueue.data
+            : null,
+          [SIMULATION_SOLVER_STATUS_PATH]: needsRuntimeResources
+            ? solverStatus.data
+            : null,
+          [SIMULATION_STAGES_EXECUTION_PATH]: needsRuntimeResources
+            ? stageExecution.data
+            : null,
+          [SESSION_STATUS_RESOURCE_KEY]: needsRuntimeResources
+            ? sessionStatus.data
+            : null,
           [VISUALIZATION_STATE_PATH]: visualizationState.data,
         },
       }),
@@ -77,7 +132,16 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
       geometryCapabilities.data,
       geometryValidation.data,
       kernel,
+      checkpointCatalog.data,
+      commandQueue.data,
       meshBuildCurrent.data,
+      needsRuntimeResources,
+      meshBuildLatest.data,
+      meshManifest.data,
+      meshSummary.data,
+      sessionStatus.data,
+      solverStatus.data,
+      stageExecution.data,
       visualizationState.data,
     ],
   );
@@ -132,7 +196,18 @@ export default function RibbonModule({ kernel, moduleId }: ModuleProps) {
         tabs={RIBBON_TABS}
         onTabClick={setActiveTab}
       />
-      <RibbonGroupsRow groups={groups} onAction={handleAction} />
+      <RibbonGroupsRow
+        groups={groups}
+        onAction={handleAction}
+        onCommandDetail={setSelectedCommandId}
+      />
+      <CommandDetailDialog
+        commandId={selectedCommandId}
+        detail={commandDetail}
+        onOpenChange={(open) => {
+          if (!open) setSelectedCommandId(null);
+        }}
+      />
     </div>
   );
 }

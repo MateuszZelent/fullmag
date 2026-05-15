@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { buildModelTree, flattenExplorerNodes } from "./buildModelTree";
-import { modelTreeSnapshotFromScene } from "./sceneModelTreeAdapter";
+import {
+  modelTreeSnapshotFromScene,
+  modelTreeSnapshotWithStageExecution,
+} from "./sceneModelTreeAdapter";
 
 describe("buildModelTree", () => {
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
@@ -254,6 +257,7 @@ describe("buildModelTree", () => {
         demag_realization: "poisson_robin",
         stages: [
           {
+            stage_id: "stage-relax",
             kind: "relax",
             max_steps: "2000",
             torque_tolerance: "1e-4",
@@ -277,13 +281,13 @@ describe("buildModelTree", () => {
     );
     expect(flattened.map((node) => node.id)).toEqual(
       expect.arrayContaining([
-        "model:study:stage:0",
+        "model:study:stage:stage-relax",
         "model:study:stage:1",
         "model:study:stage:2",
       ]),
     );
     expect(
-      flattened.find((node) => node.id === "model:study:stage:0"),
+      flattened.find((node) => node.id === "model:study:stage:stage-relax"),
     ).toMatchObject({
       badge: "tol 1e-4",
       kind: "study.stage.relax",
@@ -309,5 +313,78 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:run",
     );
+  });
+
+  it("uses stage execution ids and statuses for runtime study stage nodes", () => {
+    const snapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene({
+        objects: [],
+        study: {
+          stages: [{ kind: "relax" }, { kind: "run" }],
+        },
+      }),
+      {
+        active_stage_index: 1,
+        active_stage_kind: "run",
+        completed_stage_indexes: [0],
+        revision: 12,
+        runtime_state: "running",
+        stage_statuses: ["completed", "running"],
+        stages: [
+          { index: 0, stage_id: "runtime-relax", status: "completed" },
+          { index: 1, stage_id: "runtime-run", status: "running" },
+        ],
+        total_stages: 2,
+      } as never,
+    );
+    const flattened = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:runtime-relax"),
+    ).toMatchObject({
+      status: "completed",
+    });
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:runtime-run"),
+    ).toMatchObject({
+      label: "Run 2",
+      status: "running",
+    });
+  });
+
+  it("exposes study runtime and recovery commands through explorer context menus", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree(
+        modelTreeSnapshotFromScene({
+          objects: [],
+          study: {
+            stages: [{ kind: "relax" }],
+          },
+        }),
+      ),
+    );
+
+    expect(
+      flattened.find((node) => node.id === "model:study")?.contextCommands,
+    ).toEqual(
+      expect.arrayContaining([
+        "study.run",
+        "study.pause",
+        "study.resume",
+        "study.stop",
+        "study.skip",
+        "study.compute-fields",
+        "study.compute-energies",
+        "study.save-checkpoint",
+        "study.restore-checkpoint",
+        "study.import-state",
+        "study.export-state",
+        "study.discard-paused-state",
+      ]),
+    );
+    expect(
+      flattened.find((node) => node.id === "model:study:stage:0")
+        ?.contextCommands,
+    ).toEqual(expect.arrayContaining(["study.skip"]));
   });
 });

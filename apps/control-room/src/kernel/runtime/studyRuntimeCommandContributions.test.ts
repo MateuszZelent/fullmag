@@ -3,13 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_SCALARS_PATH,
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  PERSISTENCE_CHECKPOINTS_PATH,
+  PERSISTENCE_EXPORTS_PATH,
+  PERSISTENCE_IMPORTS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+  VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import { LayoutController } from "../layout/LayoutController";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
@@ -22,6 +33,116 @@ function registryWithStudyRuntimeCommands(): CommandRegistry {
     registry.register(command);
   }
   return registry;
+}
+
+function runtimeResourceData({
+  activeStageIndex = null,
+  binaryFields = true,
+  commands = null,
+  commandCount = 0,
+  discretization = "fdm",
+  explicitTopology = false,
+  geometryValidation = { diagnostics: [] },
+  meshBuildStatus = "idle",
+  meshSourceSceneRevision = null,
+  meshRevision = 0,
+  runtimeState = "idle",
+  runtimeControls = null,
+  sceneRevision = 3,
+  stageRevision = 7,
+}: {
+  activeStageIndex?: number | null;
+  binaryFields?: boolean;
+  commands?: Array<{
+    command_id?: string;
+    kind: string;
+    reason?: string;
+    status: string;
+  }> | null;
+  commandCount?: number;
+  discretization?: string;
+  explicitTopology?: boolean;
+  geometryValidation?: unknown;
+  meshBuildStatus?: string;
+  meshRevision?: number;
+  meshSourceSceneRevision?: number | null;
+  runtimeState?: string;
+  runtimeControls?: Array<{
+    enabled: boolean;
+    kind: string;
+    reason?: string | null;
+  }> | null;
+  sceneRevision?: number | null;
+  stageRevision?: number;
+} = {}): Record<string, unknown> {
+  return {
+    [MESHING_BUILDS_CURRENT_PATH]: { status: meshBuildStatus },
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]:
+      meshRevision > 0
+        ? {
+            revision: meshRevision,
+            source_scene_revision: meshSourceSceneRevision ?? sceneRevision,
+          }
+        : null,
+    [MODEL_GEOMETRY_VALIDATION_PATH]: geometryValidation,
+    [SESSION_STATUS_RESOURCE_KEY]: {
+      capabilities: {
+        algorithms_available: [],
+        binary_fields: binaryFields,
+        cell_fields: true,
+        eigen_modes: false,
+        explicit_topology: explicitTopology,
+        gpu_telemetry: true,
+        node_fields: explicitTopology,
+        preview_2d: true,
+        preview_3d: true,
+        scalar_history: true,
+        structured_grid: !explicitTopology,
+      },
+      domain: {
+        cell_count: 1,
+        discretization,
+        generation_id: 1,
+      },
+      resources: {
+        mesh_revision: meshRevision,
+        scene_revision: sceneRevision,
+      },
+    },
+    [SIMULATION_COMMANDS_PATH]: {
+      accepted_count: 0,
+      can_accept_commands: true,
+      commands:
+        commands ??
+        Array.from({ length: commandCount }, (_, index) => ({
+          command_id: `cmd-${index}`,
+          kind: "solve",
+          status: "completed",
+        })),
+      completed_count: 0,
+      dispatched_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 1,
+      running_count: 0,
+      runtime_controls: runtimeControls ?? [],
+    },
+    [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: runtimeState },
+    [SIMULATION_STAGES_EXECUTION_PATH]: {
+      active_stage_index: activeStageIndex,
+      revision: stageRevision,
+      runtime_state: runtimeState,
+      stages:
+        activeStageIndex == null
+          ? []
+          : [
+              { stage_id: "stage-000" },
+              { stage_id: "stage-001" },
+              { stage_id: "stage-002" },
+            ],
+    },
+  };
 }
 
 describe("study runtime command contributions", () => {
@@ -39,12 +160,15 @@ describe("study runtime command contributions", () => {
       "m",
     )}?component=full`;
     const fieldVectorListener = vi.fn();
+    const scalarWindowListener = vi.fn();
     resources.subscribe(fieldVectorKey, fieldVectorListener);
+    resources.subscribe(`${DATA_SCALARS_PATH}?limit=100`, scalarWindowListener);
 
     const result = await registry.execute("study.compute-fields", {
       api: {
         commands: { submit },
       } as never,
+      resourceData: runtimeResourceData(),
       resources,
       source: "test",
     });
@@ -53,11 +177,19 @@ describe("study runtime command contributions", () => {
       message: "Compute fields command accepted.",
       status: "completed",
     });
-    expect(submit).toHaveBeenCalledWith({ kind: "compute_fields" });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "compute_fields",
+        reason: "user_requested",
+        target: { kind: "study" },
+      }),
+    );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-fields");
     expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-fields");
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe("cmd-fields");
     expect(fieldVectorListener).toHaveBeenCalledWith("cmd-fields");
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe("cmd-fields");
+    expect(scalarWindowListener).toHaveBeenCalledWith("cmd-fields");
   });
 
   it("submits compute energies without a run command and invalidates energy/object metrics resources", async () => {
@@ -74,12 +206,15 @@ describe("study runtime command contributions", () => {
       "arch_Waveguide",
     );
     const objectMetricsListener = vi.fn();
+    const scalarWindowListener = vi.fn();
     resources.subscribe(objectMetricsKey, objectMetricsListener);
+    resources.subscribe(`${DATA_SCALARS_PATH}?limit=100`, scalarWindowListener);
 
     const result = await registry.execute("study.compute-energies", {
       api: {
         commands: { submit },
       } as never,
+      resourceData: runtimeResourceData(),
       resources,
       source: "test",
     });
@@ -88,12 +223,20 @@ describe("study runtime command contributions", () => {
       message: "Compute energies command accepted.",
       status: "completed",
     });
-    expect(submit).toHaveBeenCalledWith({ kind: "compute_energies" });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "compute_energies",
+        reason: "user_requested",
+        target: { kind: "study" },
+      }),
+    );
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-energies");
     expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-energies");
     expect(resources.getRevision(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH)).toBe(
       "cmd-energies",
     );
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe("cmd-energies");
+    expect(scalarWindowListener).toHaveBeenCalledWith("cmd-energies");
     expect(objectMetricsListener).toHaveBeenCalledWith("cmd-energies");
   });
 
@@ -104,6 +247,714 @@ describe("study runtime command contributions", () => {
     expect(registry.isEnabled("study.compute-fields", context)).toBe(false);
     expect(registry.get("study.compute-fields")?.disabledReason?.(context)).toBe(
       "Control-room API is unavailable.",
+    );
+  });
+
+  it("saves runtime checkpoints through the persistence facade", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const create = vi.fn(async () => ({
+      checkpoint: {
+        artifact_ref: "artifacts/checkpoints/cp-000042.fmstate",
+        backend_family: "fdm_cpu",
+        checkpoint_id: "cp-000042",
+        checksum: "sha256:abc",
+        coordinate_frame: "solver_domain",
+        created_at: "2026-05-14T12:00:00Z",
+        dt: 1e-13,
+        field_revision: 7,
+        format: "fmstate",
+        mesh_revision: 5,
+        resume_class: "logical_resume",
+        run_id: "run-1",
+        scene_revision: 3,
+        source: "user_requested",
+        step: 42,
+        time_s: 2.5e-9,
+        vector_count: 2,
+      },
+    }));
+    const checkpointListener = vi.fn();
+    resources.subscribe(PERSISTENCE_CHECKPOINTS_PATH, checkpointListener);
+
+    const result = await registry.execute("study.save-checkpoint", {
+      api: {
+        persistence: {
+          checkpoints: { create },
+        },
+      } as never,
+      resourceData: {
+        [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "paused" },
+      },
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Checkpoint saved.",
+      status: "completed",
+    });
+    expect(create).toHaveBeenCalledWith({
+      profile: "resume",
+      reason: "user_requested",
+    });
+    expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBe("cp-000042");
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cp-000042");
+    expect(checkpointListener).toHaveBeenCalledWith("cp-000042");
+  });
+
+  it("restores checkpoints and invalidates field, scalar, energy, metric, and visualization resources", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const restore = vi.fn(async () => ({
+      checkpoint: {
+        artifact_ref: "artifacts/checkpoints/cp-000042.fmstate",
+        backend_family: "fdm_cpu",
+        checkpoint_id: "cp-000042",
+        checksum: "sha256:abc",
+        coordinate_frame: "solver_domain",
+        created_at: "2026-05-14T12:00:00Z",
+        dt: 1e-13,
+        field_revision: 8,
+        format: "fmstate",
+        mesh_revision: 5,
+        resume_class: "logical_resume",
+        run_id: "run-1",
+        scene_revision: 3,
+        source: "user_requested",
+        step: 42,
+        time_s: 2.5e-9,
+        vector_count: 2,
+      },
+      field_revision: 8,
+      restore_class: "logical_resume",
+      restored_vector_count: 2,
+      warnings: [],
+    }));
+    const fieldVectorKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full`;
+    const objectMetricsKey = SIMULATION_OBJECT_METRICS_PATH.replace(
+      "{object_id}",
+      "arch_Waveguide",
+    );
+    const fieldVectorListener = vi.fn();
+    const objectMetricsListener = vi.fn();
+    resources.subscribe(fieldVectorKey, fieldVectorListener);
+    resources.subscribe(objectMetricsKey, objectMetricsListener);
+
+    const result = await registry.execute("study.restore-checkpoint", {
+      api: {
+        persistence: {
+          checkpoints: { restore },
+        },
+      } as never,
+      resourceData: {
+        [PERSISTENCE_CHECKPOINTS_PATH]: {
+          checkpoints: [
+            {
+              checkpoint_id: "cp-000042",
+              resume_class: "logical_resume",
+            },
+          ],
+        },
+      },
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Checkpoint restored.",
+      status: "completed",
+    });
+    expect(restore).toHaveBeenCalledWith("cp-000042", {
+      reason: "user_requested",
+    });
+    expect(resources.getRevision(PERSISTENCE_CHECKPOINTS_PATH)).toBe(8);
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe(8);
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(8);
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe(8);
+    expect(resources.getRevision(SIMULATION_SOLVER_ENERGIES_CURRENT_PATH)).toBe(8);
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(8);
+    expect(fieldVectorListener).toHaveBeenCalledWith(8);
+    expect(objectMetricsListener).toHaveBeenCalledWith(8);
+  });
+
+  it("exports state through the persistence facade", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const create = vi.fn(async () => ({
+      fms_base64: "Zm1z",
+      profile: "resume",
+      session_id: "session-1",
+      size_bytes: 3,
+    }));
+
+    const result = await registry.execute("study.export-state", {
+      api: {
+        persistence: {
+          exports: { create },
+        },
+      } as never,
+      layout,
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "State export created.",
+      status: "completed",
+    });
+    expect(create).toHaveBeenCalledWith({
+      profile: "resume",
+      ui_state: {
+        kernel_layout: {
+          activeModuleTab: "home",
+          focusedSlot: null,
+          panelVisible: {
+            bottom: true,
+            left: true,
+            right: true,
+          },
+        },
+        version: 1,
+        workspace_layout: null,
+      },
+    });
+    expect(resources.getRevision(PERSISTENCE_EXPORTS_PATH)).toBe("session-1");
+  });
+
+  it("imports state through the persistence facade and invalidates restored session resources", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const layout = new LayoutController(bus);
+    const resources = new ResourceInvalidationController(bus);
+    const inspect = vi.fn(async () => ({
+      inspection: {
+        created_at: "2026-05-15T00:00:00Z",
+        created_by_version: "test",
+        format_version: "1",
+        name: "Imported session",
+        profile: "resume",
+        restore_class: "logical_resume",
+        run_count: 1,
+        saved_at: "2026-05-15T00:00:00Z",
+        session_id: "session-imported",
+        total_size_bytes: 128,
+        warnings: [],
+      },
+    }));
+    const commit = vi.fn(async () => ({
+      restore_class: "logical_resume",
+      session_id: "session-imported",
+      ui_state: {
+        kernel_layout: {
+          activeModuleTab: "study",
+          focusedSlot: "panel-right",
+          panelVisible: {
+            bottom: false,
+            left: false,
+            right: true,
+          },
+        },
+        version: 1,
+        workspace_layout: null,
+      },
+      warnings: [],
+    }));
+    const fieldVectorKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full`;
+    const fieldVectorListener = vi.fn();
+    resources.subscribe(fieldVectorKey, fieldVectorListener);
+
+    const result = await registry.execute("study.import-state", {
+      api: {
+        persistence: {
+          imports: { commit, inspect },
+        },
+      } as never,
+      input: {
+        fmsBase64: "Zm1z",
+        restoreMode: "resume",
+      },
+      layout,
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "State imported from session-imported.",
+      status: "completed",
+    });
+    expect(inspect).toHaveBeenCalledWith({ fms_base64: "Zm1z" });
+    expect(commit).toHaveBeenCalledWith({
+      fms_base64: "Zm1z",
+      restore_mode: "resume",
+    });
+    expect(resources.getRevision(PERSISTENCE_IMPORTS_PATH)).toBe(
+      "session-imported",
+    );
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe(
+      "session-imported",
+    );
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe("session-imported");
+    expect(resources.getRevision(DATA_SCALARS_PATH)).toBe("session-imported");
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(
+      "session-imported",
+    );
+    expect(fieldVectorListener).toHaveBeenCalledWith("session-imported");
+    expect(layout.get()).toMatchObject({
+      activeModuleTab: "study",
+      focusedSlot: "panel-right",
+      panelVisible: {
+        bottom: false,
+        left: false,
+        right: true,
+      },
+    });
+  });
+
+  it("gates runtime controls from resource-backed runtime state", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const api = {} as never;
+    const runningContext = {
+      api,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        runtimeState: "running",
+      }),
+      source: "test" as const,
+    };
+    const pausedContext = {
+      api,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        runtimeState: "paused",
+      }),
+      source: "test" as const,
+    };
+    const idleContext = {
+      api,
+      resourceData: runtimeResourceData(),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.pause", runningContext)).toBe(true);
+    expect(registry.isEnabled("study.resume", runningContext)).toBe(false);
+    expect(registry.get("study.resume")?.disabledReason?.(runningContext)).toBe(
+      "Runtime is not paused.",
+    );
+    expect(registry.isEnabled("study.resume", pausedContext)).toBe(true);
+    expect(registry.isEnabled("study.stop", pausedContext)).toBe(true);
+    expect(registry.isEnabled("study.discard-paused-state", pausedContext)).toBe(
+      true,
+    );
+    expect(registry.isEnabled("study.discard-paused-state", runningContext)).toBe(
+      false,
+    );
+    expect(
+      registry
+        .get("study.discard-paused-state")
+        ?.disabledReason?.(runningContext),
+    ).toBe("Runtime is not paused.");
+    expect(registry.isEnabled("study.skip", runningContext)).toBe(true);
+    expect(registry.isEnabled("study.pause", idleContext)).toBe(false);
+    expect(registry.get("study.pause")?.disabledReason?.(idleContext)).toBe(
+      "Runtime is not running.",
+    );
+  });
+
+  it("uses backend runtime control readback when command readiness is published", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        runtimeControls: [
+          {
+            enabled: false,
+            kind: "pause",
+            reason: "Runtime backend is draining.",
+          },
+        ],
+        runtimeState: "running",
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.pause", context)).toBe(false);
+    expect(registry.get("study.pause")?.disabledReason?.(context)).toBe(
+      "Runtime backend is draining.",
+    );
+  });
+
+  it("marks study runtime commands active from the command queue", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const activeStatuses = [
+      "accepted",
+      "dispatched",
+      "pending",
+      "queued",
+      "running",
+    ];
+    const inactiveStatuses = ["completed", "failed", "rejected"];
+    const commandKinds = [
+      ["study.run", "solve"],
+      ["study.pause", "pause"],
+      ["study.resume", "resume"],
+      ["study.stop", "stop"],
+      ["study.skip", "skip"],
+      ["study.compute-fields", "compute_fields"],
+      ["study.compute-energies", "compute_energies"],
+    ] as const;
+
+    for (const [commandId, kind] of commandKinds) {
+      for (const status of activeStatuses) {
+        expect(
+          registry.isActive(commandId, {
+            api: {} as never,
+            resourceData: runtimeResourceData({
+              commands: [{ command_id: "cmd-active", kind, status }],
+            }),
+            source: "test",
+          }),
+          `${commandId} ${status}`,
+        ).toBe(true);
+      }
+
+      for (const status of inactiveStatuses) {
+        expect(
+          registry.isActive(commandId, {
+            api: {} as never,
+            resourceData: runtimeResourceData({
+              commands: [{ command_id: "cmd-inactive", kind, status }],
+            }),
+            source: "test",
+          }),
+          `${commandId} ${status}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("marks discard active only for explicit discard stop commands", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const baseContext = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        commands: [
+          {
+            command_id: "cmd-stop",
+            kind: "stop",
+            status: "running",
+          },
+        ],
+      }),
+      source: "test" as const,
+    };
+    const discardContext = {
+      ...baseContext,
+      resourceData: runtimeResourceData({
+        commands: [
+          {
+            command_id: "cmd-discard",
+            kind: "stop",
+            reason: "discard_paused_state",
+            status: "running",
+          },
+        ],
+      }),
+    };
+
+    expect(registry.isActive("study.stop", baseContext)).toBe(true);
+    expect(registry.isActive("study.discard-paused-state", baseContext)).toBe(
+      false,
+    );
+    expect(registry.isActive("study.discard-paused-state", discardContext)).toBe(
+      true,
+    );
+  });
+
+  it("requires session status before starting compute commands", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const api = {} as never;
+    const resourceData = { ...runtimeResourceData() };
+    delete resourceData[SESSION_STATUS_RESOURCE_KEY];
+    const context = {
+      api,
+      resourceData,
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Session status is unavailable.",
+    );
+  });
+
+  it("gates compute fields on the active data-plane capability", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({ binaryFields: false }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(false);
+    expect(
+      registry.get("study.compute-fields")?.disabledReason?.(context),
+    ).toBe("Field data plane is unavailable.");
+  });
+
+  it("blocks runtime start commands while geometry validation has runtime blockers", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({
+        geometryValidation: {
+          diagnostics: [
+            {
+              message: "Geometry self-intersection",
+              severity: "error",
+            },
+          ],
+        },
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "Resolve geometry validation blockers before running runtime commands.",
+    );
+  });
+
+  it("blocks runtime start commands while a mesh build is active", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: runtimeResourceData({ meshBuildStatus: "running" }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "A mesh build is still running.",
+    );
+  });
+
+  it("requires current shared-domain mesh provenance for FEM runtime start commands", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const api = {} as never;
+    const noMeshContext = {
+      api,
+      resourceData: runtimeResourceData({ discretization: "fem" }),
+      source: "test" as const,
+    };
+    const staleMeshContext = {
+      api,
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        meshRevision: 5,
+        meshSourceSceneRevision: 2,
+        sceneRevision: 3,
+      }),
+      source: "test" as const,
+    };
+    const currentMeshContext = {
+      api,
+      resourceData: runtimeResourceData({
+        discretization: "fem",
+        meshRevision: 5,
+        meshSourceSceneRevision: 3,
+        sceneRevision: 3,
+      }),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", noMeshContext)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(noMeshContext)).toBe(
+      "Build a shared-domain mesh before running FEM runtime commands.",
+    );
+    expect(registry.isEnabled("study.run", staleMeshContext)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(staleMeshContext)).toBe(
+      "Rebuild the shared-domain mesh for the current scene before running.",
+    );
+    expect(registry.isEnabled("study.run", currentMeshContext)).toBe(true);
+  });
+
+  it("submits paused-state discard as a stop command with explicit intent", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-discard",
+      error: null,
+    }));
+
+    const result = await registry.execute("study.discard-paused-state", {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        commandCount: 2,
+        runtimeState: "paused",
+        stageRevision: 9,
+      }),
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Paused state discard command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "stop",
+        precondition: {
+          command_revision: 2,
+          runtime_state: "paused",
+          stage_execution_revision: 9,
+        },
+        reason: "discard_paused_state",
+        target: { kind: "stage_id", stage_id: "stage-001" },
+      }),
+    );
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe("cmd-discard");
+    expect(resources.getRevision(SESSION_STATUS_RESOURCE_KEY)).toBe("cmd-discard");
+    expect(resources.getRevision(SIMULATION_SOLVER_STATUS_PATH)).toBe(
+      "cmd-discard",
+    );
+  });
+
+  it("submits runtime controls with active-stage target and revision preconditions", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-pause",
+      error: null,
+    }));
+
+    const result = await registry.execute("study.pause", {
+      api: {
+        commands: { submit },
+      } as never,
+      resourceData: runtimeResourceData({
+        activeStageIndex: 1,
+        commandCount: 3,
+        runtimeState: "running",
+        stageRevision: 11,
+      }),
+      resources,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Pause command accepted.",
+      status: "completed",
+    });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "pause",
+        precondition: {
+          command_revision: 3,
+          runtime_state: "running",
+          stage_execution_revision: 11,
+        },
+        target: { kind: "stage_id", stage_id: "stage-001" },
+      }),
+    );
+  });
+
+  it("gates checkpoint saving on resource-backed runtime state", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const api = {} as never;
+    const pausedContext = {
+      api,
+      resourceData: runtimeResourceData({ runtimeState: "paused" }),
+      source: "test" as const,
+    };
+    const idleContext = {
+      api,
+      resourceData: runtimeResourceData(),
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.save-checkpoint", pausedContext)).toBe(true);
+    expect(registry.isEnabled("study.save-checkpoint", idleContext)).toBe(false);
+    expect(
+      registry.get("study.save-checkpoint")?.disabledReason?.(idleContext),
+    ).toBe("No runtime magnetization state is available to checkpoint.");
+  });
+
+  it("requires a restorable checkpoint before enabling checkpoint restore", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const api = {} as never;
+    const emptyContext = {
+      api,
+      resourceData: {
+        [PERSISTENCE_CHECKPOINTS_PATH]: { checkpoints: [] },
+      },
+      source: "test" as const,
+    };
+    const configOnlyContext = {
+      api,
+      resourceData: {
+        [PERSISTENCE_CHECKPOINTS_PATH]: {
+          checkpoints: [
+            {
+              checkpoint_id: "cp-config",
+              resume_class: "config_only",
+            },
+          ],
+        },
+      },
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.restore-checkpoint", emptyContext)).toBe(
+      false,
+    );
+    expect(
+      registry.get("study.restore-checkpoint")?.disabledReason?.(emptyContext),
+    ).toBe("No checkpoint is selected.");
+    expect(registry.isEnabled("study.restore-checkpoint", configOnlyContext)).toBe(
+      false,
+    );
+    expect(
+      registry
+        .get("study.restore-checkpoint")
+        ?.disabledReason?.(configOnlyContext),
+    ).toBe("Selected checkpoint does not contain magnetization state.");
+  });
+
+  it("prevents starting a study while a runtime command is active", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: {
+        ...runtimeResourceData(),
+        [SIMULATION_COMMANDS_PATH]: {
+          commands: [{ status: "running" }],
+        },
+      },
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
+      "A runtime command is already active.",
     );
   });
 });

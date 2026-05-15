@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 const checks = [
   {
     args: [
-      "fetch\\(",
+      "\\bfetch\\(",
       "src",
       "--glob",
       "!src/kernel/api/**",

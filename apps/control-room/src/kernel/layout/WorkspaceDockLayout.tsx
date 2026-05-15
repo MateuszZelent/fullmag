@@ -8,6 +8,7 @@ import {
   moveWorkspaceColumn,
   restoreWorkspaceLayout,
   serializeWorkspaceLayout,
+  WORKSPACE_LAYOUT_RESTORED_EVENT,
   WORKSPACE_LAYOUT_STORAGE_KEY,
   type WorkspaceColumnLayout,
 } from "./layoutModel";
@@ -60,17 +61,28 @@ export function WorkspaceDockLayout() {
   });
 
   useEffect(() => {
-    let restoredLayout = DEFAULT_WORKSPACE_LAYOUT;
-    try {
-      restoredLayout = restoreWorkspaceLayout(
-        window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY),
+    const restoreFromStorage = () => {
+      let restoredLayout = DEFAULT_WORKSPACE_LAYOUT;
+      try {
+        restoredLayout = restoreWorkspaceLayout(
+          window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY),
+        );
+      } finally {
+        setDockState({
+          layout: restoredLayout,
+          restored: true,
+        });
+      }
+    };
+
+    restoreFromStorage();
+    window.addEventListener(WORKSPACE_LAYOUT_RESTORED_EVENT, restoreFromStorage);
+    return () => {
+      window.removeEventListener(
+        WORKSPACE_LAYOUT_RESTORED_EVENT,
+        restoreFromStorage,
       );
-    } finally {
-      setDockState({
-        layout: restoredLayout,
-        restored: true,
-      });
-    }
+    };
   }, []);
 
   function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {

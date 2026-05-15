@@ -11,6 +11,7 @@ import {
   useMeshSummaryResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 
@@ -19,7 +20,10 @@ import {
   buildModelTree,
   filterExplorerNodes,
 } from "./builders/buildModelTree";
-import { modelTreeSnapshotFromScene } from "./builders/sceneModelTreeAdapter";
+import {
+  modelTreeSnapshotFromScene,
+  modelTreeSnapshotWithStageExecution,
+} from "./builders/sceneModelTreeAdapter";
 import { ExplorerTabBar } from "./ExplorerTabBar";
 import {
   setExplorerActiveTab,
@@ -68,9 +72,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const realizedSizeFields = useMeshSharedDomainRealizedSizeFieldsResource({
     enabled: modelTabActive,
   });
+  const stageExecution = useStageExecutionResource({ enabled: modelTabActive });
 
   const nodes = useMemo(() => {
-    const modelSnapshot = modelTreeSnapshotFromScene(modelResource.data);
+    const modelSnapshot = modelTreeSnapshotWithStageExecution(
+      modelTreeSnapshotFromScene(modelResource.data),
+      stageExecution.data,
+    );
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus:
         stringValue(record(activeBuild.data?.active_build)?.status) ??
@@ -100,6 +108,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     manifest.data,
     meshSummary.data,
     modelResource.data,
+    stageExecution.data,
     qualityGates.data,
     realizedSizeFields.data,
   ]);

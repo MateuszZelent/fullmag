@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { ALL_MODULES } from "@/modules";
@@ -78,6 +78,26 @@ describe("viewport3dManifest", () => {
     expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("off");
     expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
       .toBe(true);
+  });
+
+  it("keeps projection changes local while queuing the backend camera patch", async () => {
+    viewport3dStore.resetForTest();
+    const registry = registerViewportCommands();
+    const queuePatch = vi.fn();
+
+    await expect(
+      registry.execute("view-projection", {
+        source: "test",
+        visualizationSync: { queuePatch } as never,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    expect(viewport3dStore.getSnapshot().widgets.cameraProjection).toBe(
+      "orthographic",
+    );
+    expect(queuePatch).toHaveBeenCalledWith({
+      camera: { projection: "orthographic" },
+    });
   });
 
   it("contributes visual quality profile commands", async () => {

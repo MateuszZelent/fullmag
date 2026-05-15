@@ -170,6 +170,19 @@ export function resolveJsonResourceRevision(
   return resolveRevisionProperty(data, "revision");
 }
 
+export function resolveMeshSharedDomainManifestRevision(
+  manifest: MeshSharedDomainManifestResource | null | undefined,
+): ResourceRevision | null {
+  const revision = resolveJsonResourceRevision(manifest);
+  if (revision === null) return null;
+
+  return [
+    revision,
+    manifest?.source_scene_revision ?? "unknown",
+    manifest?.geometry_realization_revision ?? "unknown",
+  ].join(":");
+}
+
 export function useSceneResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
@@ -367,7 +380,7 @@ export function useMeshSharedDomainManifestResource(
   return useResource<MeshSharedDomainManifestResource | null>({
     enabled: options.enabled,
     load,
-    resolveRevision: resolveJsonResourceRevision,
+    resolveRevision: resolveMeshSharedDomainManifestRevision,
     resourceKey: MESH_SHARED_DOMAIN_MANIFEST_RESOURCE_KEY,
   });
 }

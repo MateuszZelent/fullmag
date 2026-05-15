@@ -143,6 +143,8 @@ Layers may share render-model inputs, but one layer cannot own another layer's d
 
 Object and airbox layers resolve display settings through the target visualization registry. A target can independently enable/disable shader surface, wireframe, points, vector glyphs, visibility, and opacity. The renderer applies those settings per manifest object/part where the backend supplies object/part mapping; otherwise it falls back to the domain-level target and marks the display as degraded.
 
+Airbox wireframe has a different visual contract from magnetic-object wireframe. `geometryScope: "surface"` may show only boundary surface edges. `geometryScope: "full"` must show the airbox volume/bounds edge set as an overlay that is not hidden by the translucent airbox surface. Full mode uses the procedural interior volume/bounds overlay as the primary wireframe, even when backend mesh edge geometry exists, because backend-provided or fallback edge geometry can otherwise make the full airbox collapse visually to a surface-only display. Airbox surface opacity must not attenuate airbox wireframe opacity; those are separate display controls.
+
 ## 8. Picking
 
 Picking emits canonical selection identity through the kernel. The viewport does not directly open inspector panels.

@@ -160,10 +160,12 @@ export function summarizeTransportPath(entry: RequestDiagnosticEntry): string {
 }
 
 export function serializeTransportEntry(entry: RequestDiagnosticEntry): string {
+  const correlation = resolveTransportCorrelation(entry);
   return JSON.stringify(
     {
       byteLength: entry.byteLength,
       channel: entry.channel,
+      commandId: correlation.commandId,
       contentType: entry.contentType,
       detail: entry.detail,
       direction: entry.direction,
@@ -174,6 +176,8 @@ export function serializeTransportEntry(entry: RequestDiagnosticEntry): string {
       outcome: entry.outcome,
       path: entry.path,
       requestId: entry.requestId,
+      resourceKey: correlation.resourceKey,
+      stageId: correlation.stageId,
       status: entry.status,
       timestamp: formatTransportTimestampSignature(entry.timestampMs),
       timestampMs: entry.timestampMs,
@@ -181,4 +185,39 @@ export function serializeTransportEntry(entry: RequestDiagnosticEntry): string {
     null,
     2,
   );
+}
+
+export interface TransportCorrelation {
+  commandId: string | null;
+  resourceKey: string;
+  stageId: string | null;
+}
+
+export function resolveTransportCorrelation(
+  entry: RequestDiagnosticEntry,
+): TransportCorrelation {
+  return {
+    commandId: inferCommandId(entry),
+    resourceKey: summarizeTransportPath(entry),
+    stageId: inferStageId(entry),
+  };
+}
+
+function inferCommandId(entry: RequestDiagnosticEntry): string | null {
+  const match = entry.path.match(/\/simulation\/commands\/([^/?#]+)/);
+  if (match?.[1]) {
+    return decodeURIComponent(match[1]);
+  }
+
+  const detail = entry.detail ?? "";
+  const detailMatch = detail.match(
+    /\bcommand[_ -]?id["':= ]+([A-Za-z0-9_.:-]+)/i,
+  );
+  return detailMatch?.[1] ?? null;
+}
+
+function inferStageId(entry: RequestDiagnosticEntry): string | null {
+  const detail = entry.detail ?? "";
+  const match = detail.match(/\bstage[_ -]?id["':= ]+([A-Za-z0-9_.:-]+)/i);
+  return match?.[1] ?? null;
 }

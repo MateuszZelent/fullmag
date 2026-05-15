@@ -12,9 +12,13 @@ import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 import {
   AirboxLayer,
   SelectionHighlightLayer,
+  airboxWireframeOpacityFromSettings,
+  buildBoundsVolumeWireframePositions,
   resolveAirboxTopologyVisualizationSettings,
   resolveAirboxWireframeEdgeIndices,
+  resolveAirboxWireframePrimitive,
   resolveAirboxWireframeSemantic,
+  shouldRenderAirboxFullBoundsOverlay,
 } from "./BoundsLayers";
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 
@@ -88,6 +92,13 @@ describe("AirboxLayer", () => {
         shaderVisible: true,
       }),
     ).toBe("featureEdges");
+    expect(
+      resolveAirboxWireframeSemantic({
+        ...visibleWireframeAirbox,
+        geometryScope: "full",
+        shaderVisible: true,
+      }),
+    ).toBe("hiddenEdges");
   });
 
   it("keeps full airbox wireframe scope when topology freshness is unknown", () => {
@@ -128,6 +139,105 @@ describe("AirboxLayer", () => {
         partModel,
       ),
     ).toBe(surfaceEdges);
+  });
+
+  it("does not downgrade full airbox wireframe to surface edges when volume edges are unavailable", () => {
+    const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
+    const partModel = {
+      edgeIndices: surfaceEdges,
+      volumeEdgeIndices: null,
+    };
+
+    expect(
+      resolveAirboxWireframeEdgeIndices(
+        "full",
+        partModel,
+      ),
+    ).toBeNull();
+    expect(
+      resolveAirboxWireframeEdgeIndices(
+        "surface",
+        partModel,
+      ),
+    ).toBe(surfaceEdges);
+  });
+
+  it("keeps surface airbox wireframe on line segments when geometry exists", () => {
+    expect(resolveAirboxWireframePrimitive(true, true)).toBe("lines");
+    expect(resolveAirboxWireframePrimitive(true, false)).toBe("bounds");
+    expect(resolveAirboxWireframePrimitive(false, true)).toBeNull();
+  });
+
+  it("uses procedural bounds volume as the primary full airbox wireframe", () => {
+    expect(resolveAirboxWireframePrimitive(true, true, "full")).toBe("bounds");
+    expect(resolveAirboxWireframePrimitive(true, false, "full")).toBe("bounds");
+  });
+
+  it("does not add a second bounds overlay when full airbox uses procedural bounds", () => {
+    expect(
+      shouldRenderAirboxFullBoundsOverlay(
+        {
+          ...visibleWireframeAirbox,
+          geometryScope: "full",
+        },
+        resolveAirboxWireframePrimitive(true, true, "full"),
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenderAirboxFullBoundsOverlay(
+        {
+          ...visibleWireframeAirbox,
+          geometryScope: "surface",
+        },
+        "lines",
+      ),
+    ).toBe(false);
+    expect(
+      shouldRenderAirboxFullBoundsOverlay(
+        {
+          ...visibleWireframeAirbox,
+          geometryScope: "full",
+        },
+        "bounds",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps airbox wireframe opacity independent from air surface opacity", () => {
+    expect(
+      airboxWireframeOpacityFromSettings({
+        ...visibleWireframeAirbox,
+        opacityPercent: 20,
+        wireframeOpacityPercent: 100,
+      }),
+    ).toBe(1);
+    expect(
+      airboxWireframeOpacityFromSettings(
+        {
+          ...visibleWireframeAirbox,
+          opacityPercent: 20,
+          wireframeOpacityPercent: 80,
+        },
+        { opacity: 0.5 },
+      ),
+    ).toBe(0.4);
+  });
+
+  it("builds an interior volume wireframe for full airbox fallback overlays", () => {
+    const positions = buildBoundsVolumeWireframePositions(
+      {
+        center: [0, 0, 0],
+        radius: Math.sqrt(3),
+        size: [2, 2, 2],
+      },
+      2,
+    );
+
+    expect(positions).not.toBeNull();
+    expect(positions?.length).toBe(162);
+    expect(Array.from(positions ?? [])).toEqual(
+      expect.arrayContaining([0, 0, -1, 0, 0, 1]),
+    );
   });
 
   it("passes the airbox selection handler into mesh part layers", () => {

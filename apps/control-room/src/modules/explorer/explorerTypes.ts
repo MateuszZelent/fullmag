@@ -53,7 +53,12 @@ export type ExplorerNodeStatus =
   | "mesh-failed"
   | "validation-blocked"
   | "stale"
+  | "queued"
   | "running"
+  | "paused"
+  | "completed"
+  | "skipped"
+  | "cancelled"
   | "failed"
   | "degraded"
   | "warning"
@@ -155,6 +160,8 @@ export interface ModelTreeStudyStageSnapshot {
   index: number;
   kind: string;
   maxSteps?: string | number | null;
+  stageId?: string | null;
+  status?: ExplorerNodeStatus | null;
   torqueTolerance?: string | number | null;
   untilSeconds?: string | number | null;
 }

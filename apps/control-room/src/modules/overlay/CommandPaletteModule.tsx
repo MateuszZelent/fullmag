@@ -1,16 +1,22 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { CommandActiveResource } from "@/kernel/commands/commandTypes";
 import type {
   CommandContext,
   CommandContribution,
   CommandId,
 } from "@/kernel/commands/commandTypes";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import {
+  useCommandDetailResource,
+  useStudyRuntimeCommandResourceData,
+} from "@/kernel/resources/studyRuntimeResources";
 import type { ModuleProps } from "@/kernel/types";
+import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import {
   Command,
   CommandEmpty,
@@ -61,32 +67,64 @@ export function executePaletteCommand(
 }
 
 function groupCommands(
-  commands: readonly CommandContribution[],
-): Array<[string, CommandContribution[]]> {
-  const grouped = new Map<string, CommandContribution[]>();
+  commands: readonly PaletteCommandItem[],
+): Array<[string, PaletteCommandItem[]]> {
+  const grouped = new Map<string, PaletteCommandItem[]>();
 
-  for (const command of commands) {
+  for (const item of commands) {
+    const { command } = item;
     const group = command.category ?? command.group;
-    grouped.set(group, [...(grouped.get(group) ?? []), command]);
+    grouped.set(group, [...(grouped.get(group) ?? []), item]);
   }
 
   return Array.from(grouped.entries());
 }
 
+interface PaletteCommandItem {
+  active: boolean;
+  activeResource: CommandActiveResource | null;
+  command: CommandContribution;
+  disabled: boolean;
+  disabledReason: string | null;
+}
+
+export function resolvePaletteCommandItems(
+  commands: readonly CommandContribution[],
+  context: CommandContext | null,
+): PaletteCommandItem[] {
+  return commands.map((command) => {
+    const disabled = context ? command.isEnabled?.(context) === false : false;
+    const active = context ? command.isActive?.(context) === true : false;
+    return {
+      active,
+      activeResource:
+        active && context ? command.activeResource?.(context) ?? null : null,
+      command,
+      disabled,
+      disabledReason:
+        disabled && context ? command.disabledReason?.(context) ?? null : null,
+    };
+  });
+}
+
 interface CommandPaletteViewProps {
+  commandContext?: CommandContext | null;
   commands: readonly CommandContribution[];
   isOpen: boolean;
   onClose: () => void;
   onExecute: (commandId: CommandId) => void;
+  onOpenCommandDetail?: (commandId: string) => void;
   onQueryChange: (query: string) => void;
   query: string;
 }
 
 export function CommandPaletteView({
+  commandContext = null,
   commands,
   isOpen,
   onClose,
   onExecute,
+  onOpenCommandDetail,
   onQueryChange,
   query,
 }: CommandPaletteViewProps) {
@@ -100,6 +138,10 @@ export function CommandPaletteView({
   if (!isOpen) return null;
 
   const filteredCommands = filterPaletteCommands(commands, query);
+  const commandItems = resolvePaletteCommandItems(
+    filteredCommands,
+    commandContext,
+  );
 
   return (
     <Dialog.Root open={isOpen} onOpenChange={(open) => {
@@ -116,20 +158,38 @@ export function CommandPaletteView({
           />
           <CommandList>
             <CommandEmpty>No commands found.</CommandEmpty>
-            {groupCommands(filteredCommands).map(([group, groupItems]) => (
+            {groupCommands(commandItems).map(([group, groupItems]) => (
               <CommandGroup key={group} heading={group}>
-                {groupItems.map((command) => (
+                {groupItems.map(({ active, activeResource, command, disabled, disabledReason }) => (
                   <CommandItem
                     key={command.id}
+                    data-active={active}
+                    disabled={disabled}
+                    title={disabledReason ?? (active ? "Command active" : undefined)}
                     value={`${command.title} ${command.id}`}
-                    onSelect={() => onExecute(command.id)}
+                    onSelect={() => {
+                      if (!disabled) onExecute(command.id);
+                    }}
                   >
                     <span className="fm-command-palette__item-title">
                       {command.title}
                     </span>
                     <span className="fm-command-palette__item-meta">
-                      {command.shortcut ?? command.id}
+                      {disabledReason ?? (active ? "active" : command.shortcut ?? command.id)}
                     </span>
+                    {activeResource?.kind === "command" ? (
+                      <button
+                        className="fm-command-palette__item-detail"
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onOpenCommandDetail?.(activeResource.commandId);
+                        }}
+                      >
+                        Detail
+                      </button>
+                    ) : null}
                   </CommandItem>
                 ))}
               </CommandGroup>
@@ -142,6 +202,9 @@ export function CommandPaletteView({
 }
 
 export default function CommandPaletteModule({ kernel }: ModuleProps) {
+  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const commandDetail = useCommandDetailResource(selectedCommandId);
   const {
     close,
     isOpen,
@@ -160,6 +223,13 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
     },
     [commandVersion, kernel.commands],
   );
+  const commandContext = useMemo(
+    () =>
+      createCommandContext("palette", kernel, {
+        resourceData: runtimeResourceData,
+      }),
+    [kernel, runtimeResourceData],
+  );
 
   useEffect(() => {
     return kernel.bus.on("command:submitted", ({ commandId }) => {
@@ -172,18 +242,27 @@ export default function CommandPaletteModule({ kernel }: ModuleProps) {
   return (
     <>
       <CommandPaletteView
+        commandContext={commandContext}
         commands={commands}
         isOpen={isOpen}
         query={query}
         onClose={close}
+        onOpenCommandDetail={setSelectedCommandId}
         onExecute={(commandId) => {
           void executePaletteCommand(
             kernel.commands,
             commandId,
-            createCommandContext("palette", kernel),
+            commandContext,
           );
         }}
         onQueryChange={setQuery}
+      />
+      <CommandDetailDialog
+        commandId={selectedCommandId}
+        detail={commandDetail}
+        onOpenChange={(open) => {
+          if (!open) setSelectedCommandId(null);
+        }}
       />
       <MeshBuildDialog kernel={kernel} />
       <Viewport3DSettingsDialog />

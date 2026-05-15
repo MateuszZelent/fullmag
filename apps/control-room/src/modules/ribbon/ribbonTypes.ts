@@ -18,6 +18,7 @@ export interface RibbonAction {
   shortcut?: string;
   disabled?: boolean;
   active?: boolean;
+  activeCommandId?: string;
   accent?: boolean;
   menu?: RibbonMenuNode[];
   /** CSS color applied to the icon only (not label). Ignored when button is active. */

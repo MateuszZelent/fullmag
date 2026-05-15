@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveCommandSummary,
   resolveStudyInspectorModel,
   studySnapshotFromScene,
 } from "./StudyInspectorPanelModel";
@@ -27,6 +28,7 @@ describe("StudyInspectorPanelModel", () => {
           {
             entrypoint_kind: "run",
             kind: "run",
+            stage_id: "scene-run",
             until_seconds: "5e-9",
           },
         ],
@@ -48,7 +50,7 @@ describe("StudyInspectorPanelModel", () => {
         status: "running",
         total_steps: 12,
       } as never,
-      selectedNodeId: "model:study:stage:0",
+      selectedNodeId: "model:study:stage:runtime-run",
       snapshot,
       solverStatus: {
         can_accept_commands: true,
@@ -69,20 +71,22 @@ describe("StudyInspectorPanelModel", () => {
         revision: 5,
         runtime_state: "running",
         stage_statuses: ["running", "queued"],
-        stages: [{ status: "running" }, { status: "queued" }],
+        stages: [
+          { stage_id: "runtime-relax", status: "running" },
+          { stage_id: "runtime-run", status: "queued" },
+        ],
         total_stages: 2,
       } as never,
     });
 
     expect(model.selectedStage).toMatchObject({
-      energyTolerance: "1e-8",
-      index: 0,
-      kind: "relax",
-      label: "Relax 1",
-      maxSteps: "200",
-      progressPercent: 25,
-      status: "running",
-      torqueTolerance: "1e-4",
+      index: 1,
+      kind: "run",
+      label: "Run 2",
+      progressPercent: 0,
+      stageId: "runtime-run",
+      status: "queued",
+      untilSeconds: "5e-9",
     });
     expect(model.boundary).toEqual({
       demagRealization: "poisson_robin",
@@ -96,10 +100,80 @@ describe("StudyInspectorPanelModel", () => {
     });
     expect(model.runtime).toMatchObject({
       activeStageLabel: "Relax 1",
+      commandBadge: "pending",
+      commandError: null,
+      commandId: null,
+      commandLabel: "Command queue pending",
       maxTorque: "3.000e-3 T",
       progressPercent: 25,
       runId: "run-1",
       state: "running",
+    });
+  });
+
+  it("summarizes active and failed command queue states", () => {
+    expect(
+      resolveCommandSummary({
+        accepted_count: 0,
+        can_accept_commands: false,
+        commands: [
+          {
+            command_id: "cmd-1",
+            created_at_unix_ms: 1,
+            kind: "compute_fields",
+            seq: 1,
+            status: "running",
+          },
+        ],
+        completed_count: 0,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: 1,
+        running_count: 1,
+      } as never),
+    ).toMatchObject({
+      badge: "running",
+      commandId: "cmd-1",
+      error: null,
+      label: "Compute Fields running",
+    });
+
+    expect(
+      resolveCommandSummary({
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands: [
+          {
+            command_id: "cmd-1",
+            created_at_unix_ms: 1,
+            kind: "compute_fields",
+            seq: 1,
+            status: "running",
+          },
+          {
+            command_id: "cmd-2",
+            created_at_unix_ms: 2,
+            error: "stage target mismatch",
+            kind: "pause",
+            seq: 2,
+            status: "failed",
+          },
+        ],
+        completed_count: 0,
+        dispatched_count: 0,
+        failed_count: 1,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: 2,
+        running_count: 1,
+      } as never),
+    ).toMatchObject({
+      badge: "failed",
+      commandId: "cmd-2",
+      error: "stage target mismatch",
+      label: "Pause failed",
     });
   });
 });

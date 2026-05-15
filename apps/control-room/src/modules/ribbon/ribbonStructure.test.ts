@@ -12,13 +12,20 @@ import {
 } from "./ribbonCommands";
 import { resolveRibbonIconColor } from "./RibbonGroupsRow";
 import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MODEL_GEOMETRY_VALIDATION_PATH,
+  SIMULATION_COMMANDS_PATH,
+  SIMULATION_SOLVER_STATUS_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import {
   AIRBOX_VISUALIZATION_TARGET,
@@ -744,6 +751,17 @@ describe("ribbon structure", () => {
       .toMatchObject({ geometryScope: "surface" });
     expect(patches).toEqual([
       {
+        overrides: [
+          {
+            display: {
+              geometry_scope: "surface",
+            },
+            scope: "airbox",
+            scope_id: "airbox",
+          },
+        ],
+      },
+      {
         layers: {
           airbox: {
             visible: false,
@@ -765,6 +783,7 @@ describe("ribbon structure", () => {
       expect(invalidations).toEqual([
         [VISUALIZATION_STATE_PATH, 41],
         [VISUALIZATION_STATE_PATH, 42],
+        [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
   });
@@ -838,6 +857,17 @@ describe("ribbon structure", () => {
     expect(context.visualization.getSettings(AIRBOX_VISUALIZATION_TARGET))
       .toMatchObject({ geometryScope: "surface" });
     expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: {
+              geometry_scope: "surface",
+            },
+            scope: "airbox",
+            scope_id: "airbox",
+          },
+        ],
+      },
       {
         layers: {
           airbox: {
@@ -1269,6 +1299,14 @@ describe("ribbon structure", () => {
       run: () => ({ status: "completed" }),
     });
     commands.register({
+      id: "viewport-3d.open-camera-dialog",
+      title: "Open 3D Camera Controls",
+      group: "viewport-3d",
+      scope: "viewport",
+      isActive: () => false,
+      run: () => ({ status: "completed" }),
+    });
+    commands.register({
       id: "viewport-3d.capture-frame",
       title: "Capture 3D Frame",
       group: "viewport-3d",
@@ -1352,6 +1390,15 @@ describe("ribbon structure", () => {
     const hslAction = orientationGroup?.actions.find(
       (action) => action.id === "view-hsl-reference",
     );
+    const displayGroup = content?.groups.find(
+      (group) => group.id === "view-display",
+    );
+    const cameraAction = displayGroup?.actions.find(
+      (action) => action.id === "view-camera",
+    );
+    const cameraParametersNode = cameraAction?.menu?.find(
+      (node) => node.type === "item" && node.id === "camera:parameters",
+    );
     const hslNode = hslAction?.menu?.find(
       (node) => node.type === "radio-group" && node.id === "orientation:hsl-reference",
     );
@@ -1416,6 +1463,10 @@ describe("ribbon structure", () => {
       commandId: "viewport-3d.capture-frame",
       label: "Capture current frame",
     });
+    expect(cameraParametersNode).toMatchObject({
+      commandId: "viewport-3d.open-camera-dialog",
+      label: "Camera parameters",
+    });
   });
 
   it("mirrors command registry disabled state into ribbon actions", () => {
@@ -1465,6 +1516,30 @@ describe("ribbon structure", () => {
       commands,
       commandContext: {
         api: { commands: { submit: vi.fn() } } as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              explicit_topology: false,
+            },
+            domain: {
+              discretization: "fdm",
+            },
+            resources: {
+              mesh_revision: 0,
+              scene_revision: 1,
+            },
+          },
+          [SIMULATION_COMMANDS_PATH]: { commands: [] },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: null,
+            revision: 1,
+            runtime_state: "idle",
+            stages: [],
+          },
+        },
         source: "test" as const,
       },
       selection: {
@@ -1487,6 +1562,117 @@ describe("ribbon structure", () => {
       disabled: false,
       label: "Compute Fields",
     });
+  });
+
+  it("marks active study runtime commands in the Study control group", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+
+    const content = buildRibbonTabContent("study", {
+      commands,
+      commandContext: {
+        api: { commands: { submit: vi.fn() } } as never,
+        resourceData: {
+          [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+          [SESSION_STATUS_RESOURCE_KEY]: {
+            capabilities: {
+              binary_fields: true,
+              explicit_topology: false,
+            },
+            domain: {
+              discretization: "fdm",
+            },
+            resources: {
+              mesh_revision: 0,
+              scene_revision: 1,
+            },
+          },
+          [SIMULATION_COMMANDS_PATH]: {
+            commands: [
+              {
+                command_id: "cmd-run",
+                kind: "solve",
+                status: "running",
+              },
+            ],
+          },
+          [SIMULATION_SOLVER_STATUS_PATH]: { runtime_state: "idle" },
+          [SIMULATION_STAGES_EXECUTION_PATH]: {
+            active_stage_index: null,
+            revision: 1,
+            runtime_state: "idle",
+            stages: [],
+          },
+        },
+        source: "test" as const,
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const computeAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.run");
+
+    expect(computeAction).toMatchObject({
+      active: true,
+      activeCommandId: "cmd-run",
+      disabled: true,
+      tooltip: "A runtime command is already active.",
+    });
+  });
+
+  it("exposes .fms import through the Study control group command", () => {
+    const commands = new CommandRegistry();
+    for (const command of STUDY_RUNTIME_COMMANDS) {
+      commands.register(command);
+    }
+
+    const content = buildRibbonTabContent("study", {
+      commands,
+      commandContext: {
+        api: {
+          persistence: {
+            imports: {
+              commit: vi.fn(),
+              inspect: vi.fn(),
+            },
+          },
+        } as never,
+        source: "test" as const,
+      },
+      selection: {
+        kind: null,
+        label: null,
+        moduleSource: null,
+        nodeId: null,
+        objectId: null,
+        ref: null,
+      },
+      visualization: new ObjectVisualizationController(),
+      visualizationSnapshot: new ObjectVisualizationController().getSnapshot(),
+    });
+
+    const importAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.import-state");
+    const importCommand = commands.get("study.import-state");
+
+    expect(importAction).toMatchObject({
+      disabled: false,
+      label: "Import State",
+    });
+    expect(importCommand?.shortcut).toBe("Ctrl+O");
   });
 
   it("exposes object draft commit from the Geometry lifecycle group", () => {

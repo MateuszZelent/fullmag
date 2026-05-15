@@ -10,6 +10,7 @@ cuda = ["fullmag-runner/cuda"]
 fem-gpu = ["fullmag-runner/fem-gpu"]
 
 [dependencies]
+anyhow.workspace = true
 async-stream = "0.3"
 axum.workspace = true
 base64 = "0.22"

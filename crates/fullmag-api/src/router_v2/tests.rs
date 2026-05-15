@@ -447,6 +447,56 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
     state
 }
 
+async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 3,
+            completed_stage_indexes: vec![0],
+            stages: vec![
+                StageExecutionRecord {
+                    status: StageLifecycleState::Completed,
+                    command_id: Some("cmd-stage-0".into()),
+                    started_at_unix_ms: Some(1_700_000_000_000),
+                    completed_at_unix_ms: Some(1_700_000_001_000),
+                    reason: None,
+                    artifact_refs: vec!["artifacts/stage-000".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: None,
+                    metric_name: None,
+                    metric_value: None,
+                    threshold: None,
+                },
+                StageExecutionRecord {
+                    status: StageLifecycleState::Running,
+                    command_id: Some("cmd-stage-1".into()),
+                    started_at_unix_ms: Some(1_700_000_002_000),
+                    completed_at_unix_ms: None,
+                    reason: None,
+                    artifact_refs: vec!["artifacts/stage-001".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: None,
+                    metric_name: None,
+                    metric_value: None,
+                    threshold: None,
+                },
+            ],
+            stage_statuses: vec![
+                StageLifecycleState::Completed,
+                StageLifecycleState::Running,
+                StageLifecycleState::Pending,
+            ],
+            active_stage_index: Some(1),
+            active_stage_kind: Some("relax".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+        snapshot.state_version = state_version;
+    }
+}
+
 fn test_router() -> axum::Router {
     build_v2_router().with_state(test_app_state())
 }
@@ -602,14 +652,30 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     status: StageLifecycleState::Completed,
+                    command_id: Some("cmd-stage-0".into()),
+                    started_at_unix_ms: Some(1_700_000_000_000),
+                    completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
+                    artifact_refs: vec!["artifacts/stage-000".into()],
+                    checkpoint_ref: Some("cp-000041".into()),
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: Some("preserved".into()),
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
                 },
                 StageExecutionRecord {
                     status: StageLifecycleState::Running,
+                    command_id: Some("cmd-stage-1".into()),
+                    started_at_unix_ms: Some(1_700_000_002_000),
+                    completed_at_unix_ms: None,
                     reason: None,
+                    artifact_refs: vec!["artifacts/stage-001".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: Some("states/imported-state.fmstate".into()),
+                    resume_from_checkpoint_ref: Some("cp-000041".into()),
+                    state_transition: Some("restored".into()),
                     metric_name: Some("max_torque_T".into()),
                     metric_value: Some(14.0),
                     threshold: Some(1.0e-4),
@@ -655,6 +721,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-1".into(),
                 kind: "run".into(),
                 created_at_unix_ms: 1_700_000_000_500,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: Some(1.0e-9),
                 max_steps: Some(1000),
                 torque_tolerance: None,
@@ -675,6 +746,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-1".into()),
             status: CommandLifecycleState::Queued,
             dispatched_at_unix_ms: None,
             completed_at_unix_ms: None,
@@ -687,6 +759,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-2".into(),
                 kind: "pause".into(),
                 created_at_unix_ms: 1_700_000_000_700,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -707,6 +784,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-2".into()),
             status: CommandLifecycleState::Dispatched,
             dispatched_at_unix_ms: Some(1_700_000_000_800),
             completed_at_unix_ms: None,
@@ -719,6 +797,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-3".into(),
                 kind: "stop".into(),
                 created_at_unix_ms: 1_700_000_000_900,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -739,6 +822,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-3".into()),
             status: CommandLifecycleState::Completed,
             dispatched_at_unix_ms: Some(1_700_000_000_950),
             completed_at_unix_ms: Some(1_700_000_001_000),
@@ -832,6 +916,11 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
 }
 
 async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
+    let (router, _state, repo_root) = test_router_with_session_store_state().await;
+    (router, repo_root)
+}
+
+async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>, PathBuf) {
     let repo_root = std::env::temp_dir().join(format!(
         "fullmag-api-router-v1-session-store-{}-{}",
         std::process::id(),
@@ -902,7 +991,33 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         capability_profile_version: "1.0.0".into(),
         session,
         run: None,
-        live_state: None,
+        live_state: Some(LiveState {
+            status: "paused".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 42,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 15.0,
+                max_dm_dt: 10.0,
+                max_h_eff: 11.0,
+                max_h_demag: 12.0,
+                max_torque_Apm: 13.0,
+                max_torque_T: 14.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        }),
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -933,7 +1048,11 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
 
     *state.current_live_state.write().await = Some(snapshot);
 
-    (build_v2_router().with_state(state), repo_root)
+    (
+        build_v2_router().with_state(state.clone()),
+        state,
+        repo_root,
+    )
 }
 
 /// Read the response body into bytes.
@@ -4289,6 +4408,60 @@ async fn mesh_shared_domain_manifest_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_manifest_etag_changes_when_provenance_is_recovered() {
+    let state = test_app_state_with_live_session().await;
+    let mut dirty_scene = sample_scene_document();
+    dirty_scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 41;
+        snapshot.scene_document = Some(dirty_scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+    let json = body_json(first).await;
+    assert_eq!(json["source_scene_revision"], serde_json::Value::Null);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::OK);
+    let json = body_json(second).await;
+    assert_eq!(json["source_scene_revision"], 3);
+}
+
+#[tokio::test]
 async fn mesh_universe_config_put_commits_scene_projection() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -5981,6 +6154,401 @@ async fn commands_endpoint_enqueues_compute_energies_command() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_exposes_runtime_control_readiness() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.runtime_status = RuntimeStatusView {
+            kind: RuntimeStatus::Running,
+            code: "running".into(),
+            is_busy: true,
+            can_accept_commands: true,
+        };
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be json");
+    let controls = json["runtime_controls"]
+        .as_array()
+        .expect("runtime_controls should be an array");
+    assert_runtime_control(controls, "pause", true, None);
+    assert_runtime_control(controls, "stop", true, None);
+    assert_runtime_control(controls, "skip", true, None);
+    assert_runtime_control(controls, "resume", false, Some("Runtime is not paused."));
+    assert_runtime_control(controls, "solve", false, Some("Runtime is already active."));
+}
+
+#[tokio::test]
+async fn commands_endpoint_disables_skip_without_active_stage() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.runtime_status = RuntimeStatusView {
+            kind: RuntimeStatus::Running,
+            code: "running".into(),
+            is_busy: true,
+            can_accept_commands: true,
+        };
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 0,
+            completed_stage_indexes: Vec::new(),
+            stages: Vec::new(),
+            stage_statuses: Vec::new(),
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let controls = json["runtime_controls"]
+        .as_array()
+        .expect("runtime_controls should be an array");
+    assert_runtime_control(
+        controls,
+        "skip",
+        false,
+        Some("No active stage is available to skip."),
+    );
+}
+
+fn assert_runtime_control(
+    controls: &[serde_json::Value],
+    kind: &str,
+    enabled: bool,
+    reason: Option<&str>,
+) {
+    let control = controls
+        .iter()
+        .find(|entry| entry["kind"] == kind)
+        .unwrap_or_else(|| panic!("missing runtime control {kind}"));
+    assert_eq!(control["enabled"], enabled);
+    assert_eq!(
+        control.get("reason").and_then(|value| value.as_str()),
+        reason
+    );
+}
+
+fn assert_command_invalidation(
+    invalidations: &[serde_json::Value],
+    resource_key: &str,
+    state: &str,
+) {
+    let invalidation = invalidations
+        .iter()
+        .find(|entry| entry["resource_key"] == resource_key)
+        .unwrap_or_else(|| panic!("missing command invalidation for {resource_key}"));
+    assert_eq!(invalidation["state"], state);
+    assert!(
+        invalidation["revision"].as_u64().is_some(),
+        "invalidation revision should be numeric for {resource_key}"
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_persists_runtime_intent_fields() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .header("x-request-id", "req-runtime-stop-1")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "stop",
+                        "target": {
+                            "kind": "stage_index",
+                            "stage_index": 1
+                        },
+                        "reason": "user_requested",
+                        "precondition": {
+                            "stage_execution_revision": 7,
+                            "runtime_state": "running"
+                        },
+                        "client_intent_id": "intent-stop-1",
+                        "requested_at_unix_ms": 1_700_000_002_000u64
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let submitted: serde_json::Value =
+        serde_json::from_slice(&body).expect("response should be json");
+    let command_id = submitted["command_id"]
+        .as_str()
+        .expect("command_id should be present");
+    assert_eq!(submitted["request_id"], "req-runtime-stop-1");
+
+    {
+        let queue = state.current_control_queue.lock().await;
+        let command = queue.front().expect("command should be queued");
+        assert_eq!(command.kind, "stop");
+        assert_eq!(command.reason.as_deref(), Some("user_requested"));
+        assert_eq!(command.client_intent_id.as_deref(), Some("intent-stop-1"));
+        assert_eq!(command.requested_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["kind"], "stop");
+    assert_eq!(detail["request_id"], "req-runtime-stop-1");
+    assert_eq!(detail["target"]["kind"], "stage_index");
+    assert_eq!(detail["target"]["stage_index"], 1);
+    assert_eq!(detail["reason"], "user_requested");
+    assert_eq!(detail["precondition"]["stage_execution_revision"], 7);
+    assert_eq!(detail["precondition"]["runtime_state"], "running");
+    assert_eq!(detail["client_intent_id"], "intent-stop-1");
+    assert_eq!(detail["requested_at_unix_ms"], 1_700_000_002_000u64);
+    assert_eq!(detail["stage_id"], "stage-001");
+    assert_eq!(detail["stage_index"], 1);
+    assert_eq!(detail["run_id"], "test-run");
+    assert_eq!(detail["requested_execution"]["backend"], "cpu-fdm");
+    assert_eq!(detail["requested_execution"]["device"], "auto");
+    assert_eq!(detail["requested_execution"]["precision"], "double");
+    assert_eq!(detail["requested_execution"]["mode"], "strict");
+    assert_eq!(detail["resolved_execution"]["backend"], "cpu-fdm");
+    assert_eq!(detail["resolved_execution"]["device"], "cpu");
+    assert_eq!(detail["resolved_execution"]["precision"], "double");
+    assert_eq!(detail["resolved_execution"]["mode"], "strict");
+    let invalidations = detail["resource_invalidations"]
+        .as_array()
+        .expect("resource_invalidations should be an array");
+    assert_command_invalidation(invalidations, "simulation/commands", "observed");
+    assert_command_invalidation(invalidations, "simulation/stages/execution", "expected");
+    assert_command_invalidation(invalidations, "simulation/solver/status", "expected");
+    assert_command_invalidation(invalidations, "diagnostics/engine-log", "expected");
+    let diagnostics = detail["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    assert_eq!(diagnostics[0]["resource_key"], "diagnostics/engine-log");
+    assert_eq!(detail["accepted_at_unix_ms"], detail["created_at_unix_ms"]);
+    assert_eq!(detail["started_at_unix_ms"], 1_700_000_002_000u64);
+    assert!(detail.get("terminal_at_unix_ms").is_none());
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "pause",
+                        "target": { "kind": "current_stage" },
+                        "precondition": {
+                            "runtime_state": "paused"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "runtime_state precondition failed: expected paused, got running"
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.mesh_revision = 5;
+    }
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command: SessionCommand {
+                seq: 1,
+                command_id: "cmd-existing".into(),
+                kind: "compute_fields".into(),
+                created_at_unix_ms: 1_700_000_000_000,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
+                until_seconds: None,
+                max_steps: None,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                max_error: None,
+                relax_algorithm: None,
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            },
+            request_id: None,
+            status: CommandLifecycleState::Queued,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (precondition, expected_error) in [
+        (
+            serde_json::json!({ "scene_revision": 4 }),
+            "scene_revision precondition failed: expected 4, got 3",
+        ),
+        (
+            serde_json::json!({ "mesh_revision": 6 }),
+            "mesh_revision precondition failed: expected 6, got 5",
+        ),
+        (
+            serde_json::json!({ "command_revision": 2 }),
+            "command_revision precondition failed: expected 2, got 1",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "compute_fields",
+                            "precondition": precondition
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let json = body_json(response).await;
+        assert_eq!(json["error"], expected_error);
+    }
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_stage_target_mismatch() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "stop",
+                        "target": {
+                            "kind": "stage_index",
+                            "stage_index": 2
+                        },
+                        "precondition": {
+                            "runtime_state": "running"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "stage target mismatch: expected stage_index 1, got 2"
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_rejects_solve_when_authoring_geometry_is_invalid() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -6112,6 +6680,7 @@ async fn commands_endpoint_reuses_response_for_same_request_id() {
 #[tokio::test]
 async fn commands_endpoint_does_not_dedupe_by_request_id_only() {
     let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 0).await;
     let app = build_v2_router().with_state(state.clone());
 
     let first_response = app
@@ -6211,6 +6780,9 @@ async fn command_status_endpoint_returns_queue_and_dispatch_ledger() {
     assert_eq!(json["rejected_count"], 0);
     assert_eq!(json["failed_count"], 0);
     assert_eq!(json["commands"].as_array().map(Vec::len), Some(3));
+    assert_eq!(json["commands"][0]["request_id"], "req-cmd-1");
+    assert_eq!(json["commands"][1]["request_id"], "req-cmd-2");
+    assert_eq!(json["commands"][2]["request_id"], "req-cmd-3");
 }
 
 #[tokio::test]
@@ -6230,6 +6802,7 @@ async fn command_detail_endpoint_returns_command_payload() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["kind"], "run");
+    assert_eq!(json["request_id"], "req-cmd-1");
     assert_eq!(json["status"], "queued");
     assert_eq!(json["integrator"], "rk45");
 }
@@ -6254,6 +6827,103 @@ async fn command_detail_endpoint_exposes_completion_fields_for_terminal_commands
     assert_eq!(json["status"], "completed");
     assert_eq!(json["completion_status"], "completed");
     assert_eq!(json["completed_at_unix_ms"], 1_700_000_001_000u64);
+}
+
+#[tokio::test]
+async fn command_detail_endpoint_exposes_stage_state_linkage() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 7;
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-stage-0".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_001_000),
+                reason: None,
+                artifact_refs: vec!["artifacts/stage-000".into()],
+                checkpoint_ref: Some("cp-000041".into()),
+                loaded_state_ref: Some("states/imported-state.fmstate".into()),
+                resume_from_checkpoint_ref: Some("cp-000040".into()),
+                state_transition: Some("restored".into()),
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command: SessionCommand {
+                seq: 1,
+                command_id: "cmd-stage-0".into(),
+                kind: "relax".into(),
+                created_at_unix_ms: 1_700_000_000_000,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
+                until_seconds: None,
+                max_steps: None,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                max_error: None,
+                relax_algorithm: Some("llg_overdamped".into()),
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            },
+            request_id: None,
+            status: CommandLifecycleState::Completed,
+            dispatched_at_unix_ms: Some(1_700_000_000_100),
+            completed_at_unix_ms: Some(1_700_000_001_000),
+            completion_status: Some(CommandCompletionState::Completed),
+            error: None,
+        });
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands/cmd-stage-0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["stage_id"], "stage-000");
+    assert_eq!(json["stage_index"], 0);
+    assert_eq!(json["artifact_refs"][0], "artifacts/stage-000");
+    assert_eq!(json["checkpoint_ref"], "cp-000041");
+    assert_eq!(json["loaded_state_ref"], "states/imported-state.fmstate");
+    assert_eq!(json["resume_from_checkpoint_ref"], "cp-000040");
+    assert_eq!(json["state_transition"], "restored");
+    assert_eq!(json["accepted_at_unix_ms"], 1_700_000_000_000u64);
+    assert_eq!(json["started_at_unix_ms"], 1_700_000_000_100u64);
+    assert_eq!(json["terminal_at_unix_ms"], 1_700_000_001_000u64);
 }
 
 #[tokio::test]
@@ -6335,6 +7005,36 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["active_stage_index"], 1);
     assert_eq!(json["stages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(json["stages"][0]["stage_id"], "stage-000");
+    assert_eq!(json["stages"][0]["index"], 0);
+    assert_eq!(json["stages"][0]["label"], "Stage 1");
+    assert_eq!(json["stages"][0]["command_id"], "cmd-stage-0");
+    assert_eq!(
+        json["stages"][0]["started_at_unix_ms"],
+        1_700_000_000_000u64
+    );
+    assert_eq!(
+        json["stages"][0]["completed_at_unix_ms"],
+        1_700_000_001_000u64
+    );
+    assert_eq!(json["stages"][0]["artifact_refs"][0], "artifacts/stage-000");
+    assert_eq!(json["stages"][0]["checkpoint_ref"], "cp-000041");
+    assert_eq!(json["stages"][0]["state_transition"], "preserved");
+    assert_eq!(json["stages"][1]["stage_id"], "stage-001");
+    assert_eq!(json["stages"][1]["kind"], "relax");
+    assert_eq!(json["stages"][1]["command_id"], "cmd-stage-1");
+    assert_eq!(
+        json["stages"][1]["started_at_unix_ms"],
+        1_700_000_002_000u64
+    );
+    assert!(json["stages"][1]["completed_at_unix_ms"].is_null());
+    assert_eq!(json["stages"][1]["artifact_refs"][0], "artifacts/stage-001");
+    assert_eq!(
+        json["stages"][1]["loaded_state_ref"],
+        "states/imported-state.fmstate"
+    );
+    assert_eq!(json["stages"][1]["resume_from_checkpoint_ref"], "cp-000041");
+    assert_eq!(json["stages"][1]["state_transition"], "restored");
 }
 
 #[tokio::test]
@@ -6666,6 +7366,177 @@ async fn session_import_commit_round_trips_exported_session() {
 }
 
 #[tokio::test]
+async fn session_checkpoint_create_captures_live_magnetization() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "resume",
+                        "reason": "manual_test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["checkpoint"]["checkpoint_id"], "cp-000042");
+    assert_eq!(json["checkpoint"]["run_id"], "test-run");
+    assert_eq!(json["checkpoint"]["step"], 42);
+    assert_eq!(json["checkpoint"]["source"], "manual_test");
+    assert_eq!(json["checkpoint"]["vector_count"], 2);
+    assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
+    assert_eq!(json["checkpoint"]["resume_class"], "logical_resume");
+    assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
+    assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
+    let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
+        .as_str()
+        .expect("checkpoint artifact_ref should be present")
+        .to_string();
+    assert!(json["checkpoint"]["checksum"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    let stage_after_create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stage_after_create_response.status(), StatusCode::OK);
+    let stage_after_create = body_json(stage_after_create_response).await;
+    assert_eq!(
+        stage_after_create["stages"][1]["checkpoint_ref"],
+        "cp-000042"
+    );
+    assert_eq!(
+        stage_after_create["stages"][1]["state_transition"],
+        "preserved"
+    );
+    assert!(stage_after_create["stages"][1]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact_refs should be an array")
+        .iter()
+        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
+
+    let detail_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["checkpoint_id"], "cp-000042");
+    assert_eq!(detail["vector_count"], 2);
+
+    let restore_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "reason": "restore_test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(restore_response.status(), StatusCode::OK);
+    let restored = body_json(restore_response).await;
+    assert_eq!(restored["checkpoint"]["checkpoint_id"], "cp-000042");
+    assert_eq!(restored["restore_class"], "logical_resume");
+    assert_eq!(restored["restored_vector_count"], 2);
+    assert_eq!(restored["field_revision"], 2);
+    assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
+    assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
+
+    let stage_after_restore_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stage_after_restore_response.status(), StatusCode::OK);
+    let stage_after_restore = body_json(stage_after_restore_response).await;
+    assert_eq!(
+        stage_after_restore["stages"][1]["resume_from_checkpoint_ref"],
+        "cp-000042"
+    );
+    assert_eq!(
+        stage_after_restore["stages"][1]["loaded_state_ref"],
+        checkpoint_artifact_ref
+    );
+    assert_eq!(
+        stage_after_restore["stages"][1]["state_transition"],
+        "restored"
+    );
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["field_revision"], 2);
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = body_json(list_response).await;
+    assert_eq!(listed["checkpoints"][0]["checkpoint_id"], "cp-000042");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_recovery_returns_200() {
     let (app, repo_root) = test_router_with_session_store().await;
     let response = app
@@ -6801,6 +7672,45 @@ async fn engine_log_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn gpu_telemetry_endpoint_returns_contract_shape() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/gpu")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let status = json["status"]
+        .as_str()
+        .expect("gpu telemetry status should be a string");
+    assert!(
+        matches!(status, "ok" | "unavailable"),
+        "unexpected gpu telemetry status: {status}"
+    );
+    assert!(
+        json["sample_time_unix_ms"].as_u64().is_some(),
+        "gpu telemetry should include sample_time_unix_ms"
+    );
+    assert!(
+        json["devices"].as_array().is_some(),
+        "gpu telemetry should include devices array"
+    );
+    if status == "unavailable" {
+        assert!(
+            json["reason"].as_str().is_some(),
+            "unavailable gpu telemetry should include reason"
+        );
+    }
 }
 
 #[tokio::test]

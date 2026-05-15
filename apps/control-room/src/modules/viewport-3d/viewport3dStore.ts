@@ -11,6 +11,7 @@ import {
 export interface Viewport3DCameraState {
   position: [number, number, number];
   target: [number, number, number];
+  up?: [number, number, number];
 }
 
 export interface Viewport3DCommandState {
@@ -28,7 +29,11 @@ export type Viewport3DHslReferenceMode = "auto" | "off" | "on";
 export type Viewport3DCameraProjection = "perspective" | "orthographic";
 
 export interface Viewport3DWidgetState {
+  cameraDialogOpen: boolean;
   cameraProjection: Viewport3DCameraProjection;
+  effectAmbientOcclusion: boolean;
+  effectAntialias: boolean;
+  effectBloom: boolean;
   hslReferenceMode: Viewport3DHslReferenceMode;
   settingsDialogOpen: boolean;
   viewCubeVisible: boolean;
@@ -37,6 +42,7 @@ export interface Viewport3DWidgetState {
 export const DEFAULT_VIEWPORT_3D_CAMERA_STATE: Viewport3DCameraState = {
   position: [2e-6, 1.4e-6, 2e-6],
   target: [0, 0, 0],
+  up: [0, 0, 1],
 };
 
 const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
@@ -49,7 +55,11 @@ const DEFAULT_VIEWPORT_3D_STATE: Viewport3DCommandState = {
   resetCameraRevision: 0,
   visualProfileId: DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID,
   widgets: {
+    cameraDialogOpen: false,
     cameraProjection: "perspective",
+    effectAmbientOcclusion: false,
+    effectAntialias: true,
+    effectBloom: false,
     hslReferenceMode: "auto",
     settingsDialogOpen: false,
     viewCubeVisible: true,
@@ -138,10 +148,7 @@ class Viewport3DStore {
   }
 
   setCamera(camera: Viewport3DCameraState): void {
-    if (
-      sameVector(this.snapshot.camera.position, camera.position) &&
-      sameVector(this.snapshot.camera.target, camera.target)
-    ) {
+    if (sameViewport3DCameraState(this.snapshot.camera, camera)) {
       return;
     }
 
@@ -152,20 +159,63 @@ class Viewport3DStore {
     this.notify();
   }
 
+  setCameraView({
+    camera,
+    projection,
+  }: {
+    camera: Viewport3DCameraState;
+    projection: Viewport3DCameraProjection;
+  }): void {
+    if (
+      sameViewport3DCameraState(this.snapshot.camera, camera) &&
+      this.snapshot.widgets.cameraProjection === projection
+    ) {
+      return;
+    }
+
+    this.snapshot = {
+      ...this.snapshot,
+      camera,
+      widgets: {
+        ...this.snapshot.widgets,
+        cameraProjection: projection,
+      },
+    };
+    this.notify();
+  }
+
   subscribe(listener: Viewport3DListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   toggleCameraProjection(): void {
+    this.setCameraProjection(
+      this.snapshot.widgets.cameraProjection === "perspective"
+        ? "orthographic"
+        : "perspective",
+    );
+  }
+
+  setCameraProjection(projection: Viewport3DCameraProjection): void {
+    if (this.snapshot.widgets.cameraProjection === projection) return;
     this.snapshot = {
       ...this.snapshot,
       widgets: {
         ...this.snapshot.widgets,
-        cameraProjection:
-          this.snapshot.widgets.cameraProjection === "perspective"
-            ? "orthographic"
-            : "perspective",
+        cameraProjection: projection,
+      },
+    };
+    this.notify();
+  }
+
+  setCameraDialogOpen(open: boolean): void {
+    if (this.snapshot.widgets.cameraDialogOpen === open) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: {
+        ...this.snapshot.widgets,
+        cameraDialogOpen: open,
       },
     };
     this.notify();
@@ -194,6 +244,33 @@ class Viewport3DStore {
     this.notify();
   }
 
+  setEffectAmbientOcclusion(enabled: boolean): void {
+    if (this.snapshot.widgets.effectAmbientOcclusion === enabled) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, effectAmbientOcclusion: enabled },
+    };
+    this.notify();
+  }
+
+  setEffectAntialias(enabled: boolean): void {
+    if (this.snapshot.widgets.effectAntialias === enabled) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, effectAntialias: enabled },
+    };
+    this.notify();
+  }
+
+  setEffectBloom(enabled: boolean): void {
+    if (this.snapshot.widgets.effectBloom === enabled) return;
+    this.snapshot = {
+      ...this.snapshot,
+      widgets: { ...this.snapshot.widgets, effectBloom: enabled },
+    };
+    this.notify();
+  }
+
   private notify(): void {
     for (const listener of this.listeners) {
       listener();
@@ -218,6 +295,35 @@ function sameVector(
   return left.every((value, index) => value === right[index]);
 }
 
+export function sameViewport3DCameraState(
+  left: Viewport3DCameraState,
+  right: Viewport3DCameraState,
+): boolean {
+  return (
+    sameVector(left.position, right.position) &&
+    sameVector(left.target, right.target) &&
+    sameVector(
+      left.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1],
+      right.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1],
+    )
+  );
+}
+
+export function viewport3DCameraViewSignature({
+  camera,
+  projection,
+}: {
+  camera: Viewport3DCameraState;
+  projection: Viewport3DCameraProjection;
+}): string {
+  return [
+    ...camera.position,
+    ...camera.target,
+    ...(camera.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1]),
+    projection,
+  ].join(":");
+}
+
 export function resolveHslReferenceVisible(
   mode: Viewport3DHslReferenceMode,
   vectorColorMode: string,
@@ -233,10 +339,11 @@ export function resolveViewport3DCameraState(
   const camera = visualizationState?.camera;
   const position = vector3(camera?.position);
   const target = vector3(camera?.target);
+  const up = vector3(camera?.up) ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up;
   if (!position || !target) {
     return DEFAULT_VIEWPORT_3D_CAMERA_STATE;
   }
-  return { position, target };
+  return { position, target, up };
 }
 
 export function resolveViewport3DCameraProjection(

@@ -6,7 +6,7 @@ import {
 } from "./viewport3dEventManager";
 
 describe("pickViewport3DEventHandlers", () => {
-  it("removes release and click handlers from the heavy 3D scene event manager", () => {
+  it("removes release and click handlers but keeps wheel zoom for orbit controls", () => {
     const handlers = {
       onClick: vi.fn(),
       onContextMenu: vi.fn(),
@@ -26,6 +26,7 @@ describe("pickViewport3DEventHandlers", () => {
       "onPointerDown",
       "onPointerLeave",
       "onPointerMove",
+      "onWheel",
     ]);
   });
 

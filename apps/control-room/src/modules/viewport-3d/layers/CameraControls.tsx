@@ -3,7 +3,8 @@
 import { OrbitControls } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useRef } from "react";
-import type { Camera } from "three";
+import type { ComponentRef } from "react";
+import { Vector3, type Camera } from "three";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
@@ -23,10 +24,12 @@ interface OrbitControlsEndEvent {
 
 export function commitOrbitCameraEnd({
   cameraPosition,
+  cameraUp = VIEWPORT_3D_WORLD_UP,
   controlTarget,
   onCameraChange,
 }: {
   cameraPosition: [number, number, number];
+  cameraUp?: [number, number, number];
   controlTarget: number[];
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
 }): void {
@@ -39,6 +42,7 @@ export function commitOrbitCameraEnd({
       controlTarget[1] ?? 0,
       controlTarget[2] ?? 0,
     ] as [number, number, number],
+    up: cameraUp,
   };
   void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
 }
@@ -56,9 +60,17 @@ const FALLBACK_CAMERA_BOUNDS: Viewport3DBounds = {
   size: [1e-6, 1e-6, 1e-6],
 };
 export const VIEWPORT_3D_WORLD_UP: [number, number, number] = [0, 0, 1];
+const WHEEL_CAMERA_COMMIT_DELAY_MS = 180;
+const WHEEL_ZOOM_INTENSITY = 0.0015;
+const WHEEL_ZOOM_MIN_DISTANCE = 1e-12;
+const WHEEL_ZOOM_MAX_DISTANCE = 1e-2;
 
 export function applyViewport3DWorldUp(camera: Camera): void {
   camera.up.set(...VIEWPORT_3D_WORLD_UP);
+}
+
+function applyViewport3DCameraUp(camera: Camera, up: [number, number, number] | undefined): void {
+  camera.up.set(...(up ?? VIEWPORT_3D_WORLD_UP));
 }
 
 export function resolveViewport3DCameraFit(
@@ -105,7 +117,10 @@ function sameVector(
   left: [number, number, number],
   right: [number, number, number],
 ): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
@@ -116,9 +131,28 @@ function isDefaultCameraState(cameraState: Viewport3DCameraState): boolean {
 }
 
 function cameraStateSignature(cameraState: Viewport3DCameraState): string {
-  return [...cameraState.position, ...cameraState.target]
+  return [
+    ...cameraState.position,
+    ...cameraState.target,
+    ...(cameraState.up ?? VIEWPORT_3D_WORLD_UP),
+  ]
     .map((value) => value.toExponential(8))
     .join(":");
+}
+
+export function resolveWheelZoomDistance(
+  currentDistance: number,
+  deltaY: number,
+): number {
+  if (!Number.isFinite(currentDistance) || currentDistance <= 0) {
+    return WHEEL_ZOOM_MIN_DISTANCE;
+  }
+  const clampedDelta = Math.max(-1000, Math.min(1000, deltaY));
+  const scale = Math.exp(clampedDelta * WHEEL_ZOOM_INTENSITY);
+  return Math.max(
+    WHEEL_ZOOM_MIN_DISTANCE,
+    Math.min(WHEEL_ZOOM_MAX_DISTANCE, currentDistance * scale),
+  );
 }
 
 export function shouldAutoFitViewport3DBoundsChange({
@@ -205,6 +239,7 @@ export function CameraController({
     const nextCamera = {
       position: fit.position,
       target: fit.target,
+      up: VIEWPORT_3D_WORLD_UP,
     };
     lastAutoFitCameraStateRef.current = nextCamera;
     viewport3dStore.setCamera(nextCamera);
@@ -226,11 +261,12 @@ export function CameraController({
   // Initial camera placement (once, on mount)
   useEffect(() => {
     const state = cameraStateRef.current;
-    applyViewport3DWorldUp(camera);
+    applyViewport3DCameraUp(camera, state.up);
     camera.position.set(...state.position);
     camera.lookAt(...state.target);
     camera.updateProjectionMatrix();
     appliedCameraStateRef.current = cameraStateSignature(state);
+    viewport3dStore.setCamera(state);
     invalidate();
     tracker.recordDirtyFrame("camera-init");
     // Intentionally runs only on mount.
@@ -240,11 +276,12 @@ export function CameraController({
   useEffect(() => {
     const signature = cameraStateSignature(cameraState);
     if (appliedCameraStateRef.current === signature) return;
-    applyViewport3DWorldUp(camera);
+    applyViewport3DCameraUp(camera, cameraState.up);
     camera.position.set(...cameraState.position);
     camera.lookAt(...cameraState.target);
     camera.updateProjectionMatrix();
     appliedCameraStateRef.current = signature;
+    viewport3dStore.setCamera(cameraState);
     invalidate();
     tracker.recordDirtyFrame("camera-resource");
   }, [camera, cameraState, invalidate, tracker]);
@@ -261,40 +298,122 @@ export function OrbitCameraControls({
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   tracker: Viewport3DResourceTracker;
 }) {
-  const { camera, invalidate } = useThree();
+  const { camera, gl, invalidate } = useThree();
+  const controlsRef = useRef<ComponentRef<typeof OrbitControls> | null>(null);
+  const wheelCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    applyViewport3DWorldUp(camera);
+    applyViewport3DCameraUp(camera, cameraState.up);
     invalidate();
     tracker.recordDirtyFrame("camera-up");
-  }, [camera, invalidate, tracker]);
+  }, [camera, cameraState.up, invalidate, tracker]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    controls.target.set(...cameraState.target);
+    controls.update();
+    invalidate();
+    tracker.recordDirtyFrame("camera-controls-target");
+  }, [cameraState.target, invalidate, tracker]);
 
   const recordCameraControlChange = useCallback(() => {
     invalidate();
     tracker.recordDirtyFrame("camera-control");
   }, [invalidate, tracker]);
 
-  const handleEnd = useCallback(
-    (event?: unknown) => {
-      const controls = event as OrbitControlsEndEvent | undefined;
-      const target = controls?.target?.target?.toArray();
-      if (!target) return;
+  const recordCameraControlEnd = useCallback(
+    (event: OrbitControlsEndEvent) => {
+      const controlTarget = event.target?.target?.toArray();
       commitOrbitCameraEnd({
         cameraPosition: camera.position.toArray() as [number, number, number],
-        controlTarget: target,
+        cameraUp: camera.up.toArray() as [number, number, number],
+        controlTarget: controlTarget ?? cameraState.target,
         onCameraChange,
       });
+      invalidate();
+      tracker.recordDirtyFrame("camera-control-end");
     },
-    [camera, onCameraChange],
+    [camera, cameraState.target, invalidate, onCameraChange, tracker],
   );
+
+  useEffect(() => {
+    const element = gl.domElement;
+    const fallbackDirection = new Vector3(1, 0.72, 1).normalize();
+    const offset = new Vector3();
+    const target = new Vector3();
+
+    const commitWheelCamera = () => {
+      const controlTarget =
+        controlsRef.current?.target.toArray() ?? cameraState.target;
+      commitOrbitCameraEnd({
+        cameraPosition: camera.position.toArray() as [number, number, number],
+        cameraUp: camera.up.toArray() as [number, number, number],
+        controlTarget,
+        onCameraChange,
+      });
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      target.copy(
+        controlsRef.current?.target ?? new Vector3(...cameraState.target),
+      );
+      offset.copy(camera.position).sub(target);
+      const currentDistance = offset.length();
+      const nextDistance = resolveWheelZoomDistance(
+        currentDistance,
+        event.deltaY,
+      );
+      const direction =
+        currentDistance > 0 ? offset.normalize() : fallbackDirection;
+
+      camera.position.copy(target).addScaledVector(direction, nextDistance);
+      camera.updateProjectionMatrix();
+      controlsRef.current?.update();
+      invalidate();
+      tracker.recordDirtyFrame("camera-wheel");
+
+      if (wheelCommitTimerRef.current) {
+        clearTimeout(wheelCommitTimerRef.current);
+      }
+      wheelCommitTimerRef.current = setTimeout(() => {
+        wheelCommitTimerRef.current = null;
+        commitWheelCamera();
+      }, WHEEL_CAMERA_COMMIT_DELAY_MS);
+    };
+
+    element.addEventListener("wheel", handleWheel, {
+      capture: true,
+      passive: false,
+    });
+
+    return () => {
+      element.removeEventListener("wheel", handleWheel, { capture: true });
+      if (wheelCommitTimerRef.current) {
+        clearTimeout(wheelCommitTimerRef.current);
+        wheelCommitTimerRef.current = null;
+      }
+    };
+  }, [
+    camera,
+    cameraState.target,
+    gl.domElement,
+    invalidate,
+    onCameraChange,
+    tracker,
+  ]);
 
   return (
     <OrbitControls
+      ref={controlsRef}
       makeDefault
       enableDamping={false}
       onChange={recordCameraControlChange}
-      onEnd={handleEnd}
-      target={cameraState.target}
+      onEnd={(event) => recordCameraControlEnd(event as OrbitControlsEndEvent)}
     />
   );
 }

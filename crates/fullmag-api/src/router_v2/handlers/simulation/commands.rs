@@ -51,7 +51,213 @@ pub(crate) async fn submit_structured_command_impl(
         .unwrap_or(0);
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
     let command = command_from_structured(req, command_id, now);
+    validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+async fn validate_runtime_command_contract(
+    state: &Arc<AppState>,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
+    let snapshot = {
+        let guard = state.current_live_state.read().await;
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?
+    };
+
+    if let Some(precondition) = command.precondition.as_ref() {
+        let runtime_state = runtime_state_for_command_validation(&snapshot);
+        if precondition
+            .runtime_state
+            .as_deref()
+            .is_some_and(|expected| expected != runtime_state)
+        {
+            return Err(ApiError::conflict(format!(
+                "runtime_state precondition failed: expected {}, got {}",
+                precondition.runtime_state.as_deref().unwrap_or_default(),
+                runtime_state
+            )));
+        }
+
+        if let Some(expected) = precondition.stage_execution_revision {
+            if snapshot.stage_execution.is_none() || snapshot.state_version != expected {
+                return Err(ApiError::conflict(format!(
+                    "stage_execution_revision precondition failed: expected {}, got {}",
+                    expected,
+                    if snapshot.stage_execution.is_some() {
+                        snapshot.state_version
+                    } else {
+                        0
+                    }
+                )));
+            }
+        }
+
+        if let Some(expected) = precondition.mesh_revision {
+            if snapshot.mesh_revision != expected {
+                return Err(ApiError::conflict(format!(
+                    "mesh_revision precondition failed: expected {}, got {}",
+                    expected, snapshot.mesh_revision
+                )));
+            }
+        }
+
+        if let Some(expected) = precondition.scene_revision {
+            let actual = snapshot.scene_document.as_ref().map(|scene| scene.revision);
+            if actual != Some(expected) {
+                return Err(ApiError::conflict(format!(
+                    "scene_revision precondition failed: expected {}, got {}",
+                    expected,
+                    actual
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "missing".to_string())
+                )));
+            }
+        }
+
+        if let Some(expected) = precondition.command_revision {
+            let actual = state.current_command_ledger.lock().await.len() as u64;
+            if actual != expected {
+                return Err(ApiError::conflict(format!(
+                    "command_revision precondition failed: expected {}, got {}",
+                    expected, actual
+                )));
+            }
+        }
+    }
+
+    if is_stage_control_command(command.kind.as_str()) {
+        validate_stage_control_state(&snapshot, command)?;
+        validate_stage_control_target(&snapshot, command)?;
+    }
+
+    Ok(())
+}
+
+fn is_stage_control_command(kind: &str) -> bool {
+    matches!(kind, "pause" | "resume" | "stop" | "skip")
+}
+
+fn validate_stage_control_state(
+    snapshot: &crate::types::SessionStateResponse,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
+    let runtime_state = runtime_state_for_command_validation(snapshot);
+    let allowed = match command.kind.as_str() {
+        "pause" => runtime_state == "running",
+        "resume" => runtime_state == "paused",
+        "stop" => runtime_state == "running" || runtime_state == "paused",
+        "skip" => runtime_state == "running" || runtime_state == "paused",
+        _ => true,
+    };
+    if !allowed {
+        return Err(ApiError::conflict(format!(
+            "{} command requires a compatible runtime state; got {}",
+            command.kind, runtime_state
+        )));
+    }
+
+    if command.kind == "skip" && active_stage_index(snapshot).is_none() {
+        return Err(ApiError::conflict(
+            "skip command requires an active stage target",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_stage_control_target(
+    snapshot: &crate::types::SessionStateResponse,
+    command: &SessionCommand,
+) -> Result<(), ApiError> {
+    let active_index = active_stage_index(snapshot);
+    let Some(target) = command.target.as_ref() else {
+        return Ok(());
+    };
+
+    match target {
+        RuntimeCommandTarget::CurrentStage { stage_id } => {
+            validate_current_stage_target(active_index, stage_id.as_deref())
+        }
+        RuntimeCommandTarget::StageIndex { stage_index } => {
+            validate_stage_index_target(active_index, *stage_index)
+        }
+        RuntimeCommandTarget::StageId { stage_id } => {
+            validate_current_stage_target(active_index, Some(stage_id.as_str()))
+        }
+        RuntimeCommandTarget::Study
+        | RuntimeCommandTarget::Run { .. }
+        | RuntimeCommandTarget::CommandId { .. } => Err(ApiError::conflict(format!(
+            "{} command target must reference the active stage",
+            command.kind
+        ))),
+    }
+}
+
+fn validate_current_stage_target(
+    active_index: Option<usize>,
+    stage_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let Some(active_index) = active_index else {
+        return Err(ApiError::conflict(
+            "stage control command requires an active stage",
+        ));
+    };
+    if let Some(stage_id) = stage_id {
+        let expected = stage_id_for_command_validation(active_index);
+        if stage_id != expected {
+            return Err(ApiError::conflict(format!(
+                "stage target mismatch: expected {}, got {}",
+                expected, stage_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_stage_index_target(
+    active_index: Option<usize>,
+    requested_index: u32,
+) -> Result<(), ApiError> {
+    let Some(active_index) = active_index else {
+        return Err(ApiError::conflict(
+            "stage control command requires an active stage",
+        ));
+    };
+    if active_index as u32 != requested_index {
+        return Err(ApiError::conflict(format!(
+            "stage target mismatch: expected stage_index {}, got {}",
+            active_index, requested_index
+        )));
+    }
+    Ok(())
+}
+
+fn active_stage_index(snapshot: &crate::types::SessionStateResponse) -> Option<usize> {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .and_then(|stage| stage.active_stage_index)
+}
+
+fn runtime_state_for_command_validation(snapshot: &crate::types::SessionStateResponse) -> &str {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .map(|stage| stage.runtime_state.as_str())
+        .or_else(|| {
+            snapshot
+                .live_state
+                .as_ref()
+                .map(|state| state.status.as_str())
+        })
+        .unwrap_or(snapshot.session.status.as_str())
+}
+
+fn stage_id_for_command_validation(index: usize) -> String {
+    format!("stage-{index:03}")
 }
 
 async fn validate_authoring_gate_for_command(
@@ -539,6 +745,7 @@ pub(crate) async fn enqueue_session_command_impl(
         }
     }
     let command_id = command.command_id.clone();
+    let request_id = command_request_id(headers);
 
     // Enqueue
     let seq = {
@@ -557,6 +764,7 @@ pub(crate) async fn enqueue_session_command_impl(
         let mut ledger = state.current_command_ledger.lock().await;
         ledger.push_back(TrackedCommandRecord {
             command: enqueued,
+            request_id: request_id.clone(),
             status: CommandLifecycleState::Queued,
             dispatched_at_unix_ms: None,
             completed_at_unix_ms: None,
@@ -572,6 +780,7 @@ pub(crate) async fn enqueue_session_command_impl(
     let response = CommandResponse {
         accepted: true,
         command_id,
+        request_id,
         error: None,
     };
 
@@ -598,6 +807,15 @@ pub(crate) async fn enqueue_session_command_impl(
 fn command_request_key(headers: &HeaderMap) -> Option<String> {
     headers
         .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn command_request_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -651,7 +869,11 @@ fn command_from_structured(
             fixed_timestep,
         } => {
             let mut command = new_session_command(command_id, "run", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::Run { run_id: None },
+            );
             command.until_seconds = Some(until_seconds);
             command.max_steps = max_steps;
             command.integrator = integrator;
@@ -670,7 +892,11 @@ fn command_from_structured(
             max_error,
         } => {
             let mut command = new_session_command(command_id, "relax", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::Run { run_id: None },
+            );
             command.until_seconds = until_seconds;
             command.max_steps = max_steps;
             command.torque_tolerance = torque_tolerance;
@@ -683,27 +909,47 @@ fn command_from_structured(
         }
         StructuredCommandRequest::Pause { intent } => {
             let mut command = new_session_command(command_id, "pause", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::CurrentStage { stage_id: None },
+            );
             command
         }
         StructuredCommandRequest::Resume { intent } => {
             let mut command = new_session_command(command_id, "resume", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::CurrentStage { stage_id: None },
+            );
             command
         }
         StructuredCommandRequest::Stop { intent } => {
             let mut command = new_session_command(command_id, "stop", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::CurrentStage { stage_id: None },
+            );
             command
         }
         StructuredCommandRequest::Skip { intent } => {
             let mut command = new_session_command(command_id, "skip", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::CurrentStage { stage_id: None },
+            );
             command
         }
         StructuredCommandRequest::SaveVtk { intent } => {
             let mut command = new_session_command(command_id, "save_vtk", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::CurrentStage { stage_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::CurrentStage { stage_id: None },
+            );
             command
         }
         StructuredCommandRequest::Solve { intent } => {
@@ -717,13 +963,18 @@ fn command_from_structured(
             command
         }
         StructuredCommandRequest::ComputeEnergies { intent } => {
-            let mut command = new_session_command(command_id, "compute_energies", created_at_unix_ms);
+            let mut command =
+                new_session_command(command_id, "compute_energies", created_at_unix_ms);
             apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
             command
         }
         StructuredCommandRequest::Close { intent } => {
             let mut command = new_session_command(command_id, "close", created_at_unix_ms);
-            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Run { run_id: None });
+            apply_command_intent(
+                &mut command,
+                intent,
+                RuntimeCommandTarget::Run { run_id: None },
+            );
             command
         }
         StructuredCommandRequest::MeshBuild {

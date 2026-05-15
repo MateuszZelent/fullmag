@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  FileText,
   Gauge,
   Trash2,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
   type FooterDirectionFilter,
 } from "./footerModel";
 import { TransportLogTable } from "./TransportLogTable";
+import { FooterDiagnostics } from "./FooterDiagnostics";
 import { FooterTelemetry } from "./FooterTelemetry";
 
 export default function FooterModule({ kernel }: ModuleProps) {
@@ -47,6 +49,10 @@ export default function FooterModule({ kernel }: ModuleProps) {
           <TabsTrigger value="telemetry" className="fm-footer__tab">
             <Gauge size={14} aria-hidden="true" />
             Telemetry
+          </TabsTrigger>
+          <TabsTrigger value="engine" className="fm-footer__tab">
+            <FileText size={14} aria-hidden="true" />
+            Engine
           </TabsTrigger>
         </TabsList>
         <div className="fm-footer__summary" aria-label="Transport summary">
@@ -111,6 +117,10 @@ export default function FooterModule({ kernel }: ModuleProps) {
 
       <TabsContent value="telemetry" className="fm-footer__content">
         <FooterTelemetry />
+      </TabsContent>
+
+      <TabsContent value="engine" className="fm-footer__content">
+        <FooterDiagnostics />
       </TabsContent>
     </Tabs>
   );

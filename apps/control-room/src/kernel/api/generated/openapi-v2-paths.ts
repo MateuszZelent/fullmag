@@ -89,6 +89,8 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/universe/fit",
   "/v2/sessions/current/persistence/assets/import",
   "/v2/sessions/current/persistence/checkpoints",
+  "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}",
+  "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore",
   "/v2/sessions/current/persistence/exports",
   "/v2/sessions/current/persistence/imports",
   "/v2/sessions/current/persistence/imports/inspections",

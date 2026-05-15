@@ -32,8 +32,16 @@ import {
 } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
-import type { CommandContribution } from "@/kernel/commands/commandTypes";
+import type {
+  CommandActiveResource,
+  CommandContribution,
+} from "@/kernel/commands/commandTypes";
+import {
+  useCommandDetailResource,
+  useStudyRuntimeCommandResourceData,
+} from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -98,6 +106,36 @@ function contextCommandsForNode(
   }
 
   return commands;
+}
+
+export interface ExplorerContextCommandItem {
+  active: boolean;
+  activeResource: CommandActiveResource | null;
+  command: CommandContribution;
+  disabled: boolean;
+  disabledReason: string | null;
+}
+
+export function contextCommandItemsForNode({
+  kernel,
+  node,
+  resourceData,
+}: {
+  kernel: KernelApi;
+  node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
+}): ExplorerContextCommandItem[] {
+  const context = createCommandContext("menu", kernel, { resourceData });
+  return contextCommandsForNode(kernel, node).map((command) => ({
+    active: kernel.commands.isActive(command.id, context),
+    activeResource:
+      kernel.commands.isActive(command.id, context)
+        ? command.activeResource?.(context) ?? null
+        : null,
+    command,
+    disabled: !kernel.commands.isEnabled(command.id, context),
+    disabledReason: kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
+  }));
 }
 
 interface ExplorerTreeRowModel {
@@ -168,6 +206,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel,
   moduleId,
   node,
+  resourceData,
   tabId,
 }: {
   active: boolean;
@@ -177,9 +216,16 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
   kernel: KernelApi;
   moduleId: ModuleId;
   node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
   tabId: ExplorerTabId;
 }) {
-  const commands = contextCommandsForNode(kernel, node);
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const commandDetail = useCommandDetailResource(selectedCommandId);
+  const commandItems = contextCommandItemsForNode({
+    kernel,
+    node,
+    resourceData,
+  });
 
   function handleSelect(): void {
     selectExplorerNode(kernel, node, moduleId);
@@ -256,20 +302,51 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
         <ContextMenuLabel>{node.label}</ContextMenuLabel>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem>
-        {commands.map((command) => (
+        {commandItems.map(({ active, command, disabled, disabledReason }) => (
           <ContextMenuItem
             key={command.id}
+            data-active={active}
+            disabled={disabled}
+            title={disabledReason ?? (active ? "Command active" : undefined)}
             onSelect={() => {
               void kernel.commands.execute(
                 command.id,
-                createCommandContext("menu", kernel),
+                createCommandContext("menu", kernel, { resourceData }),
               );
             }}
           >
-            {command.title}
+            <span>{command.title}</span>
+            {active ? (
+              <span className="fm-context-menu-item__meta">active</span>
+            ) : null}
           </ContextMenuItem>
         ))}
+        {commandItems.some((item) => item.activeResource?.kind === "command") ? (
+          <>
+            <ContextMenuSeparator />
+            {commandItems
+              .filter((item) => item.activeResource?.kind === "command")
+              .map((item) => (
+                <ContextMenuItem
+                  key={`${item.command.id}:detail`}
+                  onSelect={() => {
+                    const commandId = item.activeResource?.commandId;
+                    if (commandId) setSelectedCommandId(commandId);
+                  }}
+                >
+                  <span>{item.command.title} detail</span>
+                </ContextMenuItem>
+              ))}
+          </>
+        ) : null}
       </ContextMenuContent>
+      <CommandDetailDialog
+        commandId={selectedCommandId}
+        detail={commandDetail}
+        onOpenChange={(open) => {
+          if (!open) setSelectedCommandId(null);
+        }}
+      />
     </ContextMenu>
   );
 });
@@ -293,6 +370,7 @@ export function ExplorerTreeView({
 }: ExplorerTreeViewProps) {
   const treeRef = useRef<HTMLDivElement | null>(null);
   const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
+  const runtimeResourceData = useStudyRuntimeCommandResourceData();
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
@@ -368,6 +446,7 @@ export function ExplorerTreeView({
           kernel={kernel}
           moduleId={moduleId}
           node={node}
+          resourceData={runtimeResourceData}
           tabId={tabId}
         />
       ))}

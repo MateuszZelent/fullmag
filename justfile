@@ -210,7 +210,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine packages/fullmag-py/src native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine packages/fullmag-py/src native/backends/fem scripts/export_fem_gpu_runtime.sh Cargo.lock -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -newer '{{gpu_runtime_bin}}' 2>/dev/null | head -n 1)"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \

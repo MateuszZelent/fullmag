@@ -14,7 +14,46 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { viewport3dStore } from "../viewport3dStore";
-import { VIEWPORT_3D_VISUAL_PROFILES, type Viewport3DVisualProfileId } from "../viewport3dVisualProfile";
+
+function EffectToggle({
+  label,
+  description,
+  enabled,
+  onToggle,
+}: {
+  label: string;
+  description: string;
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        padding: "0.75rem",
+        border: enabled ? "1px solid var(--fm-color-primary)" : "1px solid var(--fm-color-border)",
+        borderRadius: "var(--fm-radius-md)",
+        backgroundColor: enabled ? "var(--fm-color-primary-dim)" : "transparent"
+      }}
+    >
+      <div>
+        <strong style={{ display: "block", color: enabled ? "var(--fm-color-foreground)" : "var(--fm-color-muted)" }}>{label}</strong>
+        <span style={{ fontSize: "12px", color: "var(--fm-color-muted)" }}>
+          {description}
+        </span>
+      </div>
+      <Button
+        variant={enabled ? "primary" : "secondary"}
+        onClick={() => onToggle(!enabled)}
+        style={{ minWidth: "80px" }}
+      >
+        {enabled ? "ON" : "OFF"}
+      </Button>
+    </div>
+  );
+}
 
 export function Viewport3DSettingsDialog() {
   const state = useSyncExternalStore(
@@ -24,48 +63,41 @@ export function Viewport3DSettingsDialog() {
   );
 
   const isOpen = state.widgets.settingsDialogOpen;
-  const currentProfileId = state.visualProfileId;
+  const { effectAmbientOcclusion, effectAntialias, effectBloom } = state.widgets;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => viewport3dStore.setSettingsDialogOpen(open)}>
       <DialogContent aria-describedby="fm-viewport-settings-dialog-description">
         <DialogHeader>
-          <DialogTitle>Visualization Settings</DialogTitle>
+          <DialogTitle>3D Render Effects</DialogTitle>
           <DialogDescription id="fm-viewport-settings-dialog-description">
-            Adjust 3D graphics quality and performance profiles. Higher quality modes provide better aesthetics but may require more GPU resources.
+            Adjust visual post-processing effects to make objects look more realistic (&quot;Full 3D&quot;). Note that these effects consume more GPU power.
           </DialogDescription>
         </DialogHeader>
 
         <div className="fm-dialog__body" style={{ display: "flex", flexDirection: "column", gap: "1rem", marginTop: "1rem" }}>
-          {Object.values(VIEWPORT_3D_VISUAL_PROFILES).map((profile) => (
-            <div 
-              key={profile.id} 
-              style={{
-                display: "flex", 
-                justifyContent: "space-between", 
-                alignItems: "center",
-                padding: "0.5rem",
-                border: currentProfileId === profile.id ? "1px solid var(--fm-color-primary)" : "1px solid var(--fm-color-border)",
-                borderRadius: "var(--fm-radius-md)",
-                backgroundColor: currentProfileId === profile.id ? "var(--fm-color-primary-dim)" : "transparent"
-              }}
-            >
-              <div>
-                <strong style={{ display: "block" }}>{profile.label}</strong>
-                <span style={{ fontSize: "12px", color: "var(--fm-color-muted)" }}>
-                  {profile.antialias ? "Anti-aliasing" : "No AA"} • DPR: {profile.dprCap}x • Tone Mapping: {profile.toneMapping}
-                </span>
-              </div>
-              <Button 
-                variant={currentProfileId === profile.id ? "primary" : "secondary"}
-                onClick={() => {
-                  viewport3dStore.setVisualProfile(profile.id as Viewport3DVisualProfileId);
-                }}
-              >
-                {currentProfileId === profile.id ? "Active" : "Apply"}
-              </Button>
-            </div>
-          ))}
+
+          <EffectToggle
+            label="Ambient Occlusion (Shadows)"
+            description="Adds depth by shading crevices and corners. Heavily improves realism."
+            enabled={effectAmbientOcclusion}
+            onToggle={(v) => viewport3dStore.setEffectAmbientOcclusion(v)}
+          />
+
+          <EffectToggle
+            label="Bloom (Glow)"
+            description="Adds a light aura around highly saturated or bright magnetic fields."
+            enabled={effectBloom}
+            onToggle={(v) => viewport3dStore.setEffectBloom(v)}
+          />
+
+          <EffectToggle
+            label="Anti-Aliasing"
+            description="Smooths out jagged edges on polygon boundaries."
+            enabled={effectAntialias}
+            onToggle={(v) => viewport3dStore.setEffectAntialias(v)}
+          />
+
         </div>
 
         <DialogFooter style={{ marginTop: "1rem" }}>

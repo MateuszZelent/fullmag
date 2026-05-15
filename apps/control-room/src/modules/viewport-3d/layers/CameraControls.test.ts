@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   commitOrbitCameraEnd,
+  resolveWheelZoomDistance,
   resolveViewport3DCameraFit,
   shouldAutoFitViewport3DBoundsChange,
 } from "./CameraControls";
@@ -11,6 +12,12 @@ import {
 } from "../viewport3dStore";
 
 describe("resolveViewport3DCameraFit", () => {
+  it("maps wheel deltas to bounded dolly distances", () => {
+    expect(resolveWheelZoomDistance(1e-6, 1000)).toBeGreaterThan(1e-6);
+    expect(resolveWheelZoomDistance(1e-6, -1000)).toBeLessThan(1e-6);
+    expect(resolveWheelZoomDistance(0, 1000)).toBe(1e-12);
+  });
+
   it("fits nanoscale micromagnetic bounds without meter-scale clipping", () => {
     const fit = resolveViewport3DCameraFit({
       center: [1e-7, 0, 0],
@@ -76,6 +83,7 @@ describe("resolveViewport3DCameraFit", () => {
     expect(onCameraChange).toHaveBeenCalledWith({
       position: [3, 2, 1],
       target: [0.5, 0.25, 0],
+      up: [0, 0, 1],
     });
   });
 });

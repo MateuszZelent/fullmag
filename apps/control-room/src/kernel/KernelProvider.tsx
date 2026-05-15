@@ -25,6 +25,7 @@ import { ModuleRegistry } from "./module/ModuleRegistry";
 import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import { useStudyRuntimeCommandResourceData } from "./resources/studyRuntimeResources";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
@@ -130,15 +131,19 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
 }
 
 function CommandShortcutConnector({ kernel }: { kernel: KernelApi }) {
+  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
-      const context = createCommandContext("shortcut", kernel);
+      const context = createCommandContext("shortcut", kernel, {
+        resourceData: runtimeResourceData,
+      });
       dispatchShortcutCommand(kernel.commands, event, context);
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [kernel]);
+  }, [kernel, runtimeResourceData]);
 
   return null;
 }

@@ -372,14 +372,16 @@ function studyStageBadge(stage: ModelTreeStudyStageSnapshot): string {
 
 function studyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const displayKind = formatStudyStageKind(stage.kind);
+  const nodeStageId = stage.stageId ?? `${stage.index}`;
   return {
-    id: `model:study:stage:${stage.index}`,
+    id: `model:study:stage:${nodeStageId}`,
     kind: studyStageKind(stage.kind),
     label: `${displayKind} ${stage.index + 1}`,
     parentId: "model:study",
     badge: studyStageBadge(stage),
     icon: stage.kind === "relax" || stage.kind === "run" ? "play" : "activity",
-    status: "ready",
+    status: stage.status ?? "ready",
+    contextCommands: ["study.skip", "workspace.focus-selection"],
   };
 }
 
@@ -397,8 +399,17 @@ function studyNodes(study: ModelTreeSnapshot["study"]): ExplorerNode {
       "study.add-relax-stage",
       "study.add-run-stage",
       "study.run",
+      "study.pause",
+      "study.resume",
+      "study.stop",
+      "study.skip",
       "study.compute-fields",
       "study.compute-energies",
+      "study.save-checkpoint",
+      "study.restore-checkpoint",
+      "study.import-state",
+      "study.export-state",
+      "study.discard-paused-state",
     ],
     children: stages.map(studyStageNode),
   };

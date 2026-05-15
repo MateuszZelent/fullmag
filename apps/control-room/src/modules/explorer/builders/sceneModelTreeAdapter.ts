@@ -1,3 +1,5 @@
+import type { StageExecutionResource } from "@/kernel/api/apiTypes";
+
 import type {
   ExplorerNodeStatus,
   ModelTreeMaterialSnapshot,
@@ -41,6 +43,51 @@ export function modelTreeSnapshotFromScene(
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
+}
+
+export function modelTreeSnapshotWithStageExecution(
+  snapshot: ModelTreeSnapshot,
+  stageExecution: StageExecutionResource | null | undefined,
+): ModelTreeSnapshot {
+  if (!snapshot.study || !stageExecution?.stages.length) return snapshot;
+
+  return {
+    ...snapshot,
+    study: {
+      ...snapshot.study,
+      stages: snapshot.study.stages.map((stage, index) => {
+        const runtimeStage = stageExecution.stages[index] ?? null;
+        const runtimeStatus =
+          runtimeStage?.status ?? stageExecution.stage_statuses[index] ?? null;
+        return {
+          ...stage,
+          stageId: runtimeStage?.stage_id ?? stage.stageId,
+          status: explorerStatusFromRuntimeStage(runtimeStatus) ?? stage.status,
+        };
+      }),
+    },
+  };
+}
+
+function explorerStatusFromRuntimeStage(
+  status: string | null | undefined,
+): ExplorerNodeStatus | null {
+  if (!status) return null;
+  const normalized = status.toLowerCase();
+  if (
+    normalized === "queued" ||
+    normalized === "running" ||
+    normalized === "paused" ||
+    normalized === "completed" ||
+    normalized === "skipped" ||
+    normalized === "cancelled" ||
+    normalized === "failed"
+  ) {
+    return normalized;
+  }
+  if (normalized === "error" || normalized === "rejected") return "failed";
+  if (normalized === "warning") return "warning";
+  return null;
 }
 
 function sceneMaterials(value: unknown): ModelTreeMaterialSnapshot[] {
@@ -304,6 +351,7 @@ function sceneStudyStageSnapshot(
     index,
     kind,
     maxSteps: scalarText(stage.max_steps),
+    stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
     torqueTolerance: scalarText(stage.torque_tolerance),
     untilSeconds: scalarText(stage.until_seconds),
   };

@@ -203,6 +203,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Every `apps/control-room` R3F/WebGL viewport change must run a browser smoke or Playwright check that asserts the canvas is visible, the WebGL context is not lost, and the drawing buffer is non-zero after load; passing TypeScript/tests alone is not enough for viewport work.
 - Treat `THREE.WebGLRenderer: Context Lost` during `apps/control-room` startup as a failing viewport lifecycle signal until proven to be teardown-only; verify with `gl.isContextLost()` and drawing-buffer dimensions before calling it harmless.
 - Keep `apps/control-room` development StrictMode disabled while the installed R3F/Three stack force-loses WebGL during React development remounts; do not re-enable `reactStrictMode` without a real browser smoke showing stable 3D canvas after load.
+- Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
 
 ---
 

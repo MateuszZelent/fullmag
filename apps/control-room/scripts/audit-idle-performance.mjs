@@ -25,7 +25,10 @@ if (!viewportModule.includes("frameloop={VIEWPORT_3D_FRAMELOOP}")) {
 for (const filePath of listSourceFiles(viewportRoot)) {
   const content = readFileSync(filePath, "utf8");
   const relativePath = path.relative(viewportRoot, filePath);
-  if (content.includes("requestAnimationFrame(")) {
+  if (
+    content.includes("requestAnimationFrame(") &&
+    !allowsOneShotDemandFrameAck(relativePath, content)
+  ) {
     failures.push(`${relativePath} uses requestAnimationFrame().`);
   }
   if (content.includes("setInterval(")) {
@@ -42,6 +45,33 @@ if (failures.length > 0) {
 }
 
 console.log("Idle performance audit passed.");
+
+function allowsOneShotDemandFrameAck(relativePath, content) {
+  if (relativePath !== path.join("layers", "Viewport3DScene.tsx")) {
+    return false;
+  }
+
+  const requestCount = countOccurrences(content, "requestAnimationFrame(");
+  const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
+  return (
+    requestCount === 1 &&
+    cancelCount === 1 &&
+    content.includes("idle-audit-allow-one-shot-raf") &&
+    content.includes('tracker.recordDirtyFrame("resources-updated")') &&
+    content.includes("invalidate();")
+  );
+}
+
+function countOccurrences(content, needle) {
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const next = content.indexOf(needle, offset);
+    if (next === -1) return count;
+    count += 1;
+    offset = next + needle.length;
+  }
+}
 
 function listSourceFiles(root) {
   const files = [];

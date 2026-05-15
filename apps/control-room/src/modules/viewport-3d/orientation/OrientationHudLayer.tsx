@@ -18,8 +18,12 @@ import {
 } from "three";
 
 import { viewport3dStore } from "../viewport3dStore";
+import type { Viewport3DCameraState } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
-import { applyViewport3DWorldUp } from "../layers/CameraControls";
+import {
+  applyViewport3DWorldUp,
+  VIEWPORT_3D_WORLD_UP,
+} from "../layers/CameraControls";
 
 import {
   orbitCameraAroundTarget,
@@ -42,6 +46,7 @@ import {
 interface OrientationHudLayerProps {
   colors: Viewport3DColors;
   hslReferenceVisible: boolean;
+  onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   viewCubeVisible: boolean;
 }
 
@@ -131,6 +136,7 @@ function viewCubeAxisColors(
 export function OrientationHudLayer({
   colors,
   hslReferenceVisible,
+  onCameraChange,
   viewCubeVisible,
 }: OrientationHudLayerProps) {
   const camera = useThree((state) => state.camera);
@@ -142,16 +148,26 @@ export function OrientationHudLayer({
     () => controls?.target?.clone() ?? new Vector3(0, 0, 0),
     [controls],
   );
+  const pendingOrbitCameraRef = useRef<Viewport3DCameraState | null>(null);
+  const commitCameraChange = useCallback(
+    (nextCamera: Viewport3DCameraState) => {
+      void Promise.resolve(onCameraChange(nextCamera)).catch(() => undefined);
+    },
+    [onCameraChange],
+  );
   const snapToDirection = useCallback(
     (direction: Direction3) => {
       const target = getTarget();
-      const nextCamera = snapCameraToDirection(
-        {
-          position: camera.position.toArray() as [number, number, number],
-          target: target.toArray() as [number, number, number],
-        },
-        direction,
-      );
+      const nextCamera = {
+        ...snapCameraToDirection(
+          {
+            position: camera.position.toArray() as [number, number, number],
+            target: target.toArray() as [number, number, number],
+          },
+          direction,
+        ),
+        up: VIEWPORT_3D_WORLD_UP,
+      };
 
       applyViewport3DWorldUp(camera);
       camera.position.set(...nextCamera.position);
@@ -160,22 +176,26 @@ export function OrientationHudLayer({
       controls?.target?.set(...nextCamera.target);
       controls?.update?.();
       viewport3dStore.setCamera(nextCamera);
+      commitCameraChange(nextCamera);
       invalidate();
     },
-    [camera, controls, getTarget, invalidate],
+    [camera, commitCameraChange, controls, getTarget, invalidate],
   );
 
   const onOrbit = useCallback(
     (deltaX: number) => {
       const target = getTarget();
-      const nextCamera = orbitCameraAroundTarget(
-        {
-          position: camera.position.toArray() as [number, number, number],
-          target: target.toArray() as [number, number, number],
-        },
-        deltaX,
-        ORBIT_SENSITIVITY,
-      );
+      const nextCamera = {
+        ...orbitCameraAroundTarget(
+          {
+            position: camera.position.toArray() as [number, number, number],
+            target: target.toArray() as [number, number, number],
+          },
+          deltaX,
+          ORBIT_SENSITIVITY,
+        ),
+        up: VIEWPORT_3D_WORLD_UP,
+      };
 
       applyViewport3DWorldUp(camera);
       camera.position.set(nextCamera.position[0], nextCamera.position[1], nextCamera.position[2]);
@@ -184,10 +204,17 @@ export function OrientationHudLayer({
       controls?.target?.set(nextCamera.target[0], nextCamera.target[1], nextCamera.target[2]);
       controls?.update?.();
       viewport3dStore.setCamera(nextCamera);
+      pendingOrbitCameraRef.current = nextCamera;
       invalidate();
     },
     [camera, controls, getTarget, invalidate],
   );
+  const commitOrbit = useCallback(() => {
+    const nextCamera = pendingOrbitCameraRef.current;
+    if (!nextCamera) return;
+    pendingOrbitCameraRef.current = null;
+    commitCameraChange(nextCamera);
+  }, [commitCameraChange]);
 
   if (!viewCubeVisible && !hslReferenceVisible) {
     return null;
@@ -201,6 +228,7 @@ export function OrientationHudLayer({
             colors={colors}
             controls={controls}
             onOrbit={onOrbit}
+            onOrbitEnd={commitOrbit}
             onSnap={snapToDirection}
           />
         </ScreenAnchoredGroup>
@@ -274,11 +302,13 @@ export function ViewCube3DBox({
   colors,
   controls,
   onOrbit,
+  onOrbitEnd,
   onSnap,
 }: {
   colors: Viewport3DColors;
   controls?: OrbitControlsHandle;
   onOrbit: (deltaX: number) => void;
+  onOrbitEnd: () => void;
   onSnap: (direction: Direction3) => void;
 }) {
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
@@ -334,7 +364,11 @@ export function ViewCube3DBox({
       ))}
       {/* 3D orbit ring at the base of the box */}
       <group position={[0, 0, -VIEW_CUBE_HALF]}>
-        <OrbitRing3D controls={controls} onOrbit={onOrbit} />
+        <OrbitRing3D
+          controls={controls}
+          onOrbit={onOrbit}
+          onOrbitEnd={onOrbitEnd}
+        />
       </group>
       <AxisLabelSprite
         color={String(colors.textPrimary ?? "#e4e4e7")}
@@ -369,9 +403,11 @@ export function ViewCube3DBox({
 function OrbitRing3D({
   controls,
   onOrbit,
+  onOrbitEnd,
 }: {
   controls?: OrbitControlsHandle;
   onOrbit: (dx: number) => void;
+  onOrbitEnd: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const isDragging = useRef(false);
@@ -411,8 +447,12 @@ function OrbitRing3D({
       onOrbitRef.current(dx);
     };
     const handleUp = () => {
+      const wasDragging = isDragging.current;
       isDragging.current = false;
       restoreOrbitControls();
+      if (wasDragging) {
+        onOrbitEnd();
+      }
     };
     canvas.addEventListener("pointermove", handleMove);
     canvas.addEventListener("pointerup", handleUp);
@@ -425,7 +465,7 @@ function OrbitRing3D({
       window.removeEventListener("pointerup", handleUp);
       restoreOrbitControls();
     };
-  }, [gl]);
+  }, [gl, onOrbitEnd]);
 
   return (
     <group renderOrder={WIDGET_RENDER_ORDER + 1}>

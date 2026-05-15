@@ -136,23 +136,52 @@ impl SessionStore {
 
     /// Read the latest checkpoint for a run.
     pub fn latest_checkpoint(&self, run_id: &str) -> Result<Option<FmsCheckpoint>> {
+        let checkpoints = self.list_checkpoints(run_id)?;
+        Ok(checkpoints.into_iter().last())
+    }
+
+    /// Read all checkpoints for a run, sorted by checkpoint id.
+    pub fn list_checkpoints(&self, run_id: &str) -> Result<Vec<FmsCheckpoint>> {
         let cp_base = self.root.join("runs").join(run_id).join("checkpoints");
         if !cp_base.exists() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let mut candidates: Vec<_> = fs::read_dir(&cp_base)?
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
             .collect();
         candidates.sort_by_key(|e| e.file_name());
-        if let Some(latest) = candidates.last() {
-            let path = latest.path().join("checkpoint.json");
-            if path.exists() {
-                let data = fs::read(&path)?;
-                return Ok(Some(serde_json::from_slice(&data)?));
+
+        let mut checkpoints = Vec::new();
+        for candidate in candidates {
+            let path = candidate.path().join("checkpoint.json");
+            if !path.exists() {
+                continue;
             }
+            let data = fs::read(&path)?;
+            checkpoints.push(serde_json::from_slice(&data)?);
         }
-        Ok(None)
+        Ok(checkpoints)
+    }
+
+    /// Read one checkpoint for a run.
+    pub fn read_checkpoint(
+        &self,
+        run_id: &str,
+        checkpoint_id: &str,
+    ) -> Result<Option<FmsCheckpoint>> {
+        let path = self
+            .root
+            .join("runs")
+            .join(run_id)
+            .join("checkpoints")
+            .join(checkpoint_id)
+            .join("checkpoint.json");
+        if !path.exists() {
+            return Ok(None);
+        }
+        let data = fs::read(&path)?;
+        Ok(Some(serde_json::from_slice(&data)?))
     }
 
     // ── Tensor storage ─────────────────────────────────────────────────

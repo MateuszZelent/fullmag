@@ -1421,7 +1421,39 @@ export interface paths {
         };
         get: operations["persistence_get_sessions_current_persistence_checkpoints"];
         put?: never;
+        post: operations["persistence_post_sessions_current_persistence_checkpoints"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_sessions_current_persistence_checkpoints_checkpoint_id"];
+        put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1905,16 +1937,55 @@ export interface components {
             scalar_history: boolean;
             structured_grid: boolean;
         };
+        CheckpointCreateRequest: {
+            profile?: components["schemas"]["SaveProfile"];
+            reason?: string | null;
+        };
+        CheckpointCreateResponse: {
+            checkpoint: components["schemas"]["CheckpointEntry"];
+        };
         CheckpointEntry: {
+            artifact_ref: string;
+            backend_family?: string | null;
             checkpoint_id: string;
+            checksum?: string | null;
+            command_id?: string | null;
+            coordinate_frame: string;
             created_at: string;
+            /** Format: double */
+            dt: number;
+            /** Format: int64 */
+            field_revision?: number | null;
+            format: string;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            resume_class: components["schemas"]["RestoreClass"];
+            run_id: string;
+            /** Format: int64 */
+            scene_revision?: number | null;
+            source: string;
+            stage_id?: string | null;
             /** Format: int64 */
             step: number;
             /** Format: double */
             time_s: number;
+            /** Format: int64 */
+            vector_count: number;
         };
         CheckpointListResponse: {
             checkpoints: components["schemas"]["CheckpointEntry"][];
+        };
+        CheckpointRestoreRequest: {
+            reason?: string | null;
+        };
+        CheckpointRestoreResponse: {
+            checkpoint: components["schemas"]["CheckpointEntry"];
+            /** Format: int64 */
+            field_revision: number;
+            restore_class: components["schemas"]["RestoreClass"];
+            /** Format: int64 */
+            restored_vector_count: number;
+            warnings: string[];
         };
         CheckpointSummary: {
             checkpoint_id: string;
@@ -1941,10 +2012,15 @@ export interface components {
             position_percent: number;
         };
         CommandDetailResource: {
+            accepted_at_unix_ms?: number | null;
+            artifact_refs?: string[];
+            checkpoint_ref?: string | null;
+            client_intent_id?: string | null;
             command_id: string;
             completed_at_unix_ms?: number | null;
             completion_status?: string | null;
             created_at_unix_ms: number;
+            diagnostics?: components["schemas"]["CommandDiagnosticReferenceResource"][];
             dispatched_at_unix_ms?: number | null;
             /** Format: double */
             energy_tolerance?: number | null;
@@ -1953,22 +2029,56 @@ export interface components {
             fixed_timestep?: number | null;
             integrator?: string | null;
             kind: string;
+            loaded_state_ref?: string | null;
             /** Format: double */
             max_error?: number | null;
             /** Format: int64 */
             max_steps?: number | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
+            precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
+            reason?: string | null;
             relax_algorithm?: string | null;
             /** Format: double */
             relax_alpha?: number | null;
+            request_id?: string | null;
+            /** Format: int64 */
+            requested_at_unix_ms?: number | null;
+            requested_execution?: null | components["schemas"]["CommandExecutionReadbackResource"];
+            resolved_execution?: null | components["schemas"]["CommandExecutionReadbackResource"];
+            resource_invalidations?: components["schemas"]["CommandResourceInvalidationResource"][];
+            resume_from_checkpoint_ref?: string | null;
+            run_id?: string | null;
             /** Format: int64 */
             seq: number;
+            stage_id?: string | null;
+            /** Format: int32 */
+            stage_index?: number | null;
+            started_at_unix_ms?: number | null;
+            state_transition?: string | null;
             status: string;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
+            terminal_at_unix_ms?: number | null;
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */
             until_seconds?: number | null;
+        };
+        CommandDiagnosticReferenceResource: {
+            message: string;
+            resource_key: string;
+            /** Format: int64 */
+            revision: number;
+            severity: string;
+        };
+        CommandExecutionReadbackResource: {
+            backend?: string | null;
+            device?: string | null;
+            engine_id?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            runtime_family?: string | null;
+            worker?: string | null;
         };
         CommandQueueStatusResource: {
             /** Format: int64 */
@@ -1989,11 +2099,20 @@ export interface components {
             revision: number;
             /** Format: int64 */
             running_count: number;
+            runtime_controls: components["schemas"]["RuntimeCommandReadinessResource"][];
+        };
+        CommandResourceInvalidationResource: {
+            reason: string;
+            resource_key: string;
+            /** Format: int64 */
+            revision: number;
+            state: string;
         };
         CommandResponse: {
             accepted: boolean;
             command_id: string;
             error?: string | null;
+            request_id?: string | null;
         };
         CommandStatusResource: {
             command_id: string;
@@ -2003,9 +2122,12 @@ export interface components {
             dispatched_at_unix_ms?: number | null;
             error?: string | null;
             kind: string;
+            reason?: string | null;
+            request_id?: string | null;
             /** Format: int64 */
             seq: number;
             status: string;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
         };
         /** @enum {string} */
         CompressionProfile: "speed" | "balanced" | "smallest";
@@ -3242,6 +3364,55 @@ export interface components {
             engines: components["schemas"]["HostEngineEntry"][];
             profile_version: string;
         };
+        RuntimeCommandIntent: {
+            client_intent_id?: string | null;
+            precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
+            reason?: string | null;
+            /** Format: int64 */
+            requested_at_unix_ms?: number | null;
+            target?: null | components["schemas"]["RuntimeCommandTarget"];
+        };
+        RuntimeCommandPrecondition: {
+            /** Format: int64 */
+            command_revision?: number | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            runtime_state?: string | null;
+            /** Format: int64 */
+            scene_revision?: number | null;
+            /** Format: int64 */
+            stage_execution_revision?: number | null;
+        };
+        RuntimeCommandReadinessResource: {
+            enabled: boolean;
+            kind: string;
+            reason?: string | null;
+        };
+        RuntimeCommandTarget: {
+            /** @enum {string} */
+            kind: "study";
+        } | {
+            /** @enum {string} */
+            kind: "run";
+            run_id?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "current_stage";
+            stage_id?: string | null;
+        } | {
+            /** @enum {string} */
+            kind: "stage_index";
+            /** Format: int32 */
+            stage_index: number;
+        } | {
+            /** @enum {string} */
+            kind: "stage_id";
+            stage_id: string;
+        } | {
+            command_id: string;
+            /** @enum {string} */
+            kind: "command_id";
+        };
         /** @enum {string} */
         SamplingProfile: "quality" | "balanced" | "interactive" | "memory_saver" | "custom";
         SamplingVisualizationPatch: {
@@ -3512,10 +3683,26 @@ export interface components {
             state: string;
         };
         StageExecutionRecordResource: {
+            action?: string | null;
+            artifact_refs?: string[];
+            checkpoint_ref?: string | null;
+            command_id?: string | null;
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            /** Format: int32 */
+            index: number;
+            kind?: string | null;
+            label?: string | null;
+            loaded_state_ref?: string | null;
             metric_name?: string | null;
             /** Format: double */
             metric_value?: number | null;
             reason?: string | null;
+            resume_from_checkpoint_ref?: string | null;
+            stage_id: string;
+            /** Format: int64 */
+            started_at_unix_ms?: number | null;
+            state_transition?: string | null;
             status: string;
             /** Format: double */
             threshold?: number | null;
@@ -3533,23 +3720,22 @@ export interface components {
             /** Format: int32 */
             total_stages: number;
         };
-        StructuredCommandRequest: {
+        StructuredCommandRequest: (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             fixed_timestep?: number | null;
             integrator?: string | null;
-            /** @enum {string} */
-            kind: "run";
             /** Format: int64 */
             max_steps?: number | null;
             /** Format: double */
             until_seconds: number;
-        } | {
+        } & {
+            /** @enum {string} */
+            kind: "run";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** Format: double */
             energy_tolerance?: number | null;
             /** Format: double */
             fixed_timestep?: number | null;
-            /** @enum {string} */
-            kind: "relax";
             /** Format: double */
             max_error?: number | null;
             /** Format: int64 */
@@ -3561,40 +3747,44 @@ export interface components {
             torque_tolerance?: number | null;
             /** Format: double */
             until_seconds?: number | null;
-        } | {
+        } & {
+            /** @enum {string} */
+            kind: "relax";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "pause";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "resume";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "stop";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "skip";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "save_vtk";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "solve";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "compute_fields";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "compute_energies";
-        } | {
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             /** @enum {string} */
             kind: "close";
-        } | {
-            /** @enum {string} */
-            kind: "mesh_build";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
             mesh_options?: Record<string, never> | null;
             mesh_reason?: string | null;
             mesh_target?: null | components["schemas"]["MeshCommandTarget"];
-        };
+        } & {
+            /** @enum {string} */
+            kind: "mesh_build";
+        });
         StructuredGridDescriptor: {
             origin: number[];
             shape: number[];
@@ -7693,6 +7883,115 @@ export interface operations {
                 };
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_checkpoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Checkpoint captured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointCreateResponse"];
+                };
+            };
+            /** @description No live magnetization to capture */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_sessions_current_persistence_checkpoints_checkpoint_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session checkpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointEntry"];
+                };
+            };
+            /** @description No active workspace or checkpoint not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_post_sessions_current_persistence_checkpoints_checkpoint_id_restore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Checkpoint id */
+                checkpoint_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckpointRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Checkpoint restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckpointRestoreResponse"];
+                };
+            };
+            /** @description Checkpoint is incompatible with the active domain */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace or checkpoint not found */
             404: {
                 headers: {
                     [name: string]: unknown;

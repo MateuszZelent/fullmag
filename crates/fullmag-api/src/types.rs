@@ -1,8 +1,6 @@
 //! API request/response types and view models.
 
-use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget,
-};
+use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
@@ -805,7 +803,23 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
 pub(crate) struct StageExecutionRecord {
     pub status: StageLifecycleState,
     #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub completed_at_unix_ms: Option<u64>,
+    #[serde(default)]
     pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    #[serde(default)]
+    pub checkpoint_ref: Option<String>,
+    #[serde(default)]
+    pub loaded_state_ref: Option<String>,
+    #[serde(default)]
+    pub resume_from_checkpoint_ref: Option<String>,
+    #[serde(default)]
+    pub state_transition: Option<String>,
     #[serde(default)]
     pub metric_name: Option<String>,
     #[serde(default)]
@@ -862,6 +876,7 @@ pub(crate) enum StageLifecycleState {
     Pending,
     Running,
     Paused,
+    Skipped,
     Completed,
     Cancelled,
     Stopped,
@@ -876,6 +891,7 @@ impl StageLifecycleState {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Paused => "paused",
+            Self::Skipped => "skipped",
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
             Self::Stopped => "stopped",
@@ -916,7 +932,7 @@ pub(crate) struct SessionCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_intent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_at_unix_ms: Option<u128>,
+    pub requested_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1011,6 +1027,8 @@ impl CommandCompletionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TrackedCommandRecord {
     pub command: SessionCommand,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub status: CommandLifecycleState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,

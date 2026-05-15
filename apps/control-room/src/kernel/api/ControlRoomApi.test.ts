@@ -209,6 +209,37 @@ describe("ControlRoomApi", () => {
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
   });
 
+  it("loads scalar windows through the v2 data facade", async () => {
+    let observedUrl = "";
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      observedUrl = String(url);
+      return jsonResponse({
+        columns: ["step", "time", "e_total"],
+        returned_rows: 1,
+        revision: 12,
+        rows: [[4, 2.5e-9, 15]],
+        total_rows: 8,
+      });
+    });
+
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-scalars",
+    });
+
+    const window = await api.data.scalars.window({
+      columns: ["time", "e_total"],
+      limit: 50,
+      sinceRevision: 10,
+    });
+
+    expect(window.revision).toBe(12);
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10",
+    );
+  });
+
   it("binds the default browser fetch to globalThis", async () => {
     const originalFetch = globalThis.fetch;
     let observedThis: unknown = null;
@@ -293,6 +324,7 @@ describe("ControlRoomApi", () => {
   });
 
   it("submits structured commands through the v2 simulation command resource", async () => {
+    const diagnostics = new RequestDiagnosticsController();
     let observedInit: RequestInit | undefined;
     let observedUrl = "";
     const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -307,6 +339,7 @@ describe("ControlRoomApi", () => {
 
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
       fetchImpl,
       requestIdFactory: () => "req-command",
     });
@@ -328,6 +361,25 @@ describe("ControlRoomApi", () => {
         ? new TextDecoder().decode(observedInit.body)
         : String(observedInit?.body);
     expect(JSON.parse(body)).toEqual({ kind: "pause" });
+    expect(diagnostics.list()).toMatchObject([
+      {
+        detail: "attempt 1",
+        direction: "tx",
+        method: "POST",
+        outcome: "sent",
+        path: "/v2/sessions/current/simulation/commands",
+        requestId: "req-command",
+      },
+      {
+        detail: "attempt 1; command_id=cmd-1; accepted=true",
+        direction: "rx",
+        method: "POST",
+        outcome: "ok",
+        path: "/v2/sessions/current/simulation/commands",
+        requestId: "req-command",
+        status: 200,
+      },
+    ]);
   });
 
   it("loads command queue and command detail through v2 command resources", async () => {
@@ -356,6 +408,7 @@ describe("ControlRoomApi", () => {
           rejected_count: 0,
           revision: 3,
           running_count: 0,
+          runtime_controls: [],
         });
       },
     });
@@ -368,6 +421,144 @@ describe("ControlRoomApi", () => {
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/simulation/commands",
       "http://127.0.0.1:8765/v2/sessions/current/simulation/commands/cmd-2",
+    ]);
+  });
+
+  it("loads, creates, and restores checkpoints through the v2 persistence facade", async () => {
+    const seenUrls: string[] = [];
+    const seenMethods: string[] = [];
+    const seenBodies: unknown[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        seenUrls.push(String(url));
+        seenMethods.push(init?.method ?? "GET");
+        if (init?.body) {
+          seenBodies.push(parseRequestBody(init.body));
+        }
+        if (init?.method === "POST") {
+          if (String(url).endsWith("/exports")) {
+            return jsonResponse({
+              fms_base64: "Zm1z",
+              profile: "resume",
+              session_id: "session-1",
+              size_bytes: 3,
+            });
+          }
+          if (String(url).endsWith("/restore")) {
+            return jsonResponse({
+              checkpoint: {
+                artifact_ref: "artifacts/checkpoints/cp-000042.fmstate",
+                backend_family: "fdm_cpu",
+                checkpoint_id: "cp-000042",
+                checksum: "sha256:abc",
+                coordinate_frame: "solver_domain",
+                created_at: "2026-05-14T12:00:00Z",
+                dt: 1e-13,
+                field_revision: 8,
+                format: "fmstate",
+                mesh_revision: 5,
+                resume_class: "logical_resume",
+                run_id: "run-1",
+                scene_revision: 3,
+                source: "user_requested",
+                step: 42,
+                time_s: 2.5e-9,
+                vector_count: 2,
+              },
+              field_revision: 8,
+              restore_class: "logical_resume",
+              restored_vector_count: 2,
+              warnings: [],
+            });
+          }
+          return jsonResponse({
+            checkpoint: {
+              artifact_ref: "artifacts/checkpoints/cp-000042.fmstate",
+              backend_family: "fdm_cpu",
+              checkpoint_id: "cp-000042",
+              checksum: "sha256:abc",
+              coordinate_frame: "solver_domain",
+              created_at: "2026-05-14T12:00:00Z",
+              dt: 1e-13,
+              field_revision: 7,
+              format: "fmstate",
+              mesh_revision: 5,
+              resume_class: "logical_resume",
+              run_id: "run-1",
+              scene_revision: 3,
+              source: "user_requested",
+              step: 42,
+              time_s: 2.5e-9,
+              vector_count: 2,
+            },
+          });
+        }
+        if (String(url).endsWith("/cp-000042")) {
+          return jsonResponse({
+            artifact_ref: "artifacts/checkpoints/cp-000042.fmstate",
+            backend_family: "fdm_cpu",
+            checkpoint_id: "cp-000042",
+            checksum: "sha256:abc",
+            coordinate_frame: "solver_domain",
+            created_at: "2026-05-14T12:00:00Z",
+            dt: 1e-13,
+            field_revision: 7,
+            format: "fmstate",
+            mesh_revision: 5,
+            resume_class: "logical_resume",
+            run_id: "run-1",
+            scene_revision: 3,
+            source: "manual",
+            step: 42,
+            time_s: 2.5e-9,
+            vector_count: 2,
+          });
+        }
+        return jsonResponse({
+          checkpoints: [],
+        });
+      },
+    });
+
+    const list = await api.persistence.checkpoints.list();
+    const created = await api.persistence.checkpoints.create({
+      profile: "resume",
+      reason: "user_requested",
+    });
+    const detail = await api.persistence.checkpoints.detail("cp-000042");
+    const restored = await api.persistence.checkpoints.restore("cp-000042", {
+      reason: "user_requested",
+    });
+    const exported = await api.persistence.exports.create({
+      profile: "resume",
+    });
+
+    expect(list.checkpoints).toEqual([]);
+    expect(created.checkpoint.checkpoint_id).toBe("cp-000042");
+    expect(detail.checkpoint_id).toBe("cp-000042");
+    expect(restored.restore_class).toBe("logical_resume");
+    expect(restored.field_revision).toBe(8);
+    expect(exported.session_id).toBe("session-1");
+    expect(seenUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints",
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints",
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints/cp-000042",
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/checkpoints/cp-000042/restore",
+      "http://127.0.0.1:8765/v2/sessions/current/persistence/exports",
+    ]);
+    expect(seenMethods).toEqual(["GET", "POST", "GET", "POST", "POST"]);
+    expect(seenBodies).toEqual([
+      {
+        profile: "resume",
+        reason: "user_requested",
+      },
+      {
+        reason: "user_requested",
+      },
+      {
+        profile: "resume",
+      },
     ]);
   });
 
@@ -876,6 +1067,59 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/meshing/builds/latest-successful",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/report",
       "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/objects/box/quality",
+    ]);
+  });
+
+  it("loads runtime diagnostics through facade methods", async () => {
+    const seenUrls: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        seenUrls.push(String(url));
+        return jsonResponse({ devices: [], entries: [], revision: 1, status: "ok", total: 0 });
+      },
+    });
+
+    await api.diagnostics.engineLog();
+    await api.diagnostics.gpuTelemetry();
+
+    expect(seenUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/diagnostics/engine-log",
+      "http://127.0.0.1:8765/v2/sessions/current/diagnostics/gpu",
+    ]);
+  });
+
+  it("posts session import requests through persistence facade methods", async () => {
+    const requests: Array<{ body: unknown; method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          url: String(url),
+        });
+        return jsonResponse({ inspection: {}, restore_class: "logical_resume", session_id: "s1", warnings: [] });
+      },
+    });
+
+    await api.persistence.imports.inspect({ fms_base64: "abc" });
+    await api.persistence.imports.commit({
+      fms_base64: "abc",
+      restore_mode: "resume",
+    });
+
+    expect(requests).toEqual([
+      {
+        body: { fms_base64: "abc" },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/persistence/imports/inspections",
+      },
+      {
+        body: { fms_base64: "abc", restore_mode: "resume" },
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/persistence/imports",
+      },
     ]);
   });
 

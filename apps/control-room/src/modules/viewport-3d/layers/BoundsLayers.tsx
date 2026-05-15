@@ -37,11 +37,11 @@ import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import {
   opacityFromSettings,
+  percentToUnit,
   shaderColorFromSettings,
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
 
 export function BoundsBox({
@@ -102,6 +102,45 @@ function BoundsPoints({
       />
       <pointsMaterial color={color} opacity={opacity} sizeAttenuation={false} size={3} transparent />
     </points>
+  );
+}
+
+function BoundsVolumeWireframe({
+  bounds,
+  color,
+  opacity,
+  policySemantic,
+  tracker,
+}: {
+  bounds: Viewport3DBounds | null;
+  color: ColorRepresentation;
+  opacity: number;
+  policySemantic: Extract<RenderSemantic, "featureEdges" | "hiddenEdges">;
+  tracker: Viewport3DResourceTracker;
+}) {
+  const geometry = useMemo(() => {
+    const positions = buildBoundsVolumeWireframePositions(bounds);
+    if (!positions) return null;
+    const next = tracker.track("geometry", new BufferGeometry());
+    next.setAttribute("position", new BufferAttribute(positions, 3));
+    return next;
+  }, [bounds, tracker]);
+
+  useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+
+  if (!geometry) return null;
+
+  return (
+    <lineSegments
+      geometry={geometry}
+      renderOrder={RENDER_POLICIES[policySemantic].renderOrder}
+    >
+      <lineBasicMaterial
+        color={color}
+        opacity={opacity}
+        {...materialPolicyProps(policySemantic)}
+      />
+    </lineSegments>
   );
 }
 
@@ -170,6 +209,13 @@ function AirboxMeshPartLayer({
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
   };
+  const wireframePrimitive = resolveAirboxWireframePrimitive(
+    resolvedSettings.wireframeVisible,
+    Boolean(edgeGeometry),
+    resolvedSettings.geometryScope,
+  );
+  const showFullWireframeBoundsOverlay =
+    shouldRenderAirboxFullBoundsOverlay(resolvedSettings, wireframePrimitive);
 
   if (!geometry) {
     return (
@@ -182,12 +228,37 @@ function AirboxMeshPartLayer({
             wireframe={false}
           />
         ) : null}
-        {resolvedSettings.wireframeVisible ? (
-          <BoundsBox
+        {wireframePrimitive === "lines" && edgeGeometry ? (
+          <lineSegments
+            geometry={edgeGeometry}
+            renderOrder={RENDER_POLICIES[airboxWireframeSemantic].renderOrder}
+          >
+            <lineBasicMaterial
+              color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+              opacity={airboxWireframeOpacityFromSettings(
+                resolvedSettings,
+                materialProfile.featureEdges,
+              )}
+              {...materialPolicyProps(airboxWireframeSemantic)}
+            />
+          </lineSegments>
+        ) : wireframePrimitive === "bounds" ? (
+          <AirboxWireframeFallback
             bounds={resolveMeshPartBounds(part)}
             color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(resolvedSettings)}
+            opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
             policySemantic={airboxWireframeSemantic}
+            settings={resolvedSettings}
+            tracker={tracker}
+          />
+        ) : null}
+        {showFullWireframeBoundsOverlay ? (
+          <BoundsVolumeWireframe
+            bounds={resolveMeshPartBounds(part)}
+            color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+            opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
+            policySemantic={airboxWireframeSemantic}
+            tracker={tracker}
           />
         ) : null}
         {resolvedSettings.boundsVisible ? (
@@ -243,7 +314,7 @@ function AirboxMeshPartLayer({
           >
             <lineBasicMaterial
               color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-              opacity={wireframeOpacityFromSettings(
+              opacity={airboxWireframeOpacityFromSettings(
                 resolvedSettings,
                 materialProfile.featureEdges,
               )}
@@ -251,13 +322,24 @@ function AirboxMeshPartLayer({
             />
           </lineSegments>
         ) : (
-          <BoundsBox
+          <AirboxWireframeFallback
             bounds={resolveMeshPartBounds(part)}
             color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(resolvedSettings)}
+            opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
             policySemantic={airboxWireframeSemantic}
+            settings={resolvedSettings}
+            tracker={tracker}
           />
         )
+      ) : null}
+      {showFullWireframeBoundsOverlay ? (
+        <BoundsVolumeWireframe
+          bounds={resolveMeshPartBounds(part)}
+          color={wireframeColorFromSettings(resolvedSettings, colors.wire)}
+          opacity={airboxWireframeOpacityFromSettings(resolvedSettings)}
+          policySemantic={airboxWireframeSemantic}
+          tracker={tracker}
+        />
       ) : null}
       {resolvedSettings.boundsVisible ? (
         <BoundsBox
@@ -296,10 +378,80 @@ function AirboxMeshPartLayer({
   );
 }
 
+function AirboxWireframeFallback({
+  bounds,
+  color,
+  opacity,
+  policySemantic,
+  settings,
+  tracker,
+}: {
+  bounds: Viewport3DBounds | null;
+  color: ColorRepresentation;
+  opacity: number;
+  policySemantic: Extract<RenderSemantic, "featureEdges" | "hiddenEdges">;
+  settings: VisualizationTargetSettings;
+  tracker: Viewport3DResourceTracker;
+}) {
+  if (settings.geometryScope === "full") {
+    return (
+      <BoundsVolumeWireframe
+        bounds={bounds}
+        color={color}
+        opacity={opacity}
+        policySemantic={policySemantic}
+        tracker={tracker}
+      />
+    );
+  }
+
+  return (
+    <BoundsBox
+      bounds={bounds}
+      color={color}
+      opacity={opacity}
+      policySemantic={policySemantic}
+    />
+  );
+}
+
 export function resolveAirboxWireframeSemantic(
   settings: VisualizationTargetSettings,
 ): Extract<RenderSemantic, "featureEdges" | "hiddenEdges"> {
+  if (settings.geometryScope === "full") return "hiddenEdges";
   return settings.shaderVisible ? "featureEdges" : "hiddenEdges";
+}
+
+export function airboxWireframeOpacityFromSettings(
+  settings: VisualizationTargetSettings,
+  featureEdges?: Viewport3DMaterialProfile["featureEdges"],
+): number {
+  const opacity =
+    percentToUnit(settings.wireframeOpacityPercent) *
+    (featureEdges?.opacity ?? 1);
+  return Math.max(0, Math.min(1, opacity));
+}
+
+export function resolveAirboxWireframePrimitive(
+  wireframeVisible: boolean,
+  hasEdgeGeometry: boolean,
+  geometryScope: VisualizationTargetSettings["geometryScope"] = "surface",
+): "bounds" | "lines" | null {
+  if (!wireframeVisible) return null;
+  if (geometryScope === "full") return "bounds";
+  return hasEdgeGeometry ? "lines" : "bounds";
+}
+
+export function shouldRenderAirboxFullBoundsOverlay(
+  settings: VisualizationTargetSettings,
+  wireframePrimitive: "bounds" | "lines" | null,
+): boolean {
+  return (
+    settings.visible &&
+    settings.wireframeVisible &&
+    settings.geometryScope === "full" &&
+    wireframePrimitive === "lines"
+  );
 }
 
 export function resolveAirboxTopologyVisualizationSettings(
@@ -324,10 +476,72 @@ export function resolveAirboxWireframeEdgeIndices(
   >,
 ): Uint32Array | null {
   if (geometryScope === "full") {
-    return partModel.volumeEdgeIndices ?? partModel.edgeIndices;
+    return partModel.volumeEdgeIndices;
   }
 
   return partModel.edgeIndices;
+}
+
+const AIRBOX_VOLUME_WIREFRAME_DIVISIONS = 4;
+
+export function buildBoundsVolumeWireframePositions(
+  bounds: Viewport3DBounds | null,
+  divisions = AIRBOX_VOLUME_WIREFRAME_DIVISIONS,
+): Float32Array | null {
+  if (!bounds) return null;
+
+  const safeDivisions = Math.max(1, Math.floor(divisions));
+  const [cx, cy, cz] = bounds.center;
+  const [sx, sy, sz] = bounds.size.map((value) => Math.max(value, 1e-9)) as [
+    number,
+    number,
+    number,
+  ];
+  const min: [number, number, number] = [
+    cx - sx / 2,
+    cy - sy / 2,
+    cz - sz / 2,
+  ];
+  const max: [number, number, number] = [
+    cx + sx / 2,
+    cy + sy / 2,
+    cz + sz / 2,
+  ];
+  const positions: number[] = [];
+
+  for (let ix = 0; ix <= safeDivisions; ix += 1) {
+    const x = lerp(min[0], max[0], ix / safeDivisions);
+    for (let iy = 0; iy <= safeDivisions; iy += 1) {
+      const y = lerp(min[1], max[1], iy / safeDivisions);
+      appendLine(positions, [x, y, min[2]], [x, y, max[2]]);
+    }
+    for (let iz = 0; iz <= safeDivisions; iz += 1) {
+      const z = lerp(min[2], max[2], iz / safeDivisions);
+      appendLine(positions, [x, min[1], z], [x, max[1], z]);
+    }
+  }
+
+  for (let iy = 0; iy <= safeDivisions; iy += 1) {
+    const y = lerp(min[1], max[1], iy / safeDivisions);
+    for (let iz = 0; iz <= safeDivisions; iz += 1) {
+      const z = lerp(min[2], max[2], iz / safeDivisions);
+      appendLine(positions, [min[0], y, z], [max[0], y, z]);
+    }
+  }
+
+  return new Float32Array(positions);
+}
+
+function appendLine(
+  positions: number[],
+  start: [number, number, number],
+  end: [number, number, number],
+): void {
+  positions.push(start[0], start[1], start[2], end[0], end[1], end[2]);
+}
+
+function lerp(start: number, end: number, factor: number): number {
+  return start + (end - start) * factor;
 }
 
 export function DomainBoxLayer({

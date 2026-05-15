@@ -326,6 +326,16 @@ async function patchAirboxVisualization(
   }
 
   const statePatch = airboxVisualizationStatePatchFromTargetPatch(patch);
+  if (patch.geometryScope !== undefined) {
+    const state = visualizationStateFromContext(context);
+    if (state) {
+      statePatch.overrides = mergeVisualizationStateTargetOverride(
+        state.overrides ?? [],
+        AIRBOX_VISUALIZATION_TARGET,
+        { geometryScope: patch.geometryScope },
+      );
+    }
+  }
   if (!hasVisualizationStatePatch(statePatch)) {
     return { status: "completed" };
   }

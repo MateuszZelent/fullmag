@@ -213,6 +213,173 @@ describe("viewport3dRenderModel", () => {
     ]);
   });
 
+  it("derives part volume edges from explicit node indices when element range is missing", () => {
+    expect(
+      Array.from(
+        buildPartVolumeEdgeIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            node_indices: [0, 1, 2, 4],
+          },
+          {
+            ...topologyFixture(),
+            elementCount: 2,
+            indices: new Uint32Array([
+              0, 1, 2, 3,
+              0, 1, 2, 4,
+            ]),
+            nodeCount: 5,
+          },
+        ) ?? [],
+      ),
+    ).toEqual([
+      0, 1,
+      0, 2,
+      0, 4,
+      1, 2,
+      1, 4,
+      2, 4,
+    ]);
+  });
+
+  it("derives part volume edges from contiguous node ranges when element range is missing", () => {
+    expect(
+      Array.from(
+        buildPartVolumeEdgeIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            node_count: 4,
+            node_start: 1,
+          },
+          {
+            ...topologyFixture(),
+            elementCount: 2,
+            indices: new Uint32Array([
+              0, 1, 2, 3,
+              1, 2, 3, 4,
+            ]),
+            nodeCount: 5,
+          },
+        ) ?? [],
+      ),
+    ).toEqual([
+      1, 2,
+      1, 3,
+      1, 4,
+      2, 3,
+      2, 4,
+      3, 4,
+    ]);
+  });
+
+  it("uses unclaimed tetrahedra for full airbox wireframe when the airbox range is missing", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        ...topologyFixture(),
+        elementCount: 2,
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          4, 5, 6, 7,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array(8 * 3),
+      },
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 1,
+          element_start: 0,
+          id: "part:body",
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_indices: [0],
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part:air",
+          node_indices: [4, 5, 6],
+        },
+      ],
+    );
+
+    expect(
+      Array.from(topologyModel?.airboxParts[0]?.volumeEdgeIndices ?? []),
+    ).toEqual([
+      4, 5,
+      4, 6,
+      4, 7,
+      5, 6,
+      5, 7,
+      6, 7,
+    ]);
+  });
+
+  it("falls back to shared-domain volume edges for full airbox when part ownership is unavailable", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        ...topologyFixture(),
+        elementCount: 2,
+        indices: new Uint32Array([
+          0, 1, 2, 3,
+          4, 5, 6, 7,
+        ]),
+        nodeCount: 8,
+        positions: new Float64Array(8 * 3),
+      },
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_indices: [0],
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part:body",
+          node_count: 0,
+          node_start: 0,
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_indices: [1],
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part:air",
+          node_count: 0,
+          node_start: 0,
+        },
+      ],
+    );
+
+    expect(
+      Array.from(topologyModel?.airboxParts[0]?.volumeEdgeIndices ?? []),
+    ).toEqual([
+      0, 1,
+      0, 2,
+      0, 3,
+      1, 2,
+      1, 3,
+      2, 3,
+      4, 5,
+      4, 6,
+      4, 7,
+      5, 6,
+      5, 7,
+      6, 7,
+    ]);
+  });
+
   it("builds vector segments for a selected object node range", () => {
     const segments = buildVectorLineSegmentsForNodeSelection(
       topologyFixture(),

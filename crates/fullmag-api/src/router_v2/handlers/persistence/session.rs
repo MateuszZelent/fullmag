@@ -2,14 +2,15 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 
 use crate::error::ApiError;
 use crate::session_persistence::{
-    CheckpointListResponse, RecoveryClearResponse, RecoveryListResponse, SessionExportRequest,
-    SessionExportResponse, SessionImportCommitRequest, SessionImportCommitResponse,
-    SessionImportInspectRequest, SessionImportInspectResponse,
+    CheckpointCreateRequest, CheckpointCreateResponse, CheckpointEntry, CheckpointListResponse,
+    CheckpointRestoreRequest, CheckpointRestoreResponse, RecoveryClearResponse,
+    RecoveryListResponse, SessionExportRequest, SessionExportResponse, SessionImportCommitRequest,
+    SessionImportCommitResponse, SessionImportInspectRequest, SessionImportInspectResponse,
 };
 use crate::types::AppState;
 
@@ -76,6 +77,65 @@ pub async fn list_checkpoints(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CheckpointListResponse>, ApiError> {
     crate::session_persistence::list_checkpoints(State(state)).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}",
+    params(
+        ("checkpoint_id" = String, Path, description = "Checkpoint id"),
+    ),
+    responses(
+        (status = 200, description = "Session checkpoint", body = CheckpointEntry),
+        (status = 404, description = "No active workspace or checkpoint not found"),
+    ),
+    tag = "persistence"
+)]
+pub async fn get_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Path(checkpoint_id): Path<String>,
+) -> Result<Json<CheckpointEntry>, ApiError> {
+    crate::session_persistence::get_checkpoint(State(state), checkpoint_id).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/checkpoints",
+    request_body = CheckpointCreateRequest,
+    responses(
+        (status = 200, description = "Checkpoint captured", body = CheckpointCreateResponse),
+        (status = 400, description = "No live magnetization to capture"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "persistence"
+)]
+pub async fn create_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CheckpointCreateRequest>,
+) -> Result<Json<CheckpointCreateResponse>, ApiError> {
+    crate::session_persistence::create_checkpoint(State(state), Json(req)).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore",
+    params(
+        ("checkpoint_id" = String, Path, description = "Checkpoint id"),
+    ),
+    request_body = CheckpointRestoreRequest,
+    responses(
+        (status = 200, description = "Checkpoint restored", body = CheckpointRestoreResponse),
+        (status = 400, description = "Checkpoint is incompatible with the active domain"),
+        (status = 404, description = "No active workspace or checkpoint not found"),
+    ),
+    tag = "persistence"
+)]
+pub async fn restore_checkpoint(
+    State(state): State<Arc<AppState>>,
+    Path(checkpoint_id): Path<String>,
+    Json(req): Json<CheckpointRestoreRequest>,
+) -> Result<Json<CheckpointRestoreResponse>, ApiError> {
+    crate::session_persistence::restore_checkpoint(State(state), checkpoint_id, Json(req)).await
 }
 
 #[utoipa::path(

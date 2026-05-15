@@ -103,10 +103,14 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
 ) -> CurrentLiveRealtimeState {
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
-        (
-            ledger.len() as u64,
-            ledger.back().map(|record| record.command.seq).unwrap_or(0),
-        )
+        let commands_revision = ledger.len() as u64;
+        let command_completion_revision = ledger
+            .iter()
+            .filter_map(|record| record.completed_at_unix_ms)
+            .filter_map(|value| u64::try_from(value).ok())
+            .max()
+            .unwrap_or_else(|| ledger.back().map(|record| record.command.seq).unwrap_or(0));
+        (commands_revision, command_completion_revision)
     };
     let workspace_revision = current_live_workspace_revision(state).await;
     let domain_generation_id = snapshot
@@ -1016,6 +1020,23 @@ where
     let preview_ms = preview_start.elapsed().as_micros();
     next.state_version = next.state_version.wrapping_add(1);
     let current_state_version = next.state_version;
+    let command_completed_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        reconcile_command_ledger_from_stage_execution(
+            &mut ledger,
+            &next,
+            command_completed_at_unix_ms,
+        );
+        reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &next,
+            command_completed_at_unix_ms,
+        );
+    }
     let (preview_source_step, preview_vector_len, preview_vector_avg) =
         preview_debug_metrics(next.preview.as_ref());
     let live_mag_len = next

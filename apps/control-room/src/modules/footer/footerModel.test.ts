@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   SESSION_EVENTS_WS_PATH,
   SESSION_STATUS_PATH,
+  SIMULATION_COMMAND_DETAIL_PATH,
+  SIMULATION_COMMANDS_PATH,
 } from "@/kernel/api/apiPaths";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 
@@ -13,6 +15,7 @@ import {
   formatTransportByteSize,
   formatTransportTimestamp,
   formatTransportTimestampSignature,
+  resolveTransportCorrelation,
   serializeTransportEntry,
   sortTransportEntries,
   summarizeTransportPath,
@@ -76,19 +79,58 @@ describe("footerModel", () => {
   });
 
   it("serializes full entries for the details modal", () => {
+    const commandDetailPath = SIMULATION_COMMAND_DETAIL_PATH.replace(
+      "{command_id}",
+      "cmd-42",
+    );
+
     expect(
       JSON.parse(
         serializeTransportEntry(
           entry({
             byteLength: 262144000,
+            path: commandDetailPath,
             timestampMs: Date.UTC(2026, 4, 14, 12, 34, 56),
           }),
         ),
       ),
     ).toMatchObject({
       byteLength: 262144000,
-      path: SESSION_STATUS_PATH,
+      commandId: "cmd-42",
+      path: commandDetailPath,
+      resourceKey: commandDetailPath,
       timestamp: "2026-05-14T12:34:56.000Z",
+    });
+  });
+
+  it("resolves transport correlation details from request metadata", () => {
+    const commandDetailPath = SIMULATION_COMMAND_DETAIL_PATH.replace(
+      "{command_id}",
+      "cmd-42",
+    );
+
+    expect(
+      resolveTransportCorrelation(
+        entry({
+          detail: "stage_id=stage-003",
+          path: commandDetailPath,
+        }),
+      ),
+    ).toEqual({
+      commandId: "cmd-42",
+      resourceKey: commandDetailPath,
+      stageId: "stage-003",
+    });
+
+    expect(
+      resolveTransportCorrelation(
+        entry({
+          detail: "attempt 1; command_id=cmd-77; accepted=true",
+          path: SIMULATION_COMMANDS_PATH,
+        }),
+      ),
+    ).toMatchObject({
+      commandId: "cmd-77",
     });
   });
 

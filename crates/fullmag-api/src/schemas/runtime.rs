@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::schemas::commands::{RuntimeCommandPrecondition, RuntimeCommandTarget};
 use crate::types::MeshCommandTarget;
-use crate::schemas::commands::{
-    RuntimeCommandPrecondition, RuntimeCommandTarget,
-};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CurrentRunResource {
@@ -83,7 +81,23 @@ pub struct StageExecutionRecordResource {
     pub action: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded_state_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from_checkpoint_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,12 +211,57 @@ pub struct CommandQueueStatusResource {
     pub rejected_count: u64,
     pub failed_count: u64,
     pub can_accept_commands: bool,
+    pub runtime_controls: Vec<RuntimeCommandReadinessResource>,
     pub commands: Vec<CommandStatusResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RuntimeCommandReadinessResource {
+    pub kind: String,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CommandExecutionReadbackResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CommandResourceInvalidationResource {
+    pub resource_key: String,
+    pub revision: u64,
+    pub reason: String,
+    pub state: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct CommandDiagnosticReferenceResource {
+    pub resource_key: String,
+    pub revision: u64,
+    pub severity: String,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CommandStatusResource {
     pub command_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub seq: u64,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,6 +283,8 @@ pub struct CommandStatusResource {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CommandDetailResource {
     pub command_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub seq: u64,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,17 +296,33 @@ pub struct CommandDetailResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_intent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub requested_at_unix_ms: Option<u128>,
+    pub requested_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_index: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_execution: Option<CommandExecutionReadbackResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_execution: Option<CommandExecutionReadbackResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_invalidations: Vec<CommandResourceInvalidationResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<CommandDiagnosticReferenceResource>,
     pub status: String,
     pub created_at_unix_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_unix_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_at_unix_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,4 +349,14 @@ pub struct CommandDetailResource {
     pub mesh_target: Option<MeshCommandTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded_state_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_from_checkpoint_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_transition: Option<String>,
 }

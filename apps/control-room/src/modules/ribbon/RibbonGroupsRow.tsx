@@ -65,6 +65,7 @@ export function resolveRibbonIconColor(iconColor?: string): string | undefined {
 interface RibbonGroupsRowProps {
   groups: RibbonGroupData[];
   onAction?: (actionId: string, input?: unknown) => void;
+  onCommandDetail?: (commandId: string) => void;
 }
 
 function RibbonActionButton({
@@ -74,11 +75,13 @@ function RibbonActionButton({
   label,
   disabled,
   active,
+  activeCommandId,
   accent,
   tooltip,
   iconColor,
   splitButton,
   onAction,
+  onCommandDetail,
 }: {
   actionMenu?: RibbonGroupData["actions"][number]["menu"];
   id: string;
@@ -86,11 +89,13 @@ function RibbonActionButton({
   label: string;
   disabled?: boolean;
   active?: boolean;
+  activeCommandId?: string;
   accent?: boolean;
   tooltip?: string;
   iconColor?: string;
   splitButton?: boolean;
   onAction?: (actionId: string, input?: unknown) => void;
+  onCommandDetail?: (commandId: string) => void;
 }) {
   const hasMenu = Boolean(actionMenu?.length);
   const isTriggerDisabled = Boolean(disabled && !hasMenu);
@@ -155,11 +160,20 @@ function RibbonActionButton({
     </button>
   );
 
-  if (!hasMenu) {
-    return trigger;
-  }
+  const detailButton = activeCommandId ? (
+    <button
+      className="fm-ribbon-action-detail"
+      title="Open active command detail"
+      type="button"
+      onClick={() => onCommandDetail?.(activeCommandId)}
+    >
+      Detail
+    </button>
+  ) : null;
 
-  return (
+  const content = !hasMenu ? (
+    trigger
+  ) : (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="fm-ribbon-menu">
@@ -167,14 +181,25 @@ function RibbonActionButton({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+
+  return detailButton ? (
+    <div className="fm-ribbon-action-stack">
+      {content}
+      {detailButton}
+    </div>
+  ) : (
+    content
+  );
 }
 
 function RibbonGroup({
   group,
   onAction,
+  onCommandDetail,
 }: {
   group: RibbonGroupData;
   onAction?: (actionId: string, input?: unknown) => void;
+  onCommandDetail?: (commandId: string) => void;
 }) {
   return (
     <div
@@ -189,6 +214,7 @@ function RibbonGroup({
             accent={action.accent}
             actionMenu={action.menu}
             active={action.active}
+            activeCommandId={action.activeCommandId}
             disabled={action.disabled}
             icon={action.icon}
             id={action.id}
@@ -197,6 +223,7 @@ function RibbonGroup({
             splitButton={action.splitButton}
             tooltip={action.tooltip}
             onAction={onAction}
+            onCommandDetail={onCommandDetail}
           />
         ))}
       </div>
@@ -208,11 +235,20 @@ function RibbonGroup({
   );
 }
 
-export function RibbonGroupsRow({ groups, onAction }: RibbonGroupsRowProps) {
+export function RibbonGroupsRow({
+  groups,
+  onAction,
+  onCommandDetail,
+}: RibbonGroupsRowProps) {
   return (
     <div className="fm-ribbon__groups" role="tabpanel">
       {groups.map((group) => (
-        <RibbonGroup key={group.id} group={group} onAction={onAction} />
+        <RibbonGroup
+          key={group.id}
+          group={group}
+          onAction={onAction}
+          onCommandDetail={onCommandDetail}
+        />
       ))}
     </div>
   );

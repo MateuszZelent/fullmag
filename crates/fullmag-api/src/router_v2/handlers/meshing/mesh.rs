@@ -787,8 +787,16 @@ pub async fn get_mesh_shared_domain_manifest(
             };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-manifest:{generation_id}:{}",
-                snapshot.mesh_revision
+                "mesh-shared-domain-manifest:{generation_id}:{}:{}:{}",
+                snapshot.mesh_revision,
+                provenance
+                    .source_scene_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                provenance
+                    .geometry_realization_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
             ));
             Ok(
                 crate::router_v2::handlers::shared::conditional_json_response(
