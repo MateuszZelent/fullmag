@@ -6,6 +6,7 @@ import {
   DATA_SCALARS_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
@@ -35,6 +36,7 @@ import type {
   ObjectMetricsResource,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
+  SolverProfileResource,
   SolverStatusResource,
   StageExecutionResource,
   ScalarWindowQuery,
@@ -309,6 +311,26 @@ export function useGpuTelemetryResource({
     load,
     resolveRevision: (data) => data.sample_time_unix_ms,
     resourceKey: DIAGNOSTICS_GPU_PATH,
+  });
+}
+
+export function useSolverProfileResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.diagnostics
+        .solverProfile({ signal })
+        .catch(ignoreMissingResource<SolverProfileResource>),
+    [api],
+  );
+
+  return useResource<SolverProfileResource | null>({
+    enabled,
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey: DIAGNOSTICS_SOLVER_PROFILE_PATH,
   });
 }
 

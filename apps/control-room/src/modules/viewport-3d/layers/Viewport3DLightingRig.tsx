@@ -75,11 +75,11 @@ export function Viewport3DLightingRig({
   return (
     <>
       <ambientLight color={rig.ambient.color} intensity={rig.ambient.intensity} />
-      {rig.directional.map((light, index) => (
+      {rig.directional.map((light) => (
         <directionalLight
           color={light.color}
           intensity={light.intensity}
-          key={`${index}:${light.position.join(",")}`}
+          key={`${light.color}:${light.intensity}:${light.position.join(",")}`}
           position={light.position}
         />
       ))}
@@ -87,4 +87,3 @@ export function Viewport3DLightingRig({
     </>
   );
 }
-

@@ -263,6 +263,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_command_detail),
         )
         .route(
+            "/v2/sessions/current/diagnostics/solver-profile",
+            get(handlers::diagnostics::get_solver_profile),
+        )
+        .route(
             "/v2/sessions/current/simulation/runs/current",
             get(handlers::simulation::get_current_run),
         )

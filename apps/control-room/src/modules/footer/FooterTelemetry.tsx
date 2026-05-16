@@ -22,6 +22,11 @@ import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResourc
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
 
+const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 3,
+});
+
 export function FooterTelemetry() {
   const { data: status } = useSessionStatus();
   const scene = useSceneResource();
@@ -345,7 +350,7 @@ function formatFixed(
 
 function formatInteger(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
-    ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value)
+    ? INTEGER_FORMAT.format(value)
     : "0";
 }
 
@@ -355,9 +360,7 @@ function formatScientific(
 ): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   if (Math.abs(value) >= 1e-2 && Math.abs(value) < 1e4) {
-    return new Intl.NumberFormat("en-US", {
-      maximumFractionDigits: 3,
-    }).format(value);
+    return COMPACT_DECIMAL_FORMAT.format(value);
   }
   return value.toExponential(3);
 }

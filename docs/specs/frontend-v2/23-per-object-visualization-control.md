@@ -1,6 +1,6 @@
 # Frontend v2 - Per-Object Visualization Control
 
-**Status:** Airbox backend-backed with kernel effective-state resolver; per-object backend persistence and live browser smoke still pending
+**Status:** Object/part target overrides are backend-backed for display, shader/wire/vector style, arrow budget, and arrow length; airbox display plus arrow budget/length are backend-backed through `layers.airbox` and `vector_style`; strict active-session browser smoke is covered with a live local runtime
 **Date:** 2026-05-11
 
 ## 1. Goal
@@ -11,7 +11,7 @@ Every renderable visualization target can be configured independently:
 - airbox visualization;
 - future 2D slice/projection views for the same targets.
 
-The user must be able to choose, per target, whether the viewport shows shader surface, vectors, wireframe, points, visibility, and opacity. The View ribbon `Per selected object` group, explorer `Visualization` nodes, inspector panel, and viewport renderer all read and write the same target registry.
+The user must be able to choose, per target, whether the viewport shows shader surface, vectors, wireframe, points, visibility, opacity, arrow budget, and arrow length. The View ribbon `Per selected object` group, explorer `Visualization` nodes, inspector panel, and viewport renderer all read and write the same target registry.
 
 ## 2. Target Identity
 
@@ -30,7 +30,9 @@ When a new object is committed but no current mesh exists yet, the target id sti
 
 ## 3. State Ownership
 
-The long-term owner is the v2 visualization resource. Airbox display now reads and writes `visualization/state.layers.airbox` through the typed v2 facade. Until the backend exposes full per-target object/part fields beyond narrow overrides, object and part display details still use a kernel visualization controller as a temporary client-owned display-preference registry. Modules consume it through kernel hooks/controllers, not through cross-module imports.
+The owner is the v2 visualization resource. Object and part display/style overrides are stored in `visualization/state.overrides`, including `vector_budget` and `vector_length_scale`. Airbox display reads and writes `visualization/state.layers.airbox` through the typed v2 facade; airbox arrow budget is `layers.airbox.vectors.density`, and airbox arrow length is `vector_style.length_scale`.
+
+The kernel visualization controller is only the UI-side resolver/cache around the v2 resource. It may preserve immediate local feedback while a revision-driven refetch is pending, but it must not become a second persistence model for fields already present in the v2 contract.
 
 Global camera state is not a per-target override. It belongs to `visualization/state.camera`, is shared by all clients in the session, and changes through HTTP patches followed by WebSocket resource invalidation.
 
@@ -42,6 +44,8 @@ The registry stores only small display preferences:
 - points visible;
 - vectors visible;
 - opacity percent;
+- arrow budget;
+- arrow length scale;
 - geometry scope for pass sampling (`surface` or `full`);
 - render mode summary for ribbon menus.
 
@@ -64,9 +68,10 @@ visible again. This rule prevents the visible UI drift where `View -> Airbox` sa
 wireframe pass.
 
 For airbox, backend-owned fields (`visible`, surface, wireframe, points, vectors,
-opacity) are written only to `visualization/state.layers.airbox`. The temporary
-kernel controller may store only local fields that are not present in the v2
-contract, currently `boundsVisible`.
+opacity, vector budget, and vector length scale) are written only to
+`visualization/state.layers.airbox` and `visualization/state.vector_style`. The
+temporary kernel controller may store only local fields that are not present in
+the v2 contract for airbox-specific styling.
 
 ## 4. UI Contract
 
@@ -99,6 +104,7 @@ Viewport:
 - vector glyph visibility can be independent per target when full-domain vector data is available.
 - wireframe display must use the same geometry scope vocabulary as vectors, even when the renderer chooses a bounded fallback for very large full-volume meshes.
 - vector glyph sampling must respect the target geometry scope: boundary-surface nodes for `surface`, the full target node selection for `full`.
+- no-session smoke must allow an absent runtime API only when `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1`; active-session smoke may tolerate explicitly enumerated optional 404 resources for primitive-only sessions that have not built a mesh or run yet, but must still fail on missing `model/scene`, failed scene transactions, or websocket invalidation.
 
 ## 5. 2D Extension
 
@@ -113,3 +119,6 @@ Required tests:
 - registry patch/reset preserves defaults and notifies subscribers;
 - ribbon selected-target controls reflect the current selection target;
 - viewport render helpers can build per-part surface indices and apply target display settings without rebuilding unrelated topology.
+- backend `PATCH /v2/sessions/current/visualization/state` round-trips per-target `vector_budget` and `vector_length_scale` through `targets.*.settings`;
+- no-session 3D smoke verifies visible canvas, non-lost WebGL context, and non-zero drawing buffer without requiring a live runtime;
+- strict active-session 3D smoke verifies geometry authoring, `model/scene` refetch, websocket `resource.batch_changed`, explorer selection, viewport render-model/canvas delta, and inspector `SceneDocument`.

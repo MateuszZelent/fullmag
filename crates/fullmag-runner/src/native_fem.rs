@@ -62,6 +62,9 @@ pub(crate) fn is_cpu_available() -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct GpuAvailability {
     pub available: bool,
+    pub available_any: bool,
+    pub available_cpu: bool,
+    pub available_gpu: bool,
     pub built_with_mfem_stack: bool,
     pub built_with_cuda_runtime: bool,
     pub built_with_ceed: bool,
@@ -74,6 +77,8 @@ pub(crate) struct GpuAvailability {
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
     pub reason: String,
+    pub reason_cpu: String,
+    pub reason_gpu: String,
 }
 
 pub(crate) fn native_availability() -> GpuAvailability {
@@ -93,11 +98,19 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
             reason: [0; 256],
+            available_any: 0,
+            available_cpu: 0,
+            available_gpu: 0,
+            reason_cpu: [0; 256],
+            reason_gpu: [0; 256],
         };
         let rc = unsafe { ffi::fullmag_fem_get_availability_info(&mut info) };
         if rc != ffi::FULLMAG_FEM_OK {
             return GpuAvailability {
                 available: false,
+                available_any: false,
+                available_cpu: false,
+                available_gpu: false,
                 built_with_mfem_stack: false,
                 built_with_cuda_runtime: false,
                 built_with_ceed: false,
@@ -112,15 +125,26 @@ pub(crate) fn native_availability() -> GpuAvailability {
                 reason: last_global_error_or(
                     "fullmag_fem_get_availability_info failed without an error message",
                 ),
+                reason_cpu: String::new(),
+                reason_gpu: String::new(),
             };
         }
 
         let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
             .to_string_lossy()
             .to_string();
+        let reason_cpu = unsafe { CStr::from_ptr(info.reason_cpu.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        let reason_gpu = unsafe { CStr::from_ptr(info.reason_gpu.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
 
         GpuAvailability {
             available: info.available == 1,
+            available_any: info.available_any == 1,
+            available_cpu: info.available_cpu == 1,
+            available_gpu: info.available_gpu == 1,
             built_with_mfem_stack: info.built_with_mfem_stack == 1,
             built_with_cuda_runtime: info.built_with_cuda_runtime == 1,
             built_with_ceed: info.built_with_ceed == 1,
@@ -133,12 +157,17 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: info.requested_gpu_index,
             resolved_gpu_index: info.resolved_gpu_index,
             reason,
+            reason_cpu,
+            reason_gpu,
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
     {
         GpuAvailability {
             available: false,
+            available_any: false,
+            available_cpu: false,
+            available_gpu: false,
             built_with_mfem_stack: false,
             built_with_cuda_runtime: false,
             built_with_ceed: false,
@@ -151,6 +180,8 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
             reason: "fullmag-runner was built without the fem-gpu feature".to_string(),
+            reason_cpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
+            reason_gpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
         }
     }
 }
@@ -464,9 +495,10 @@ impl NativeFemBackend {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                     ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_AIRBOX_ROBIN
                 }
-                fullmag_ir::ResolvedFemDemagIR::Bem
-                | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
-                | fullmag_ir::ResolvedFemDemagIR::Fmm => {
+                fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => {
+                    ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER
+                }
+                fullmag_ir::ResolvedFemDemagIR::Bem | fullmag_ir::ResolvedFemDemagIR::Fmm => {
                     return Err(RunError {
                         message: format!(
                             "native FEM runner: demag model '{}' is not yet implemented in the backend",
@@ -813,6 +845,7 @@ impl NativeFemBackend {
                     safety: a.safety,
                     growth_limit: a.growth_limit,
                     shrink_limit: a.shrink_limit,
+                    max_reject: 50,
                 })
             })
             .transpose()?;
@@ -1786,6 +1819,37 @@ mod tests {
             "unexpected material-class rejection message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn native_fem_accepts_fredkin_koehler_demag_at_runner_boundary() {
+        let mut plan = make_test_plan();
+        plan.enable_exchange = false;
+        plan.enable_demag = true;
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        plan.air_box_config = None;
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh;
+        plan.mesh.boundary_faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        plan.mesh.boundary_markers = vec![1, 1, 1, 1];
+
+        if let Err(err) = NativeFemBackend::create_with_initial_effective_field(&plan, false) {
+            assert!(
+                !err.message.contains("not yet implemented")
+                    && !err.message.contains("air-box demag requires"),
+                "runner must route Fredkin-Koehler demag to the native FEM/BEM backend, got: {}",
+                err.message
+            );
+            if !is_gpu_available()
+                && (err.message.contains("MFEM") || err.message.contains("scaffold"))
+            {
+                return;
+            }
+            panic!(
+                "unexpected native FEM Fredkin-Koehler create error: {}",
+                err.message
+            );
+        }
     }
 
     #[test]

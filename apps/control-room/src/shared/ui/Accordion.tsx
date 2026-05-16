@@ -7,25 +7,27 @@ import { cn } from "@/shared/utils/className";
 
 const Accordion = AccordionPrimitive.Root;
 
-const AccordionItem = React.forwardRef<
-  React.ElementRef<typeof AccordionPrimitive.Item>,
-  React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Item>
->(({ className, ...props }, ref) => (
+function AccordionItem({
+  className,
+  ...props
+}: React.ComponentPropsWithRef<typeof AccordionPrimitive.Item>) {
+  return (
   <AccordionPrimitive.Item
-    ref={ref}
     className={cn("fm-accordion-item", className)}
     {...props}
   />
-));
+  );
+}
 AccordionItem.displayName = "AccordionItem";
 
-const AccordionTrigger = React.forwardRef<
-  React.ElementRef<typeof AccordionPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+function AccordionTrigger({
+  className,
+  children,
+  ...props
+}: React.ComponentPropsWithRef<typeof AccordionPrimitive.Trigger>) {
+  return (
   <AccordionPrimitive.Header className="fm-accordion-header">
     <AccordionPrimitive.Trigger
-      ref={ref}
       className={cn("fm-accordion-trigger", className)}
       {...props}
     >
@@ -33,21 +35,24 @@ const AccordionTrigger = React.forwardRef<
       <ChevronRight aria-hidden="true" />
     </AccordionPrimitive.Trigger>
   </AccordionPrimitive.Header>
-));
+  );
+}
 AccordionTrigger.displayName = AccordionPrimitive.Trigger.displayName;
 
-const AccordionContent = React.forwardRef<
-  React.ElementRef<typeof AccordionPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+function AccordionContent({
+  className,
+  children,
+  ...props
+}: React.ComponentPropsWithRef<typeof AccordionPrimitive.Content>) {
+  return (
   <AccordionPrimitive.Content
-    ref={ref}
     className="fm-accordion-content"
     {...props}
   >
     <div className={cn("fm-accordion-content-inner", className)}>{children}</div>
   </AccordionPrimitive.Content>
-));
+  );
+}
 AccordionContent.displayName = AccordionPrimitive.Content.displayName;
 
 export { Accordion, AccordionItem, AccordionTrigger, AccordionContent };

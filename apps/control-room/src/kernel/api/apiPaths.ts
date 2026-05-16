@@ -39,6 +39,10 @@ export const DIAGNOSTICS_GPU_PATH = openApiV2Path(
   "/v2/sessions/current/diagnostics/gpu",
 );
 
+export const DIAGNOSTICS_SOLVER_PROFILE_PATH = openApiV2Path(
+  "/v2/sessions/current/diagnostics/solver-profile",
+);
+
 export const MESHING_SHARED_DOMAIN_MANIFEST_PATH = openApiV2Path(
   "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
 );

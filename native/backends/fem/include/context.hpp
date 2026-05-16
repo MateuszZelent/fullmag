@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "fullmag_fem.h"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -31,6 +32,7 @@ struct ExplicitTableau {
 struct StepperWorkspace {
     bool allocated = false;
     size_t dof_len = 0;                             // n_nodes * 3
+    int stages = 0;                                 // currently allocated RK stages
     std::vector<double> m_backup;                   // backup of m before stage loop
     std::vector<double> k[MAX_RK_STAGES];           // stage derivatives k_i
     std::vector<double> m_stage;                    // temp: m at stage evaluation point
@@ -67,6 +69,7 @@ struct Context {
     double safety_factor = 0.9;       // safety multiplier on predicted dt
     double dt_grow_max = 2.0;         // max growth ratio per step
     double dt_shrink_min = 0.2;       // min shrink ratio per step
+    uint32_t max_reject = 50;         // max rejected attempts per accepted step
     double prev_error_norm = 1.0;     // for PI: error from previous accepted step
     uint64_t rejected_steps = 0;      // total rejected (retried) steps
 
@@ -224,11 +227,20 @@ struct Context {
     uint64_t thermal_seed = 0;      // 0 = random seed from system entropy
     std::vector<double> h_therm_xyz;  // Per-node thermal field buffer (AOS-3)
 
+    // Transitional nodal integration weights used by local interaction energy
+    // tests and, in the MFEM path, populated from the scalar lumped mass form.
+    std::vector<double> mfem_lumped_mass;
+
     // FEM-029 fix: explicit GPU device index from plan. -1 = env / default.
     int32_t gpu_device_index = -1;
 
     // FEM-030 fix: explicit MFEM device string from plan. Empty = env / default.
     std::string mfem_device_string_override;
+
+    // CPU OpenMP runtime diagnostics for Poisson/Robin demag and telemetry.
+    bool cpu_threads_auto_requested = false;
+    int requested_omp_threads = 1;
+    int effective_omp_threads = 1;
 
 #if FULLMAG_HAS_MFEM_STACK
     std::vector<double> mfem_mx;
@@ -238,7 +250,6 @@ struct Context {
     std::vector<double> mfem_h_ex_y;
     std::vector<double> mfem_h_ex_z;
     std::vector<double> mfem_exchange_tmp;
-    std::vector<double> mfem_lumped_mass;
 
     int mfem_selected_device_index = -1;
     void *mfem_mesh = nullptr;
@@ -303,7 +314,8 @@ struct Context {
     void *mfem_cached_hypre_solver = nullptr;         // mfem::HypreSolver*
     bool poisson_solver_setup = false;
 
-    // Demag realization: 1 = airbox_dirichlet, 2 = airbox_robin
+    // Demag realization:
+    // 1 = airbox_dirichlet, 2 = airbox_robin, 3 = Fredkin-Koehler FEM/BEM.
     int demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     int poisson_boundary_marker = 99;
 
@@ -313,11 +325,6 @@ struct Context {
     double robin_effective_beta = 0.0;   // computed β value
     void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
 
-    // CPU OpenMP runtime diagnostics for Poisson/Robin demag.
-    bool cpu_threads_auto_requested = false;
-    int requested_omp_threads = 1;
-    int effective_omp_threads = 1;
-
     // ── Periodic demag: algebraic P^T A P reduced Poisson system ──
     // Assembled once in context_initialize_poisson when demag_periodic_enabled().
     // The reduced system has periodic_reduced_node_count DOFs.
@@ -326,6 +333,11 @@ struct Context {
     void *mfem_periodic_poisson_solution = nullptr;  // mfem::Vector* (work: x_p)
     void *mfem_periodic_poisson_workspace = nullptr; // PeriodicPoissonReducedWorkspace*
     bool poisson_periodic_reduced_ready = false;
+
+    // Body-only Fredkin-Koehler FEM/BEM demag subsystem.
+    // Owned by cpu/mfem/interactions/demag_fem_bem.cpp.
+    void *mfem_demag_fem_bem_workspace = nullptr;
+    bool demag_fem_bem_ready = false;
 #endif
 
     // ── S12: CUDA stream management ──
@@ -377,7 +389,6 @@ int context_upload_magnetization_f64(
     uint64_t len,
     std::string &error);
 void context_populate_device_info(Context &ctx);
-void context_refresh_thermal_field(Context &ctx);
 #if FULLMAG_HAS_MFEM_STACK
 bool context_initialize_mfem(Context &ctx, std::string &error);
 bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);
@@ -405,12 +416,15 @@ const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator)
 void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
 bool context_initialize_poisson(Context &ctx, std::string &error);
 void context_destroy_poisson(Context &ctx);
-// Forward-declared so that context.cpp can call this without including
-// mfem_bridge.cpp internals. PhaseTimings is only ever passed as nullptr
-// from context.cpp.
-struct PhaseTimings;
+struct PhaseTimings {
+    uint64_t exchange_wall_time_ns = 0;
+    DemagPoissonPhaseTimings demag;
+    uint64_t rhs_wall_time_ns = 0;
+    uint64_t extra_energy_wall_time_ns = 0;
+    uint64_t snapshot_wall_time_ns = 0;
+};
 
-// MFEM device classification helpers (defined in mfem_bridge.cpp)
+// MFEM device classification helpers (defined in cpu/mfem/runtime/mfem_device.cpp)
 const char *configured_mfem_device_string();
 const char *configured_mfem_device_string(const Context &ctx);
 bool is_gpu_device_string(const char *device);
@@ -425,9 +439,6 @@ bool context_compute_demag_poisson(
     bool allow_interrupt,
     PhaseTimings *timings,
     std::string &error);
-void compute_magnetoelastic_field(
-    Context &ctx,
-    const std::vector<double> &m_xyz);
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

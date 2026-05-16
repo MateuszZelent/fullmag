@@ -25,13 +25,27 @@ describe("physics interaction catalog", () => {
       "magnetoelastic",
     ]);
     expect(writableObjectInteractionIds()).toEqual([
-      "exchange",
       "interfacial_dmi",
       "uniaxial_anisotropy",
     ]);
     expect(findInteractionSpec("bulk_dmi")?.availability).toBe("deferred");
     expect(findInteractionSpec("current_transport")?.availability).toBe("deferred");
     expect(findInteractionSpec("spin_torque")?.availability).toBe("deferred");
+  });
+
+  it("keeps exchange and demag as global effective-field switches", () => {
+    expect(findInteractionSpec("exchange")).toMatchObject({
+      availability: "study",
+      id: "exchange",
+      scope: "global",
+      storage: "study",
+    });
+    expect(findInteractionSpec("demag")).toMatchObject({
+      availability: "study",
+      id: "demag",
+      scope: "global",
+      storage: "study",
+    });
   });
 
   it("keeps demag global and exposes the implemented and planned demag methods", () => {
@@ -48,7 +62,7 @@ describe("physics interaction catalog", () => {
         { label: "FEM Poisson Robin airbox", value: "poisson_robin" },
         { label: "FEM Poisson Dirichlet airbox", value: "poisson_dirichlet" },
         { label: "FEM BEM", value: "bem" },
-        { label: "FEM Fredkin-Koehler", value: "fredkin_koehler" },
+        { label: "FEM/BEM Fredkin-Koehler (no airbox)", value: "fredkin_koehler" },
         { label: "FEM FMM", value: "fmm" },
         { label: "FDM multilayer convolution", value: "multilayer_convolution" },
       ],
@@ -91,13 +105,23 @@ describe("physics interaction catalog", () => {
   it("builds study patches for global demag and Zeeman field settings", () => {
     expect(
       buildStudyInteractionPatchFromDraft({
-        enabled: true,
+        enabled: false,
+        id: "exchange",
+        present: true,
+        values: {},
+      }),
+    ).toEqual({
+      patch: { study: { exchange_enabled: false } },
+    });
+    expect(
+      buildStudyInteractionPatchFromDraft({
+        enabled: false,
         id: "demag",
         present: true,
         values: { method: "poisson_robin" },
       }),
     ).toEqual({
-      patch: { study: { demag_realization: "poisson_robin" } },
+      patch: { study: { demag_enabled: false, demag_realization: "poisson_robin" } },
     });
     expect(
       buildStudyInteractionPatchFromDraft({

@@ -104,7 +104,11 @@ page.on("response", (response) => {
       });
   }
 
-  if (status < 400 || isAllowedMissingSessionResponse(response.url(), status)) {
+  if (
+    status < 400 ||
+    isAllowedMissingSessionResponse(response.url(), status) ||
+    isAllowedOptionalActiveSessionResponse(response.url(), status)
+  ) {
     return;
   }
 
@@ -848,6 +852,10 @@ function isIgnorableConsoleError(text) {
     return true;
   }
 
+  if (allowMissingSession && text.includes("net::ERR_CONNECTION_REFUSED")) {
+    return true;
+  }
+
   return (
     allowMissingSession &&
     text.includes("/v2/sessions/current/events/ws") &&
@@ -863,6 +871,28 @@ function isAllowedMissingSessionResponse(responseUrl, status) {
   try {
     const pathname = new URL(responseUrl).pathname;
     return pathname.startsWith("/v2/sessions/current/");
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOptionalActiveSessionResponse(responseUrl, status) {
+  if (allowMissingSession || status !== 404) {
+    return false;
+  }
+
+  const optionalPaths = new Set([
+    "/v2/sessions/current/meshing/builds/current",
+    "/v2/sessions/current/meshing/builds/latest-successful",
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+    "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+    "/v2/sessions/current/meshing/summary",
+    "/v2/sessions/current/simulation/runs/current",
+    "/v2/sessions/current/simulation/stages/execution",
+  ]);
+
+  try {
+    return optionalPaths.has(new URL(responseUrl).pathname);
   } catch {
     return false;
   }

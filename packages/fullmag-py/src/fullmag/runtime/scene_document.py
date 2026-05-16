@@ -77,7 +77,7 @@ def _normalize_interaction_entry(
     if kind not in _INTERACTION_ORDER:
         return None
     if kind in {"exchange", "demag"}:
-        return {"kind": kind, "enabled": True, "params": None}
+        return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
     params = raw.get("params")
     params_map = dict(params) if isinstance(params, dict) else (_default_interaction_params(kind, material_dind=material_dind) or {})
     if kind == "interfacial_dmi":
@@ -104,7 +104,8 @@ def _ensure_physics_stack(raw: object, *, material_dind: object = None) -> list[
             if normalized is not None:
                 by_kind[str(normalized["kind"])] = normalized
     for required in ("exchange", "demag"):
-        by_kind[required] = {"kind": required, "enabled": True, "params": None}
+        if required not in by_kind:
+            by_kind[required] = {"kind": required, "enabled": True, "params": None}
     if material_dind is not None and "interfacial_dmi" not in by_kind:
         by_kind["interfacial_dmi"] = _normalize_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
@@ -222,6 +223,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_mode": "strict",
             "requested_cpu_threads": builder.get("cpu_threads"),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
+            "exchange_enabled": bool(builder.get("exchange_enabled", True)),
+            "demag_enabled": bool(builder.get("demag_enabled", True)),
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
             "solver": builder.get("solver") or {},
@@ -324,6 +327,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "backend": study.get("backend"),
         "cpu_threads": study.get("requested_cpu_threads"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
+        "exchange_enabled": bool(study.get("exchange_enabled", True)),
+        "demag_enabled": bool(study.get("demag_enabled", True)),
         "demag_realization": study.get("demag_realization"),
         "external_field": study.get("external_field"),
         "solver": study.get("solver") or {},
@@ -351,6 +356,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             if isinstance(builder.get("fem_demag_solver_policy"), dict)
             else None
         ),
+        "exchange_enabled": bool(builder.get("exchange_enabled", True)),
+        "demag_enabled": bool(builder.get("demag_enabled", True)),
         "demag_realization": builder.get("demag_realization"),
         "external_field": (
             [float(value) for value in builder.get("external_field")]

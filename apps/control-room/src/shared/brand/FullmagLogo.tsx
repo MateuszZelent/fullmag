@@ -28,6 +28,8 @@ export default function FullmagLogo({
   void _animate;
   const [zoomed, setZoomed] = useState(false);
   const mounted = typeof document !== "undefined";
+  const openZoom = () => setZoomed(true);
+  const closeZoom = () => setZoomed(false);
 
   return (
     <>
@@ -40,18 +42,37 @@ export default function FullmagLogo({
           spin && "animate-[spin_4s_linear_infinite]",
           className
         )}
-        onClick={() => setZoomed(true)}
+        aria-label="Open Fullmag logo preview"
+        role="button"
+        tabIndex={0}
+        onClick={openZoom}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openZoom();
+          }
+        }}
       />
 
       {/* ── Zoom Modal Render ── */}
       {zoomed && mounted && createPortal(
         <div
           className="fixed inset-0 z-[99999] p-4 sm:p-8 flex items-center justify-center bg-background/90 backdrop-blur-xl cursor-zoom-out animate-in fade-in duration-200"
-          onClick={() => setZoomed(false)}
+          aria-label="Close Fullmag logo preview"
+          role="button"
+          tabIndex={0}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeZoom();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              closeZoom();
+            }
+          }}
         >
           <div
             className="relative flex items-center justify-center w-full h-full max-w-[90vw] max-h-[90vh] sm:max-w-[70vw] sm:max-h-[70vh] p-8 sm:p-16 rounded-3xl border border-white/10 bg-black/20 shadow-2xl animate-in zoom-in-95 duration-300 cursor-default"
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="absolute inset-0 bg-primary/10 rounded-3xl blur-3xl pointer-events-none" />
             <FullmagLogoVector

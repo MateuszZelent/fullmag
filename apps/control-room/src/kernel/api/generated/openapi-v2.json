@@ -4224,8 +4224,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Build/pipeline state for build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -4329,8 +4332,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Detailed build pipeline state for diagnostics and build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -4369,6 +4375,35 @@
           "revision",
           "history"
         ],
+        "type": "object"
+      },
+      "MeshBuildPipelinePhaseResource": {
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshCapabilitiesResource": {
@@ -6773,6 +6808,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "solver_profile_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "stages_revision": {
             "format": "int64",
             "minimum": 0,
@@ -6806,6 +6846,7 @@
           "domain_generation_id",
           "artifacts_revision",
           "engine_log_revision",
+          "solver_profile_revision",
           "display_revision",
           "workspace_revision",
           "mesh_revision",
@@ -8238,6 +8279,273 @@
         ],
         "type": "object"
       },
+      "SolverProfileAggregatesResource": {
+        "properties": {
+          "average_demag_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "average_exchange_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "average_total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_count": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_count",
+          "average_total_ns",
+          "max_total_ns",
+          "average_exchange_ns",
+          "average_demag_ns"
+        ],
+        "type": "object"
+      },
+      "SolverProfileCommandConfig": {
+        "properties": {
+          "emit_engine_log": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "max_samples": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "persist_artifact": {
+            "type": "boolean"
+          },
+          "sample_every": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SolverProfilePhaseResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "percent_of_total": {
+            "format": "double",
+            "type": "number"
+          },
+          "wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "wall_time_ns",
+          "percent_of_total"
+        ],
+        "type": "object"
+      },
+      "SolverProfileResource": {
+        "properties": {
+          "aggregates": {
+            "$ref": "#/components/schemas/SolverProfileAggregatesResource"
+          },
+          "artifact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "config": {
+            "$ref": "#/components/schemas/SolverProfileCommandConfig"
+          },
+          "latest_samples": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileStepSampleResource"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "threading": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolverProfileThreadingResource"
+              }
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "state",
+          "config",
+          "latest_samples",
+          "aggregates",
+          "artifact_refs"
+        ],
+        "type": "object"
+      },
+      "SolverProfileStepSampleResource": {
+        "properties": {
+          "demag_solves": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_subphase_sum_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "demag_subphases": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseResource"
+            },
+            "type": "array"
+          },
+          "dt": {
+            "format": "double",
+            "type": "number"
+          },
+          "missing_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase_sum_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseResource"
+            },
+            "type": "array"
+          },
+          "poisson_final_residual": {
+            "format": "double",
+            "type": "number"
+          },
+          "poisson_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rejected_attempts": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rhs_evaluations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threading": {
+            "$ref": "#/components/schemas/SolverProfileThreadingResource"
+          },
+          "time": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step",
+          "time",
+          "dt",
+          "total_ns",
+          "phase_sum_ns",
+          "missing_ns",
+          "phases",
+          "demag_subphase_sum_ns",
+          "demag_subphases",
+          "rhs_evaluations",
+          "rejected_attempts",
+          "demag_solves",
+          "poisson_iterations",
+          "poisson_final_residual",
+          "threading"
+        ],
+        "type": "object"
+      },
+      "SolverProfileThreadingResource": {
+        "properties": {
+          "effective_omp_threads": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "mfem_device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "openmp_available": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "openmp_compiled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "requested_omp_threads": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "thread_mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requested_omp_threads",
+          "effective_omp_threads",
+          "thread_mode"
+        ],
+        "type": "object"
+      },
       "SolverStatusResource": {
         "properties": {
           "algorithm": {
@@ -8926,6 +9234,38 @@
                   "kind": {
                     "enum": [
                       "mesh_build"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeCommandIntent"
+              },
+              {
+                "properties": {
+                  "profile": {
+                    "$ref": "#/components/schemas/SolverProfileCommandConfig"
+                  }
+                },
+                "required": [
+                  "profile"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "set_solver_profile"
                     ],
                     "type": "string"
                   }
@@ -9932,8 +10272,17 @@
             "format": "double",
             "type": "number"
           },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "vector_color_mode": {
             "$ref": "#/components/schemas/VectorColorMode"
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": "number"
           },
           "vector_mono_color": {
             "type": "string"
@@ -9970,7 +10319,9 @@
           "surface_mono_color",
           "surface_visible",
           "vector_alpha",
+          "vector_budget",
           "vector_color_mode",
+          "vector_length_scale",
           "vector_mono_color",
           "vector_thickness",
           "vectors_visible",
@@ -10583,6 +10934,14 @@
               "null"
             ]
           },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "vector_color_mode": {
             "oneOf": [
               {
@@ -10591,6 +10950,13 @@
               {
                 "$ref": "#/components/schemas/VectorColorMode"
               }
+            ]
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
             ]
           },
           "vector_mono_color": {
@@ -13514,6 +13880,32 @@
               }
             },
             "description": "GPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/solver-profile": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_solver_profile",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolverProfileResource"
+                }
+              }
+            },
+            "description": "Opt-in FEM solver phase profile"
+          },
+          "304": {
+            "description": "Solver profile not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
           }
         },
         "tags": [

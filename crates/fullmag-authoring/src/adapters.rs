@@ -1,11 +1,11 @@
 use crate::{
-    validate_scene_document, MagnetizationAsset, SceneCurrentModulesState, SceneDocument,
-    SceneDocumentValidationError, SceneEditorState, SceneGeometry, SceneMaterialAsset,
-    SceneMeshInterface, SceneMetadata, SceneObject, SceneOutputsState, SceneStudyState,
-    ScriptBuilderGeometryEntry, ScriptBuilderMagneticInteractionEntry,
-    ScriptBuilderMagneticInteractionKind, ScriptBuilderMagnetizationState,
-    ScriptBuilderMeshInterfaceState, ScriptBuilderPerGeometryMeshState, ScriptBuilderState,
-    StudyPipelineNode, Transform3D,
+    MagnetizationAsset, SceneCurrentModulesState, SceneDocument, SceneDocumentValidationError,
+    SceneEditorState, SceneGeometry, SceneMaterialAsset, SceneMeshInterface, SceneMetadata,
+    SceneObject, SceneOutputsState, SceneStudyState, ScriptBuilderGeometryEntry,
+    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+    ScriptBuilderMagnetizationState, ScriptBuilderMeshInterfaceState,
+    ScriptBuilderPerGeometryMeshState, ScriptBuilderState, StudyPipelineNode, Transform3D,
+    validate_scene_document,
 };
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -71,6 +71,8 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             requested_mode: "strict".to_string(),
             requested_cpu_threads: builder.cpu_threads,
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
+            exchange_enabled: builder.exchange_enabled,
+            demag_enabled: builder.demag_enabled,
             demag_realization: builder.demag_realization.clone(),
             external_field: builder.external_field,
             solver: builder.solver.clone(),
@@ -171,6 +173,8 @@ pub fn scene_document_to_script_builder(
         backend: normalized_scene.study.backend.clone(),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
+        exchange_enabled: normalized_scene.study.exchange_enabled,
+        demag_enabled: normalized_scene.study.demag_enabled,
         demag_realization: normalized_scene.study.demag_realization.clone(),
         external_field: normalized_scene.study.external_field,
         solver: normalized_scene.study.solver.clone(),
@@ -214,6 +218,8 @@ pub fn scene_document_to_script_builder_overrides(
                 || scene.study.requested_mode != "strict"
                 || scene.study.requested_cpu_threads.is_some(),
         },
+        "exchange_enabled": builder.exchange_enabled,
+        "demag_enabled": builder.demag_enabled,
         "demag_realization": builder.demag_realization,
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
@@ -291,6 +297,9 @@ pub fn scene_document_to_script_builder_overrides(
             "center": universe.center,
             "padding": universe.padding,
             "airbox_hmax": universe.airbox_hmax,
+            "airbox_hmin": universe.airbox_hmin,
+            "airbox_growth_rate": universe.airbox_growth_rate,
+            "airbox_grading": universe.airbox_grading,
         })).unwrap_or(Value::Null),
         "stages": builder.stages.iter().map(|stage| serde_json::json!({
             "kind": stage.kind,
@@ -672,6 +681,34 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .map(parse_optional_text_f64)
             .unwrap_or(Value::Null),
     );
+    let edge_hmax = mesh
+        .edge_hmax
+        .as_deref()
+        .map(parse_optional_text_f64)
+        .unwrap_or(Value::Null);
+    map.insert("edge_hmax".to_string(), edge_hmax.clone());
+    map.insert("edge_maximum_element_size".to_string(), edge_hmax);
+    map.insert(
+        "edge_thickness".to_string(),
+        mesh.edge_thickness
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
+    let corner_hmax = mesh
+        .corner_hmax
+        .as_deref()
+        .map(parse_optional_text_f64)
+        .unwrap_or(Value::Null);
+    map.insert("corner_hmax".to_string(), corner_hmax.clone());
+    map.insert("corner_maximum_element_size".to_string(), corner_hmax);
+    map.insert(
+        "corner_extent".to_string(),
+        mesh.corner_extent
+            .as_deref()
+            .map(parse_optional_text_f64)
+            .unwrap_or(Value::Null),
+    );
     map.insert(
         "transition_distance".to_string(),
         mesh.transition_distance
@@ -765,22 +802,32 @@ fn ensure_object_physics_stack(
             normalize_interaction_entry(entry, material_dind),
         );
     }
-    upsert_interaction(
-        &mut normalized,
-        ScriptBuilderMagneticInteractionEntry {
-            kind: ScriptBuilderMagneticInteractionKind::Exchange,
-            enabled: true,
-            params: None,
-        },
-    );
-    upsert_interaction(
-        &mut normalized,
-        ScriptBuilderMagneticInteractionEntry {
-            kind: ScriptBuilderMagneticInteractionKind::Demag,
-            enabled: true,
-            params: None,
-        },
-    );
+    if !normalized
+        .iter()
+        .any(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::Exchange)
+    {
+        upsert_interaction(
+            &mut normalized,
+            ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::Exchange,
+                enabled: true,
+                params: None,
+            },
+        );
+    }
+    if !normalized
+        .iter()
+        .any(|entry| entry.kind == ScriptBuilderMagneticInteractionKind::Demag)
+    {
+        upsert_interaction(
+            &mut normalized,
+            ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::Demag,
+                enabled: true,
+                params: None,
+            },
+        );
+    }
     if material_dind.is_some()
         && !normalized
             .iter()
@@ -811,12 +858,12 @@ fn normalize_interaction_entry(
     match entry.kind {
         ScriptBuilderMagneticInteractionKind::Exchange => ScriptBuilderMagneticInteractionEntry {
             kind: ScriptBuilderMagneticInteractionKind::Exchange,
-            enabled: true,
+            enabled: entry.enabled,
             params: None,
         },
         ScriptBuilderMagneticInteractionKind::Demag => ScriptBuilderMagneticInteractionEntry {
             kind: ScriptBuilderMagneticInteractionKind::Demag,
-            enabled: true,
+            enabled: entry.enabled,
             params: None,
         },
         ScriptBuilderMagneticInteractionKind::InterfacialDmi => {
@@ -1253,6 +1300,8 @@ mod tests {
             backend: Some("fem".to_string()),
             cpu_threads: Some(8),
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
+            exchange_enabled: true,
+            demag_enabled: true,
             demag_realization: Some("airbox_robin".to_string()),
             external_field: Some([0.0, 0.0, 0.015]),
             solver: ScriptBuilderSolverState {
@@ -1309,8 +1358,9 @@ mod tests {
                 center: Some([0.0, 0.0, 0.0]),
                 padding: Some([100e-9, 120e-9, 140e-9]),
                 airbox_hmax: Some(60e-9),
-                airbox_hmin: None,
-                airbox_growth_rate: None,
+                airbox_hmin: Some(12e-9),
+                airbox_growth_rate: Some(1.35),
+                airbox_grading: Some("linear".to_string()),
             }),
             domain_frame: None,
             stages: vec![ScriptBuilderStageState {
@@ -1468,6 +1518,10 @@ mod tests {
                     bulk_hmin: None,
                     interface_hmax: None,
                     interface_thickness: None,
+                    edge_hmax: Some("8e-9".to_string()),
+                    edge_thickness: Some("20e-9".to_string()),
+                    corner_hmax: Some("5e-9".to_string()),
+                    corner_extent: Some("12e-9".to_string()),
                     transition_distance: None,
                     transition_growth: None,
                     size_fields: vec![ScriptBuilderMeshSizeFieldState {
@@ -1523,6 +1577,10 @@ mod tests {
                     bulk_hmin: None,
                     interface_hmax: Some("4e-9".to_string()),
                     interface_thickness: Some("8e-9".to_string()),
+                    edge_hmax: None,
+                    edge_thickness: None,
+                    corner_hmax: None,
+                    corner_extent: None,
                     transition_distance: Some("24e-9".to_string()),
                     transition_growth: Some(1.2),
                     size_fields: Vec::new(),
@@ -1623,9 +1681,11 @@ mod tests {
         scene.objects[0].magnetization_ref = None;
         let error = scene_document_to_script_builder(&scene)
             .expect_err("missing magnetization ref must fail");
-        assert!(error
-            .message
-            .contains("must reference a magnetization asset"));
+        assert!(
+            error
+                .message
+                .contains("must reference a magnetization asset")
+        );
     }
 
     #[test]
@@ -1653,9 +1713,11 @@ mod tests {
         scene.magnetization_assets[0].kind = "procedural".to_string();
         let error = scene_document_to_script_builder(&scene)
             .expect_err("unsupported magnetization kind must fail");
-        assert!(error
-            .message
-            .contains("unsupported magnetization asset kind"));
+        assert!(
+            error
+                .message
+                .contains("unsupported magnetization asset kind")
+        );
     }
 
     #[test]
@@ -1690,6 +1752,15 @@ mod tests {
                 .and_then(|value| value.get("airbox_hmax"))
                 .and_then(Value::as_f64),
             Some(60e-9)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("universe")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("airbox_grading"))
+                .and_then(Value::as_str),
+            Some("linear")
         );
         assert_eq!(
             projection
@@ -1756,6 +1827,66 @@ mod tests {
                 .and_then(|mesh| mesh.get("through_thickness_elements"))
                 .and_then(Value::as_i64),
             Some(1)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("mesh"))
+                .and_then(Value::as_object)
+                .and_then(|mesh| mesh.get("edge_maximum_element_size"))
+                .and_then(Value::as_f64),
+            Some(8e-9)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("mesh"))
+                .and_then(Value::as_object)
+                .and_then(|mesh| mesh.get("corner_maximum_element_size"))
+                .and_then(Value::as_f64),
+            Some(5e-9)
+        );
+    }
+
+    #[test]
+    fn scene_document_round_trips_disabled_effective_field_terms() {
+        let mut builder = sample_builder();
+        builder.exchange_enabled = false;
+        builder.demag_enabled = false;
+        builder.geometries[0].physics_stack[0].enabled = false;
+        builder.geometries[0].physics_stack[1].enabled = false;
+
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.exchange_enabled, false);
+        assert_eq!(scene.study.demag_enabled, false);
+        assert_eq!(scene.objects[0].physics_stack[0].enabled, false);
+        assert_eq!(scene.objects[0].physics_stack[1].enabled, false);
+
+        let projection =
+            scene_document_problem_projection(&scene).expect("problem projection should build");
+        assert_eq!(projection.builder.exchange_enabled, false);
+        assert_eq!(projection.builder.demag_enabled, false);
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("exchange_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("demag_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
         );
     }
 

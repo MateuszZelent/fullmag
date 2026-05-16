@@ -226,6 +226,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
     node,
     resourceData,
   });
+  const activeCommandItems = commandItems.reduce<typeof commandItems>((items, item) => {
+    if (item.activeResource?.kind === "command") items.push(item);
+    return items;
+  }, []);
 
   function handleSelect(): void {
     selectExplorerNode(kernel, node, moduleId);
@@ -321,12 +325,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
             ) : null}
           </ContextMenuItem>
         ))}
-        {commandItems.some((item) => item.activeResource?.kind === "command") ? (
+        {activeCommandItems.length > 0 ? (
           <>
             <ContextMenuSeparator />
-            {commandItems
-              .filter((item) => item.activeResource?.kind === "command")
-              .map((item) => (
+            {activeCommandItems.map((item) => (
                 <ContextMenuItem
                   key={`${item.command.id}:detail`}
                   onSelect={() => {

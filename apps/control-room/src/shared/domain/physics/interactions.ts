@@ -71,21 +71,21 @@ const DEMAG_METHOD_OPTIONS: InteractionFieldOption[] = [
   { label: "FEM Poisson Robin airbox", value: "poisson_robin" },
   { label: "FEM Poisson Dirichlet airbox", value: "poisson_dirichlet" },
   { label: "FEM BEM", value: "bem" },
-  { label: "FEM Fredkin-Koehler", value: "fredkin_koehler" },
+  { label: "FEM/BEM Fredkin-Koehler (no airbox)", value: "fredkin_koehler" },
   { label: "FEM FMM", value: "fmm" },
   { label: "FDM multilayer convolution", value: "multilayer_convolution" },
 ];
 
 const INTERACTION_SPECS: readonly InteractionSpec[] = [
   {
-    availability: "object",
+    availability: "study",
     description:
-      "Nearest-neighbour exchange stiffness. The numeric A value is owned by the assigned material; this switch controls whether the interaction is active for the object or region.",
+      "Nearest-neighbour exchange stiffness. The numeric A value is owned by assigned materials; this switch controls whether exchange contributes to H_eff for the authored problem.",
     fields: [],
     id: "exchange",
     label: "Exchange",
-    scope: "object_or_region",
-    storage: "object_interaction",
+    scope: "global",
+    storage: "study",
   },
   {
     availability: "study",
@@ -515,10 +515,13 @@ export function findInteractionSpec(
 }
 
 export function writableObjectInteractionIds(): ObjectInteractionKind[] {
-  return INTERACTION_SPECS
-    .filter((spec) => spec.storage === "object_interaction")
-    .map((spec) => spec.id)
-    .filter(isObjectInteractionKind);
+  const ids: ObjectInteractionKind[] = [];
+  for (const spec of INTERACTION_SPECS) {
+    if (spec.storage === "object_interaction" && isObjectInteractionKind(spec.id)) {
+      ids.push(spec.id);
+    }
+  }
+  return ids;
 }
 
 export function defaultDraftForInteraction(
@@ -588,7 +591,17 @@ export function buildStudyInteractionPatchFromDraft(
     return {
       patch: {
         study: {
+          demag_enabled: draft.enabled && draft.present,
           demag_realization: method === "auto" ? null : method,
+        },
+      },
+    };
+  }
+  if (draft.id === "exchange") {
+    return {
+      patch: {
+        study: {
+          exchange_enabled: draft.enabled && draft.present,
         },
       },
     };

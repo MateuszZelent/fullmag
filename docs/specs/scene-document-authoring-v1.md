@@ -129,10 +129,17 @@ Stored as a top-level module block with:
 
 Stored study defaults:
 
+- `exchange_enabled`
+- `demag_enabled`
+- `demag_realization`
 - `solver`
 - `mesh_defaults`
 - `stages`
 - `initial_state`
+
+`exchange_enabled` and `demag_enabled` are global active effective-field term switches. A disabled
+term must project to absence from canonical `ProblemIR.energy_terms`; it is not a per-object
+interaction mask.
 
 ### `outputs`
 

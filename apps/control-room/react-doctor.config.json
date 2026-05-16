@@ -4,9 +4,25 @@
       {
         "files": [
           "src/modules/viewport-3d/layers/**/*.tsx",
-          "src/modules/viewport-3d/orientation/OrientationHudLayer.tsx"
+          "src/modules/viewport-3d/orientation/**/*.tsx"
         ],
         "rules": ["react/no-unknown-property"]
+      },
+      {
+        "files": ["src/modules/viewport-3d/layers/CameraControls.tsx"],
+        "rules": ["react-doctor/client-passive-event-listeners"]
+      },
+      {
+        "files": ["src/modules/viewport-3d/viewport3dFieldMapping.ts"],
+        "rules": ["react-doctor/async-await-in-loop"]
+      },
+      {
+        "files": ["src/kernel/api/ControlRoomApi.ts"],
+        "rules": ["react-doctor/async-await-in-loop"]
+      },
+      {
+        "files": ["src/kernel/api/ControlRoomApi.test.ts"],
+        "rules": ["react-doctor/server-sequential-independent-await"]
       }
     ]
   }

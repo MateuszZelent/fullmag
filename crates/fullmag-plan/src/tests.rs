@@ -1359,6 +1359,78 @@ fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
 }
 
 #[test]
+fn fem_backend_fredkin_koehler_demag_plans_on_body_only_mesh_without_airbox() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::FredkinKoehler,
+        },
+    ];
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 5e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".to_string(),
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip_body_only".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                boundary_markers: vec![1, 1, 1, 1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+
+    let planned = plan(&ir).expect("Fredkin-Koehler FEM/BEM demag should plan on a body-only mesh");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem.enable_demag);
+    assert_eq!(
+        fem.demag_realization,
+        Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+    );
+    assert_eq!(
+        fem.domain_mesh_mode,
+        fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
+    );
+    assert!(
+        fem.air_box_config.is_none(),
+        "Fredkin-Koehler FEM/BEM demag must not materialize an airbox"
+    );
+}
+
+#[test]
 fn fem_backend_rejects_requested_shared_domain_without_air_elements() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

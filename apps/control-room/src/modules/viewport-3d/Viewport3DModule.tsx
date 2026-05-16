@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useRef,
-  useState,
   type ComponentProps,
 } from "react";
 
@@ -16,7 +15,10 @@ import type {
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 import { useObjectVisualizationRegistry } from "@/kernel/visualization/useObjectVisualization";
-import { useVisualizationClientAck } from "@/kernel/visualization/useVisualizationClientAck";
+import {
+  useVisualizationClientAck,
+  useVisualizationClientAckSender,
+} from "@/kernel/visualization/useVisualizationClientAck";
 
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 import { useViewport3DSceneModel } from "./hooks/useViewport3DSceneModel";
@@ -230,8 +232,6 @@ function Viewport3DFrame({
   ...sceneProps
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [renderedVisualizationRevision, setRenderedVisualizationRevision] =
-    useState<number | null>(null);
   const primitiveObjectIds =
     sceneProps.primitiveModel?.objects
       .map((object) => object.objectId)
@@ -248,6 +248,7 @@ function Viewport3DFrame({
     visualProfile,
     effectAntialias,
   );
+  const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const discretizationKind = sceneProps.fdmDomain
     ? "FDM"
@@ -255,8 +256,20 @@ function Viewport3DFrame({
       ? "FEM"
       : null;
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
-    setRenderedVisualizationRevision(revision);
-  }, []);
+    sendVisualizationAck({
+      effectiveRenderMode: visualizationEffectiveRenderMode,
+      enabled: clientReady && !visualizationError,
+      revision,
+      status: "rendered",
+      viewportId: slotId,
+    });
+  }, [
+    clientReady,
+    sendVisualizationAck,
+    slotId,
+    visualizationEffectiveRenderMode,
+    visualizationError,
+  ]);
   useVisualizationClientAck({
     api: kernel.api,
     effectiveRenderMode: visualizationEffectiveRenderMode,
@@ -264,14 +277,6 @@ function Viewport3DFrame({
     error: visualizationError,
     revision: sceneProps.visualizationRevision,
     status: visualizationError ? "failed" : "applied",
-    viewportId: slotId,
-  });
-  useVisualizationClientAck({
-    api: kernel.api,
-    effectiveRenderMode: visualizationEffectiveRenderMode,
-    enabled: clientReady && !visualizationError,
-    revision: renderedVisualizationRevision,
-    status: "rendered",
     viewportId: slotId,
   });
   useEffect(() => {

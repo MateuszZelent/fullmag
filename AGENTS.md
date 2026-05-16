@@ -206,6 +206,9 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
 - FEM time-integration performance gates must cover every supported explicit RK integrator, not only Heun.
 - When FEM CPU and FEM GPU work are split between agents, keep this agent's changes to the FEM CPU path only and do not create GPU hot-loop or GPU-state artifacts.
+- Native FEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
+- Native FEM CPU and GPU implementations must share backend-neutral physics contracts; do not duplicate equations, signs, units, or observable semantics per device.
+- Any native FEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
 
 ---
 
@@ -1114,6 +1117,7 @@ The following stale concepts should be actively retired when encountered:
 | dense eigensolver as default future path | matrix-free Krylov operator architecture |
 | “relax = run with another stop” | explicit relax semantics and stop reason |
 | monolithic viewport file | split model/hooks/overlays/scene |
+| monolithic native FEM `Context` / `mfem_bridge.cpp` solver | `FemCore` plus CPU/GPU backend modules for interactions, demag, solvers, integrators, runtime, and observables |
 
 ---
 

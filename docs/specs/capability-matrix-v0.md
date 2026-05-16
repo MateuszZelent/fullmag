@@ -33,6 +33,53 @@ Every product-facing feature should be described with one of these statuses:
 | **`production_executable`** | Executable on the intended production lane. |
 | **`validated`** | Executable and benchmarked with explicit regression coverage for the documented workload. |
 
+## Native FEM qualification overlay
+
+The 2026-05-16 native FEM audit adds a stricter reading rule for FEM CPU/GPU:
+executor availability is not the same thing as solver qualification.
+
+For native FEM, `production_executable` means the public lane can execute the
+feature. It does **not** mean the feature is validated for production workloads
+unless the row or related note lists explicit validated workloads.
+
+Canonical references:
+
+- `docs/adr/0014-native-fem-backend-modularization.md`
+- `docs/specs/native-fem-backend-architecture-v1.md`
+- `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+- `docs/reports/16.05.2026/fullmag_fem_cpu_validation_matrix.md`
+
+Native FEM release documentation must use this minimum target as the first
+qualified CPU FEM scope unless a narrower release note says otherwise:
+
+```text
+FEM CPU P1
+no PBC unless feature-specific PBC gates pass
+exchange
+Zeeman
+uniaxial anisotropy
+cubic anisotropy after derivative tests
+Poisson demag airbox with documented boundary limits
+explicit RK fixed/adaptive with stop-reason telemetry
+```
+
+The following native FEM features may be executable in the current code, but
+must not be described as `validated` until their feature-specific gates pass:
+
+```text
+Slonczewski STT
+Zhang-Li STT
+DMI interfacial/bulk
+thermal noise
+two-way magnetoelasticity
+high-order FEM
+general FEM GPU parity
+```
+
+Capability changes for those features must update both the capability row and
+the relevant physics note with units, field/torque interpretation, validation
+coverage, and known limits.
+
 ## Drive / STNO alignment slice
 
 The following status statements are intentionally explicit because older docs and examples drifted:
@@ -43,7 +90,7 @@ The following status statements are intentionally explicit because older docs an
 | `OerstedField(model="from_current_solution")` for cylindrical `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Executable only for `CurrentTransport(model="prescribed_density")` with cylindrical `solve_region` and axis-aligned current; planner lowers to the exact infinite-cylinder Oersted realization. |
 | `OerstedField(model="from_current_solution")` for general `prescribed_density` sources | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Non-cylindrical prescribed-current sources lower to a midpoint Biot-Savart `H_oe(x)` realization with explicit provenance. The current FDM slice is still single-body and capped by planner source-cell count, but both CPU reference and native CUDA now execute the resulting per-cell field. |
 | `CurrentTransport(model="prescribed_density")` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | Emits `current_transport/<name>.json` as an auxiliary artifact. On FDM and MFEM FEM it can bind named current sources into prescribed Slonczewski / Zhang-Li torque modules. |
-| `SlonczewskiSTT` / `ZhangLiSTT` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | MFEM FEM executes the current public single-module subset; the Rust FEM reference runner still does not. |
+| `SlonczewskiSTT` / `ZhangLiSTT` | `reference_executable` on CPU FDM, `production_executable` on GPU FDM plus MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU FEM | MFEM FEM executes the current public single-module subset; the Rust FEM reference runner still does not. The 2026-05-16 native FEM audit treats these FEM paths as executable but not validated until the macrospin/current-scaling and 1D domain-wall gates in the native FEM validation matrix pass. |
 | `examples/stno_vortex_ref_minimal.py` | `reference_executable` on the reference FDM lane | This is the canonical minimal STNO benchmark; full solver CI validation remains separate work. |
 | `examples/stno_vortex_mtj_workflow.py` | non-canonical workflow example | Do not treat this generated workflow as the golden benchmark. |
 | Artifact-backed STNO report | `validated` on the reference FDM lane | Uses real solver artifacts, not synthetic demonstration data, and has regression coverage for the analysis path. |
@@ -60,6 +107,9 @@ The following status statements are intentionally explicit because older docs an
 
 - `SceneDocument` `scene.v1` is now the canonical control-room authoring document for geometry,
   material assignment, magnetization initialization, study defaults, and editor metadata.
+- `study.exchange_enabled` and `study.demag_enabled` are authoring switches for active
+  `ProblemIR.energy_terms`. Disabling either term removes that contribution from `H_eff`; it does
+  not create a new solver capability or a per-object demag participation mask.
 - This does not expand executable capability coverage by itself.
 - Execution legality, planner resolution, requested-vs-resolved backend semantics, and runtime
   provenance remain governed by the same `ProblemIR` and backend capability rules listed below.
@@ -103,7 +153,7 @@ The following status statements are intentionally explicit because older docs an
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
 | Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; the CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/Heun runtime; FEM merges disjoint mesh assets into one bootstrap plan with body-local exchange and global demag |
 | `Exchange` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | CPU 6-point stencil in FDM and lumped-mass P1 operator in FEM |
-| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT; executable FEM is Poisson-only (`poisson_robin` / `poisson_dirichlet`) on the MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU lanes and requires a shared-domain mesh with air. Native FEM Poisson exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
+| `Demag` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses Newell tensor FFT. Executable FEM includes Poisson airbox (`poisson_robin` / `poisson_dirichlet`) on the MFEM/libCEED/hypre CPU and MFEM/libCEED/CUDA GPU lanes, plus the initial body-only `fredkin_koehler` FEM/BEM open-boundary path in the native MFEM CPU subsystem. Poisson requires a shared-domain mesh with air; `fredkin_koehler` must not require or allocate an airbox and uses the magnetic body boundary surface instead. The Fredkin-Koehler implementation is dense-reference/validation-scale until analytic and cross-model qualification are complete. Native FEM demag exposes an explicit backend-hint `FemLinearSolverPolicy` authoring contract (`CG/GMRES`, `AMG/JACOBI/NONE`, tolerances, iteration cap) while keeping `Demag()` physics-first. For explicit native `poisson_robin`, the managed runtime resolves directly to `hypre_pcg_boomeramg`; live session views preserve requested CPU threads, resolved Rayon threads, and requested/effective OpenMP threads when the native runtime reports them. |
 | `InterfacialDMI` | planned | planned | planned | semantic-only | Not numerically implemented |
 | `Zeeman` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Public API authors `B`; planner normalizes to `H_ext` in A/m for CPU FDM and CPU FEM |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { ControlRoomApi } from "../api/ControlRoomApi";
 import type { VisualizationClientAckRequest } from "../api/apiTypes";
@@ -8,6 +8,14 @@ import type { VisualizationClientAckRequest } from "../api/apiTypes";
 const VISUALIZATION_CLIENT_ID_STORAGE_KEY = "fullmag.visualization.clientId";
 
 type VisualizationClientAckStatus = VisualizationClientAckRequest["status"];
+interface VisualizationClientAckInput {
+  effectiveRenderMode?: string | null;
+  enabled?: boolean;
+  error?: string | null;
+  revision: number | null | undefined;
+  status: VisualizationClientAckStatus;
+  viewportId: string;
+}
 
 let volatileVisualizationClientId: string | null = null;
 
@@ -72,39 +80,62 @@ export function useVisualizationClientAck({
   revision,
   status,
   viewportId,
+}: VisualizationClientAckInput & {
+  api: ControlRoomApi;
+}) {
+  const sendAck = useVisualizationClientAckSender({ api });
+
+  useEffect(() => {
+    sendAck({
+      effectiveRenderMode,
+      enabled,
+      error,
+      revision,
+      status,
+      viewportId,
+    });
+  }, [effectiveRenderMode, enabled, error, revision, sendAck, status, viewportId]);
+}
+
+export function useVisualizationClientAckSender({
+  api,
 }: {
   api: ControlRoomApi;
-  effectiveRenderMode?: string | null;
-  enabled?: boolean;
-  error?: string | null;
-  revision: number | null | undefined;
-  status: VisualizationClientAckStatus;
-  viewportId: string;
 }) {
   const lastSentKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!enabled || revision === null || revision === undefined) return;
-
-    const request: VisualizationClientAckRequest = {
-      client_id: resolveVisualizationClientId(),
-      client_label: "control-room",
-      viewport_id: viewportId,
+  return useCallback(
+    ({
+      effectiveRenderMode,
+      enabled = true,
+      error,
       revision,
       status,
-    };
+      viewportId,
+    }: VisualizationClientAckInput) => {
+      if (!enabled || revision === null || revision === undefined) return;
 
-    if (effectiveRenderMode) {
-      request.effective_render_mode = effectiveRenderMode;
-    }
-    if (error) {
-      request.error = error;
-    }
+      const request: VisualizationClientAckRequest = {
+        client_id: resolveVisualizationClientId(),
+        client_label: "control-room",
+        viewport_id: viewportId,
+        revision,
+        status,
+      };
 
-    const sentKey = JSON.stringify(request);
-    if (lastSentKeyRef.current === sentKey) return;
-    lastSentKeyRef.current = sentKey;
+      if (effectiveRenderMode) {
+        request.effective_render_mode = effectiveRenderMode;
+      }
+      if (error) {
+        request.error = error;
+      }
 
-    void api.visualization.ack(request).catch(() => undefined);
-  }, [api, effectiveRenderMode, enabled, error, revision, status, viewportId]);
+      const sentKey = JSON.stringify(request);
+      if (lastSentKeyRef.current === sentKey) return;
+      lastSentKeyRef.current = sentKey;
+
+      void api.visualization.ack(request).catch(() => undefined);
+    },
+    [api],
+  );
 }

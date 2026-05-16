@@ -7,6 +7,7 @@ import {
   DATA_SCALARS_PATH,
   DIAGNOSTICS_ENGINE_LOG_PATH,
   DIAGNOSTICS_GPU_PATH,
+  DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_CAPABILITIES_PATH,
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -138,6 +139,7 @@ import type {
   SessionImportInspectResponse,
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
+  SolverProfileResource,
   SolverStatusResource,
   StageExecutionResource,
   StructuredCommandRequest,
@@ -262,6 +264,11 @@ export class ControlRoomApi {
       ),
     gpuTelemetry: (options?: RequestOptions) =>
       this.requestJson<GpuTelemetryResource>(DIAGNOSTICS_GPU_PATH, options),
+    solverProfile: (options?: RequestOptions) =>
+      this.requestJson<SolverProfileResource>(
+        DIAGNOSTICS_SOLVER_PROFILE_PATH,
+        options,
+      ),
   };
 
   readonly meshing = {

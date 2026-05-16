@@ -54,8 +54,6 @@ function JsonNode({
   depth?: number;
   defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   if (
     value === null ||
     typeof value === "string" ||
@@ -91,18 +89,15 @@ function JsonNode({
   return (
     <details
       className="fm-registry-tree__node"
-      open={open}
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      open={defaultOpen}
     >
       <summary className="fm-registry-tree__summary" data-depth={depth}>
         <span className="fm-registry-tree__key">{label}</span>
         <span className="fm-registry-tree__bracket">{bracket[0]}</span>
-        {!open && (
+        <span className="fm-registry-tree__compact">
           <span className="fm-registry-tree__count">{count}</span>
-        )}
-        {!open && (
           <span className="fm-registry-tree__bracket">{bracket[1]}</span>
-        )}
+        </span>
       </summary>
       <div className="fm-registry-tree__children" data-depth={depth}>
         {entries.map(([k, v]) => (
@@ -185,6 +180,7 @@ export function RegistryInspectorDialog({
 
         <div className="fm-registry-inspector__tabs" role="tablist">
           <button
+            aria-selected={tab === "local"}
             className="fm-registry-inspector__tab"
             data-active={tab === "local"}
             role="tab"
@@ -197,6 +193,7 @@ export function RegistryInspectorDialog({
             </span>
           </button>
           <button
+            aria-selected={tab === "backend"}
             className="fm-registry-inspector__tab"
             data-active={tab === "backend"}
             role="tab"

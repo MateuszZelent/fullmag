@@ -388,12 +388,7 @@ export function resolveVisualizationStateTargetOverride(
   );
   if (!override) return null;
   const display = override.display ?? null;
-  // Extend the generated style type with forward-compatible fields not yet in
-  // the OpenAPI schema.  All existing fields keep their original types.
-  const style = (override.style ?? null) as (typeof override.style & {
-    vector_budget?: number | null;
-    vector_length_scale?: number | null;
-  }) | null;
+  const style = override.style ?? null;
   const visible = display?.visible ?? override.visible;
   const patch: VisualizationTargetPatch = {
     ...(display?.geometry_scope === undefined || display.geometry_scope === null
@@ -520,7 +515,15 @@ export function visualizationStateOverrideFromTargetPatch(
       : { vector_alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
     ...(normalized.vectorBudget === undefined
       ? {}
-      : { vector_budget: Math.max(0, Math.floor(normalized.vectorBudget)) }),
+      : { vector_budget: Math.max(1, Math.floor(normalized.vectorBudget)) }),
+    ...(normalized.vectorLengthScale === undefined
+      ? {}
+      : {
+          vector_length_scale: Math.max(
+            0.1,
+            Math.min(5, normalized.vectorLengthScale),
+          ),
+        }),
     ...(normalized.vectorColorMode === undefined
       ? {}
       : { vector_color_mode: normalized.vectorColorMode }),
@@ -587,7 +590,7 @@ export function visualizationStatePatchFromDefaultTargetPatch(
       : { visible: normalized.vectorsVisible }),
     ...(normalized.vectorBudget === undefined
       ? {}
-      : { density: Math.max(0, Math.floor(normalized.vectorBudget)) }),
+      : { density: Math.max(1, Math.floor(normalized.vectorBudget)) }),
   };
   const vectorColorMode =
     normalized.surfaceColorSource === undefined
@@ -775,6 +778,10 @@ export function resolveAirboxVisualizationSettingsFromState(
       wireframeVisible,
     }),
     shaderVisible,
+    vectorBudget:
+      targetSettings === null
+        ? airbox?.vectors?.density ?? baseSettings.vectorBudget
+        : baseSettings.vectorBudget,
     vectorsVisible:
       airbox?.vectors?.visible ?? baseSettings.vectorsVisible,
     visible: airbox?.visible ?? baseSettings.visible,
@@ -798,7 +805,15 @@ function visualizationSettingsFromResolvedTarget(
     shaderVisible: settings.surface_visible,
     surfaceColorSource: settings.surface_color_source,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
+    vectorBudget: Math.max(
+      1,
+      Math.floor(
+        settings.vector_budget ?? DEFAULT_AIRBOX_VISUALIZATION.vectorBudget,
+      ),
+    ),
     vectorColorMode: settings.vector_color_mode,
+    vectorLengthScale:
+      settings.vector_length_scale ?? DEFAULT_AIRBOX_VISUALIZATION.vectorLengthScale,
     vectorMonoColor: settings.vector_mono_color,
     vectorThickness: settings.vector_thickness,
     vectorsVisible: settings.vectors_visible,
@@ -812,6 +827,20 @@ function visualizationSettingsFromResolvedTarget(
 export function airboxVisualizationStatePatchFromTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationStatePatch {
+  const vectors =
+    patch.vectorsVisible === undefined && patch.vectorBudget === undefined
+      ? {}
+      : {
+          vectors: {
+            domain: "airbox_only" as const,
+            ...(patch.vectorBudget === undefined
+              ? {}
+              : { density: Math.max(1, Math.floor(patch.vectorBudget)) }),
+            ...(patch.vectorsVisible === undefined
+              ? {}
+              : { visible: patch.vectorsVisible }),
+          },
+        };
   const airbox: NonNullable<
     NonNullable<VisualizationStatePatch["layers"]>["airbox"]
   > = {
@@ -827,23 +856,25 @@ export function airboxVisualizationStatePatchFromTargetPatch(
     ...(patch.shaderVisible === undefined
       ? {}
       : { surface: { visible: patch.shaderVisible } }),
-    ...(patch.vectorsVisible === undefined
-      ? {}
-      : {
-          vectors: {
-            domain: "airbox_only",
-            visible: patch.vectorsVisible,
-          },
-        }),
+    ...vectors,
     ...(patch.visible === undefined ? {} : { visible: patch.visible }),
     ...(patch.wireframeVisible === undefined
       ? {}
       : { wireframe: { visible: patch.wireframeVisible } }),
   };
+  const vectorStyle =
+    patch.vectorLengthScale === undefined
+      ? {}
+      : {
+          vector_style: {
+            length_scale: Math.max(0.1, Math.min(5, patch.vectorLengthScale)),
+          },
+        };
 
-  return Object.keys(airbox).length > 0
-    ? { layers: { airbox } }
-    : {};
+  return {
+    ...(Object.keys(airbox).length > 0 ? { layers: { airbox } } : {}),
+    ...vectorStyle,
+  };
 }
 
 export function airboxLocalVisualizationPatchFromTargetPatch(
@@ -865,15 +896,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorAlphaPercent === undefined
       ? {}
       : { vectorAlphaPercent: patch.vectorAlphaPercent }),
-    ...(patch.vectorBudget === undefined
-      ? {}
-      : { vectorBudget: patch.vectorBudget }),
     ...(patch.vectorColorMode === undefined
       ? {}
       : { vectorColorMode: patch.vectorColorMode }),
-    ...(patch.vectorLengthScale === undefined
-      ? {}
-      : { vectorLengthScale: patch.vectorLengthScale }),
     ...(patch.vectorMonoColor === undefined
       ? {}
       : { vectorMonoColor: patch.vectorMonoColor }),
@@ -947,7 +972,7 @@ function normalizePatch(
     normalized.vectorThickness = clampScale(normalized.vectorThickness);
   }
   if (normalized.vectorBudget !== undefined) {
-    normalized.vectorBudget = Math.max(0, Math.floor(normalized.vectorBudget));
+    normalized.vectorBudget = Math.max(1, Math.floor(normalized.vectorBudget));
   }
   if (normalized.vectorLengthScale !== undefined) {
     normalized.vectorLengthScale = Math.max(0.1, Math.min(5, normalized.vectorLengthScale));

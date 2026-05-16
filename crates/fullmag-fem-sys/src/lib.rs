@@ -41,6 +41,7 @@ pub struct fullmag_fem_adaptive_config {
     pub safety: f64,
     pub growth_limit: f64,
     pub shrink_limit: f64,
+    pub max_reject: u32,
 }
 
 #[repr(C)]
@@ -81,6 +82,7 @@ pub enum fullmag_fem_preconditioner {
 pub enum fullmag_fem_demag_realization {
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN = 2,
+    FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER = 3,
 }
 
 #[repr(C)]
@@ -353,6 +355,11 @@ pub struct fullmag_fem_availability_info {
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
     pub reason: [c_char; 256],
+    pub available_any: i32,
+    pub available_cpu: i32,
+    pub available_gpu: i32,
+    pub reason_cpu: [c_char; 256],
+    pub reason_gpu: [c_char; 256],
 }
 
 #[repr(C)]

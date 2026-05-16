@@ -184,17 +184,18 @@ export function buildViewport3DFieldRenderModel(
   const hasPartBudgetPlan = Boolean(options.partVectorBudgets);
 
   for (const partModel of [...topology.magneticParts, ...topology.airboxParts]) {
+    const partId = partModel.part.id;
     const partBudget = hasPartBudgetPlan
-      ? options.partVectorBudgets?.get(partModel.part.id) ?? 0
+      ? options.partVectorBudgets?.get(partId) ?? 0
       : DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET;
-    const vectorScope = options.partVectorScopes?.get(partModel.part.id) ?? "full";
+    const vectorScope = options.partVectorScopes?.get(partId) ?? "full";
     const vectorSelection =
       vectorScope === "surface"
         ? partModel.surfaceNodeSelection ?? partModel.part
         : partModel.part;
-    const partScale = options.partVectorScales?.get(partModel.part.id) ?? 1;
+    const partScale = options.partVectorScales?.get(partId) ?? 1;
     partVectorSegments.set(
-      partModel.part.id,
+      partId,
       buildCachedPartVectorSegments(
         partModel,
         topology,
@@ -369,12 +370,17 @@ export function distributeVectorGlyphBudget(
   maxGlyphs: number,
 ): Map<string, number> {
   const budget = Math.max(0, Math.floor(maxGlyphs));
-  const visibleTargets = targets
-    .filter((target) => target.visible && target.nodeCount > 0)
-    .map((target) => ({
-      ...target,
-      nodeCount: Math.max(1, Math.floor(target.nodeCount)),
-    }));
+  const visibleTargets = targets.reduce<Viewport3DVectorBudgetTarget[]>(
+    (accumulator, target) => {
+      if (!target.visible || target.nodeCount <= 0) return accumulator;
+      accumulator.push({
+        ...target,
+        nodeCount: Math.max(1, Math.floor(target.nodeCount)),
+      });
+      return accumulator;
+    },
+    [],
+  );
   const result = new Map<string, number>();
   if (budget === 0 || visibleTargets.length === 0) return result;
 
@@ -393,7 +399,7 @@ export function distributeVectorGlyphBudget(
   }
 
   let remaining = budget - allocated;
-  const byWeight = [...visibleTargets].sort((left, right) =>
+  const byWeight = visibleTargets.toSorted((left, right) =>
     right.nodeCount === left.nodeCount
       ? left.id.localeCompare(right.id)
       : right.nodeCount - left.nodeCount,
@@ -553,9 +559,13 @@ function buildUnclaimedVolumeEdgeIndices(
     return buildTetraVolumeEdgeIndices(topology.indices);
   }
 
-  const claims = claimedParts
-    .map((part) => buildPartElementClaim(part, topology))
-    .filter((claim): claim is PartElementClaim => claim !== null);
+  const claims: PartElementClaim[] = [];
+  for (const part of claimedParts) {
+    const claim = buildPartElementClaim(part, topology);
+    if (claim) {
+      claims.push(claim);
+    }
+  }
   if (claims.length === 0) return null;
 
   const selectedTetraIndices: number[] = [];
@@ -618,12 +628,8 @@ function isElementClaimed(
       }
       continue;
     }
-    if (
-      claim.nodeSet.has(a) &&
-      claim.nodeSet.has(b) &&
-      claim.nodeSet.has(c) &&
-      claim.nodeSet.has(d)
-    ) {
+    const nodeSet = claim.nodeSet;
+    if (nodeSet.has(a) && nodeSet.has(b) && nodeSet.has(c) && nodeSet.has(d)) {
       return true;
     }
   }
@@ -1155,7 +1161,7 @@ function uniqueSortedIndices(indices: Uint32Array): number[] {
   for (let index = 0; index < indices.length; index += 1) {
     unique.add(indices[index] ?? 0);
   }
-  return [...unique].sort((left, right) => left - right);
+  return Array.from(unique).toSorted((left, right) => left - right);
 }
 
 export function resolveNodeSelectionCount(

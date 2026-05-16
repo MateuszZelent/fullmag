@@ -35,6 +35,7 @@ typedef struct {
     double safety;
     double growth_limit;
     double shrink_limit;
+    uint32_t max_reject;
 } fullmag_fem_adaptive_config;
 
 typedef enum {
@@ -67,6 +68,7 @@ typedef enum {
 typedef enum {
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN     = 2,
+    FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER  = 3,
 } fullmag_fem_demag_realization;
 
 typedef enum {
@@ -320,6 +322,11 @@ typedef struct {
     int requested_gpu_index;
     int resolved_gpu_index;
     char reason[256];
+    int available_any;
+    int available_cpu;
+    int available_gpu;
+    char reason_cpu[256];
+    char reason_gpu[256];
 } fullmag_fem_availability_info;
 
 typedef struct {

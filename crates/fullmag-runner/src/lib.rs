@@ -34,6 +34,7 @@ mod relaxation;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
+mod solver_profile;
 mod types;
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
@@ -77,6 +78,10 @@ pub use interactive_runtime::{InteractiveFdmPreviewRuntime, InteractiveFemPrevie
 pub use runtime_registry::{
     EngineAvailabilityStatus, HostCapabilityMatrix, HostEngineEntry, RuntimeManifest,
     RuntimeRegistry,
+};
+pub use solver_profile::{
+    SolverProfileAggregates, SolverProfileConfig, SolverProfilePhaseSample, SolverProfileSnapshot,
+    SolverProfileState, SolverProfileStepSample, SolverProfileThreading,
 };
 pub use types::{
     ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,

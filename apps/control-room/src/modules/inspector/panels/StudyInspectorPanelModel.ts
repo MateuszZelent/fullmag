@@ -287,11 +287,13 @@ function formatTorque(value: number | null | undefined): string {
 }
 
 function titleCase(value: string): string {
-  return value
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts: string[] = [];
+  for (const part of value.split(/[_\s-]+/)) {
+    if (part) {
+      parts.push(part.charAt(0).toUpperCase() + part.slice(1));
+    }
+  }
+  return parts.join(" ");
 }
 
 function optionalScalarText(value: unknown): string | null {

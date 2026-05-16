@@ -444,6 +444,8 @@ pub(crate) struct SessionCommand {
     /// Stages for `run_sequence` command.
     #[serde(default)]
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
+    #[serde(default)]
+    pub profile: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -526,6 +528,8 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub clear_preview_cache: bool,
     pub engine_log: Option<Vec<EngineLogEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_profile: Option<fullmag_runner::SolverProfileSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<CurrentLiveStageExecutionState>,
@@ -606,6 +610,8 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_log: Option<&'a [EngineLogEntry]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_profile: Option<&'a fullmag_runner::SolverProfileSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_workspace: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
@@ -637,6 +643,8 @@ pub(crate) struct CurrentLiveRuntimeFrameRequest<'a> {
     pub live_state: Option<&'a LiveStateManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_log: Option<&'a [EngineLogEntry]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_profile: Option<&'a fullmag_runner::SolverProfileSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
 }

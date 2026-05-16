@@ -8,6 +8,7 @@ use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::common::{HealthResponse, RuntimeCapabilityMatrix};
+use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::logs::EngineLogResource;
 use crate::types::{AppState, GpuTelemetryResponse};
 
@@ -110,4 +111,32 @@ pub async fn get_gpu_telemetry() -> Result<Json<GpuTelemetryResponse>, ApiError>
             devices: Vec::new(),
         })),
     }
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/diagnostics/solver-profile",
+    responses(
+        (status = 200, description = "Opt-in FEM solver phase profile", body = SolverProfileResource),
+        (status = 304, description = "Solver profile not modified for the supplied ETag"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "diagnostics"
+)]
+pub async fn get_solver_profile(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let body = snapshot.solver_profile.clone();
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "solver-profile:{}:{}:{}",
+        body.revision,
+        body.latest_samples.len(),
+        body.state
+    ));
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

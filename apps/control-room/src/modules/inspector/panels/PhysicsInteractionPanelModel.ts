@@ -80,14 +80,23 @@ export function draftFromStudyScene(
   const study = jsonObject(scene?.study);
 
   if (id === "demag") {
+    const enabled = booleanValue(study?.demag_enabled, true);
     return {
       ...draft,
-      enabled: true,
+      enabled,
       present: true,
       values: {
         ...draft.values,
         method: textValue(study?.demag_realization, "auto"),
       },
+    };
+  }
+
+  if (id === "exchange") {
+    return {
+      ...draft,
+      enabled: booleanValue(study?.exchange_enabled, true),
+      present: true,
     };
   }
 
@@ -163,6 +172,10 @@ function jsonObject(value: unknown): JsonObject | null {
 function textValue(value: JsonValue | undefined, fallback: string): string {
   if (typeof value === "string" && value.trim()) return value;
   return fallback;
+}
+
+function booleanValue(value: JsonValue | undefined, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function vector3Value(value: JsonValue | undefined): string[] | null {

@@ -59,6 +59,7 @@ export function useViewport3DFieldRenderOptions({
 
     if (topologyRenderModel.magneticParts.length > 0) {
       for (const partModel of topologyRenderModel.magneticParts) {
+        const partId = partModel.part.id;
         const settings = getPartSettings(partModel.part);
         const visible =
           magneticVectorsAllowed &&
@@ -73,12 +74,12 @@ export function useViewport3DFieldRenderOptions({
             scalarColorModes.add(scalarColorMode);
           }
         }
-        partVectorScopes.set(partModel.part.id, settings.geometryScope);
+        partVectorScopes.set(partId, settings.geometryScope);
         if (visible && settings.vectorBudget > 0) {
-          partVectorBudgets.set(partModel.part.id, settings.vectorBudget);
+          partVectorBudgets.set(partId, settings.vectorBudget);
         }
         if (settings.vectorLengthScale !== 1) {
-          partVectorScales.set(partModel.part.id, settings.vectorLengthScale);
+          partVectorScales.set(partId, settings.vectorLengthScale);
         }
       }
     } else {
@@ -104,6 +105,7 @@ export function useViewport3DFieldRenderOptions({
     }
 
     for (const partModel of topologyRenderModel.airboxParts) {
+      const partId = partModel.part.id;
       if (airboxSettings.visible && airboxSettings.shaderVisible) {
         const scalarColorMode = surfaceColorSourceToColorMode(
           airboxSettings.surfaceColorSource,
@@ -113,16 +115,16 @@ export function useViewport3DFieldRenderOptions({
           scalarColorModes.add(scalarColorMode);
         }
       }
-      partVectorScopes.set(partModel.part.id, airboxSettings.geometryScope);
+      partVectorScopes.set(partId, airboxSettings.geometryScope);
       const airboxVisible =
         airboxVectorsAllowed &&
         airboxSettings.visible &&
         airboxSettings.vectorsVisible;
       if (airboxVisible && airboxSettings.vectorBudget > 0) {
-        partVectorBudgets.set(partModel.part.id, airboxSettings.vectorBudget);
+        partVectorBudgets.set(partId, airboxSettings.vectorBudget);
       }
       if (airboxSettings.vectorLengthScale !== 1) {
-        partVectorScales.set(partModel.part.id, airboxSettings.vectorLengthScale);
+        partVectorScales.set(partId, airboxSettings.vectorLengthScale);
       }
     }
 
@@ -146,7 +148,6 @@ export function useViewport3DFieldRenderOptions({
     fallbackSettings.surfaceColorSource,
     fallbackSettings.shaderVisible,
     fallbackSettings.vectorBudget,
-    fallbackSettings.vectorLengthScale,
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,

@@ -22,6 +22,7 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
+  solver_profile_revision: 0,
   stages_revision: 0,
   topology_revision: 0,
   visualization_state_revision: 0,
@@ -1119,16 +1120,30 @@ describe("ControlRoomApi", () => {
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (url) => {
         seenUrls.push(String(url));
-        return jsonResponse({ devices: [], entries: [], revision: 1, status: "ok", total: 0 });
+        return jsonResponse({
+          aggregates: { average_total_ns: 0, sample_count: 0 },
+          artifact_refs: [],
+          config: { enabled: false, emit_engine_log: false, max_samples: 128, persist_artifact: false, sample_every: 1 },
+          devices: [],
+          entries: [],
+          latest_samples: [],
+          revision: 1,
+          state: "disabled",
+          status: "ok",
+          threading: null,
+          total: 0,
+        });
       },
     });
 
     await api.diagnostics.engineLog();
     await api.diagnostics.gpuTelemetry();
+    await api.diagnostics.solverProfile();
 
     expect(seenUrls).toEqual([
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/engine-log",
       "http://127.0.0.1:8765/v2/sessions/current/diagnostics/gpu",
+      "http://127.0.0.1:8765/v2/sessions/current/diagnostics/solver-profile",
     ]);
   });
 

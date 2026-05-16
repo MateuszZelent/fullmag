@@ -702,7 +702,9 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
                 surface_visible: false,
                 vector_alpha: 1.0,
+                vector_budget: 1,
                 vector_color_mode: VectorColorMode::Orientation,
+                vector_length_scale: 1.0,
                 vector_mono_color: "var(--fm-accent)".to_string(),
                 vector_thickness: 1.0,
                 vectors_visible: false,
@@ -748,7 +750,9 @@ pub struct VisualizationResolvedTargetSettings {
     pub surface_mono_color: String,
     pub surface_visible: bool,
     pub vector_alpha: f64,
+    pub vector_budget: u32,
     pub vector_color_mode: VectorColorMode,
+    pub vector_length_scale: f64,
     pub vector_mono_color: String,
     pub vector_thickness: f64,
     pub vectors_visible: bool,
@@ -799,6 +803,10 @@ pub struct VisualizationTargetStyleOverride {
     pub vector_mono_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_alpha: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_budget: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_length_scale: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_thickness: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

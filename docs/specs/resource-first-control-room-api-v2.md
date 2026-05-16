@@ -138,6 +138,11 @@ The response includes `transaction_kind`, `scene_revision`, and `committed_scene
 
 Solver/runtime endpoints stay global study/run resources. Per-object physics and mesh authoring uses `model/objects/*`, `model/regions/*`, `model/materials/*`, `model/objects/*/interactions/*`, and `meshing/policies/objects/*`; it must not create screen-shaped solver endpoints for Explorer rows.
 
+Global active effective-field term switches are study authoring state, not object interaction
+resources. The control room commits `study.exchange_enabled` and `study.demag_enabled` through
+`model/transactions` merge patches; object interaction routes remain for object-local entries such
+as interfacial DMI and anisotropy.
+
 Mesh-affecting model changes mark affected objects or the scene as mesh-stale. A frontend may show primitive authoring geometry immediately after a create/edit commit, but solver topology remains owned by `meshing` resources and is current only after mesh-build provenance matches the committed scene revision.
 
 Mesh rebuild uses the existing command path:

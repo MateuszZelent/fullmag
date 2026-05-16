@@ -140,9 +140,11 @@ describe("ribbon structure", () => {
   it("resolves every contributed action icon color", () => {
     const unresolved = Object.values(ALL_TAB_CONTENT).flatMap((content) =>
       content.groups.flatMap((group) =>
-        group.actions
-          .filter((action) => action.iconColor && !resolveRibbonIconColor(action.iconColor))
-          .map((action) => `${content.tabId}/${group.id}/${action.id}`),
+        group.actions.flatMap((action) =>
+          action.iconColor && !resolveRibbonIconColor(action.iconColor)
+            ? [`${content.tabId}/${group.id}/${action.id}`]
+            : [],
+        ),
       ),
     );
 

@@ -19,6 +19,11 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useKernel } from "@/kernel/KernelContext";
+import {
+  normalizeMeshPipelineStatus,
+  resolveMeshBuildStatusLabel,
+} from "@/shared/domain/mesh/buildPipeline";
+import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -37,14 +42,7 @@ import {
   nestedRecord,
   recordField,
 } from "./MeshResourceView";
-
-function buildStatusLabel(value: unknown): string {
-  const record = asRecord(value);
-  const status = recordField(record, "status");
-  if (typeof status === "string" && status.length > 0) return status;
-  if (record && Object.keys(record).length > 0) return "available";
-  return "idle";
-}
+import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 
 function selectedSectionTitle(kind: string | null): string {
   if (kind === "mesh.shared-domain") return "Shared-Domain Mesh";
@@ -223,9 +221,16 @@ function SolverMeshIdentitySection({
 }
 
 function MeshCountsExtentsSection({
+  edgeLength,
   meshStatistics,
   meshSummary,
 }: {
+  edgeLength: {
+    max: number | null;
+    mean: number | null;
+    min: number | null;
+    std: number | null;
+  } | null;
   meshStatistics: unknown;
   meshSummary: unknown;
 }) {
@@ -256,15 +261,21 @@ function MeshCountsExtentsSection({
           },
           {
             label: "Min edge",
-            value: formatLength(recordField(asRecord(meshStatistics), "min_edge_length")),
+            value: formatLength(
+              edgeLength?.min ?? recordField(asRecord(meshStatistics), "min_edge_length"),
+            ),
           },
           {
             label: "Max edge",
-            value: formatLength(recordField(asRecord(meshStatistics), "max_edge_length")),
+            value: formatLength(
+              edgeLength?.max ?? recordField(asRecord(meshStatistics), "max_edge_length"),
+            ),
           },
           {
             label: "Mean edge",
-            value: formatLength(recordField(asRecord(meshStatistics), "mean_edge_length")),
+            value: formatLength(
+              edgeLength?.mean ?? recordField(asRecord(meshStatistics), "mean_edge_length"),
+            ),
           },
         ]}
       />
@@ -374,6 +385,24 @@ function MeshQualityGatesSection({
       ) : (
         <MeshResourceEmpty label="No quality-gate checks published yet." />
       )}
+    </InspectorSection>
+  );
+}
+
+function MeshQualityStatisticsSection({
+  statistics,
+}: {
+  statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
+}) {
+  return (
+    <InspectorSection
+      value="quality-statistics"
+      title="Quality Distributions"
+      badge={statistics ? formatCount(statistics.elementCount) : "missing"}
+      collapsible
+      defaultCollapsed={false}
+    >
+      <MeshQualityStatisticsView statistics={statistics} />
     </InspectorSection>
   );
 }
@@ -509,13 +538,14 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const meshStatistics =
     nestedRecord(semantics.data?.mesh_build_diagnostics, "mesh_statistics") ??
     nestedRecord(sharedReport.data?.report, "mesh_statistics");
+  const qualityStatistics = normalizeMeshQualityStatistics(meshStatistics);
   const lastBuildSummary = firstRecord(
     activeBuild.data?.last_build_summary,
     latestBuild.data?.last_success,
   );
   const sceneRecord = asRecord(scene.data);
   const activeBuildRecord = asRecord(activeBuild.data?.active_build);
-  const pipelineStatus = asRecord(activeBuild.data?.mesh_pipeline_status);
+  const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
   const lastBuildGeometryRealization = nestedRecord(
     lastBuildSummary,
     "geometry_realization",
@@ -529,7 +559,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const thinFilmDiagnostics =
     activeBuild.data?.shared_domain_build_report?.thin_film_diagnostics ?? [];
   const title = selectedSectionTitle(selection.kind);
-  const buildStatus = buildStatusLabel(activeBuildRecord ?? pipelineStatus);
+  const buildStatus = resolveMeshBuildStatusLabel(activeBuildRecord, pipelinePhases);
   const sceneRevision = firstNumericRevision(
     recordField(sceneRecord, "revision"),
     recordField(sceneRecord, "scene_revision"),
@@ -562,7 +592,15 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
     <Accordion
       className="fm-inspector-panel"
       type="multiple"
-      defaultValue={["overview", "identity", "counts", "pipeline", "quality-gates", "size-fields"]}
+      defaultValue={[
+        "overview",
+        "identity",
+        "counts",
+        "pipeline",
+        "quality-gates",
+        "quality-statistics",
+        "size-fields",
+      ]}
     >
       <MeshOverviewSection
         activeBuildRevision={activeBuild.data?.revision}
@@ -584,6 +622,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       />
       <SolverMeshIdentitySection badge={manifest.status} manifest={manifest.data} />
       <MeshCountsExtentsSection
+        edgeLength={qualityStatistics?.edgeLength ?? null}
         meshStatistics={meshStatistics}
         meshSummary={meshSummary}
       />
@@ -616,6 +655,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         }
       />
       <MeshQualityGatesSection badge={sharedQuality.status} gateRows={gateRows} />
+      <MeshQualityStatisticsSection statistics={qualityStatistics} />
       <RealizedSizeFieldsSection sizeFields={sizeFields} />
       <OperationStatusesSection operationStatuses={operationStatuses} />
       <ThinFilmDiagnosticsSection thinFilmDiagnostics={thinFilmDiagnostics} />

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
+use crate::schemas::diagnostics::SolverProfileCommandConfig;
 use crate::types::MeshCommandTarget;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -135,6 +136,11 @@ pub enum StructuredCommandRequest {
         mesh_target: Option<MeshCommandTarget>,
         #[serde(skip_serializing_if = "Option::is_none")]
         mesh_reason: Option<String>,
+    },
+    SetSolverProfile {
+        #[serde(default, flatten)]
+        intent: RuntimeCommandIntent,
+        profile: SolverProfileCommandConfig,
     },
 }
 

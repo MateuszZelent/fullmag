@@ -14,6 +14,11 @@ import {
 import { useStageExecutionResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSelection } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import {
+  meshPipelineStatusIsActive,
+  normalizeMeshPipelineStatus,
+  resolveMeshBuildStatusLabel,
+} from "@/shared/domain/mesh/buildPipeline";
 
 import {
   buildExplorerTree,
@@ -79,10 +84,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTreeSnapshotFromScene(modelResource.data),
       stageExecution.data,
     );
+    const activeBuildStatus = resolveMeshBuildStatusLabel(
+      record(activeBuild.data?.active_build),
+      normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status),
+    );
     const mesh: ModelTreeMeshSnapshot = {
-      activeBuildStatus:
-        stringValue(record(activeBuild.data?.active_build)?.status) ??
-        stringValue(record(activeBuild.data?.mesh_pipeline_status)?.status),
+      activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
+        ? activeBuildStatus
+        : null,
       buildRevision: activeBuild.data?.revision,
       domainMeshMode: manifest.data?.domain_mesh_mode,
       generationId: manifest.data?.generation_id,

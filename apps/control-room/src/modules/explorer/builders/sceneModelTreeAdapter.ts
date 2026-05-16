@@ -33,11 +33,17 @@ export function modelTreeSnapshotFromScene(
   return {
     materials,
     objects: Array.isArray(scene?.objects)
-      ? scene.objects
-          .map((object) =>
-            sceneObjectSnapshot(object, materialById, magnetizationById),
-          )
-          .filter((object): object is ModelTreeObjectSnapshot => Boolean(object))
+      ? scene.objects.reduce<ModelTreeObjectSnapshot[]>((objects, object) => {
+          const snapshot = sceneObjectSnapshot(
+            object,
+            materialById,
+            magnetizationById,
+          );
+          if (snapshot) {
+            objects.push(snapshot);
+          }
+          return objects;
+        }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
     study: sceneStudySnapshot(scene?.study),
@@ -93,21 +99,18 @@ function explorerStatusFromRuntimeStage(
 function sceneMaterials(value: unknown): ModelTreeMaterialSnapshot[] {
   if (!Array.isArray(value)) return [];
 
-  return value
-    .map((item): ModelTreeMaterialSnapshot | null => {
-      if (!item || typeof item !== "object") return null;
-      const material = item as Record<string, unknown>;
-      const id = stringValue(material.id);
-      if (!id) return null;
-      return {
-        id,
-        label: stringValue(material.name) ?? id,
-        propertyKeys: materialPropertyKeys(material.properties),
-      };
-    })
-    .filter((material): material is ModelTreeMaterialSnapshot =>
-      Boolean(material),
-    );
+  return value.reduce<ModelTreeMaterialSnapshot[]>((materials, item) => {
+    if (!item || typeof item !== "object") return materials;
+    const material = item as Record<string, unknown>;
+    const id = stringValue(material.id);
+    if (!id) return materials;
+    materials.push({
+      id,
+      label: stringValue(material.name) ?? id,
+      propertyKeys: materialPropertyKeys(material.properties),
+    });
+    return materials;
+  }, []);
 }
 
 interface SceneMagnetizationAssetSnapshot {
@@ -122,37 +125,37 @@ function sceneMagnetizationAssets(
 ): SceneMagnetizationAssetSnapshot[] {
   if (!Array.isArray(value)) return [];
 
-  return value
-    .map((item): SceneMagnetizationAssetSnapshot | null => {
-      if (!item || typeof item !== "object") return null;
-      const asset = item as Record<string, unknown>;
-      const id = stringValue(asset.id);
-      if (!id) return null;
-      const kind = stringValue(asset.kind);
-      return {
+  return value.reduce<SceneMagnetizationAssetSnapshot[]>((assets, item) => {
+    if (!item || typeof item !== "object") return assets;
+    const asset = item as Record<string, unknown>;
+    const id = stringValue(asset.id);
+    if (!id) return assets;
+    const kind = stringValue(asset.kind);
+    assets.push({
+      id,
+      kind,
+      label:
+        stringValue(asset.ui_label) ??
+        stringValue(asset.name) ??
+        stringValue(asset.preset_kind) ??
+        kind ??
         id,
-        kind,
-        label:
-          stringValue(asset.ui_label) ??
-          stringValue(asset.name) ??
-          stringValue(asset.preset_kind) ??
-          kind ??
-          id,
-        textureTransformAvailable:
-          kind === "preset_texture" && Boolean(asset.texture_transform),
-      };
-    })
-    .filter((asset): asset is SceneMagnetizationAssetSnapshot =>
-      Boolean(asset),
-    );
+      textureTransformAvailable:
+        kind === "preset_texture" && Boolean(asset.texture_transform),
+    });
+    return assets;
+  }, []);
 }
 
 function materialPropertyKeys(value: unknown): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-  return Object.entries(value as Record<string, unknown>)
-    .filter(([, entry]) => entry !== null && entry !== undefined)
-    .map(([key]) => key)
-    .sort();
+  const keys: string[] = [];
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (entry !== null && entry !== undefined) {
+      keys.push(key);
+    }
+  }
+  return keys.sort();
 }
 
 function scenePhysicsInteractions(
@@ -278,17 +281,20 @@ function sceneObjectPhysicsInteractions(
     }
   }
 
-  return interactionOrder
-    .filter((kind) => byKind.has(kind))
-    .map((kind) => {
-      const counts = byKind.get(kind)!;
-      return {
+  return interactionOrder.reduce<ModelTreePhysicsInteractionSnapshot[]>(
+    (interactions, kind) => {
+      const counts = byKind.get(kind);
+      if (!counts) return interactions;
+      interactions.push({
         enabledCount: counts.enabledCount,
         id: kind,
         label: interactionLabel(kind),
         objectCount: counts.objectCount,
-      };
-    });
+      });
+      return interactions;
+    },
+    [],
+  );
 }
 
 const interactionOrder = [
@@ -368,7 +374,14 @@ function geometryKind(value: unknown): string | null {
 }
 
 function meshStatusFromTags(value: unknown): ExplorerNodeStatus {
-  const tags = Array.isArray(value) ? value.filter((tag) => typeof tag === "string") : [];
+  const tags: string[] = [];
+  if (Array.isArray(value)) {
+    for (const tag of value) {
+      if (typeof tag === "string") {
+        tags.push(tag);
+      }
+    }
+  }
   if (tags.includes("mesh:building")) return "mesh-building";
   if (tags.includes("mesh:failed")) return "mesh-failed";
   if (tags.includes("mesh:validation-blocked")) return "validation-blocked";
@@ -384,11 +397,13 @@ function interactionLabel(kind: string): string {
   if (kind === "interfacial_dmi") return "Interfacial DMI";
   if (kind === "uniaxial_anisotropy") return "Uniaxial anisotropy";
 
-  return kind
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts: string[] = [];
+  for (const part of kind.split("_")) {
+    if (part) {
+      parts.push(part[0]?.toUpperCase() + part.slice(1));
+    }
+  }
+  return parts.join(" ");
 }
 
 function stringValue(value: unknown): string | null {

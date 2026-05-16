@@ -28,11 +28,12 @@ When you need to understand Fullmag quickly, read in this order:
 13. `docs/specs/problem-ir-compatibility-v1.md`
 14. `docs/specs/problem-ir-v0.md`
 15. `docs/specs/capability-matrix-v0.md`
-16. `docs/specs/mesh-roundtrip-semantics-v1.md`
-17. `docs/specs/frequency-domain-artifacts-v2.md`
-18. `docs/specs/viewport3d-contract-v1.md`
-19. the relevant `docs/physics/` notes
-20. the relevant `docs/plans/active/` plan
+16. `docs/specs/native-fem-backend-architecture-v1.md`
+17. `docs/specs/mesh-roundtrip-semantics-v1.md`
+18. `docs/specs/frequency-domain-artifacts-v2.md`
+19. `docs/specs/viewport3d-contract-v1.md`
+20. the relevant `docs/physics/` notes
+21. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -66,11 +67,18 @@ cutover acceptance. They do not override the resource-first API contract.
 
 ### 2. Solver architecture
 
+- `docs/specs/native-fem-backend-architecture-v1.md`
 - `docs/specs/exchange-only-full-solver-architecture-v1.md`
 
-This is the architecture for the first physically meaningful solver slice.
+`native-fem-backend-architecture-v1.md` is the target architecture for the
+native FEM backend after the 2026-05-16 audit. It defines the modular split
+between FEM core, CPU/MFEM, GPU/CUDA, operator modules, demag subsystem,
+runtime ownership, and validation/qualification boundaries.
 
-It is subordinate to the application architecture and should be read as:
+`exchange-only-full-solver-architecture-v1.md` is the architecture for the
+first physically meaningful solver slice.
+
+These are subordinate to the application architecture and should be read as:
 
 - how the first executable solver fits inside the whole app,
 - not as the only architecture document for Fullmag.
@@ -178,3 +186,14 @@ frontend cutover, or legacy `apps/web` status changes, also update:
 - `docs/adr/0013-frontend-v2-module-kernel.md`
 - `AGENTS.md`
 - the relevant `.agents/skills/frontend-v2-*` skill when agent behavior must change
+
+Whenever native FEM backend ownership, `Context`, `mfem_bridge.cpp`,
+CPU/GPU separation, operator extraction, demag Poisson policy, or FEM solver
+qualification changes, also update:
+
+- `docs/specs/native-fem-backend-architecture-v1.md`
+- `docs/adr/0014-native-fem-backend-modularization.md` when the long-lived
+  decision changes
+- `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
+- `.agents/skills/fem-native-backend-architecture/SKILL.md` when agent behavior
+  must change

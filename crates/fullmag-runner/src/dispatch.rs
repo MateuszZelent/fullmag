@@ -2920,7 +2920,7 @@ fn execute_native_fem(
         device_info.compute_capability,
         device_info.driver_version,
         device_info.runtime_version,
-        plan.mfem_device_string.as_deref().unwrap_or("cuda"),
+        plan.mfem_device_string.as_deref().unwrap_or("cpu"),
         demag_policy.solver,
         demag_policy.preconditioner,
     ));
@@ -3668,6 +3668,7 @@ fn fem_poisson_demag_provenance(
     let boundary_condition = match resolved_demag {
         fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "dirichlet",
         fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "robin",
+        fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => "fredkin_koehler_fem_bem",
         _ => return None,
     };
     let policy = plan.demag_solver_policy.clone().unwrap_or_default();
@@ -4242,6 +4243,28 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn fem_fredkin_koehler_demag_provenance_records_method_and_solve_stats() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        plan.air_box_config = None;
+        let stats = StepStats {
+            poisson_iterations: 21,
+            poisson_final_residual: 7.0e-8,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("Fredkin-Koehler demag provenance should be present");
+
+        assert_eq!(provenance.boundary_condition, "fredkin_koehler_fem_bem");
+        assert_eq!(provenance.actual_iterations, Some(21));
+        assert_eq!(provenance.final_residual, Some(7.0e-8));
+        assert_eq!(provenance.robin_beta, None);
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn native_fem_initial_snapshot_is_lazy_for_headless_time_domain() {
         assert!(!native_fem_requires_initial_snapshot(false, false));
         assert!(native_fem_requires_initial_snapshot(true, false));
@@ -4565,7 +4588,10 @@ mod tests {
         reason: &str,
     ) -> native_fem::GpuAvailability {
         native_fem::GpuAvailability {
-            available: gpu,
+            available: cpu || gpu,
+            available_any: cpu || gpu,
+            available_cpu: cpu,
+            available_gpu: gpu,
             built_with_mfem_stack: cpu || gpu,
             built_with_cuda_runtime: gpu,
             built_with_ceed: false,
@@ -4578,6 +4604,16 @@ mod tests {
             requested_gpu_index: -1,
             resolved_gpu_index: if gpu { 0 } else { -1 },
             reason: reason.to_string(),
+            reason_cpu: if cpu {
+                "native FEM CPU backend is available".to_string()
+            } else {
+                reason.to_string()
+            },
+            reason_gpu: if gpu {
+                "native FEM GPU backend is available".to_string()
+            } else {
+                reason.to_string()
+            },
         }
     }
 

@@ -16,7 +16,7 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -78,6 +78,8 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   resolveStudyInspectorModel,
   studySnapshotFromScene,
+  type StudyInspectorModel,
+  type StudyInspectorSnapshot,
   type StudyStageModel,
 } from "./StudyInspectorPanelModel";
 
@@ -139,22 +141,96 @@ function StageCard({
   );
 }
 
+interface StudyInspectorPanelState {
+  importDialogOpen: boolean;
+  importError: string | null;
+  importFileName: string | null;
+  importFmsBase64: string | null;
+  importInspection: SessionImportInspectResponse["inspection"] | null;
+  importInspecting: boolean;
+  importRestoreMode: string;
+  restoreDialogOpen: boolean;
+  selectedCommandId: string | null;
+  selectedRestoreCheckpointId: string | null;
+}
+
+type StudyInspectorPanelAction =
+  | { type: "setImportDialogOpen"; open: boolean }
+  | { type: "setImportRestoreMode"; mode: string }
+  | { type: "setRestoreDialogOpen"; open: boolean }
+  | { type: "setSelectedCommandId"; commandId: string | null }
+  | { type: "setSelectedRestoreCheckpointId"; checkpointId: string | null }
+  | { type: "prepareImportFile"; fileName: string | null }
+  | {
+      type: "importInspectSuccess";
+      fmsBase64: string;
+      inspection: SessionImportInspectResponse["inspection"];
+    }
+  | { type: "importInspectFailure"; message: string };
+
+const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
+  importDialogOpen: false,
+  importError: null,
+  importFileName: null,
+  importFmsBase64: null,
+  importInspection: null,
+  importInspecting: false,
+  importRestoreMode: "resume",
+  restoreDialogOpen: false,
+  selectedCommandId: null,
+  selectedRestoreCheckpointId: null,
+};
+
+function studyInspectorPanelReducer(
+  state: StudyInspectorPanelState,
+  action: StudyInspectorPanelAction,
+): StudyInspectorPanelState {
+  switch (action.type) {
+    case "setImportDialogOpen":
+      return { ...state, importDialogOpen: action.open };
+    case "setImportRestoreMode":
+      return { ...state, importRestoreMode: action.mode };
+    case "setRestoreDialogOpen":
+      return { ...state, restoreDialogOpen: action.open };
+    case "setSelectedCommandId":
+      return { ...state, selectedCommandId: action.commandId };
+    case "setSelectedRestoreCheckpointId":
+      return {
+        ...state,
+        selectedRestoreCheckpointId: action.checkpointId,
+      };
+    case "prepareImportFile":
+      return {
+        ...state,
+        importError: null,
+        importFileName: action.fileName,
+        importFmsBase64: null,
+        importInspection: null,
+        importInspecting: action.fileName !== null,
+      };
+    case "importInspectSuccess":
+      return {
+        ...state,
+        importError: null,
+        importFmsBase64: action.fmsBase64,
+        importInspection: action.inspection,
+        importInspecting: false,
+        importRestoreMode: action.inspection.restore_class ?? "resume",
+      };
+    case "importInspectFailure":
+      return {
+        ...state,
+        importError: action.message,
+        importInspecting: false,
+      };
+  }
+}
+
 export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
-  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
-  const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importFileName, setImportFileName] = useState<string | null>(null);
-  const [importFmsBase64, setImportFmsBase64] = useState<string | null>(null);
-  const [importInspection, setImportInspection] = useState<
-    SessionImportInspectResponse["inspection"] | null
-  >(null);
-  const [importInspecting, setImportInspecting] = useState(false);
-  const [importRestoreMode, setImportRestoreMode] = useState("resume");
-  const [selectedRestoreCheckpointId, setSelectedRestoreCheckpointId] =
-    useState<string | null>(null);
-  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(
-    null,
+  const [state, dispatch] = useReducer(
+    studyInspectorPanelReducer,
+    STUDY_INSPECTOR_INITIAL_STATE,
   );
   const scene = useSceneResource();
   const currentRun = useCurrentRunResource();
@@ -170,12 +246,13 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const sessionStatus = useSessionStatus();
   const energyCurrent = useSolverEnergyCurrentResource();
   const energyHistory = useSolverEnergyHistoryResource(120);
-  const commandDetail = useCommandDetailResource(selectedCommandId);
+  const commandDetail = useCommandDetailResource(state.selectedCommandId);
   const checkpoints = checkpointCatalog.data?.checkpoints ?? [];
   const latestCheckpoint = checkpoints[0] ?? null;
   const selectedRestoreCheckpoint =
     checkpoints.find(
-      (checkpoint) => checkpoint.checkpoint_id === selectedRestoreCheckpointId,
+      (checkpoint) =>
+        checkpoint.checkpoint_id === state.selectedRestoreCheckpointId,
     ) ??
     latestCheckpoint ??
     null;
@@ -209,27 +286,28 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     void kernel.commands.execute(commandId, commandContext, input);
   };
   const inspectImportFile = async (file: File | null) => {
-    setImportError(null);
-    setImportInspection(null);
-    setImportFmsBase64(null);
-    setImportFileName(file?.name ?? null);
+    dispatch({
+      type: "prepareImportFile",
+      fileName: file?.name ?? null,
+    });
     if (!file) return;
 
-    setImportInspecting(true);
     try {
       const fmsBase64 = await readFileAsBase64(file);
       const inspection = await kernel.api.persistence.imports.inspect({
         fms_base64: fmsBase64,
       });
-      setImportFmsBase64(fmsBase64);
-      setImportInspection(inspection.inspection);
-      setImportRestoreMode(inspection.inspection.restore_class ?? "resume");
+      dispatch({
+        type: "importInspectSuccess",
+        fmsBase64,
+        inspection: inspection.inspection,
+      });
     } catch (error) {
-      setImportError(
-        error instanceof Error ? error.message : "Failed to inspect .fms file.",
-      );
-    } finally {
-      setImportInspecting(false);
+      dispatch({
+        type: "importInspectFailure",
+        message:
+          error instanceof Error ? error.message : "Failed to inspect .fms file.",
+      });
     }
   };
   const commandEnabled = (commandId: string) =>
@@ -254,325 +332,430 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           "history",
         ]}
       >
-        <InspectorSection
-          value="runtime"
-          title="Runtime"
-          badge={model.runtime.state}
-        >
-          <FieldRow label="Run" value={model.runtime.runId} />
-          <FieldRow
-            label="Active stage"
-            value={model.runtime.activeStageLabel}
-          />
-          <FieldRow
-            label="Command"
-            value={
-              model.runtime.commandId ? (
-                <button
-                  type="button"
-                  className="fm-study-command-link"
-                  onClick={() => setSelectedCommandId(model.runtime.commandId)}
-                  title="Open command detail"
-                >
-                  <span>{model.runtime.commandLabel}</span>
-                  <Info size={12} aria-hidden="true" />
-                </button>
-              ) : (
-                model.runtime.commandLabel
-              )
-            }
-          />
-          {model.runtime.commandError ? (
-            <FieldRow label="Command error" value={model.runtime.commandError} />
-          ) : null}
-          <FieldRow label="Max torque" value={model.runtime.maxTorque} />
-          <FieldRow
-            label="Step"
-            value={
-              solverStatus.data?.step_index ??
-              currentRun.data?.total_steps ??
-              "n/a"
-            }
-          />
-          <ProgressBar
-            label="Current study progress"
-            value={model.runtime.progressPercent}
-          />
-          <div className="fm-inspector-toolbar">
-            <StudyCommandButton
-              commandId="study.run"
-              disabledReason={commandDisabledReason("study.run")}
-              icon={<Play size={13} />}
-              label="Compute"
-              onRun={runCommand}
-            />
-            <StudyCommandButton
-              commandId="study.pause"
-              disabledReason={commandDisabledReason("study.pause")}
-              icon={<Pause size={13} />}
-              label="Pause"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.resume"
-              disabledReason={commandDisabledReason("study.resume")}
-              icon={<Play size={13} />}
-              label="Resume"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.skip"
-              disabledReason={commandDisabledReason("study.skip")}
-              icon={<SkipForward size={13} />}
-              label="Skip"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.stop"
-              disabledReason={commandDisabledReason("study.stop")}
-              icon={<Square size={13} />}
-              label="Stop"
-              onRun={runCommand}
-              variant="danger"
-            />
-          </div>
-        </InspectorSection>
+        <StudyRuntimeSection
+          commandDisabledReason={commandDisabledReason}
+          model={model}
+          onOpenCommand={(commandId) =>
+            dispatch({ type: "setSelectedCommandId", commandId })
+          }
+          runCommand={runCommand}
+          stepValue={
+            solverStatus.data?.step_index ?? currentRun.data?.total_steps ?? "n/a"
+          }
+        />
 
-        <InspectorSection
-          value="selected-stage"
-          title="Selected Stage"
-          badge={model.selectedStage?.status ?? "none"}
-        >
-          <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
-          <FieldRow
-            label="Torque stop"
-            value={model.selectedStage?.torqueTolerance ?? "not set"}
-          />
-          <FieldRow
-            label="Energy stop"
-            value={model.selectedStage?.energyTolerance ?? "not set"}
-          />
-          <FieldRow
-            label="Step budget"
-            value={model.selectedStage?.maxSteps ?? "not set"}
-          />
-          <FieldRow
-            label="Time budget"
-            value={model.selectedStage?.untilSeconds ?? "not set"}
-            unit={model.selectedStage?.untilSeconds ? "s" : undefined}
-          />
-          <ProgressBar
-            label="Selected stage progress"
-            value={model.selectedStage?.progressPercent ?? null}
-          />
-        </InspectorSection>
+        <StudySelectedStageSection model={model} />
 
-        <InspectorSection
-          value="boundary"
-          title="Boundary Conditions"
-          badge={snapshot.requested.backend}
-        >
-          <FieldRow
-            label="Demag realization"
-            value={model.boundary.demagRealization}
-          />
-          <FieldRow
-            label="External field"
-            value={model.boundary.externalField}
-          />
-          <FieldRow label="Device" value={snapshot.requested.device} />
-          <FieldRow label="Precision" value={snapshot.requested.precision} />
-          <FieldRow label="Mode" value={snapshot.requested.mode} />
-        </InspectorSection>
+        <StudyBoundarySection model={model} snapshot={snapshot} />
 
-        <InspectorSection
-          value="pipeline"
-          title="Stage Pipeline"
-          badge={`${model.stages.length}`}
-        >
-          <div className="fm-study-stage-list">
-            {model.stages.map((stage) => (
-              <StageCard
-                key={stage.index}
-                active={activeStageIndex === stage.index}
-                stage={stage}
-              />
-            ))}
-          </div>
-          <div className="fm-inspector-toolbar">
-            <StudyCommandButton
-              commandId="study.add-relax-stage"
-              disabledReason={commandDisabledReason("study.add-relax-stage")}
-              icon={<Plus size={13} />}
-              label="Relax"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.add-run-stage"
-              disabledReason={commandDisabledReason("study.add-run-stage")}
-              icon={<Zap size={13} />}
-              label="Run"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.compute-fields"
-              disabledReason={commandDisabledReason("study.compute-fields")}
-              icon={<Activity size={13} />}
-              label="Fields"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.compute-energies"
-              disabledReason={commandDisabledReason("study.compute-energies")}
-              icon={<Sigma size={13} />}
-              label="Energies"
-              onRun={runCommand}
-              variant="ghost"
-            />
-          </div>
-        </InspectorSection>
+        <StudyPipelineSection
+          activeStageIndex={activeStageIndex}
+          commandDisabledReason={commandDisabledReason}
+          model={model}
+          runCommand={runCommand}
+        />
 
-        <InspectorSection
-          value="recovery"
-          title="Recovery"
-          badge={`${checkpointCatalog.data?.checkpoints.length ?? 0}`}
-        >
-          <FieldRow
-            label="Latest checkpoint"
-            value={latestCheckpoint?.checkpoint_id ?? "not available"}
-          />
-          <FieldRow
-            label="Resume class"
-            value={latestCheckpoint?.resume_class ?? "not available"}
-          />
-          <FieldRow
-            label="Checkpoint step"
-            value={latestCheckpoint?.step ?? "not available"}
-          />
-          <div className="fm-inspector-toolbar">
-            <StudyCommandButton
-              commandId="study.save-checkpoint"
-              disabledReason={commandDisabledReason("study.save-checkpoint")}
-              icon={<Save size={13} />}
-              label="Save"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.restore-checkpoint"
-              disabledReason={commandDisabledReason("study.restore-checkpoint")}
-              icon={<RotateCcw size={13} />}
-              label="Restore"
-              onRun={() => {
-                setSelectedRestoreCheckpointId(
-                  latestCheckpoint?.checkpoint_id ?? null,
-                );
-                setRestoreDialogOpen(true);
-              }}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.import-state"
-              disabledReason={commandDisabledReason("study.import-state")}
-              icon={<Upload size={13} />}
-              label="Import"
-              onRun={() => setImportDialogOpen(true)}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.export-state"
-              disabledReason={commandDisabledReason("study.export-state")}
-              icon={<Download size={13} />}
-              label="Export"
-              onRun={runCommand}
-              variant="ghost"
-            />
-            <StudyCommandButton
-              commandId="study.discard-paused-state"
-              disabledReason={commandDisabledReason("study.discard-paused-state")}
-              icon={<Scissors size={13} />}
-              label="Discard"
-              onRun={runCommand}
-              variant="danger"
-            />
-          </div>
-        </InspectorSection>
+        <StudyRecoverySection
+          checkpointCount={checkpointCatalog.data?.checkpoints.length ?? 0}
+          commandDisabledReason={commandDisabledReason}
+          latestCheckpoint={latestCheckpoint}
+          onImport={() => dispatch({ type: "setImportDialogOpen", open: true })}
+          onRestore={() => {
+            dispatch({
+              type: "setSelectedRestoreCheckpointId",
+              checkpointId: latestCheckpoint?.checkpoint_id ?? null,
+            });
+            dispatch({ type: "setRestoreDialogOpen", open: true });
+          }}
+          runCommand={runCommand}
+        />
 
-        <InspectorSection
-          value="history"
-          title="Run History"
-          badge={`${energyHistory.data?.returned_rows ?? 0}`}
-        >
-          <FieldRow
-            label="Energy step"
-            value={energyCurrent.data?.step ?? "not available"}
-          />
-          <FieldRow
-            label="Total energy"
-            value={
-              typeof energyCurrent.data?.total === "number"
-                ? energyCurrent.data.total.toExponential(4)
-                : "not available"
-            }
-            unit="J"
-          />
-          <FieldRow
-            label="Returned rows"
-            value={energyHistory.data?.returned_rows ?? "not available"}
-          />
-          <FieldRow
-            label="Total rows"
-            value={energyHistory.data?.total_rows ?? "not available"}
-          />
-        </InspectorSection>
+        <StudyHistorySection
+          energyStep={energyCurrent.data?.step ?? "not available"}
+          returnedRows={energyHistory.data?.returned_rows ?? "not available"}
+          totalEnergy={
+            typeof energyCurrent.data?.total === "number"
+              ? energyCurrent.data.total.toExponential(4)
+              : "not available"
+          }
+          totalRows={energyHistory.data?.total_rows ?? "not available"}
+        />
       </Accordion>
       <CommandDetailDialog
-        commandId={selectedCommandId}
+        commandId={state.selectedCommandId}
         detail={commandDetail}
         onOpenChange={(open) => {
-          if (!open) setSelectedCommandId(null);
+          if (!open) {
+            dispatch({ type: "setSelectedCommandId", commandId: null });
+          }
         }}
       />
       <RestoreCheckpointDialog
         checkpoints={checkpoints}
-        open={restoreDialogOpen}
+        open={state.restoreDialogOpen}
         selectedCheckpointId={selectedRestoreCheckpoint?.checkpoint_id ?? null}
         onConfirm={(checkpointId) => {
-          setRestoreDialogOpen(false);
-          setSelectedRestoreCheckpointId(checkpointId);
+          dispatch({ type: "setRestoreDialogOpen", open: false });
+          dispatch({
+            type: "setSelectedRestoreCheckpointId",
+            checkpointId,
+          });
           runCommand("study.restore-checkpoint", { checkpointId });
         }}
-        onOpenChange={setRestoreDialogOpen}
-        onSelectCheckpoint={setSelectedRestoreCheckpointId}
+        onOpenChange={(open) =>
+          dispatch({ type: "setRestoreDialogOpen", open })
+        }
+        onSelectCheckpoint={(checkpointId) =>
+          dispatch({
+            type: "setSelectedRestoreCheckpointId",
+            checkpointId,
+          })
+        }
       />
       <ImportStateDialog
-        error={importError}
-        fileName={importFileName}
-        inspection={importInspection}
-        inspecting={importInspecting}
-        open={importDialogOpen}
-        restoreMode={importRestoreMode}
+        error={state.importError}
+        fileName={state.importFileName}
+        inspection={state.importInspection}
+        inspecting={state.importInspecting}
+        open={state.importDialogOpen}
+        restoreMode={state.importRestoreMode}
         onConfirm={() => {
-          if (!importFmsBase64) return;
-          setImportDialogOpen(false);
+          if (!state.importFmsBase64) return;
+          dispatch({ type: "setImportDialogOpen", open: false });
           runCommand("study.import-state", {
-            fmsBase64: importFmsBase64,
-            restoreMode: importRestoreMode,
+            fmsBase64: state.importFmsBase64,
+            restoreMode: state.importRestoreMode,
           });
         }}
         onFileSelected={(file) => {
           void inspectImportFile(file);
         }}
-        onOpenChange={setImportDialogOpen}
-        onRestoreModeChange={setImportRestoreMode}
+        onOpenChange={(open) =>
+          dispatch({ type: "setImportDialogOpen", open })
+        }
+        onRestoreModeChange={(mode) =>
+          dispatch({ type: "setImportRestoreMode", mode })
+        }
       />
     </>
+  );
+}
+
+type StudyCommandRunner = (commandId: string, input?: unknown) => void;
+type StudyCommandDisabledReason = (commandId: string) => string | null;
+
+function StudyRuntimeSection({
+  commandDisabledReason,
+  model,
+  onOpenCommand,
+  runCommand,
+  stepValue,
+}: {
+  commandDisabledReason: StudyCommandDisabledReason;
+  model: StudyInspectorModel;
+  onOpenCommand: (commandId: string) => void;
+  runCommand: StudyCommandRunner;
+  stepValue: ReactNode;
+}) {
+  return (
+    <InspectorSection value="runtime" title="Runtime" badge={model.runtime.state}>
+      <FieldRow label="Run" value={model.runtime.runId} />
+      <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
+      <FieldRow
+        label="Command"
+        value={
+          model.runtime.commandId ? (
+            <button
+              type="button"
+              className="fm-study-command-link"
+              onClick={() => onOpenCommand(model.runtime.commandId ?? "")}
+              title="Open command detail"
+            >
+              <span>{model.runtime.commandLabel}</span>
+              <Info size={12} aria-hidden="true" />
+            </button>
+          ) : (
+            model.runtime.commandLabel
+          )
+        }
+      />
+      {model.runtime.commandError ? (
+        <FieldRow label="Command error" value={model.runtime.commandError} />
+      ) : null}
+      <FieldRow label="Max torque" value={model.runtime.maxTorque} />
+      <FieldRow label="Step" value={stepValue} />
+      <ProgressBar
+        label="Current study progress"
+        value={model.runtime.progressPercent}
+      />
+      <div className="fm-inspector-toolbar">
+        <StudyCommandButton
+          commandId="study.run"
+          disabledReason={commandDisabledReason("study.run")}
+          icon={<Play size={13} />}
+          label="Compute"
+          onRun={runCommand}
+        />
+        <StudyCommandButton
+          commandId="study.pause"
+          disabledReason={commandDisabledReason("study.pause")}
+          icon={<Pause size={13} />}
+          label="Pause"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.resume"
+          disabledReason={commandDisabledReason("study.resume")}
+          icon={<Play size={13} />}
+          label="Resume"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.skip"
+          disabledReason={commandDisabledReason("study.skip")}
+          icon={<SkipForward size={13} />}
+          label="Skip"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.stop"
+          disabledReason={commandDisabledReason("study.stop")}
+          icon={<Square size={13} />}
+          label="Stop"
+          onRun={runCommand}
+          variant="danger"
+        />
+      </div>
+    </InspectorSection>
+  );
+}
+
+function StudySelectedStageSection({ model }: { model: StudyInspectorModel }) {
+  return (
+    <InspectorSection
+      value="selected-stage"
+      title="Selected Stage"
+      badge={model.selectedStage?.status ?? "none"}
+    >
+      <FieldRow label="Kind" value={model.selectedStage?.kind ?? "none"} />
+      <FieldRow
+        label="Torque stop"
+        value={model.selectedStage?.torqueTolerance ?? "not set"}
+      />
+      <FieldRow
+        label="Energy stop"
+        value={model.selectedStage?.energyTolerance ?? "not set"}
+      />
+      <FieldRow
+        label="Step budget"
+        value={model.selectedStage?.maxSteps ?? "not set"}
+      />
+      <FieldRow
+        label="Time budget"
+        value={model.selectedStage?.untilSeconds ?? "not set"}
+        unit={model.selectedStage?.untilSeconds ? "s" : undefined}
+      />
+      <ProgressBar
+        label="Selected stage progress"
+        value={model.selectedStage?.progressPercent ?? null}
+      />
+    </InspectorSection>
+  );
+}
+
+function StudyBoundarySection({
+  model,
+  snapshot,
+}: {
+  model: StudyInspectorModel;
+  snapshot: StudyInspectorSnapshot;
+}) {
+  return (
+    <InspectorSection
+      value="boundary"
+      title="Boundary Conditions"
+      badge={snapshot.requested.backend}
+    >
+      <FieldRow
+        label="Demag realization"
+        value={model.boundary.demagRealization}
+      />
+      <FieldRow label="External field" value={model.boundary.externalField} />
+      <FieldRow label="Device" value={snapshot.requested.device} />
+      <FieldRow label="Precision" value={snapshot.requested.precision} />
+      <FieldRow label="Mode" value={snapshot.requested.mode} />
+    </InspectorSection>
+  );
+}
+
+function StudyPipelineSection({
+  activeStageIndex,
+  commandDisabledReason,
+  model,
+  runCommand,
+}: {
+  activeStageIndex: number | null;
+  commandDisabledReason: StudyCommandDisabledReason;
+  model: StudyInspectorModel;
+  runCommand: StudyCommandRunner;
+}) {
+  return (
+    <InspectorSection
+      value="pipeline"
+      title="Stage Pipeline"
+      badge={`${model.stages.length}`}
+    >
+      <div className="fm-study-stage-list">
+        {model.stages.map((stage) => (
+          <StageCard
+            key={stage.index}
+            active={activeStageIndex === stage.index}
+            stage={stage}
+          />
+        ))}
+      </div>
+      <div className="fm-inspector-toolbar">
+        <StudyCommandButton
+          commandId="study.add-relax-stage"
+          disabledReason={commandDisabledReason("study.add-relax-stage")}
+          icon={<Plus size={13} />}
+          label="Relax"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.add-run-stage"
+          disabledReason={commandDisabledReason("study.add-run-stage")}
+          icon={<Zap size={13} />}
+          label="Run"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.compute-fields"
+          disabledReason={commandDisabledReason("study.compute-fields")}
+          icon={<Activity size={13} />}
+          label="Fields"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.compute-energies"
+          disabledReason={commandDisabledReason("study.compute-energies")}
+          icon={<Sigma size={13} />}
+          label="Energies"
+          onRun={runCommand}
+          variant="ghost"
+        />
+      </div>
+    </InspectorSection>
+  );
+}
+
+function StudyRecoverySection({
+  checkpointCount,
+  commandDisabledReason,
+  latestCheckpoint,
+  onImport,
+  onRestore,
+  runCommand,
+}: {
+  checkpointCount: number;
+  commandDisabledReason: StudyCommandDisabledReason;
+  latestCheckpoint: CheckpointEntry | null;
+  onImport: () => void;
+  onRestore: () => void;
+  runCommand: StudyCommandRunner;
+}) {
+  return (
+    <InspectorSection
+      value="recovery"
+      title="Recovery"
+      badge={`${checkpointCount}`}
+    >
+      <FieldRow
+        label="Latest checkpoint"
+        value={latestCheckpoint?.checkpoint_id ?? "not available"}
+      />
+      <FieldRow
+        label="Resume class"
+        value={latestCheckpoint?.resume_class ?? "not available"}
+      />
+      <FieldRow
+        label="Checkpoint step"
+        value={latestCheckpoint?.step ?? "not available"}
+      />
+      <div className="fm-inspector-toolbar">
+        <StudyCommandButton
+          commandId="study.save-checkpoint"
+          disabledReason={commandDisabledReason("study.save-checkpoint")}
+          icon={<Save size={13} />}
+          label="Save"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.restore-checkpoint"
+          disabledReason={commandDisabledReason("study.restore-checkpoint")}
+          icon={<RotateCcw size={13} />}
+          label="Restore"
+          onRun={onRestore}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.import-state"
+          disabledReason={commandDisabledReason("study.import-state")}
+          icon={<Upload size={13} />}
+          label="Import"
+          onRun={onImport}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.export-state"
+          disabledReason={commandDisabledReason("study.export-state")}
+          icon={<Download size={13} />}
+          label="Export"
+          onRun={runCommand}
+          variant="ghost"
+        />
+        <StudyCommandButton
+          commandId="study.discard-paused-state"
+          disabledReason={commandDisabledReason("study.discard-paused-state")}
+          icon={<Scissors size={13} />}
+          label="Discard"
+          onRun={runCommand}
+          variant="danger"
+        />
+      </div>
+    </InspectorSection>
+  );
+}
+
+function StudyHistorySection({
+  energyStep,
+  returnedRows,
+  totalEnergy,
+  totalRows,
+}: {
+  energyStep: ReactNode;
+  returnedRows: ReactNode;
+  totalEnergy: ReactNode;
+  totalRows: ReactNode;
+}) {
+  return (
+    <InspectorSection
+      value="history"
+      title="Run History"
+      badge={`${returnedRows}`}
+    >
+      <FieldRow label="Energy step" value={energyStep} />
+      <FieldRow label="Total energy" value={totalEnergy} unit="J" />
+      <FieldRow label="Returned rows" value={returnedRows} />
+      <FieldRow label="Total rows" value={totalRows} />
+    </InspectorSection>
   );
 }
 

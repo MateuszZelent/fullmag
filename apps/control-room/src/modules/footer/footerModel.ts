@@ -46,7 +46,7 @@ export function sortTransportEntries(
   entries: readonly RequestDiagnosticEntry[],
   sort: FooterLogSort,
 ): RequestDiagnosticEntry[] {
-  return [...entries].sort((left, right) => {
+  return entries.toSorted((left, right) => {
     const order =
       compareTransportEntries(left, right, sort.key) ||
       compareString(left.id, right.id);

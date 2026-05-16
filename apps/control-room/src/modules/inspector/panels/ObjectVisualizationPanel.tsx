@@ -455,8 +455,8 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         patchValue,
       ),
     });
-    // Keep the patch locally so forward-compatible fields (vectorBudget,
-    // vectorLengthScale) survive even if the backend drops them.
+    // Keep the patch locally for immediate inspector/ribbon feedback until the
+    // revision-driven resource refetch lands.
     visualization.patchTarget(target, patchValue);
     setFeedback(null);
   }
@@ -538,24 +538,11 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     void patch({ wireframeOpacityPercent: value });
   }
 
-  if (!target || !settings) {
-    return (
-      <div className="fm-inspector-panel">
-        <InspectorSection title="Visualization">
-          <FieldRow label="Target" value="No visualization target" />
-        </InspectorSection>
-      </div>
-    );
-  }
-
-  const displaySettings = renderResolution?.finalSettings ?? effectiveSettings ?? settings;
-  const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
-
-  // Build per-part arrow visibility list from manifest
-  const vectorMeshParts = React.useMemo(() => {
+  // Build per-part arrow visibility list from manifest.
+  const vectorMeshParts = (() => {
     const parts = manifest.data?.mesh_parts;
     if (!parts || parts.length === 0) return undefined;
-    // Filter to magnetic parts only (exclude airbox)
+    // Filter to magnetic parts only (exclude airbox).
     const magneticParts = parts.filter((p) => p.role !== "airbox");
     if (magneticParts.length <= 1) return undefined;
     return magneticParts.map((p) => {
@@ -574,7 +561,20 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         vectorsVisible: partSettings.vectorsVisible,
       };
     });
-  }, [manifest.data?.mesh_parts, snapshot, visualizationState.data]);
+  })();
+
+  if (!target || !settings) {
+    return (
+      <div className="fm-inspector-panel">
+        <InspectorSection title="Visualization">
+          <FieldRow label="Target" value="No visualization target" />
+        </InspectorSection>
+      </div>
+    );
+  }
+
+  const displaySettings = renderResolution?.finalSettings ?? effectiveSettings ?? settings;
+  const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
 
   function onTogglePartVectors(partId: string, visible: boolean) {
     const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);

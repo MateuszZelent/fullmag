@@ -403,6 +403,95 @@ mod all_in_gpu_fem_transfer_audit_tests {
     }
 
     #[test]
+    fn solver_profile_ring_buffer_keeps_latest_samples_and_phase_math() {
+        let mut profile = crate::SolverProfileState::new(crate::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            max_samples: 2,
+            emit_engine_log: false,
+            persist_artifact: false,
+        });
+
+        for step in 1..=3 {
+            profile.record_step(&StepStats {
+                step,
+                wall_time_ns: 1_000,
+                exchange_wall_time_ns: 100,
+                demag_wall_time_ns: 250,
+                demag_assemble_wall_time_ns: 30,
+                demag_solver_setup_wall_time_ns: 40,
+                demag_solver_apply_wall_time_ns: 120,
+                demag_recover_wall_time_ns: 20,
+                demag_energy_wall_time_ns: 10,
+                extra_energy_wall_time_ns: 50,
+                snapshot_wall_time_ns: 25,
+                rhs_evals: 3,
+                rejected_attempts: 1,
+                demag_solves: 2,
+                poisson_iterations: 9,
+                poisson_final_residual: 1.5e-8,
+                requested_fem_omp_threads: 8,
+                effective_fem_omp_threads: 4,
+                ..StepStats::default()
+            });
+        }
+
+        let snapshot = profile.snapshot();
+        assert_eq!(snapshot.revision, 3);
+        assert_eq!(snapshot.latest_samples.len(), 2);
+        assert_eq!(snapshot.latest_samples[0].step, 2);
+        assert_eq!(snapshot.latest_samples[1].step, 3);
+        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 425);
+        assert_eq!(snapshot.latest_samples[1].missing_ns, 575);
+        assert_eq!(
+            snapshot.latest_samples[1].threading.effective_omp_threads,
+            4
+        );
+        assert_eq!(snapshot.aggregates.sample_count, 2);
+    }
+
+    #[test]
+    fn disabled_solver_profile_does_not_allocate_samples() {
+        let mut profile = crate::SolverProfileState::default();
+
+        profile.record_step(&StepStats {
+            step: 1,
+            wall_time_ns: 1_000,
+            exchange_wall_time_ns: 100,
+            ..StepStats::default()
+        });
+
+        let snapshot = profile.snapshot();
+        assert!(!snapshot.config.enabled);
+        assert_eq!(snapshot.revision, 0);
+        assert!(snapshot.latest_samples.is_empty());
+    }
+
+    #[test]
+    fn solver_profile_demag_total_covers_subphase_sum() {
+        let sample = crate::SolverProfileStepSample::from_step_stats(&StepStats {
+            step: 1,
+            wall_time_ns: 1_000,
+            demag_wall_time_ns: 10,
+            demag_assemble_wall_time_ns: 30,
+            demag_solver_setup_wall_time_ns: 40,
+            demag_solver_apply_wall_time_ns: 50,
+            demag_recover_wall_time_ns: 60,
+            demag_energy_wall_time_ns: 70,
+            ..StepStats::default()
+        });
+        let demag_total = sample
+            .phases
+            .iter()
+            .find(|phase| phase.id == "demag_total")
+            .expect("missing demag_total phase")
+            .wall_time_ns;
+
+        assert_eq!(sample.demag_subphase_sum_ns, 250);
+        assert_eq!(demag_total, sample.demag_subphase_sum_ns);
+    }
+
+    #[test]
     fn execution_provenance_carries_truthful_fem_gpu_runtime_contract() {
         let provenance = ExecutionProvenance {
             fem_execution_mode: Some("hybrid_legacy_sparse".to_string()),
@@ -994,7 +1083,7 @@ pub struct ResolvedFallback {
     pub message: String,
 }
 
-/// FEM Poisson demag solver provenance.
+/// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
     pub linear_solver: String,

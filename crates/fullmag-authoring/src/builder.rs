@@ -188,6 +188,8 @@ pub struct ScriptBuilderUniverseState {
     pub airbox_hmin: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_growth_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_grading: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -517,6 +519,24 @@ pub struct ScriptBuilderPerGeometryMeshState {
     pub interface_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_thickness: Option<String>,
+    #[serde(
+        default,
+        rename = "edge_maximum_element_size",
+        alias = "edge_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub edge_hmax: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_thickness: Option<String>,
+    #[serde(
+        default,
+        rename = "corner_maximum_element_size",
+        alias = "corner_hmax",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub corner_hmax: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_extent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_distance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -569,6 +589,10 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             bulk_hmin: None,
             interface_hmax: None,
             interface_thickness: None,
+            edge_hmax: None,
+            edge_thickness: None,
+            corner_hmax: None,
+            corner_extent: None,
             transition_distance: None,
             transition_growth: None,
             size_fields: Vec::new(),
@@ -649,6 +673,10 @@ pub struct ScriptBuilderState {
     pub cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default = "default_true")]
+    pub exchange_enabled: bool,
+    #[serde(default = "default_true")]
+    pub demag_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

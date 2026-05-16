@@ -130,8 +130,11 @@ function nearVector(
   left: [number, number, number],
   right: [number, number, number],
 ): boolean {
-  return left.every(
-    (value, index) => Math.abs(value - right[index]) <= CAMERA_STATE_EPSILON,
+  return (
+    left.length === right.length &&
+    left.every(
+      (value, index) => Math.abs(value - right[index]) <= CAMERA_STATE_EPSILON,
+    )
   );
 }
 
@@ -212,9 +215,14 @@ export function CameraController({
   const autoFittedBoundsRef = useRef<string | null>(null);
   const lastAutoFitCameraStateRef = useRef<Viewport3DCameraState | null>(null);
   const appliedCameraStateRef = useRef<Viewport3DCameraState | null>(null);
+  const onCameraChangeRef = useRef(onCameraChange);
   // Store cameraState in a ref so the fit/reset effect doesn't re-fire
   // when OrbitControls updates the store (which it does on every drag-end).
   const cameraStateRef = useRef(cameraState);
+
+  useEffect(() => {
+    onCameraChangeRef.current = onCameraChange;
+  }, [onCameraChange]);
 
   useEffect(() => {
     cameraStateRef.current = cameraState;
@@ -259,7 +267,7 @@ export function CameraController({
     lastAutoFitCameraStateRef.current = nextCamera;
     viewport3dStore.setCamera(nextCamera);
     void Promise.resolve(
-      onCameraChange(nextCamera),
+      onCameraChangeRef.current(nextCamera),
     ).catch(() => undefined);
     invalidate();
     tracker.recordDirtyFrame("camera-fit");
@@ -268,7 +276,6 @@ export function CameraController({
     camera,
     fitRevision,
     invalidate,
-    onCameraChange,
     resetCameraRevision,
     tracker,
   ]);

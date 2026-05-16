@@ -292,7 +292,7 @@ function sameVector(
   left: [number, number, number],
   right: [number, number, number],
 ): boolean {
-  return left.every((value, index) => value === right[index]);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export function sameViewport3DCameraState(

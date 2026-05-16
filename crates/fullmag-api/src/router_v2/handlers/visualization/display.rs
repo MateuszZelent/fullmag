@@ -1,11 +1,11 @@
 //! Display mutation endpoints.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;
@@ -430,6 +430,23 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             }
         }
     }
+    if let Some(style) = &update.vector_style {
+        if matches!(style.alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
+            return Err(ApiError::bad_request(
+                "vector_style.alpha must be between 0 and 1",
+            ));
+        }
+        if matches!(style.length_scale, Some(value) if !(0.1..=5.0).contains(&value)) {
+            return Err(ApiError::bad_request(
+                "vector_style.length_scale must be between 0.1 and 5",
+            ));
+        }
+        if matches!(style.thickness, Some(value) if value <= 0.0) {
+            return Err(ApiError::bad_request(
+                "vector_style.thickness must be greater than zero",
+            ));
+        }
+    }
     if let Some(overrides) = &update.overrides {
         for (index, target_override) in overrides.iter().enumerate() {
             if target_override.scope_id.trim().is_empty() {
@@ -470,6 +487,19 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
                 if matches!(style.vector_alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
                     return Err(ApiError::bad_request(format!(
                         "overrides[{index}].style.vector_alpha must be between 0 and 1"
+                    )));
+                }
+                if matches!(style.vector_budget, Some(0)) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_budget must be greater than zero"
+                    )));
+                }
+                if matches!(
+                    style.vector_length_scale,
+                    Some(value) if !(0.1..=5.0).contains(&value)
+                ) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_length_scale must be between 0.1 and 5"
                     )));
                 }
                 if matches!(style.vector_thickness, Some(value) if value <= 0.0) {
@@ -1550,7 +1580,7 @@ fn build_visualization_target_registry(
             "airbox",
             "Airbox",
             VisualizationTargetSource::Airbox,
-            airbox_target_settings(layers),
+            airbox_target_settings(layers, vector_style),
             overrides,
         ),
         objects: live_snapshot
@@ -1635,7 +1665,9 @@ fn object_target_settings(
         surface_mono_color: vector_style.mono_color.clone(),
         surface_visible: layers.surface.visible,
         vector_alpha: vector_style.alpha,
+        vector_budget: layers.vectors.density,
         vector_color_mode: vector_style.color_mode,
+        vector_length_scale: vector_style.length_scale,
         vector_mono_color: vector_style.mono_color.clone(),
         vector_thickness: vector_style.thickness,
         vectors_visible: layers.vectors.visible,
@@ -1647,7 +1679,10 @@ fn object_target_settings(
     settings
 }
 
-fn airbox_target_settings(layers: &VisualizationLayerState) -> VisualizationResolvedTargetSettings {
+fn airbox_target_settings(
+    layers: &VisualizationLayerState,
+    vector_style: &VectorStyleVisualizationState,
+) -> VisualizationResolvedTargetSettings {
     let mut settings = VisualizationResolvedTargetSettings {
         visible: layers.airbox.visible,
         bounds_visible: layers.airbox.bounds.visible,
@@ -1659,7 +1694,9 @@ fn airbox_target_settings(layers: &VisualizationLayerState) -> VisualizationReso
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
         surface_visible: layers.airbox.surface.visible,
         vector_alpha: 1.0,
+        vector_budget: layers.airbox.vectors.density,
         vector_color_mode: VectorColorMode::Orientation,
+        vector_length_scale: vector_style.length_scale,
         vector_mono_color: "var(--fm-accent)".to_string(),
         vector_thickness: 1.0,
         vectors_visible: layers.airbox.vectors.visible,
@@ -1735,6 +1772,12 @@ fn apply_visualization_target_override(
         }
         if let Some(vector_alpha) = style.vector_alpha {
             settings.vector_alpha = vector_alpha;
+        }
+        if let Some(vector_budget) = style.vector_budget {
+            settings.vector_budget = vector_budget;
+        }
+        if let Some(vector_length_scale) = style.vector_length_scale {
+            settings.vector_length_scale = vector_length_scale;
         }
         if let Some(vector_thickness) = style.vector_thickness {
             settings.vector_thickness = vector_thickness;

@@ -63,6 +63,18 @@ pub struct MeshSolverMeshResource {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct MeshBuildPipelinePhaseResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshBuildDiagnosticsResource {
     /// Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only.
     #[schema(value_type = Object, nullable)]
@@ -77,7 +89,7 @@ pub struct MeshBuildDiagnosticsResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_build_summary: Option<Value>,
     /// Detailed build pipeline state for diagnostics and build panels.
-    #[schema(value_type = Object, nullable)]
+    #[schema(value_type = [MeshBuildPipelinePhaseResource], nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_pipeline_status: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -604,7 +616,7 @@ pub struct MeshActiveBuildResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_build: Option<Value>,
     /// Build/pipeline state for build panels.
-    #[schema(value_type = Object, nullable)]
+    #[schema(value_type = [MeshBuildPipelinePhaseResource], nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_pipeline_status: Option<Value>,
     /// Resolved target for the current build. Summary-level copies are transitional dashboard projections.
