@@ -68,6 +68,7 @@ typedef enum {
 typedef enum {
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN     = 2,
+    FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER  = 3,
 } fullmag_fem_demag_realization;
 
 typedef enum {

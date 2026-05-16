@@ -118,19 +118,20 @@ pub struct SolverProfileStepSample {
 impl SolverProfileStepSample {
     pub fn from_step_stats(stats: &StepStats) -> Self {
         let total_ns = stats.wall_time_ns;
-        let phase_sum_ns = stats
-            .exchange_wall_time_ns
-            .saturating_add(stats.demag_wall_time_ns)
-            .saturating_add(stats.extra_energy_wall_time_ns)
-            .saturating_add(stats.snapshot_wall_time_ns)
-            .saturating_add(stats.preview_wall_time_ns)
-            .saturating_add(stats.cached_preview_wall_time_ns);
         let demag_subphase_sum_ns = stats
             .demag_assemble_wall_time_ns
             .saturating_add(stats.demag_solver_setup_wall_time_ns)
             .saturating_add(stats.demag_solver_apply_wall_time_ns)
             .saturating_add(stats.demag_recover_wall_time_ns)
             .saturating_add(stats.demag_energy_wall_time_ns);
+        let demag_total_ns = stats.demag_wall_time_ns.max(demag_subphase_sum_ns);
+        let phase_sum_ns = stats
+            .exchange_wall_time_ns
+            .saturating_add(demag_total_ns)
+            .saturating_add(stats.extra_energy_wall_time_ns)
+            .saturating_add(stats.snapshot_wall_time_ns)
+            .saturating_add(stats.preview_wall_time_ns)
+            .saturating_add(stats.cached_preview_wall_time_ns);
 
         Self {
             step: stats.step,
@@ -141,10 +142,25 @@ impl SolverProfileStepSample {
             missing_ns: total_ns.saturating_sub(phase_sum_ns),
             phases: vec![
                 phase("rhs_total", "RHS total", stats.rhs_wall_time_ns, total_ns),
-                phase("exchange", "Exchange", stats.exchange_wall_time_ns, total_ns),
-                phase("demag_total", "Demag total", stats.demag_wall_time_ns, total_ns),
-                phase("local_terms", "Local terms", stats.extra_energy_wall_time_ns, total_ns),
-                phase("snapshot", "Snapshot", stats.snapshot_wall_time_ns, total_ns),
+                phase(
+                    "exchange",
+                    "Exchange",
+                    stats.exchange_wall_time_ns,
+                    total_ns,
+                ),
+                phase("demag_total", "Demag total", demag_total_ns, total_ns),
+                phase(
+                    "local_terms",
+                    "Local terms",
+                    stats.extra_energy_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "snapshot",
+                    "Snapshot",
+                    stats.snapshot_wall_time_ns,
+                    total_ns,
+                ),
                 phase("preview", "Preview", stats.preview_wall_time_ns, total_ns),
                 phase(
                     "cached_preview",
@@ -152,7 +168,12 @@ impl SolverProfileStepSample {
                     stats.cached_preview_wall_time_ns,
                     total_ns,
                 ),
-                phase("unattributed", "Unattributed", total_ns.saturating_sub(phase_sum_ns), total_ns),
+                phase(
+                    "unattributed",
+                    "Unattributed",
+                    total_ns.saturating_sub(phase_sum_ns),
+                    total_ns,
+                ),
             ],
             demag_subphase_sum_ns,
             demag_subphases: vec![
@@ -288,7 +309,11 @@ impl SolverProfileState {
 
     pub fn add_artifact_ref(&mut self, artifact_ref: impl Into<String>) {
         let artifact_ref = artifact_ref.into();
-        if !self.artifact_refs.iter().any(|existing| existing == &artifact_ref) {
+        if !self
+            .artifact_refs
+            .iter()
+            .any(|existing| existing == &artifact_ref)
+        {
             self.artifact_refs.push(artifact_ref);
             self.revision = self.revision.wrapping_add(1);
         }
@@ -298,7 +323,12 @@ impl SolverProfileState {
         let latest_samples: Vec<_> = self.samples.iter().cloned().collect();
         SolverProfileSnapshot {
             revision: self.revision,
-            state: if self.config.enabled { "active" } else { "disabled" }.to_string(),
+            state: if self.config.enabled {
+                "active"
+            } else {
+                "disabled"
+            }
+            .to_string(),
             config: self.config.clone(),
             threading: latest_samples.last().map(|sample| sample.threading.clone()),
             aggregates: aggregate_samples(&latest_samples),
@@ -341,12 +371,7 @@ fn aggregate_samples(samples: &[SolverProfileStepSample]) -> SolverProfileAggreg
     }
 }
 
-fn phase(
-    id: &str,
-    label: &str,
-    wall_time_ns: u64,
-    total_ns: u64,
-) -> SolverProfilePhaseSample {
+fn phase(id: &str, label: &str, wall_time_ns: u64, total_ns: u64) -> SolverProfilePhaseSample {
     SolverProfilePhaseSample {
         id: id.to_string(),
         label: label.to_string(),

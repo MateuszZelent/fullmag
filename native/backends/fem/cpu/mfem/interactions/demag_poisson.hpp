@@ -1,5 +1,7 @@
 #pragma once
 
+#include "fullmag_fem.h"
+
 #include <string>
 #include <cstdint>
 #include <vector>
@@ -14,6 +16,29 @@ class Vector;
 namespace fullmag::fem {
 
 struct Context;
+
+struct DemagPoissonPhaseTimings {
+    uint64_t wall_time_ns = 0;
+    uint64_t assemble_wall_time_ns = 0;
+    uint64_t solve_wall_time_ns = 0;
+    uint64_t solver_setup_wall_time_ns = 0;
+    uint64_t solver_apply_wall_time_ns = 0;
+    bool solver_setup_reused = false;
+    uint64_t recover_wall_time_ns = 0;
+    uint64_t energy_wall_time_ns = 0;
+};
+
+struct DemagPoissonCallProfile {
+    uint64_t step = 0;
+    uint64_t call = 0;
+    double dt_seconds = 0.0;
+    uint64_t assemble_wall_time_ns = 0;
+    uint64_t solve_wall_time_ns = 0;
+    uint64_t recover_wall_time_ns = 0;
+    uint64_t energy_wall_time_ns = 0;
+    int linear_iterations = 0;
+    double linear_residual = 0.0;
+};
 
 /*
  * Compute the native FEM Poisson-demag energy from an already recovered field.
@@ -31,6 +56,143 @@ double demag_poisson_energy_from_field(
     const std::vector<double> &m_xyz,
     const std::vector<double> &h_demag_xyz,
     int energy_threads = 1);
+
+/*
+ * Decide whether the Poisson-demag field must be recomputed for the current
+ * time state.
+ *
+ * Without an explicit refresh interval, with an invalid cache, or with a
+ * non-positive interval, the safe answer is a fresh solve. Otherwise the cached
+ * field is reusable until the configured interval has elapsed.
+ */
+bool demag_poisson_should_refresh_field(const Context &ctx);
+
+/*
+ * Store a freshly solved Poisson-demag field in the frozen-field cache.
+ *
+ * The cache is populated only when an explicit demag refresh interval is active.
+ * Both the solver field and full-domain visualization field are captured at the
+ * same time so subsequent frozen steps reuse a consistent potential snapshot.
+ */
+void demag_poisson_store_refreshed_field_cache(
+    Context &ctx,
+    const std::vector<double> &h_demag_xyz);
+
+/*
+ * Try to load the frozen Poisson-demag field into the caller's output buffer.
+ *
+ * A load succeeds only for a valid cache whose field shape matches the existing
+ * output buffer. When the cached full-domain visualization field has a matching
+ * shape it is restored as well; otherwise the visualization field is cleared.
+ */
+bool demag_poisson_try_load_cached_field(
+    Context &ctx,
+    std::vector<double> &h_demag_xyz);
+
+/*
+ * Compute demag energy for a cached Poisson-demag field.
+ *
+ * Frozen-field updates reuse both H_demag and, for Robin airbox realizations,
+ * the cached boundary energy term associated with the frozen potential.
+ */
+double demag_poisson_cached_energy_from_field(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &h_demag_xyz,
+    int energy_threads = 1);
+
+/*
+ * Validate whether the native Poisson-demag operator can run a fresh solve.
+ *
+ * Only airbox Dirichlet and airbox Robin realizations are executable in this
+ * module. The caller must also have initialized the Poisson operator workspace.
+ */
+bool demag_poisson_operator_ready_for_fresh_solve(
+    int demag_realization,
+    bool poisson_ready,
+    std::string &error);
+
+/*
+ * Fill demag-specific solver statistics for the current step snapshot.
+ *
+ * Builds without the MFEM demag stack always report zero demag solve stats.
+ * MFEM builds report the current demag solve counter, non-negative linear
+ * iteration count, and latest residual for airbox Poisson and FEM/BEM demag.
+ */
+void fill_demag_poisson_solver_stats(
+    const Context &ctx,
+    fullmag_fem_step_stats &stats);
+
+/*
+ * Return stable labels for Poisson-demag solver telemetry.
+ *
+ * These names are used in runtime logs and reports. Keeping them in the demag
+ * module prevents `mfem_bridge.cpp` from owning demag-specific vocabulary.
+ */
+const char *demag_poisson_linear_solver_name(fullmag_fem_linear_solver solver);
+const char *demag_poisson_preconditioner_name(fullmag_fem_preconditioner preconditioner);
+
+/*
+ * Accumulate Poisson-demag phase timings for the current step.
+ *
+ * The bridge owns the surrounding step timeline, but demag-specific timing
+ * fields and stat names stay in this module.
+ */
+void accumulate_demag_poisson_phase_timings(
+    DemagPoissonPhaseTimings *timings,
+    uint64_t assemble_wall_time_ns,
+    uint64_t solve_wall_time_ns,
+    uint64_t solver_setup_wall_time_ns,
+    uint64_t solver_apply_wall_time_ns,
+    bool solver_setup_reused,
+    uint64_t recover_wall_time_ns,
+    uint64_t energy_wall_time_ns);
+
+void fill_demag_poisson_phase_stats(
+    const DemagPoissonPhaseTimings &timings,
+    fullmag_fem_step_stats &stats);
+
+/*
+ * Format and emit one Poisson-demag call profile line.
+ *
+ * The log format is a runtime contract used during demag hot-path profiling.
+ * `log_demag_poisson_call_profile(...)` emits only when
+ * FULLMAG_FEM_STEP_PROFILE is enabled.
+ */
+std::string demag_poisson_call_profile_line(const DemagPoissonCallProfile &profile);
+
+void log_demag_poisson_call_profile(
+    const Context &ctx,
+    uint64_t demag_call_index,
+    uint64_t assemble_wall_time_ns,
+    uint64_t solve_wall_time_ns,
+    uint64_t recover_wall_time_ns,
+    uint64_t energy_wall_time_ns);
+
+/*
+ * Finalize a recovered Poisson-demag field before it leaves the demag module.
+ *
+ * Periodic demag copies representative-node values across each periodic class.
+ * When a full-domain visualization demag buffer is active, it is synchronized to
+ * the finalized solver field for the current PBC path.
+ */
+void finalize_demag_poisson_recovered_field(
+    Context &ctx,
+    std::vector<double> &h_demag_xyz);
+
+/*
+ * Build the visualization H_eff buffer from the solver H_eff plus the
+ * full-domain Poisson-demag visualization field.
+ *
+ * The LLG field is zeroed on nonmagnetic nodes, while the visualization field
+ * should preserve the recovered full-domain stray field. If the visual demag
+ * buffer is unavailable or has the wrong size, the visual H_eff buffer is
+ * cleared.
+ */
+void update_demag_poisson_visual_effective_field(
+    Context &ctx,
+    const std::vector<double> &h_eff_xyz,
+    const std::vector<double> &h_demag_xyz);
 
 #if FULLMAG_HAS_MFEM_STACK
 /*

@@ -51,6 +51,7 @@ class Demag:
 
         Demag(model="airbox")                       # default airbox + Robin
         Demag(model="airbox", variant="dirichlet")  # explicit Dirichlet
+        Demag(model="fredkin_koehler")              # FEM/BEM, body-only mesh
         Demag(model="bem")                          # future: BEM
 
     Legacy API (still works, deprecated)::

@@ -71,6 +71,8 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "backend": base_problem.runtime.backend_target.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
+        "exchange_enabled": _problem_has_exchange(base_problem),
+        "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "solver": {
@@ -212,6 +214,11 @@ def render_loaded_problem_as_script(
     if spin_torque_lines:
         lines.append("")
         lines.extend(spin_torque_lines)
+
+    exchange_lines = _render_exchange(base_problem, overrides=overrides, surface=surface)
+    if exchange_lines:
+        lines.append("")
+        lines.extend(exchange_lines)
 
     demag_lines = _render_demag(base_problem, overrides=overrides, surface=surface)
     if demag_lines:
@@ -791,7 +798,7 @@ def _normalize_geometry_interaction_entry(
     if kind not in _GEOMETRY_INTERACTION_ORDER:
         return None
     if kind in {"exchange", "demag"}:
-        return {"kind": kind, "enabled": True, "params": None}
+        return {"kind": kind, "enabled": bool(raw.get("enabled", True)), "params": None}
     params = raw.get("params") if isinstance(raw.get("params"), dict) else {}  # type: ignore[assignment]
     if kind == "interfacial_dmi":
         dind = _number_or_none(params.get("dind"))
@@ -820,7 +827,8 @@ def _ensure_geometry_physics_stack(raw: object, *, material_dind: object) -> lis
             if normalized is not None:
                 by_kind[str(normalized["kind"])] = normalized
     for required in ("exchange", "demag"):
-        by_kind[required] = {"kind": required, "enabled": True, "params": None}
+        if required not in by_kind:
+            by_kind[required] = {"kind": required, "enabled": True, "params": None}
     if material_dind is not None and "interfacial_dmi" not in by_kind:
         by_kind["interfacial_dmi"] = _normalize_geometry_interaction_entry(
             {"kind": "interfacial_dmi", "enabled": True, "params": None},
@@ -2642,8 +2650,8 @@ def _export_geometry_entry(
     if dmi_val is not None:
         material["Dind"] = dmi_val
     physics_stack: list[dict[str, object]] = [
-        {"kind": "exchange", "enabled": True, "params": None},
-        {"kind": "demag", "enabled": True, "params": None},
+        {"kind": "exchange", "enabled": _problem_has_exchange(problem), "params": None},
+        {"kind": "demag", "enabled": _problem_has_demag(problem), "params": None},
     ]
     if dmi_val is not None:
         physics_stack.append(
@@ -3025,6 +3033,14 @@ def _problem_demag_realization(problem: Problem) -> str | None:
     return None
 
 
+def _problem_has_exchange(problem: Problem) -> bool:
+    return any(isinstance(term, Exchange) for term in problem.energy)
+
+
+def _problem_has_demag(problem: Problem) -> bool:
+    return any(isinstance(term, Demag) for term in problem.energy)
+
+
 def _problem_external_field(problem: Problem) -> list[float] | None:
     for term in problem.energy:
         if isinstance(term, Zeeman):
@@ -3041,9 +3057,28 @@ def _override_external_field(value: object) -> tuple[float, float, float] | None
     return None
 
 
+def _override_bool(value: object, fallback: bool) -> bool:
+    return value if isinstance(value, bool) else fallback
+
+
 def _export_demag_realization(problem: Problem) -> str | None:
     realization = _problem_demag_realization(problem)
     return str(realization) if isinstance(realization, str) and realization.strip() else None
+
+
+def _render_exchange(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+    surface: str,
+) -> list[str]:
+    enabled = _override_bool(overrides.get("exchange_enabled"), _problem_has_exchange(problem))
+    if enabled:
+        return []
+    return [
+        "# Effective-field terms",
+        f"{_surface_call(surface, 'exchange')}(enabled=False)",
+    ]
 
 
 def _render_demag(
@@ -3052,12 +3087,22 @@ def _render_demag(
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
+    enabled = _override_bool(overrides.get("demag_enabled"), _problem_has_demag(problem))
     realization = overrides.get("demag_realization", _problem_demag_realization(problem))
-    if not isinstance(realization, str) or realization.strip() in {"", "auto"}:
+    explicit_realization = isinstance(realization, str) and realization.strip() not in {
+        "",
+        "auto",
+    }
+    if enabled and not explicit_realization:
         return []
+    kwargs: list[str] = []
+    if not enabled:
+        kwargs.append("enabled=False")
+    if explicit_realization:
+        kwargs.append(f"realization={_py_repr(realization)}")
     return [
         "# Outer boundary / demag",
-        f"{_surface_call(surface, 'demag')}(realization={_py_repr(realization)})",
+        f"{_surface_call(surface, 'demag')}({', '.join(kwargs)})",
     ]
 
 
@@ -3578,9 +3623,9 @@ def _validate_energy_terms(problem: Problem) -> None:
         raise ValueError(
             f"canonical flat-script rewrite does not yet support energy term {type(term).__name__}"
         )
-    if exchange_count != 1 or demag_count != 1:
+    if exchange_count > 1 or demag_count > 1:
         raise ValueError(
-            "canonical flat-script rewrite currently expects exactly one exchange term and one demag term"
+            "canonical flat-script rewrite currently supports at most one exchange term and one demag term"
         )
     if zeeman_count > 1 or dmi_count > 1:
         raise ValueError(

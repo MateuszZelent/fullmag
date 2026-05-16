@@ -32,10 +32,11 @@ describe("PhysicsInteractionPanelModel", () => {
     expect(interactionLabel("oersted_field")).toBe("Regional field source");
   });
 
-  it("classifies writable paths without treating demag as object-local", () => {
-    expect(isWritableObjectInteraction("exchange")).toBe(true);
+  it("classifies H_eff term toggles as study-level switches", () => {
+    expect(isWritableObjectInteraction("exchange")).toBe(false);
     expect(isWritableObjectInteraction("demag")).toBe(false);
     expect(isWritableObjectInteraction("zeeman")).toBe(false);
+    expect(isWritableStudyInteraction("exchange")).toBe(true);
     expect(isWritableStudyInteraction("demag")).toBe(true);
     expect(isWritableStudyInteraction("zeeman")).toBe(true);
   });
@@ -65,18 +66,34 @@ describe("PhysicsInteractionPanelModel", () => {
     });
   });
 
-  it("creates global study drafts for demag and uniform Zeeman", () => {
+  it("creates global study drafts for exchange, demag, and uniform Zeeman", () => {
     const scene = {
       revision: 4,
       study: {
+        exchange_enabled: false,
+        demag_enabled: false,
         demag_realization: "poisson_robin",
         external_field: [0.01, 0, -0.002],
       },
     } as unknown as SceneResource;
 
+    expect(draftFromStudyScene("exchange", scene)).toMatchObject({
+      enabled: false,
+      id: "exchange",
+      present: true,
+    });
+    expect(buildInteractionApplyPatch(draftFromStudyScene("exchange", scene))).toEqual({
+      patch: { study: { exchange_enabled: false } },
+      storage: "study",
+    });
     expect(draftFromStudyScene("demag", scene)).toMatchObject({
+      enabled: false,
       id: "demag",
       values: { method: "poisson_robin" },
+    });
+    expect(buildInteractionApplyPatch(draftFromStudyScene("demag", scene))).toEqual({
+      patch: { study: { demag_enabled: false, demag_realization: "poisson_robin" } },
+      storage: "study",
     });
     const zeeman = draftFromStudyScene("zeeman", scene);
 

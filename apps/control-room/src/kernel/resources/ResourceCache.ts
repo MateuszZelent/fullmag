@@ -126,9 +126,13 @@ export class ResourceCache<TData> {
 
   private evictUntilWithinBudget(): void {
     while (this.byteLength > this.options.maxBytes) {
-      const oldestKey = Array.from(this.entries.keys()).find(
-        (key) => !this.retained.has(key),
-      );
+      let oldestKey: string | undefined;
+      for (const key of this.entries.keys()) {
+        if (!this.retained.has(key)) {
+          oldestKey = key;
+          break;
+        }
+      }
       if (oldestKey === undefined) return;
       this.delete(oldestKey);
     }

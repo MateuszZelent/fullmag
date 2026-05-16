@@ -208,6 +208,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - When FEM CPU and FEM GPU work are split between agents, keep this agent's changes to the FEM CPU path only and do not create GPU hot-loop or GPU-state artifacts.
 - Native FEM backend work must split by explicit subsystem/operator contracts before folder moves; do not add new cross-cutting state to `Context` or new physics to `mfem_bridge.cpp`.
 - Native FEM CPU and GPU implementations must share backend-neutral physics contracts; do not duplicate equations, signs, units, or observable semantics per device.
+- Any native FEM solver rebuild or refactor must preserve the opt-in solver profiler contract: `set_solver_profile`, `/v2/sessions/current/diagnostics/solver-profile`, bounded `SolverProfileState`, stable phase IDs, disabled-by-default behavior, and no profiler sample allocation/logging when disabled.
 
 ---
 

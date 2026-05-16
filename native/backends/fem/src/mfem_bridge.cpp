@@ -1,9 +1,15 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/anisotropy.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/magnetoelastic.hpp"
+#include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/interactions/stt.hpp"
+#include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
-#include "dmi_weak_residual.hpp"
 #include "gpu_rk.hpp"
 #include "transfer_audit.hpp"
 
@@ -34,23 +40,6 @@
 #endif
 
 namespace fullmag::fem {
-
-// Declared outside the anonymous namespace so that context.cpp can forward-declare
-// and call this struct/function across translation units.
-struct PhaseTimings {
-    uint64_t exchange_wall_time_ns = 0;
-    uint64_t demag_wall_time_ns = 0;
-    uint64_t demag_assemble_wall_time_ns = 0;
-    uint64_t demag_solve_wall_time_ns = 0;
-    uint64_t demag_solver_setup_wall_time_ns = 0;
-    uint64_t demag_solver_apply_wall_time_ns = 0;
-    bool demag_solver_setup_reused = false;
-    uint64_t demag_recover_wall_time_ns = 0;
-    uint64_t demag_energy_wall_time_ns = 0;
-    uint64_t rhs_wall_time_ns = 0;
-    uint64_t extra_energy_wall_time_ns = 0;
-    uint64_t snapshot_wall_time_ns = 0;
-};
 
 namespace {
 
@@ -113,39 +102,10 @@ void apply_phase_timings(
     const PhaseTimings &timings)
 {
     stats.exchange_wall_time_ns = timings.exchange_wall_time_ns;
-    stats.demag_wall_time_ns = timings.demag_wall_time_ns;
-    stats.demag_assemble_wall_time_ns = timings.demag_assemble_wall_time_ns;
-    stats.demag_solve_wall_time_ns = timings.demag_solve_wall_time_ns;
-    stats.demag_solver_setup_wall_time_ns = timings.demag_solver_setup_wall_time_ns;
-    stats.demag_solver_apply_wall_time_ns = timings.demag_solver_apply_wall_time_ns;
-    stats.demag_solver_setup_reused = timings.demag_solver_setup_reused ? 1 : 0;
-    stats.demag_recover_wall_time_ns = timings.demag_recover_wall_time_ns;
-    stats.demag_energy_wall_time_ns = timings.demag_energy_wall_time_ns;
+    fill_demag_poisson_phase_stats(timings.demag, stats);
     stats.rhs_wall_time_ns = timings.rhs_wall_time_ns;
     stats.extra_energy_wall_time_ns = timings.extra_energy_wall_time_ns;
     stats.snapshot_wall_time_ns = timings.snapshot_wall_time_ns;
-}
-
-void add_demag_phase_timings(
-    PhaseTimings *timings,
-    uint64_t assemble_wall_time_ns,
-    uint64_t solve_wall_time_ns,
-    uint64_t solver_setup_wall_time_ns,
-    uint64_t solver_apply_wall_time_ns,
-    bool solver_setup_reused,
-    uint64_t recover_wall_time_ns,
-    uint64_t energy_wall_time_ns)
-{
-    if (timings == nullptr) {
-        return;
-    }
-    timings->demag_assemble_wall_time_ns += assemble_wall_time_ns;
-    timings->demag_solve_wall_time_ns += solve_wall_time_ns;
-    timings->demag_solver_setup_wall_time_ns += solver_setup_wall_time_ns;
-    timings->demag_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
-    timings->demag_solver_setup_reused = timings->demag_solver_setup_reused || solver_setup_reused;
-    timings->demag_recover_wall_time_ns += recover_wall_time_ns;
-    timings->demag_energy_wall_time_ns += energy_wall_time_ns;
 }
 
 std::optional<int> selected_cuda_device_from_env() {
@@ -161,18 +121,6 @@ std::optional<int> selected_cuda_device_from_env() {
         return std::nullopt;
     }
     return static_cast<int>(parsed);
-}
-
-Vec3 add3(const Vec3 &a, const Vec3 &b) {
-    return {a[0] + b[0], a[1] + b[1], a[2] + b[2]};
-}
-
-Vec3 sub3(const Vec3 &a, const Vec3 &b) {
-    return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-}
-
-Vec3 scale3(const Vec3 &a, double s) {
-    return {a[0] * s, a[1] * s, a[2] * s};
 }
 
 } // namespace
@@ -191,65 +139,6 @@ bool env_flag_enabled(const char *name) {
            std::strcmp(raw, "ON") == 0 ||
            std::strcmp(raw, "yes") == 0 ||
            std::strcmp(raw, "YES") == 0;
-}
-
-bool detailed_fem_step_profile_enabled() {
-    return env_flag_enabled("FULLMAG_FEM_STEP_PROFILE");
-}
-
-const char *demag_linear_solver_name(fullmag_fem_linear_solver solver) {
-    switch (solver) {
-    case FULLMAG_FEM_LINEAR_SOLVER_CG:
-        return "CG";
-    case FULLMAG_FEM_LINEAR_SOLVER_GMRES:
-        return "GMRES";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-const char *demag_preconditioner_name(fullmag_fem_preconditioner preconditioner) {
-    switch (preconditioner) {
-    case FULLMAG_FEM_PRECONDITIONER_AMG:
-        return "AMG";
-    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
-        return "JACOBI";
-    case FULLMAG_FEM_PRECONDITIONER_NONE:
-        return "NONE";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-void log_demag_call_profile(
-    const Context &ctx,
-    uint64_t demag_call_index,
-    uint64_t assemble_wall_time_ns,
-    uint64_t solve_wall_time_ns,
-    uint64_t recover_wall_time_ns,
-    uint64_t energy_wall_time_ns)
-{
-    if (!detailed_fem_step_profile_enabled()) {
-        return;
-    }
-    const uint64_t total_wall_time_ns =
-        assemble_wall_time_ns +
-        solve_wall_time_ns +
-        recover_wall_time_ns +
-        energy_wall_time_ns;
-    std::fprintf(
-        stderr,
-        "[fullmag-fem] demag call: step=%llu call=%llu dt=%.3e assemble=%llums solve=%llums recover=%llums energy=%llums total=%llums lin_iters=%d residual=%.3e\n",
-        static_cast<unsigned long long>(ctx.step_count),
-        static_cast<unsigned long long>(demag_call_index),
-        ctx.current_dt,
-        static_cast<unsigned long long>(assemble_wall_time_ns / 1000000ull),
-        static_cast<unsigned long long>(solve_wall_time_ns / 1000000ull),
-        static_cast<unsigned long long>(recover_wall_time_ns / 1000000ull),
-        static_cast<unsigned long long>(energy_wall_time_ns / 1000000ull),
-        static_cast<unsigned long long>(total_wall_time_ns / 1000000ull),
-        ctx.poisson_last_iterations,
-        ctx.poisson_last_residual);
 }
 
 int openmp_max_threads() {
@@ -354,8 +243,8 @@ void log_cpu_runtime_selection(const Context &ctx) {
     std::fprintf(
         stderr,
         "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
-        demag_linear_solver_name(ctx.demag_solver.solver),
-        demag_preconditioner_name(ctx.demag_solver.preconditioner),
+        demag_poisson_linear_solver_name(ctx.demag_solver.solver),
+        demag_poisson_preconditioner_name(ctx.demag_solver.preconditioner),
         thread_mode,
         ctx.requested_omp_threads,
         ctx.effective_omp_threads,
@@ -380,15 +269,6 @@ Vec3 cross3(const Vec3 &a, const Vec3 &b) {
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
-    };
-}
-
-Vec3 node_coords(const Context &ctx, uint32_t node) {
-    const size_t base = static_cast<size_t>(node) * 3u;
-    return {
-        ctx.nodes_xyz[base + 0],
-        ctx.nodes_xyz[base + 1],
-        ctx.nodes_xyz[base + 2],
     };
 }
 
@@ -782,256 +662,6 @@ void llg_rhs_aos(
     }
 }
 
-double effective_magnetic_thickness_along_axis(const Context &ctx, const Vec3 &axis) {
-    double min_proj = std::numeric_limits<double>::infinity();
-    double max_proj = -std::numeric_limits<double>::infinity();
-    bool any = false;
-    for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
-            continue;
-        }
-        const size_t base = i * 3u;
-        const double proj = ctx.nodes_xyz[base + 0] * axis[0]
-            + ctx.nodes_xyz[base + 1] * axis[1]
-            + ctx.nodes_xyz[base + 2] * axis[2];
-        min_proj = std::min(min_proj, proj);
-        max_proj = std::max(max_proj, proj);
-        any = true;
-    }
-    if (!any) {
-        return std::max(ctx.hmax, 1e-30);
-    }
-    return std::max(max_proj - min_proj, std::max(ctx.hmax, 1e-30));
-}
-
-bool tetrahedron_gradients(
-    const Vec3 &p0,
-    const Vec3 &p1,
-    const Vec3 &p2,
-    const Vec3 &p3,
-    Vec3 (&grads)[4],
-    double &volume)
-{
-    const Vec3 d1 = sub3(p1, p0);
-    const Vec3 d2 = sub3(p2, p0);
-    const Vec3 d3 = sub3(p3, p0);
-    const Vec3 c23 = cross3(d2, d3);
-    const double det = dot3(d1, c23);
-    if (!(std::abs(det) > kGeomEps) || !std::isfinite(det)) {
-        volume = 0.0;
-        return false;
-    }
-    volume = std::abs(det) / 6.0;
-
-    const double inv_det = 1.0 / det;
-    const double a00 =  (d2[1] * d3[2] - d2[2] * d3[1]) * inv_det;
-    const double a01 = -(d2[0] * d3[2] - d2[2] * d3[0]) * inv_det;
-    const double a02 =  (d2[0] * d3[1] - d2[1] * d3[0]) * inv_det;
-    const double a10 = -(d1[1] * d3[2] - d1[2] * d3[1]) * inv_det;
-    const double a11 =  (d1[0] * d3[2] - d1[2] * d3[0]) * inv_det;
-    const double a12 = -(d1[0] * d3[1] - d1[1] * d3[0]) * inv_det;
-    const double a20 =  (d1[1] * d2[2] - d1[2] * d2[1]) * inv_det;
-    const double a21 = -(d1[0] * d2[2] - d1[2] * d2[0]) * inv_det;
-    const double a22 =  (d1[0] * d2[1] - d1[1] * d2[0]) * inv_det;
-
-    grads[1] = {a00, a10, a20};
-    grads[2] = {a01, a11, a21};
-    grads[3] = {a02, a12, a22};
-    grads[0] = scale3(add3(add3(grads[1], grads[2]), grads[3]), -1.0);
-    return true;
-}
-
-void add_slonczewski_stt_rhs_aos(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &rhs_xyz)
-{
-    if (!ctx.has_slonczewski_stt) {
-        return;
-    }
-
-    constexpr double HBAR = 1.054571817e-34;
-    constexpr double E_CHARGE = 1.60217662e-19;
-
-    const Vec3 current_density = {
-        ctx.stt_current_density_am2[0],
-        ctx.stt_current_density_am2[1],
-        ctx.stt_current_density_am2[2],
-    };
-    const double j_mag = vector_norm3(
-        current_density[0],
-        current_density[1],
-        current_density[2]);
-    if (!(j_mag > 0.0)) {
-        return;
-    }
-    const Vec3 axis = scale3(current_density, 1.0 / j_mag);
-    // Use explicit free layer thickness if provided, otherwise geometry-derived
-    const double thickness = ctx.stt_free_layer_thickness > 0.0
-        ? ctx.stt_free_layer_thickness
-        : effective_magnetic_thickness_along_axis(ctx, axis);
-    const double lambda = ctx.stt_lambda;
-    const double lambda_sq = lambda * lambda;
-    const double degree = ctx.stt_degree > 0.0 ? ctx.stt_degree : 1.0;
-    const Vec3 p = ctx.stt_spin_polarization;
-
-    const size_t n = m_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
-            continue;
-        }
-        const size_t base = i * 3u;
-        const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
-        const double ms = scalar_field_value(
-            ctx.Ms_field,
-            i,
-            ctx.material.saturation_magnetisation);
-        if (!(ms > 0.0)) {
-            continue;
-        }
-        const double prefactor =
-            (ctx.stt_current_sign * j_mag * HBAR) / (2.0 * E_CHARGE * kMu0 * ms * thickness);
-        const double m_dot_p = dot3(m, p);
-        const double g = (degree * lambda_sq)
-            / ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
-        const double beta_stt = prefactor * g;
-
-        const Vec3 m_cross_p = cross3(m, p);
-        const Vec3 m_cross_m_cross_p = cross3(m, m_cross_p);
-        const Vec3 torque = {
-            beta_stt * (m_cross_m_cross_p[0] + ctx.stt_epsilon_prime * m_cross_p[0]),
-            beta_stt * (m_cross_m_cross_p[1] + ctx.stt_epsilon_prime * m_cross_p[1]),
-            beta_stt * (m_cross_m_cross_p[2] + ctx.stt_epsilon_prime * m_cross_p[2]),
-        };
-        rhs_xyz[base + 0] += torque[0];
-        rhs_xyz[base + 1] += torque[1];
-        rhs_xyz[base + 2] += torque[2];
-    }
-}
-
-void add_zhang_li_stt_rhs_aos(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &rhs_xyz)
-{
-    if (!ctx.has_zhang_li_stt) {
-        return;
-    }
-
-    constexpr double MU_B = 9.274009994e-24;
-    constexpr double E_CHARGE = 1.60217662e-19;
-
-    std::vector<double> node_weight(static_cast<size_t>(ctx.n_nodes), 0.0);
-    const double beta = ctx.stt_beta;
-
-    for (size_t element_index = 0; element_index < static_cast<size_t>(ctx.n_elements); ++element_index) {
-        if (!ctx.magnetic_element_mask.empty() && ctx.magnetic_element_mask[element_index] == 0u) {
-            continue;
-        }
-        const size_t ebase = element_index * 4u;
-        const uint32_t n0 = ctx.elements[ebase + 0];
-        const uint32_t n1 = ctx.elements[ebase + 1];
-        const uint32_t n2 = ctx.elements[ebase + 2];
-        const uint32_t n3 = ctx.elements[ebase + 3];
-        Vec3 grads[4];
-        double volume = 0.0;
-        if (!tetrahedron_gradients(
-                node_coords(ctx, n0),
-                node_coords(ctx, n1),
-                node_coords(ctx, n2),
-                node_coords(ctx, n3),
-                grads,
-                volume)) {
-            continue;
-        }
-
-        const uint32_t nodes[4] = {n0, n1, n2, n3};
-        double elem_ms = 0.0;
-        for (int local = 0; local < 4; ++local) {
-            elem_ms += scalar_field_value(
-                ctx.Ms_field,
-                nodes[local],
-                ctx.material.saturation_magnetisation);
-        }
-        elem_ms /= 4.0;
-        if (!(elem_ms > 0.0)) {
-            continue;
-        }
-
-        const double drift_prefactor =
-            (ctx.stt_degree * MU_B) / (E_CHARGE * elem_ms * (1.0 + beta * beta));
-        const Vec3 u = scale3(ctx.stt_current_density_am2, drift_prefactor);
-
-        Vec3 grad_m[3] = {};
-        for (int local = 0; local < 4; ++local) {
-            const size_t base = static_cast<size_t>(nodes[local]) * 3u;
-            const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
-            for (int component = 0; component < 3; ++component) {
-                grad_m[component][0] += m[component] * grads[local][0];
-                grad_m[component][1] += m[component] * grads[local][1];
-                grad_m[component][2] += m[component] * grads[local][2];
-            }
-        }
-
-        const Vec3 dm = {
-            dot3(u, grad_m[0]),
-            dot3(u, grad_m[1]),
-            dot3(u, grad_m[2]),
-        };
-
-        const double nodal_weight = volume * 0.25;
-        for (int local = 0; local < 4; ++local) {
-            const uint32_t node = nodes[local];
-            const size_t base = static_cast<size_t>(node) * 3u;
-            const Vec3 m = {m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]};
-            const Vec3 c = cross3(m, dm);
-            const Vec3 dc = cross3(m, c);
-            rhs_xyz[base + 0] += nodal_weight * (-dc[0] - beta * c[0]);
-            rhs_xyz[base + 1] += nodal_weight * (-dc[1] - beta * c[1]);
-            rhs_xyz[base + 2] += nodal_weight * (-dc[2] - beta * c[2]);
-            node_weight[node] += nodal_weight;
-        }
-    }
-
-    for (size_t i = 0; i < static_cast<size_t>(ctx.n_nodes); ++i) {
-        if (!(node_weight[i] > kGeomEps)) {
-            continue;
-        }
-        const double inv_w = 1.0 / node_weight[i];
-        const size_t base = i * 3u;
-        rhs_xyz[base + 0] *= inv_w;
-        rhs_xyz[base + 1] *= inv_w;
-        rhs_xyz[base + 2] *= inv_w;
-    }
-}
-
-void add_stt_rhs_aos(
-    const Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &rhs_xyz,
-    double &max_rhs)
-{
-    const std::vector<double> llg_only = rhs_xyz;
-    add_slonczewski_stt_rhs_aos(ctx, m_xyz, rhs_xyz);
-    if (ctx.has_zhang_li_stt) {
-        std::vector<double> zhang_li(rhs_xyz.size(), 0.0);
-        add_zhang_li_stt_rhs_aos(ctx, m_xyz, zhang_li);
-        for (size_t i = 0; i < rhs_xyz.size(); ++i) {
-            rhs_xyz[i] += zhang_li[i];
-        }
-    }
-    if (rhs_xyz != llg_only) {
-        max_rhs = 0.0;
-        const size_t n = rhs_xyz.size() / 3u;
-        for (size_t i = 0; i < n; ++i) {
-            const size_t base = i * 3u;
-            max_rhs = std::max(
-                max_rhs,
-                vector_norm3(rhs_xyz[base + 0], rhs_xyz[base + 1], rhs_xyz[base + 2]));
-        }
-    }
-}
-
 double max_norm_aos(const std::vector<double> &field_xyz) {
     double max_value = 0.0;
     const size_t n = field_xyz.size() / 3u;
@@ -1074,452 +704,6 @@ void zero_non_magnetic_nodes_aos(
             field_xyz[base + 2] = 0.0;
         }
     }
-}
-
-struct DmiElementWorkspace {
-    static void reset_vector(std::vector<double> &values, size_t size) {
-        if (values.size() != size) {
-            values.assign(size, 0.0);
-        } else {
-            std::fill(values.begin(), values.end(), 0.0);
-        }
-    }
-
-    void prepare_residual(size_t field_len) {
-        reset_vector(residual_xyz, field_len);
-    }
-
-    void prepare_local(int local_ndof) {
-        mx_elem.SetSize(local_ndof);
-        my_elem.SetSize(local_ndof);
-        mz_elem.SetSize(local_ndof);
-        dshape.SetSize(local_ndof, 3);
-        shape.SetSize(local_ndof);
-    }
-
-    mfem::Array<int> dofs;
-    mfem::Vector mx_elem;
-    mfem::Vector my_elem;
-    mfem::Vector mz_elem;
-    mfem::DenseMatrix dshape;
-    mfem::Vector shape;
-    std::vector<double> residual_xyz;
-    std::vector<double> projected_m_xyz;
-};
-
-DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
-    auto *workspace = static_cast<DmiElementWorkspace *>(ctx.mfem_dmi_workspace);
-    if (workspace == nullptr) {
-        workspace = new DmiElementWorkspace();
-        ctx.mfem_dmi_workspace = workspace;
-    }
-    return workspace;
-}
-
-/// Compute interfacial DMI effective field using element-loop gradient.
-/// H_dmi_x =  (2D / μ₀Ms) ∂m_z/∂x
-/// H_dmi_y =  (2D / μ₀Ms) ∂m_z/∂y
-/// H_dmi_z = -(2D / μ₀Ms) (∂m_x/∂x + ∂m_y/∂y)
-/// Energy: e_dmi = D [mz(∂mx/∂x + ∂my/∂y) - mx ∂mz/∂x - my ∂mz/∂y] (integrated)
-bool compute_interfacial_dmi_field(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_dmi_xyz,
-    double *dmi_energy,
-    std::string &error)
-{
-    const size_t n = ctx.n_nodes;
-    h_dmi_xyz.assign(n * 3u, 0.0);
-    // F-05 fix: check per-node field too, not just uniform constant.
-    if (!ctx.enable_dmi || (ctx.dmi_D == 0.0 && ctx.Dind_field.empty())) {
-        if (dmi_energy != nullptr) {
-            *dmi_energy = 0.0;
-        }
-        return true;
-    }
-
-#if FULLMAG_HAS_MFEM_STACK
-    if (!ctx.mfem_ready) {
-        error = "MFEM context not ready for DMI computation";
-        return false;
-    }
-
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_fes);
-    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
-    if (fes == nullptr || mesh == nullptr) {
-        error = "MFEM FE space or mesh is null during DMI computation";
-        return false;
-    }
-
-    const double uniform_D = ctx.dmi_D;
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
-    double energy = 0.0;
-
-    auto *dmi_workspace = dmi_element_workspace(ctx);
-    dmi_workspace->prepare_residual(n * 3u);
-    std::vector<double> &residual_xyz = dmi_workspace->residual_xyz;
-
-    // Unpack m components for element-loop access
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
-
-    // Set up GridFunctions for reading
-    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
-    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
-    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
-
-    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
-        // Skip non-magnetic elements
-        if (!ctx.magnetic_element_mask.empty() &&
-            static_cast<size_t>(elem) < ctx.magnetic_element_mask.size() &&
-            ctx.magnetic_element_mask[elem] == 0u) {
-            continue;
-        }
-
-        const mfem::FiniteElement *fe = fes->GetFE(elem);
-        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
-        mfem::Array<int> &dofs = dmi_workspace->dofs;
-        fes->GetElementDofs(elem, dofs);
-        const int local_ndof = dofs.Size();
-        dmi_workspace->prepare_local(local_ndof);
-
-        // Extract local m_x, m_y, m_z
-        mfem::Vector &mx_elem = dmi_workspace->mx_elem;
-        mfem::Vector &my_elem = dmi_workspace->my_elem;
-        mfem::Vector &mz_elem = dmi_workspace->mz_elem;
-        for (int i = 0; i < local_ndof; ++i) {
-            const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-            const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
-            mx_elem(i) = sign * (*gf_mx)(gdof);
-            my_elem(i) = sign * (*gf_my)(gdof);
-            mz_elem(i) = sign * (*gf_mz)(gdof);
-        }
-
-        double elem_D = 0.0;
-        if (!ctx.Dind_field.empty()) {
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                elem_D += ctx.Dind_field[gdof];
-            }
-            elem_D /= static_cast<double>(local_ndof);
-        } else {
-            elem_D = uniform_D;
-        }
-
-        const mfem::IntegrationRule &ir =
-            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
-
-        for (int q = 0; q < ir.GetNPoints(); ++q) {
-            const mfem::IntegrationPoint &ip = ir.IntPoint(q);
-            T->SetIntPoint(&ip);
-            const double w = ip.weight * T->Weight();
-
-            // Gradient of shape functions in physical coordinates
-            mfem::DenseMatrix &dshape = dmi_workspace->dshape;
-            fe->CalcPhysDShape(*T, dshape);
-
-            // FND-009: General iDMI with arbitrary interface normal n̂.
-            // The observable field is recovered after assembling the weak
-            // residual, so natural boundary terms are preserved by the
-            // variation rather than by a strong-form nodal average.
-            const double nx = ctx.dmi_n_hat[0];
-            const double ny = ctx.dmi_n_hat[1];
-            const double nz = ctx.dmi_n_hat[2];
-
-            // Compute full gradient: ∂m_i/∂x_j for all i,j
-            double dm[3][3] = {}; // dm[component][spatial_dim]
-            for (int i = 0; i < local_ndof; ++i) {
-                dm[0][0] += mx_elem(i) * dshape(i, 0); // ∂mx/∂x
-                dm[0][1] += mx_elem(i) * dshape(i, 1); // ∂mx/∂y
-                dm[0][2] += mx_elem(i) * dshape(i, 2); // ∂mx/∂z
-                dm[1][0] += my_elem(i) * dshape(i, 0); // ∂my/∂x
-                dm[1][1] += my_elem(i) * dshape(i, 1); // ∂my/∂y
-                dm[1][2] += my_elem(i) * dshape(i, 2); // ∂my/∂z
-                dm[2][0] += mz_elem(i) * dshape(i, 0); // ∂mz/∂x
-                dm[2][1] += mz_elem(i) * dshape(i, 1); // ∂mz/∂y
-                dm[2][2] += mz_elem(i) * dshape(i, 2); // ∂mz/∂z
-            }
-
-            // ∇·m = ∂mx/∂x + ∂my/∂y + ∂mz/∂z
-            const double div_m = dm[0][0] + dm[1][1] + dm[2][2];
-
-            // ∇(m·n̂) = (∂/∂x_j)(mx*nx + my*ny + mz*nz) for j=0,1,2
-            const double grad_mn[3] = {
-                nx * dm[0][0] + ny * dm[1][0] + nz * dm[2][0],
-                nx * dm[0][1] + ny * dm[1][1] + nz * dm[2][1],
-                nx * dm[0][2] + ny * dm[1][2] + nz * dm[2][2],
-            };
-
-            mfem::Vector &shape = dmi_workspace->shape;
-            fe->CalcShape(ip, shape);
-            double m_q[3] = {};
-            for (int i = 0; i < local_ndof; ++i) {
-                m_q[0] += mx_elem(i) * shape(i);
-                m_q[1] += my_elem(i) * shape(i);
-                m_q[2] += mz_elem(i) * shape(i);
-            }
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
-                    continue;
-                }
-                const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
-                DmiElementData data{};
-                data.m_q[0] = m_q[0];
-                data.m_q[1] = m_q[1];
-                data.m_q[2] = m_q[2];
-                data.shape = sign * shape(i);
-                data.weight = w;
-                for (int comp = 0; comp < 3; ++comp) {
-                    for (int dir = 0; dir < 3; ++dir) {
-                        data.grad_m[comp][dir] = dm[comp][dir];
-                    }
-                }
-                for (int dir = 0; dir < 3; ++dir) {
-                    data.grad_shape[dir] = sign * dshape(i, dir);
-                }
-                const double n_hat[3] = {nx, ny, nz};
-                dmi_accumulate_interfacial_residual(
-                    data,
-                    n_hat,
-                    elem_D,
-                    &residual_xyz[static_cast<size_t>(gdof) * 3u]);
-            }
-
-            // Energy: e_dmi = D [(m·n̂)(∇·m) − (m·∇)(m·n̂)]
-            if (dmi_energy != nullptr) {
-                // Interpolate m at quadrature point
-                double mx_q = 0.0, my_q = 0.0, mz_q = 0.0;
-                for (int i = 0; i < local_ndof; ++i) {
-                    mx_q += mx_elem(i) * shape(i);
-                    my_q += my_elem(i) * shape(i);
-                    mz_q += mz_elem(i) * shape(i);
-                }
-                const double m_dot_n = mx_q * nx + my_q * ny + mz_q * nz;
-                // (m·∇)(m·n̂) = m_i ∂(m·n̂)/∂x_i
-                const double m_grad_mn = mx_q * grad_mn[0] + my_q * grad_mn[1] + mz_q * grad_mn[2];
-                energy += elem_D * (m_dot_n * div_m - m_grad_mn) * w;
-            }
-        }
-    }
-
-    if (ctx.mfem_lumped_mass.size() != n) {
-        error = "MFEM lumped mass is unavailable for interfacial DMI weak-residual projection";
-        return false;
-    }
-    if (!dmi_project_lumped_field(
-            residual_xyz.data(),
-            ctx.mfem_lumped_mass.data(),
-            ctx.Ms_field.empty() ? nullptr : ctx.Ms_field.data(),
-            static_cast<uint64_t>(n),
-            uniform_Ms,
-            h_dmi_xyz.data(),
-            error)) {
-        return false;
-    }
-
-    if (dmi_energy != nullptr) {
-        *dmi_energy = energy;
-    }
-
-    return true;
-#else
-    // No MFEM stack — DMI requires element-loop gradient
-    error = "DMI computation requires MFEM stack";
-    return false;
-#endif
-}
-
-/// Compute Bloch-type (bulk) DMI by assembling the weak residual and
-/// recovering the observable field with lumped mass projection.
-/// Energy: e_bulk_dmi = D · m · (∇ × m) (integrated)
-bool compute_bulk_dmi_field(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_dmi_xyz,
-    double *dmi_energy,
-    std::string &error)
-{
-    const size_t n = ctx.n_nodes;
-    h_dmi_xyz.assign(n * 3u, 0.0);
-    // F-05 fix: check per-node field too, not just uniform constant.
-    if (!ctx.enable_bulk_dmi || (ctx.bulk_dmi_D == 0.0 && ctx.Dbulk_field.empty())) {
-        if (dmi_energy != nullptr) {
-            *dmi_energy = 0.0;
-        }
-        return true;
-    }
-
-#if FULLMAG_HAS_MFEM_STACK
-    if (!ctx.mfem_ready) {
-        error = "MFEM context not ready for bulk DMI computation";
-        return false;
-    }
-
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_fes);
-    auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
-    if (fes == nullptr || mesh == nullptr) {
-        error = "MFEM FE space or mesh is null during bulk DMI computation";
-        return false;
-    }
-
-    const double uniform_D = ctx.bulk_dmi_D;
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
-    double energy = 0.0;
-
-    auto *dmi_workspace = dmi_element_workspace(ctx);
-    dmi_workspace->prepare_residual(n * 3u);
-    std::vector<double> &residual_xyz = dmi_workspace->residual_xyz;
-
-    const std::vector<double> *exchange_input = &m_xyz;
-    if (!ctx.periodic_reduced_node.empty()) {
-        dmi_workspace->projected_m_xyz = m_xyz;
-        project_static_periodic_aos(ctx, dmi_workspace->projected_m_xyz);
-        exchange_input = &dmi_workspace->projected_m_xyz;
-    }
-
-    unpack_aos_to_existing_components(*exchange_input, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
-
-    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
-    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
-    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
-
-    for (int elem = 0; elem < mesh->GetNE(); ++elem) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            static_cast<size_t>(elem) < ctx.magnetic_element_mask.size() &&
-            ctx.magnetic_element_mask[elem] == 0u) {
-            continue;
-        }
-
-        const mfem::FiniteElement *fe = fes->GetFE(elem);
-        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
-        mfem::Array<int> &dofs = dmi_workspace->dofs;
-        fes->GetElementDofs(elem, dofs);
-        const int local_ndof = dofs.Size();
-        dmi_workspace->prepare_local(local_ndof);
-
-        mfem::Vector &mx_elem = dmi_workspace->mx_elem;
-        mfem::Vector &my_elem = dmi_workspace->my_elem;
-        mfem::Vector &mz_elem = dmi_workspace->mz_elem;
-        for (int i = 0; i < local_ndof; ++i) {
-            const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-            const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
-            mx_elem(i) = sign * (*gf_mx)(gdof);
-            my_elem(i) = sign * (*gf_my)(gdof);
-            mz_elem(i) = sign * (*gf_mz)(gdof);
-        }
-
-        double elem_D = 0.0;
-        if (!ctx.Dbulk_field.empty()) {
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof2 = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                elem_D += ctx.Dbulk_field[gdof2];
-            }
-            elem_D /= static_cast<double>(local_ndof);
-        } else {
-            elem_D = uniform_D;
-        }
-
-        const mfem::IntegrationRule &ir =
-            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
-
-        for (int q = 0; q < ir.GetNPoints(); ++q) {
-            const mfem::IntegrationPoint &ip = ir.IntPoint(q);
-            T->SetIntPoint(&ip);
-            const double w = ip.weight * T->Weight();
-
-            mfem::DenseMatrix &dshape = dmi_workspace->dshape;
-            fe->CalcPhysDShape(*T, dshape);
-
-            // Full gradient: ∂m_i/∂x_j for i=x,y,z and j=x,y,z
-            double dmx_dx = 0.0, dmx_dy = 0.0, dmx_dz = 0.0;
-            double dmy_dx = 0.0, dmy_dy = 0.0, dmy_dz = 0.0;
-            double dmz_dx = 0.0, dmz_dy = 0.0, dmz_dz = 0.0;
-            for (int i = 0; i < local_ndof; ++i) {
-                dmx_dx += mx_elem(i) * dshape(i, 0);
-                dmx_dy += mx_elem(i) * dshape(i, 1);
-                dmx_dz += mx_elem(i) * dshape(i, 2);
-                dmy_dx += my_elem(i) * dshape(i, 0);
-                dmy_dy += my_elem(i) * dshape(i, 1);
-                dmy_dz += my_elem(i) * dshape(i, 2);
-                dmz_dx += mz_elem(i) * dshape(i, 0);
-                dmz_dy += mz_elem(i) * dshape(i, 1);
-                dmz_dz += mz_elem(i) * dshape(i, 2);
-            }
-
-            // ∇ × m
-            const double curl_x = dmz_dy - dmy_dz;
-            const double curl_y = dmx_dz - dmz_dx;
-            const double curl_z = dmy_dx - dmx_dy;
-
-            mfem::Vector &shape = dmi_workspace->shape;
-            fe->CalcShape(ip, shape);
-            double m_q[3] = {};
-            for (int i = 0; i < local_ndof; ++i) {
-                m_q[0] += mx_elem(i) * shape(i);
-                m_q[1] += my_elem(i) * shape(i);
-                m_q[2] += mz_elem(i) * shape(i);
-            }
-            for (int i = 0; i < local_ndof; ++i) {
-                const int gdof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];
-                if (gdof < 0 || static_cast<uint32_t>(gdof) >= ctx.n_nodes) {
-                    continue;
-                }
-                const double sign = dofs[i] >= 0 ? 1.0 : -1.0;
-                DmiElementData data{};
-                data.m_q[0] = m_q[0];
-                data.m_q[1] = m_q[1];
-                data.m_q[2] = m_q[2];
-                data.shape = sign * shape(i);
-                data.weight = w;
-                data.grad_m[0][0] = dmx_dx;
-                data.grad_m[0][1] = dmx_dy;
-                data.grad_m[0][2] = dmx_dz;
-                data.grad_m[1][0] = dmy_dx;
-                data.grad_m[1][1] = dmy_dy;
-                data.grad_m[1][2] = dmy_dz;
-                data.grad_m[2][0] = dmz_dx;
-                data.grad_m[2][1] = dmz_dy;
-                data.grad_m[2][2] = dmz_dz;
-                for (int dir = 0; dir < 3; ++dir) {
-                    data.grad_shape[dir] = sign * dshape(i, dir);
-                }
-                dmi_accumulate_bulk_residual(
-                    data,
-                    elem_D,
-                    &residual_xyz[static_cast<size_t>(gdof) * 3u]);
-            }
-
-            // Energy: e = D · m · (∇ × m)
-            if (dmi_energy != nullptr) {
-                energy += elem_D * (m_q[0] * curl_x + m_q[1] * curl_y + m_q[2] * curl_z) * w;
-            }
-        }
-    }
-
-    if (ctx.mfem_lumped_mass.size() != n) {
-        error = "MFEM lumped mass is unavailable for bulk DMI weak-residual projection";
-        return false;
-    }
-    if (!dmi_project_lumped_field(
-            residual_xyz.data(),
-            ctx.mfem_lumped_mass.data(),
-            ctx.Ms_field.empty() ? nullptr : ctx.Ms_field.data(),
-            static_cast<uint64_t>(n),
-            uniform_Ms,
-            h_dmi_xyz.data(),
-            error)) {
-        return false;
-    }
-
-    if (dmi_energy != nullptr) {
-        *dmi_energy = energy;
-    }
-
-    return true;
-#else
-    error = "Bulk DMI computation requires MFEM stack";
-    return false;
-#endif
 }
 
 bool compute_effective_fields_for_magnetization_impl(
@@ -1567,51 +751,36 @@ bool compute_effective_fields_for_magnetization_impl(
 
     double demag = 0.0;
     if (ctx.enable_demag) {
-        ScopedPhaseTimer timer(timings != nullptr ? &timings->demag_wall_time_ns : nullptr);
-        bool refresh_demag = true;
-        if (ctx.field_refresh.has_demag_interval_s != 0 &&
-            ctx.demag_cache_valid &&
-            ctx.field_refresh.demag_interval_s > 0.0) {
-            const double elapsed = ctx.current_time - ctx.demag_last_refresh_time;
-            refresh_demag = elapsed + 1e-30 >= ctx.field_refresh.demag_interval_s;
+        ScopedPhaseTimer timer(timings != nullptr ? &timings->demag.wall_time_ns : nullptr);
+        DemagFieldUpdateDecision demag_decision{};
+        if (!plan_demag_field_update(ctx, demag_decision, error)) {
+            return false;
         }
-        if (refresh_demag) {
-            if ((ctx.demag_realization == 1 || ctx.demag_realization == 2) && ctx.poisson_ready) {
-                // Native FEM demag: Poisson-Dirichlet (1) or Poisson-Robin (2)
+        switch (demag_decision.action) {
+            case DemagFieldUpdateAction::FreshFemBemSolve:
+                if (!context_compute_demag_fem_bem(
+                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, timings, error)) {
+                    return false;
+                }
+                break;
+            case DemagFieldUpdateAction::FreshPoissonSolve:
                 if (!context_compute_demag_poisson(
                         ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, timings, error)) {
                     return false;
                 }
-            } else {
-                error =
-                    "Native FEM demag requires a Poisson airbox realization, but the Poisson "
-                    "demag operator is not ready";
-                return false;
-            }
-            if (ctx.field_refresh.has_demag_interval_s != 0) {
-                ctx.h_demag_cached_xyz = h_demag_xyz;
-                ctx.h_demag_cached_visual_xyz = ctx.h_demag_visual_xyz;
-                ctx.demag_last_refresh_time = ctx.current_time;
-                ctx.demag_cache_valid = true;
-            }
-        } else if (ctx.demag_cache_valid &&
-                   ctx.h_demag_cached_xyz.size() == h_demag_xyz.size()) {
-            h_demag_xyz = ctx.h_demag_cached_xyz;
-            if (ctx.h_demag_cached_visual_xyz.size() == h_demag_xyz.size()) {
-                ctx.h_demag_visual_xyz = ctx.h_demag_cached_visual_xyz;
-            } else {
-                ctx.h_demag_visual_xyz.clear();
-            }
-            demag = demag_poisson_energy_from_field(
-                ctx,
-                m_xyz,
-                h_demag_xyz,
-                ctx.effective_omp_threads);
-            // Phase-0A fix: include the cached Robin boundary energy term
-            // so that E_demag is energetically consistent between fresh and
-            // frozen-field steps.  The potential u is frozen together with
-            // H_demag, so the boundary integral is also frozen.
-            demag += ctx.cached_robin_boundary_energy;
+                break;
+            case DemagFieldUpdateAction::UseCachedField:
+                if (demag_poisson_try_load_cached_field(ctx, h_demag_xyz)) {
+                    demag = demag_poisson_cached_energy_from_field(
+                        ctx,
+                        m_xyz,
+                        h_demag_xyz,
+                        ctx.effective_omp_threads);
+                }
+                break;
+        }
+        if (demag_decision.store_refreshed_field_cache) {
+            demag_poisson_store_refreshed_field_cache(ctx, h_demag_xyz);
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;
@@ -1686,37 +855,12 @@ bool compute_effective_fields_for_magnetization_impl(
             }
         }
 
-        // F-09 fix: add Oersted field to H_eff per step (with time modulation).
-        if ((ctx.has_oersted_cylinder || ctx.has_oersted_field) && !ctx.h_oe_xyz.empty()) {
-            double I_scale = 1.0;
-            if (ctx.has_oersted_cylinder) {
-                I_scale = ctx.oersted_current;
-                switch (ctx.oersted_time_dep_kind) {
-                    case 1: { // Sinusoidal
-                        I_scale *= std::sin(2.0 * kPi * ctx.oersted_time_dep_freq * ctx.current_time
-                                            + ctx.oersted_time_dep_phase)
-                                 + ctx.oersted_time_dep_offset;
-                        break;
-                    }
-                    case 2: { // Pulse
-                        I_scale *= (ctx.current_time >= ctx.oersted_time_dep_t_on &&
-                                    ctx.current_time <  ctx.oersted_time_dep_t_off) ? 1.0 : 0.0;
-                        break;
-                    }
-                    default: break;
-                }
-            }
-            for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-                h_eff_xyz[i] += I_scale * ctx.h_oe_xyz[i];
-            }
-        }
+        add_oersted_field(ctx, h_eff_xyz);
 
         // F-09 fix: add thermal noise to H_eff per step.
-        if (ctx.temperature > 0.0 && !ctx.h_therm_xyz.empty()) {
-            context_refresh_thermal_field(ctx);
-            for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-                h_eff_xyz[i] += ctx.h_therm_xyz[i];
-            }
+        if (ctx.temperature > 0.0) {
+            refresh_thermal_brown_field(ctx);
+            add_thermal_brown_field(ctx, h_eff_xyz);
         }
 
         // Add magnetoelastic field
@@ -1724,9 +868,7 @@ bool compute_effective_fields_for_magnetization_impl(
         if (ctx.enable_magnetoelastic) {
             compute_magnetoelastic_field(ctx, m_xyz);
             magnetoelastic_energy = ctx.mel_energy;
-            for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-                h_eff_xyz[i] += ctx.h_mel_xyz[i];
-            }
+            add_magnetoelastic_field(ctx, h_eff_xyz);
         }
         // After all local terms are assembled, project H_eff onto periodic
         // classes.  This removes floating-point rounding mismatches between
@@ -1742,18 +884,7 @@ bool compute_effective_fields_for_magnetization_impl(
         ctx.last_magnetoelastic_energy_joules = magnetoelastic_energy;
     }
 
-    // Build full-domain H_eff for visualization: replace zeroed h_demag
-    // with the Poisson-recovered full-domain version so that airbox nodes
-    // carry the correct stray-field contribution.
-    if (!ctx.h_demag_visual_xyz.empty() &&
-        ctx.h_demag_visual_xyz.size() == h_eff_xyz.size()) {
-        ctx.h_eff_visual_xyz = h_eff_xyz;
-        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-            ctx.h_eff_visual_xyz[i] += ctx.h_demag_visual_xyz[i] - h_demag_xyz[i];
-        }
-    } else {
-        ctx.h_eff_visual_xyz.clear();
-    }
+    update_demag_poisson_visual_effective_field(ctx, h_eff_xyz, h_demag_xyz);
 
     if (exchange_energy != nullptr) {
         *exchange_energy = exchange;
@@ -1769,15 +900,7 @@ void fill_demag_solver_stats(
     const Context &ctx,
     fullmag_fem_step_stats &stats)
 {
-    if (ctx.enable_demag && (ctx.demag_realization == 1 || ctx.demag_realization == 2)) {
-        stats.demag_solve_count = ctx.demag_solves_current_step;
-        stats.demag_linear_iterations = static_cast<uint32_t>(std::max(ctx.poisson_last_iterations, 0));
-        stats.demag_linear_residual = ctx.poisson_last_residual;
-    } else {
-        stats.demag_solve_count = 0;
-        stats.demag_linear_iterations = 0;
-        stats.demag_linear_residual = 0.0;
-    }
+    fill_demag_poisson_solver_stats(ctx, stats);
     // Thread provenance: filled from context each step for telemetry.
     stats.requested_omp_threads = ctx.requested_omp_threads;
     stats.effective_omp_threads = ctx.effective_omp_threads;
@@ -2069,11 +1192,11 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
 }
 
 void context_destroy_mfem(Context &ctx) {
-    // Destroy Poisson demag resources first
+    // Destroy demag resources first.
+    context_destroy_demag_fem_bem(ctx);
     context_destroy_poisson(ctx);
 
-    delete static_cast<DmiElementWorkspace *>(ctx.mfem_dmi_workspace);
-    ctx.mfem_dmi_workspace = nullptr;
+    destroy_dmi_workspace(ctx);
 
     // NOTE: mfem::Device is a process-global singleton — do NOT delete it here,
     // because a subsequent NativeFemBackend may need the already-configured device.
@@ -2141,316 +1264,6 @@ void context_destroy_mfem(Context &ctx) {
     }
     ctx.pinned_snapshot_bytes = 0;
 #endif
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Poisson demag initialization / destruction / compute (S02–S05)
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool context_initialize_poisson(Context &ctx, std::string &error) {
-    try {
-        debug_checkpoint("context_initialize_poisson:enter");
-        auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
-        if (mesh == nullptr) {
-            error = "MFEM mesh is null — cannot initialize Poisson demag";
-            return false;
-        }
-
-        // S02: Scalar H1 FE space on the FULL mesh (magnetic + air)
-        auto *potential_fec = new mfem::H1_FECollection(
-            static_cast<int>(ctx.fe_order), mesh->Dimension());
-        auto *potential_fes = new mfem::FiniteElementSpace(mesh, potential_fec);
-
-        // S02: Poisson bilinear form: a(u,v) = ∫ ∇u·∇v dV (Laplacian)
-        auto *poisson_bilinear = new mfem::BilinearForm(potential_fes);
-        poisson_bilinear->AddDomainIntegrator(new mfem::DiffusionIntegrator());
-        poisson_bilinear->Assemble();
-        poisson_bilinear->Finalize();
-
-        // Potential GridFunction (warm-start: zeros initially)
-        auto *gf_potential = new mfem::GridFunction(potential_fes);
-        gf_potential->UseDevice(true);
-        *gf_potential = 0.0;
-
-        ctx.mfem_potential_fec = potential_fec;
-        ctx.mfem_potential_fes = potential_fes;
-        ctx.mfem_poisson_bilinear = poisson_bilinear;
-        ctx.mfem_gf_potential = gf_potential;
-
-        if (!initialize_demag_poisson_boundary_operator(
-                ctx,
-                *mesh,
-                *potential_fes,
-                *poisson_bilinear,
-                error)) {
-            context_destroy_poisson(ctx);
-            return false;
-        }
-
-        if (!initialize_demag_periodic_poisson_reduction(ctx, error)) {
-            context_destroy_poisson(ctx);
-            return false;
-        }
-
-        if (!initialize_demag_poisson_rhs_workspace(ctx, *potential_fes, error)) {
-            context_destroy_poisson(ctx);
-            return false;
-        }
-        ctx.mfem_poisson_solution_vec =
-            new mfem::Vector(potential_fes->GetTrueVSize());
-        if (!initialize_demag_poisson_recovery_workspace(
-                ctx,
-                *potential_fes,
-                error)) {
-            context_destroy_poisson(ctx);
-            return false;
-        }
-
-        ctx.poisson_ready = true;
-        debug_checkpoint("context_initialize_poisson:done");
-        return true;
-    } catch (const std::exception &ex) {
-        error = std::string("Poisson demag initialization failed: ") + ex.what();
-    } catch (...) {
-        error = "Poisson demag initialization failed with an unknown error";
-    }
-    context_destroy_poisson(ctx);
-    return false;
-}
-
-void context_destroy_poisson(Context &ctx) {
-    // Cached Hypre solver objects must be deleted before the matrix they reference.
-    destroy_demag_poisson_hypre_workspace(ctx);
-
-    // S09: BC-eliminated matrix is a separate allocation — delete first.
-    delete static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
-    ctx.mfem_poisson_bc_op = nullptr;
-    // Robin boundary mass form (separate allocation)
-    delete static_cast<mfem::BilinearForm *>(ctx.mfem_boundary_mass);
-    ctx.mfem_boundary_mass = nullptr;
-    destroy_demag_periodic_poisson_reduction(ctx);
-    destroy_demag_poisson_rhs_workspace(ctx);
-    delete static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec);
-    ctx.mfem_poisson_solution_vec = nullptr;
-    destroy_demag_poisson_recovery_workspace(ctx);
-    // Poisson bilinear form owns the SparseMatrix — don't double-free
-    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
-    delete static_cast<mfem::BilinearForm *>(ctx.mfem_poisson_bilinear);
-    delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
-    delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_potential_fec);
-    ctx.mfem_gf_potential = nullptr;
-    ctx.mfem_poisson_bilinear = nullptr;
-    ctx.mfem_potential_fes = nullptr;
-    ctx.mfem_potential_fec = nullptr;
-    ctx.poisson_ess_tdof_list.clear();
-    ctx.poisson_ready = false;
-}
-
-bool context_compute_demag_poisson(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_demag_xyz,
-    double &demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error)
-{
-    if (!ctx.poisson_ready) {
-        error = "Poisson demag requested before initialization";
-        return false;
-    }
-    debug_checkpoint("context_compute_demag_poisson:enter");
-    const uint64_t demag_call_index = ++ctx.demag_call_count;
-
-    // S03: Assemble RHS b(v) = ∫ M·∇v dV
-    const auto assemble_wall_start = SteadyClock::now();
-    mfem::Vector *rhs = nullptr;
-    debug_checkpoint("context_compute_demag_poisson:assemble_rhs_enter");
-    if (!assemble_demag_poisson_rhs(ctx, m_xyz, rhs, error)) {
-        return false;
-    }
-    debug_checkpoint("context_compute_demag_poisson:assemble_rhs_done");
-    if (rhs == nullptr) {
-        error = "Poisson RHS assembly returned a null RHS vector";
-        return false;
-    }
-    const uint64_t assemble_wall_time_ns = elapsed_ns(assemble_wall_start);
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    // ── Periodic demag: solve in reduced class space, then lift ─────────────
-    if (ctx.demag_periodic_enabled() && ctx.poisson_periodic_reduced_ready) {
-        mfem::Vector *full_solution = nullptr;
-        uint64_t solve_wall_time_ns_pbc = 0;
-        if (!solve_demag_periodic_poisson_reduced(
-                ctx,
-                *rhs,
-                full_solution,
-                solve_wall_time_ns_pbc,
-                error)) {
-            return false;
-        }
-        if (full_solution == nullptr) {
-            error = "Periodic Poisson reduced solve returned a null lifted solution";
-            return false;
-        }
-
-        debug_checkpoint("context_compute_demag_poisson:solve_done");
-        if (allow_interrupt && poll_interrupt(ctx)) {
-            return false;
-        }
-
-        uint64_t energy_wall_time_ns_pbc = 0;
-        const auto recover_wall_start_pbc = SteadyClock::now();
-        debug_checkpoint("context_compute_demag_poisson:recover_enter");
-        if (!recover_demag_poisson_field(
-                ctx,
-                *full_solution,
-                h_demag_xyz,
-                demag_energy,
-                m_xyz,
-                &energy_wall_time_ns_pbc,
-                error)) {
-            return false;
-        }
-        const uint64_t recover_total_wall_time_ns_pbc = elapsed_ns(recover_wall_start_pbc);
-        const uint64_t recover_wall_time_ns_pbc =
-            recover_total_wall_time_ns_pbc > energy_wall_time_ns_pbc
-                ? recover_total_wall_time_ns_pbc - energy_wall_time_ns_pbc
-                : 0;
-        debug_checkpoint("context_compute_demag_poisson:recover_done");
-
-        // Project h_demag onto periodic equivalence classes so that all nodes
-        // in the same class carry the same (averaged) demagnetization field.
-        project_static_periodic_aos(ctx, h_demag_xyz);
-        if (!ctx.h_demag_visual_xyz.empty()) {
-            ctx.h_demag_visual_xyz = h_demag_xyz;
-        }
-
-        if (allow_interrupt && poll_interrupt(ctx)) {
-            return false;
-        }
-        // Store lifted solution for warm-start in next step.
-        auto *gf_potential_pbc = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
-        gf_potential_pbc->SetFromTrueDofs(*full_solution);
-
-        log_demag_call_profile(
-            ctx,
-            demag_call_index,
-            assemble_wall_time_ns,
-            solve_wall_time_ns_pbc,
-            recover_wall_time_ns_pbc,
-            energy_wall_time_ns_pbc);
-        add_demag_phase_timings(
-            timings,
-            assemble_wall_time_ns,
-            solve_wall_time_ns_pbc,
-            ctx.poisson_last_setup_wall_time_ns,
-            ctx.poisson_last_solver_apply_wall_time_ns,
-            ctx.poisson_last_solver_setup_reused,
-            recover_wall_time_ns_pbc,
-            energy_wall_time_ns_pbc);
-        ctx.demag_solves_current_step += 1;
-        return true;
-    }
-    // ── End periodic demag path ──────────────────────────────────────────────
-
-    // S04: Solve -∇²u = -∇·M with the configured boundary operator.
-    auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
-    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
-    auto *solution = static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec);
-    if (gf_potential == nullptr || fes == nullptr || solution == nullptr) {
-        error = "Poisson solution workspace is null during non-PBC demag solve";
-        return false;
-    }
-    solution->SetSize(fes->GetTrueVSize());
-    if (!demag_poisson_hypre_has_warm_start(ctx)) {
-        gf_potential->GetTrueDofs(*solution);
-    }
-
-    const auto solve_wall_start = SteadyClock::now();
-    debug_checkpoint("context_compute_demag_poisson:solve_enter_hypre");
-    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, error)) {
-        return false;
-    }
-    debug_checkpoint("context_compute_demag_poisson:solve_done_hypre");
-    const uint64_t solve_wall_time_ns = elapsed_ns(solve_wall_start);
-    debug_checkpoint("context_compute_demag_poisson:solve_done");
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    // S05: Recover H_demag = -∇u and compute energy
-    uint64_t energy_wall_time_ns = 0;
-    const auto recover_wall_start = SteadyClock::now();
-    debug_checkpoint("context_compute_demag_poisson:recover_enter");
-    if (!recover_demag_poisson_field(
-            ctx,
-            *solution,
-            h_demag_xyz,
-            demag_energy,
-            m_xyz,
-            &energy_wall_time_ns,
-            error)) {
-        return false;
-    }
-    const uint64_t recover_total_wall_time_ns = elapsed_ns(recover_wall_start);
-    const uint64_t recover_wall_time_ns =
-        recover_total_wall_time_ns > energy_wall_time_ns
-            ? recover_total_wall_time_ns - energy_wall_time_ns
-            : 0;
-    debug_checkpoint("context_compute_demag_poisson:recover_done");
-    if (allow_interrupt && poll_interrupt(ctx)) {
-        return false;
-    }
-
-    // Store solution for warm-start in next step
-    gf_potential->SetFromTrueDofs(*solution);
-    log_demag_call_profile(
-        ctx,
-        demag_call_index,
-        assemble_wall_time_ns,
-        solve_wall_time_ns,
-        recover_wall_time_ns,
-        energy_wall_time_ns);
-    add_demag_phase_timings(
-        timings,
-        assemble_wall_time_ns,
-        solve_wall_time_ns,
-        ctx.poisson_last_setup_wall_time_ns,
-        ctx.poisson_last_solver_apply_wall_time_ns,
-        ctx.poisson_last_solver_setup_reused,
-        recover_wall_time_ns,
-        energy_wall_time_ns);
-    ctx.demag_solves_current_step += 1;
-
-    return true;
-}
-
-bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error) {
-    debug_checkpoint("context_refresh_exchange_field_mfem:enter");
-    if (!context_sync_gpu_magnetization_to_host(ctx, error)) {
-        return false;
-    }
-    double exchange_energy = 0.0;
-    double demag_energy = 0.0;
-    if (!compute_effective_fields_for_magnetization(
-            ctx,
-            ctx.m_xyz,
-            ctx.h_ex_xyz,
-            ctx.h_demag_xyz,
-            ctx.h_eff_xyz,
-            &exchange_energy,
-            &demag_energy,
-            false,
-            nullptr,
-            error)) {
-        return false;
-    }
-    ctx.mfem_exchange_ready = true;
-    debug_checkpoint("context_refresh_exchange_field_mfem:done");
-    return true;
 }
 
 bool context_snapshot_stats_mfem(

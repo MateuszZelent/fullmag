@@ -30,6 +30,17 @@ const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
 const CUBIC_AXIS_VALIDATION_ERROR: &str =
     "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
 
+fn requested_fem_demag_realization(problem: &ProblemIR) -> fullmag_ir::RequestedFemDemagIR {
+    problem
+        .energy_terms
+        .iter()
+        .find_map(|term| match term {
+            EnergyTermIR::Demag { realization } => Some(realization.normalized()),
+            _ => None,
+        })
+        .unwrap_or(fullmag_ir::RequestedFemDemagIR::Auto)
+}
+
 fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String {
     if requested_cuda {
         format!(
@@ -465,10 +476,11 @@ pub(crate) fn plan_fem(
                 reasons: vec![message],
             },
         )?;
+    let requested_demag_realization = requested_fem_demag_realization(problem);
     // Commit 4: fail early when study_universe requires a shared domain mesh
     // but no fem_domain_mesh_asset was provided.
     if resolved_domain_mesh_asset.is_none()
-        && shared_domain_mesh_requested(problem, fullmag_ir::RequestedFemDemagIR::Auto)
+        && shared_domain_mesh_requested(problem, requested_demag_realization)
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -483,6 +495,7 @@ pub(crate) fn plan_fem(
             .energy_terms
             .iter()
             .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+        && requested_demag_realization.requires_airbox()
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -875,7 +888,7 @@ pub(crate) fn plan_fem(
     if !demag_realization.is_implemented() {
         return Err(PlanError {
             reasons: vec![format!(
-                "Demag model '{}' is not yet implemented. Currently supported: airbox.",
+                "Demag model '{}' is not yet implemented. Currently supported: airbox and fredkin_koehler.",
                 demag_realization.model_name(),
             )],
         });
@@ -1220,10 +1233,11 @@ pub(crate) fn plan_fem_eigen(
         resolve_fem_domain_mesh_asset(problem, false).map_err(|message| PlanError {
             reasons: vec![message],
         })?;
+    let requested_demag_realization = requested_fem_demag_realization(problem);
     // Commit 4: fail early when study_universe requires a shared domain mesh
     // but no fem_domain_mesh_asset was provided (eigen path).
     if resolved_domain_mesh_asset.is_none()
-        && shared_domain_mesh_requested(problem, fullmag_ir::RequestedFemDemagIR::Auto)
+        && shared_domain_mesh_requested(problem, requested_demag_realization)
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -1238,6 +1252,7 @@ pub(crate) fn plan_fem_eigen(
             .energy_terms
             .iter()
             .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+        && requested_demag_realization.requires_airbox()
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -1671,7 +1686,7 @@ pub(crate) fn plan_fem_eigen(
     if !demag_realization.is_implemented() {
         return Err(PlanError {
             reasons: vec![format!(
-                "Demag model '{}' is not yet implemented. Currently supported: airbox.",
+                "Demag model '{}' is not yet implemented. Currently supported: airbox and fredkin_koehler.",
                 demag_realization.model_name(),
             )],
         });

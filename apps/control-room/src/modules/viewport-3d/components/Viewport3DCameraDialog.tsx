@@ -109,13 +109,13 @@ export function Viewport3DCameraDialog({
     [snapshot],
   );
   const [draftOverride, setDraftOverride] = useState<CameraDraft | null>(null);
-  const [orientationDirty, setOrientationDirty] = useState(false);
+  const orientationDirtyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const draft = draftOverride ?? baseDraft;
 
   function resetDraft(): void {
     setDraftOverride(null);
-    setOrientationDirty(false);
+    orientationDirtyRef.current = false;
     setError(null);
   }
 
@@ -126,10 +126,10 @@ export function Viewport3DCameraDialog({
       return;
     }
 
-    const patch = cameraPatchFromDraft(parsed, orientationDirty, snapshot.up);
+    const patch = cameraPatchFromDraft(parsed, orientationDirtyRef.current, snapshot.up);
     onCameraPatch(patch);
     setDraftOverride(null);
-    setOrientationDirty(false);
+    orientationDirtyRef.current = false;
     setError(null);
   }
 
@@ -157,7 +157,7 @@ export function Viewport3DCameraDialog({
       field === "rollDegrees" ||
       field === "yawDegrees"
     ) {
-      setOrientationDirty(true);
+      orientationDirtyRef.current = true;
     }
   }
 

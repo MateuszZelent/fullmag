@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
 use axum::Json;
+use axum::extract::{Path, State};
 use serde_json::Value;
 
 use crate::error::ApiError;
@@ -19,12 +19,12 @@ use crate::schemas::authoring::{
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use fullmag_authoring::{
-    geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
-    GeometryRealizationSnapshot, GeometryValidationResource, MagnetizationAsset, SceneDocument,
-    SceneGeometry, SceneMaterialAsset, SceneObject, SceneRegionOverride,
-    ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
-    ScriptBuilderUniverseState, Transform3D,
+    GeometryBackendTarget, GeometryCapabilitiesResource, GeometryDiagnostic,
+    GeometryDiagnosticsResource, GeometryRealizationSnapshot, GeometryValidationResource,
+    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
+    SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
+    ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
+    geometry_capabilities, realize_geometry_scene, validate_geometry_scene,
 };
 
 #[utoipa::path(
@@ -1154,6 +1154,7 @@ fn apply_universe_fit(
             airbox_hmax: None,
             airbox_hmin: None,
             airbox_growth_rate: None,
+            airbox_grading: None,
         });
     universe.mode = "box".to_string();
     universe.size = Some(size);

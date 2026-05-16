@@ -12,7 +12,15 @@ set(FEM_PUBLIC_HEADERS
 
 set(FEM_SOURCES
     cpu/mfem/interactions/anisotropy.cpp
+    cpu/mfem/interactions/demag.cpp
+    cpu/mfem/interactions/demag_fem_bem.cpp
     cpu/mfem/interactions/demag_poisson.cpp
+    cpu/mfem/interactions/dmi.cpp
+    cpu/mfem/interactions/exchange.cpp
+    cpu/mfem/interactions/magnetoelastic.cpp
+    cpu/mfem/interactions/oersted.cpp
+    cpu/mfem/interactions/stt.cpp
+    cpu/mfem/interactions/thermal_brown.cpp
     cpu/mfem/interactions/zeeman.cpp
     cpu/mfem/integrators/heun.cpp
     cpu/mfem/integrators/rk_explicit.cpp
@@ -34,7 +42,6 @@ if(FULLMAG_USE_MFEM_STACK)
     find_package(MFEM CONFIG REQUIRED)
 
     list(APPEND FEM_SOURCES
-        cpu/mfem/interactions/exchange.cpp
         src/mfem_bridge.cpp
     )
 
@@ -112,6 +119,14 @@ target_include_directories(fem_anisotropy_contract PRIVATE
 )
 add_test(NAME fem_anisotropy_contract COMMAND fem_anisotropy_contract)
 
+add_executable(fem_exchange_contract tests/exchange_contract.cpp)
+target_link_libraries(fem_exchange_contract PRIVATE fullmag_fem)
+target_include_directories(fem_exchange_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_exchange_contract COMMAND fem_exchange_contract)
+
 add_executable(fem_zeeman_contract tests/zeeman_contract.cpp)
 target_link_libraries(fem_zeeman_contract PRIVATE fullmag_fem)
 target_include_directories(fem_zeeman_contract PRIVATE
@@ -120,6 +135,46 @@ target_include_directories(fem_zeeman_contract PRIVATE
 )
 add_test(NAME fem_zeeman_contract COMMAND fem_zeeman_contract)
 
+add_executable(fem_oersted_contract tests/oersted_contract.cpp)
+target_link_libraries(fem_oersted_contract PRIVATE fullmag_fem)
+target_include_directories(fem_oersted_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_oersted_contract COMMAND fem_oersted_contract)
+
+add_executable(fem_thermal_brown_contract tests/thermal_brown_contract.cpp)
+target_link_libraries(fem_thermal_brown_contract PRIVATE fullmag_fem)
+target_include_directories(fem_thermal_brown_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_thermal_brown_contract COMMAND fem_thermal_brown_contract)
+
+add_executable(fem_stt_contract tests/stt_contract.cpp)
+target_link_libraries(fem_stt_contract PRIVATE fullmag_fem)
+target_include_directories(fem_stt_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_stt_contract COMMAND fem_stt_contract)
+
+add_executable(fem_magnetoelastic_contract tests/magnetoelastic_contract.cpp)
+target_link_libraries(fem_magnetoelastic_contract PRIVATE fullmag_fem)
+target_include_directories(fem_magnetoelastic_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_magnetoelastic_contract COMMAND fem_magnetoelastic_contract)
+
+add_executable(fem_dmi_contract tests/dmi_contract.cpp)
+target_link_libraries(fem_dmi_contract PRIVATE fullmag_fem)
+target_include_directories(fem_dmi_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_dmi_contract COMMAND fem_dmi_contract)
+
 add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)
 target_include_directories(fem_demag_poisson_contract PRIVATE
@@ -127,6 +182,22 @@ target_include_directories(fem_demag_poisson_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
+
+add_executable(fem_demag_fem_bem_contract tests/demag_fem_bem_contract.cpp)
+target_link_libraries(fem_demag_fem_bem_contract PRIVATE fullmag_fem)
+target_include_directories(fem_demag_fem_bem_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_demag_fem_bem_contract COMMAND fem_demag_fem_bem_contract)
+
+add_executable(fem_demag_contract tests/demag_contract.cpp)
+target_link_libraries(fem_demag_contract PRIVATE fullmag_fem)
+target_include_directories(fem_demag_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_demag_contract COMMAND fem_demag_contract)
 
 add_executable(fem_contract_validation tests/contract_validation.cpp)
 target_link_libraries(fem_contract_validation PRIVATE fullmag_fem)

@@ -10,15 +10,15 @@
 //! - unknown-route fallback.
 
 use axum::body::Body;
-use axum::http::{header, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode, header};
 use tower::ServiceExt; // for `oneshot`
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex, RwLock};
+use std::sync::atomic::AtomicU64;
+use tokio::sync::{Mutex, RwLock, watch};
 
 use crate::feature_flags::FeatureFlags;
 use crate::types::{
@@ -40,6 +40,8 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         backend: None,
         cpu_threads: None,
         fem_demag_solver_policy: None,
+        exchange_enabled: true,
+        demag_enabled: true,
         demag_realization: None,
         external_field: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
@@ -3396,8 +3398,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
     assert_eq!(
-        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]
-            ["body"]["edge_hmax"],
+        json["last_build_summary"]["shared_domain_build_report"]["effective_per_object_targets"]["body"]
+            ["edge_hmax"],
         1.8e-9
     );
     assert_eq!(
@@ -3409,8 +3411,7 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
         "component_aware"
     );
     assert_eq!(
-        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]
-            ["edge_maximum_element_size"],
+        json["shared_domain_build_report"]["effective_per_object_targets"]["body"]["edge_maximum_element_size"],
         1.8e-9
     );
     assert_eq!(
@@ -3658,10 +3659,26 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             through_thickness_elements: Some(1),
             through_thickness_distribution: Some("fixed".to_string()),
             sweep_face_meshing: Some("triangular".to_string()),
+            edge_hmax: Some("1.8e-9".to_string()),
+            edge_thickness: Some("12e-9".to_string()),
+            corner_hmax: Some("1.2e-9".to_string()),
+            corner_extent: Some("5e-9".to_string()),
             ..Default::default()
         };
         scene.objects[0].object_mesh = Some(object_mesh.clone());
         scene.objects[0].mesh_override = Some(object_mesh);
+        let universe_mesh = fullmag_authoring::ScriptBuilderUniverseState {
+            mode: "box".to_string(),
+            size: Some([4.0, 5.0, 6.0]),
+            center: Some([0.0, 0.0, 0.0]),
+            padding: Some([1.0, 1.5, 2.0]),
+            airbox_hmax: Some(8.0e-9),
+            airbox_hmin: Some(2.0e-9),
+            airbox_growth_rate: Some(1.4),
+            airbox_grading: Some("linear".to_string()),
+        };
+        scene.study.universe_mesh = Some(universe_mesh.clone());
+        scene.universe = Some(universe_mesh);
         snapshot.scene_document = Some(scene);
     }
     let app = build_v2_router().with_state(state.clone());
@@ -3760,6 +3777,50 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .and_then(|value| value.get("through_thickness_elements"))
             .and_then(serde_json::Value::as_i64),
         Some(1)
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("edge_maximum_element_size"))
+            .and_then(serde_json::Value::as_str),
+        Some("1.8e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("edge_thickness"))
+            .and_then(serde_json::Value::as_str),
+        Some("12e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("corner_maximum_element_size"))
+            .and_then(serde_json::Value::as_str),
+        Some("1.2e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("corner_extent"))
+            .and_then(serde_json::Value::as_str),
+        Some("5e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("scene_problem_patch")
+            .and_then(|value| value.get("universe"))
+            .and_then(|value| value.get("airbox_grading"))
+            .and_then(serde_json::Value::as_str),
+        Some("linear")
     );
 }
 
@@ -4427,8 +4488,8 @@ async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_buil
 }
 
 #[tokio::test]
-async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
-) {
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary()
+ {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 94;
@@ -4611,7 +4672,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
                             "padding": [1.0, 1.5, 2.0],
                             "airbox_hmax": 8.0e-9,
                             "airbox_hmin": 2.0e-9,
-                            "airbox_growth_rate": 1.4
+                            "airbox_growth_rate": 1.4,
+                            "airbox_grading": "linear"
                         }
                     })
                     .to_string(),
@@ -4627,6 +4689,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(json["config"]["size"][0], 4.0);
     assert_eq!(json["config"]["airbox_hmax"], 8.0e-9);
     assert_eq!(json["config"]["airbox_hmin"], 2.0e-9);
+    assert_eq!(json["config"]["airbox_growth_rate"], 1.4);
+    assert_eq!(json["config"]["airbox_grading"], "linear");
 
     let guard = state.current_live_state.read().await;
     let committed = guard
@@ -4642,6 +4706,8 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(universe.size, Some([4.0, 5.0, 6.0]));
     assert_eq!(universe.airbox_hmax, Some(8.0e-9));
     assert_eq!(universe.airbox_hmin, Some(2.0e-9));
+    assert_eq!(universe.airbox_growth_rate, Some(1.4));
+    assert_eq!(universe.airbox_grading.as_deref(), Some("linear"));
     assert_eq!(committed.universe.as_ref(), Some(universe));
 }
 
@@ -4752,6 +4818,10 @@ async fn mesh_object_config_put_commits_scene_projection() {
                             "minimum_element_size": "5e-10",
                             "growth_rate": "1.1",
                             "maximum_element_growth_rate": "1.1",
+                            "edge_maximum_element_size": "1.8e-9",
+                            "edge_thickness": "12e-9",
+                            "corner_maximum_element_size": "1.2e-9",
+                            "corner_extent": "5e-9",
                             "build_requested": true
                         }
                     })
@@ -4767,6 +4837,10 @@ async fn mesh_object_config_put_commits_scene_projection() {
     assert_eq!(json["object_id"], "body");
     assert_eq!(json["config"]["mode"], "override");
     assert_eq!(json["config"]["hmax"], "2e-9");
+    assert_eq!(json["config"]["edge_maximum_element_size"], "1.8e-9");
+    assert_eq!(json["config"]["edge_thickness"], "12e-9");
+    assert_eq!(json["config"]["corner_maximum_element_size"], "1.2e-9");
+    assert_eq!(json["config"]["corner_extent"], "5e-9");
 
     let guard = state.current_live_state.read().await;
     let committed = guard
@@ -4781,6 +4855,10 @@ async fn mesh_object_config_put_commits_scene_projection() {
     let mesh = object.object_mesh.as_ref().expect("object mesh present");
     assert_eq!(mesh.mode, "override");
     assert_eq!(mesh.hmax, "2e-9");
+    assert_eq!(mesh.edge_hmax.as_deref(), Some("1.8e-9"));
+    assert_eq!(mesh.edge_thickness.as_deref(), Some("12e-9"));
+    assert_eq!(mesh.corner_hmax.as_deref(), Some("1.2e-9"));
+    assert_eq!(mesh.corner_extent.as_deref(), Some("5e-9"));
     assert_eq!(object.mesh_override.as_ref(), Some(mesh));
 }
 
@@ -4965,10 +5043,12 @@ async fn authoring_script_source_returns_current_python_source() {
     let json = body_json(response).await;
     assert_eq!(json["script_path"], script_path.display().to_string());
     assert_eq!(json["bytes"], 22);
-    assert!(json["source"]
-        .as_str()
-        .expect("source string")
-        .contains("from fullmag import *"));
+    assert!(
+        json["source"]
+            .as_str()
+            .expect("source string")
+            .contains("from fullmag import *")
+    );
 }
 
 #[tokio::test]
@@ -5105,21 +5185,27 @@ async fn authoring_geometry_capabilities_returns_backend_matrix() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "box" && entry["fem"] == true));
-    assert!(json["primitive_capabilities"]
-        .as_array()
-        .expect("primitive capabilities")
-        .iter()
-        .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production"));
-    assert!(json["csg_capabilities"]
-        .as_array()
-        .expect("csg capabilities")
-        .iter()
-        .any(|entry| entry["op"] == "subtract" && entry["status"] == "production"));
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "box" && entry["fem"] == true)
+    );
+    assert!(
+        json["primitive_capabilities"]
+            .as_array()
+            .expect("primitive capabilities")
+            .iter()
+            .any(|entry| entry["id"] == "arch_waveguide" && entry["status"] == "production")
+    );
+    assert!(
+        json["csg_capabilities"]
+            .as_array()
+            .expect("csg capabilities")
+            .iter()
+            .any(|entry| entry["op"] == "subtract" && entry["status"] == "production")
+    );
 }
 
 #[tokio::test]
@@ -5235,11 +5321,13 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
         .find(|object| object["id"] == "box_001")
         .expect("created object present");
     assert_eq!(created_object["geometry"]["geometry_kind"], "Box");
-    assert!(created_object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        created_object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
     assert_eq!(
         create_json["committed_scene"]["universe"]["size"][0],
         300e-9
@@ -5303,11 +5391,13 @@ async fn authoring_transactions_create_transform_and_delete_objects() {
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
     assert_eq!(delete_json["transaction_kind"], "delete_object");
-    assert!(!delete_json["committed_scene"]["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "box_001"));
+    assert!(
+        !delete_json["committed_scene"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "box_001")
+    );
 }
 
 #[tokio::test]
@@ -5412,11 +5502,13 @@ async fn authoring_geometry_realization_reports_blocked_csg() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["status"], "blocked");
-    assert!(json["diagnostics"]
-        .as_array()
-        .expect("diagnostics")
-        .iter()
-        .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED"));
+    assert!(
+        json["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|entry| entry["code"] == "GEOMETRY_CSG_OP_UNSUPPORTED")
+    );
 }
 
 #[tokio::test]
@@ -5512,10 +5604,12 @@ async fn authoring_regions_returns_object_derived_regions() {
     assert_eq!(json["regions"][0]["name"], "free_layer");
     assert_eq!(json["regions"][0]["source"], "object");
     assert_eq!(json["regions"][0]["source_object_ids"][0], "body");
-    assert!(json["regions"][0]["source_body_ids"][0]
-        .as_str()
-        .unwrap()
-        .starts_with("body:body:"));
+    assert!(
+        json["regions"][0]["source_body_ids"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("body:body:")
+    );
     assert_eq!(
         json["regions"][0]["mesh_part_ids"]
             .as_array()
@@ -5559,11 +5653,13 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
-    assert!(object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
 }
 
 #[tokio::test]
@@ -5827,11 +5923,13 @@ async fn authoring_object_resource_crud_commits_scene() {
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_json = body_json(create_response).await;
     let create_revision = create_json["revision"].as_u64().unwrap();
-    assert!(create_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        create_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 
     let patch_response = app
         .clone()
@@ -5862,11 +5960,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .expect("patched object present");
     assert_eq!(patched_object["name"], "Object CRUD Renamed");
     assert_eq!(patched_object["region_name"], "crud_region");
-    assert!(patched_object["tags"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tag| tag == "mesh:dirty"));
+    assert!(
+        patched_object["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag == "mesh:dirty")
+    );
 
     let delete_response = app
         .oneshot(
@@ -5880,11 +5980,13 @@ async fn authoring_object_resource_crud_commits_scene() {
         .unwrap();
     assert_eq!(delete_response.status(), StatusCode::OK);
     let delete_json = body_json(delete_response).await;
-    assert!(!delete_json["objects"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|object| object["id"] == "object_crud"));
+    assert!(
+        !delete_json["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|object| object["id"] == "object_crud")
+    );
 }
 
 #[tokio::test]
@@ -7380,9 +7482,11 @@ async fn session_export_returns_fms_payload_with_session() {
     let json = body_json(response).await;
     assert_eq!(json["session_id"], "test-session");
     assert_eq!(json["profile"], "compact");
-    assert!(json["fms_base64"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["fms_base64"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
     assert!(json["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(&repo_root);
@@ -7534,9 +7638,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .as_str()
         .expect("checkpoint artifact_ref should be present")
         .to_string();
-    assert!(json["checkpoint"]["checksum"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(
+        json["checkpoint"]["checksum"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 
     let stage_after_create_response = app
         .clone()
@@ -7559,11 +7665,13 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         stage_after_create["stages"][1]["state_transition"],
         "preserved"
     );
-    assert!(stage_after_create["stages"][1]["artifact_refs"]
-        .as_array()
-        .expect("stage artifact_refs should be an array")
-        .iter()
-        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
+    assert!(
+        stage_after_create["stages"][1]["artifact_refs"]
+            .as_array()
+            .expect("stage artifact_refs should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str()))
+    );
 
     let detail_response = app
         .clone()
@@ -9284,9 +9392,11 @@ async fn field_slice_matrix_json_uses_exact_fem_tetra_path() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
     assert!(json["matrix_hash"].as_str().unwrap_or("").starts_with('"'));
 }
 
@@ -9317,9 +9427,11 @@ async fn field_slice_matrix_json_supports_fem_slab_mean() {
         .filter_map(|value| value.as_f64())
         .collect();
     assert!(!finite_values.is_empty());
-    assert!(finite_values
-        .iter()
-        .all(|value| (*value - 2.0).abs() < 1.0e-12));
+    assert!(
+        finite_values
+            .iter()
+            .all(|value| (*value - 2.0).abs() < 1.0e-12)
+    );
 }
 
 #[tokio::test]

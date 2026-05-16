@@ -4,17 +4,23 @@
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
 
+#if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
+#endif
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace fullmag::fem {
+#if FULLMAG_HAS_MFEM_STACK
 namespace {
 
 /*
@@ -66,6 +72,30 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kMu0 = 4.0e-7 * kPi;
 constexpr int kInterruptPollStride = 256;
+
+bool debug_startup_env_enabled()
+{
+    const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "1") == 0 ||
+           std::strcmp(raw, "true") == 0 ||
+           std::strcmp(raw, "TRUE") == 0 ||
+           std::strcmp(raw, "on") == 0 ||
+           std::strcmp(raw, "ON") == 0 ||
+           std::strcmp(raw, "yes") == 0 ||
+           std::strcmp(raw, "YES") == 0;
+}
+
+void debug_checkpoint(const char *stage)
+{
+    if (!debug_startup_env_enabled()) {
+        return;
+    }
+    std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);
+    std::fflush(stderr);
+}
 
 uint64_t vector_bytes(const mfem::Vector &vector) {
     return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
@@ -748,5 +778,80 @@ bool compute_exchange_for_magnetization(
 
     return true;
 }
+
+bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error)
+{
+    debug_checkpoint("context_refresh_exchange_field_mfem:enter");
+    if (!context_sync_gpu_magnetization_to_host(ctx, error)) {
+        return false;
+    }
+    double exchange_energy = 0.0;
+    double demag_energy = 0.0;
+    if (!compute_effective_fields_for_magnetization(
+            ctx,
+            ctx.m_xyz,
+            ctx.h_ex_xyz,
+            ctx.h_demag_xyz,
+            ctx.h_eff_xyz,
+            &exchange_energy,
+            &demag_energy,
+            false,
+            nullptr,
+            error)) {
+        return false;
+    }
+    ctx.mfem_exchange_ready = true;
+    debug_checkpoint("context_refresh_exchange_field_mfem:done");
+    return true;
+}
+
+#else
+
+bool initialize_exchange_operator_mfem(
+    Context &,
+    mfem::Mesh &,
+    mfem::FiniteElementSpace &,
+    mfem::GridFunctionCoefficient &,
+    std::string &error)
+{
+    error = "Native FEM exchange requires the MFEM stack";
+    return false;
+}
+
+bool upload_legacy_sparse_exchange_to_gpu_state(
+    Context &,
+    mfem::SparseMatrix &,
+    std::string &error)
+{
+    error = "Native FEM exchange GPU upload requires the MFEM stack";
+    return false;
+}
+
+bool compute_exchange_for_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_ex_xyz,
+    std::vector<double> *h_eff_xyz,
+    double *exchange_energy,
+    bool,
+    std::string &error)
+{
+    const size_t field_size =
+        !m_xyz.empty() ? m_xyz.size() : static_cast<size_t>(ctx.n_nodes) * 3u;
+    h_ex_xyz.assign(field_size, 0.0);
+    if (h_eff_xyz != nullptr) {
+        *h_eff_xyz = h_ex_xyz;
+    }
+    if (exchange_energy != nullptr) {
+        *exchange_energy = 0.0;
+    }
+    if (!ctx.enable_exchange || ctx.material.exchange_stiffness == 0.0) {
+        return true;
+    }
+    error = "Native FEM exchange requires the MFEM stack";
+    return false;
+}
+
+#endif
 
 } // namespace fullmag::fem

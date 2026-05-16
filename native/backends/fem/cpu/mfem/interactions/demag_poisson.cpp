@@ -7,8 +7,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -55,6 +59,21 @@ double scalar_field_value(
     return index < field.size() ? field[index] : fallback;
 }
 
+bool demag_poisson_profile_env_enabled()
+{
+    const char *raw = std::getenv("FULLMAG_FEM_STEP_PROFILE");
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "1") == 0 ||
+           std::strcmp(raw, "true") == 0 ||
+           std::strcmp(raw, "TRUE") == 0 ||
+           std::strcmp(raw, "on") == 0 ||
+           std::strcmp(raw, "ON") == 0 ||
+           std::strcmp(raw, "yes") == 0 ||
+           std::strcmp(raw, "YES") == 0;
+}
+
 } // namespace
 
 double demag_poisson_energy_from_field(
@@ -97,6 +116,268 @@ double demag_poisson_energy_from_field(
     return demag_energy;
 }
 
+bool demag_poisson_should_refresh_field(const Context &ctx)
+{
+    if (ctx.field_refresh.has_demag_interval_s == 0) {
+        return true;
+    }
+    if (!ctx.demag_cache_valid) {
+        return true;
+    }
+    if (!(ctx.field_refresh.demag_interval_s > 0.0)) {
+        return true;
+    }
+    const double elapsed = ctx.current_time - ctx.demag_last_refresh_time;
+    return elapsed + 1e-30 >= ctx.field_refresh.demag_interval_s;
+}
+
+void demag_poisson_store_refreshed_field_cache(
+    Context &ctx,
+    const std::vector<double> &h_demag_xyz)
+{
+    if (ctx.field_refresh.has_demag_interval_s == 0) {
+        return;
+    }
+    ctx.h_demag_cached_xyz = h_demag_xyz;
+    ctx.h_demag_cached_visual_xyz = ctx.h_demag_visual_xyz;
+    ctx.demag_last_refresh_time = ctx.current_time;
+    ctx.demag_cache_valid = true;
+}
+
+bool demag_poisson_try_load_cached_field(
+    Context &ctx,
+    std::vector<double> &h_demag_xyz)
+{
+    if (!ctx.demag_cache_valid || ctx.h_demag_cached_xyz.size() != h_demag_xyz.size()) {
+        return false;
+    }
+    h_demag_xyz = ctx.h_demag_cached_xyz;
+    if (ctx.h_demag_cached_visual_xyz.size() == h_demag_xyz.size()) {
+        ctx.h_demag_visual_xyz = ctx.h_demag_cached_visual_xyz;
+    } else {
+        ctx.h_demag_visual_xyz.clear();
+    }
+    return true;
+}
+
+double demag_poisson_cached_energy_from_field(
+    const Context &ctx,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &h_demag_xyz,
+    int energy_threads)
+{
+    return demag_poisson_energy_from_field(ctx, m_xyz, h_demag_xyz, energy_threads) +
+           ctx.cached_robin_boundary_energy;
+}
+
+bool demag_poisson_operator_ready_for_fresh_solve(
+    int demag_realization,
+    bool poisson_ready,
+    std::string &error)
+{
+    if (demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET &&
+        demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
+        error =
+            "Native FEM demag requires a Poisson airbox realization, but the configured "
+            "demag realization is unsupported";
+        return false;
+    }
+    if (!poisson_ready) {
+        error =
+            "Native FEM demag requires a Poisson airbox realization, but the Poisson "
+            "demag operator is not ready";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+void fill_demag_poisson_solver_stats(
+    const Context &ctx,
+    fullmag_fem_step_stats &stats)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    if (ctx.enable_demag &&
+        (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
+         ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
+         ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER)) {
+        stats.demag_solve_count = ctx.demag_solves_current_step;
+        stats.demag_linear_iterations =
+            static_cast<uint32_t>(std::max(ctx.poisson_last_iterations, 0));
+        stats.demag_linear_residual = ctx.poisson_last_residual;
+        return;
+    }
+#else
+    (void) ctx;
+#endif
+    stats.demag_solve_count = 0;
+    stats.demag_linear_iterations = 0;
+    stats.demag_linear_residual = 0.0;
+}
+
+const char *demag_poisson_linear_solver_name(fullmag_fem_linear_solver solver)
+{
+    switch (solver) {
+    case FULLMAG_FEM_LINEAR_SOLVER_CG:
+        return "CG";
+    case FULLMAG_FEM_LINEAR_SOLVER_GMRES:
+        return "GMRES";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+const char *demag_poisson_preconditioner_name(fullmag_fem_preconditioner preconditioner)
+{
+    switch (preconditioner) {
+    case FULLMAG_FEM_PRECONDITIONER_AMG:
+        return "AMG";
+    case FULLMAG_FEM_PRECONDITIONER_JACOBI:
+        return "JACOBI";
+    case FULLMAG_FEM_PRECONDITIONER_NONE:
+        return "NONE";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+void accumulate_demag_poisson_phase_timings(
+    DemagPoissonPhaseTimings *timings,
+    uint64_t assemble_wall_time_ns,
+    uint64_t solve_wall_time_ns,
+    uint64_t solver_setup_wall_time_ns,
+    uint64_t solver_apply_wall_time_ns,
+    bool solver_setup_reused,
+    uint64_t recover_wall_time_ns,
+    uint64_t energy_wall_time_ns)
+{
+    if (timings == nullptr) {
+        return;
+    }
+    timings->assemble_wall_time_ns += assemble_wall_time_ns;
+    timings->solve_wall_time_ns += solve_wall_time_ns;
+    timings->solver_setup_wall_time_ns += solver_setup_wall_time_ns;
+    timings->solver_apply_wall_time_ns += solver_apply_wall_time_ns;
+    timings->solver_setup_reused = timings->solver_setup_reused || solver_setup_reused;
+    timings->recover_wall_time_ns += recover_wall_time_ns;
+    timings->energy_wall_time_ns += energy_wall_time_ns;
+}
+
+void fill_demag_poisson_phase_stats(
+    const DemagPoissonPhaseTimings &timings,
+    fullmag_fem_step_stats &stats)
+{
+    stats.demag_wall_time_ns = timings.wall_time_ns;
+    stats.demag_assemble_wall_time_ns = timings.assemble_wall_time_ns;
+    stats.demag_solve_wall_time_ns = timings.solve_wall_time_ns;
+    stats.demag_solver_setup_wall_time_ns = timings.solver_setup_wall_time_ns;
+    stats.demag_solver_apply_wall_time_ns = timings.solver_apply_wall_time_ns;
+    stats.demag_solver_setup_reused = timings.solver_setup_reused ? 1 : 0;
+    stats.demag_recover_wall_time_ns = timings.recover_wall_time_ns;
+    stats.demag_energy_wall_time_ns = timings.energy_wall_time_ns;
+}
+
+std::string demag_poisson_call_profile_line(const DemagPoissonCallProfile &profile)
+{
+    const uint64_t total_wall_time_ns =
+        profile.assemble_wall_time_ns +
+        profile.solve_wall_time_ns +
+        profile.recover_wall_time_ns +
+        profile.energy_wall_time_ns;
+    char buffer[384];
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "[fullmag-fem] demag call: step=%llu call=%llu dt=%.3e assemble=%llums solve=%llums recover=%llums energy=%llums total=%llums lin_iters=%d residual=%.3e\n",
+        static_cast<unsigned long long>(profile.step),
+        static_cast<unsigned long long>(profile.call),
+        profile.dt_seconds,
+        static_cast<unsigned long long>(profile.assemble_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(profile.solve_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(profile.recover_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(profile.energy_wall_time_ns / 1000000ull),
+        static_cast<unsigned long long>(total_wall_time_ns / 1000000ull),
+        profile.linear_iterations,
+        profile.linear_residual);
+    return std::string(buffer);
+}
+
+void log_demag_poisson_call_profile(
+    const Context &ctx,
+    uint64_t demag_call_index,
+    uint64_t assemble_wall_time_ns,
+    uint64_t solve_wall_time_ns,
+    uint64_t recover_wall_time_ns,
+    uint64_t energy_wall_time_ns)
+{
+    if (!demag_poisson_profile_env_enabled()) {
+        return;
+    }
+    DemagPoissonCallProfile profile{};
+    profile.step = ctx.step_count;
+    profile.call = demag_call_index;
+    profile.dt_seconds = ctx.current_dt;
+    profile.assemble_wall_time_ns = assemble_wall_time_ns;
+    profile.solve_wall_time_ns = solve_wall_time_ns;
+    profile.recover_wall_time_ns = recover_wall_time_ns;
+    profile.energy_wall_time_ns = energy_wall_time_ns;
+#if FULLMAG_HAS_MFEM_STACK
+    profile.linear_iterations = ctx.poisson_last_iterations;
+    profile.linear_residual = ctx.poisson_last_residual;
+#endif
+    const std::string line = demag_poisson_call_profile_line(profile);
+    std::fputs(line.c_str(), stderr);
+}
+
+void finalize_demag_poisson_recovered_field(
+    Context &ctx,
+    std::vector<double> &h_demag_xyz)
+{
+    if (!ctx.periodic_reduced_node.empty()) {
+        const uint32_t n_nodes =
+            std::min(ctx.n_nodes, static_cast<uint32_t>(h_demag_xyz.size() / 3u));
+        for (uint32_t node = 0; node < n_nodes; ++node) {
+            if (static_cast<size_t>(node) >= ctx.periodic_reduced_node.size()) {
+                continue;
+            }
+            const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
+            if (static_cast<size_t>(reduced) >= ctx.periodic_representative_nodes.size()) {
+                continue;
+            }
+            const uint32_t representative =
+                ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
+            const size_t dst = static_cast<size_t>(node) * 3u;
+            const size_t src = static_cast<size_t>(representative) * 3u;
+            if (src + 2u >= h_demag_xyz.size() || dst + 2u >= h_demag_xyz.size()) {
+                continue;
+            }
+            h_demag_xyz[dst + 0u] = h_demag_xyz[src + 0u];
+            h_demag_xyz[dst + 1u] = h_demag_xyz[src + 1u];
+            h_demag_xyz[dst + 2u] = h_demag_xyz[src + 2u];
+        }
+    }
+    if (!ctx.h_demag_visual_xyz.empty()) {
+        ctx.h_demag_visual_xyz = h_demag_xyz;
+    }
+}
+
+void update_demag_poisson_visual_effective_field(
+    Context &ctx,
+    const std::vector<double> &h_eff_xyz,
+    const std::vector<double> &h_demag_xyz)
+{
+    if (!ctx.h_demag_visual_xyz.empty() &&
+        ctx.h_demag_visual_xyz.size() == h_eff_xyz.size() &&
+        h_demag_xyz.size() == h_eff_xyz.size()) {
+        ctx.h_eff_visual_xyz = h_eff_xyz;
+        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
+            ctx.h_eff_visual_xyz[i] += ctx.h_demag_visual_xyz[i] - h_demag_xyz[i];
+        }
+        return;
+    }
+    ctx.h_eff_visual_xyz.clear();
+}
+
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
 
@@ -107,6 +388,30 @@ uint64_t elapsed_ns(const SteadyClock::time_point &start) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             SteadyClock::now() - start)
             .count());
+}
+
+bool debug_startup_env_enabled()
+{
+    const char *raw = std::getenv("FULLMAG_FEM_DEBUG_STARTUP");
+    if (raw == nullptr || *raw == '\0') {
+        return false;
+    }
+    return std::strcmp(raw, "1") == 0 ||
+           std::strcmp(raw, "true") == 0 ||
+           std::strcmp(raw, "TRUE") == 0 ||
+           std::strcmp(raw, "on") == 0 ||
+           std::strcmp(raw, "ON") == 0 ||
+           std::strcmp(raw, "yes") == 0 ||
+           std::strcmp(raw, "YES") == 0;
+}
+
+void debug_checkpoint(const char *stage)
+{
+    if (!debug_startup_env_enabled()) {
+        return;
+    }
+    std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);
+    std::fflush(stderr);
 }
 
 uint64_t vector_bytes(const mfem::Vector &vector) {
@@ -1155,6 +1460,276 @@ bool recover_demag_poisson_field(
     if (energy_wall_time_ns != nullptr) {
         *energy_wall_time_ns += elapsed_ns(energy_wall_start);
     }
+
+    return true;
+}
+
+bool context_initialize_poisson(Context &ctx, std::string &error)
+{
+    try {
+        debug_checkpoint("context_initialize_poisson:enter");
+        auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_mesh);
+        if (mesh == nullptr) {
+            error = "MFEM mesh is null — cannot initialize Poisson demag";
+            return false;
+        }
+
+        // S02: Scalar H1 FE space on the FULL mesh (magnetic + air).
+        auto *potential_fec = new mfem::H1_FECollection(
+            static_cast<int>(ctx.fe_order),
+            mesh->Dimension());
+        auto *potential_fes = new mfem::FiniteElementSpace(mesh, potential_fec);
+
+        // S02: Poisson bilinear form: a(u,v) = integral grad(u).grad(v) dV.
+        auto *poisson_bilinear = new mfem::BilinearForm(potential_fes);
+        poisson_bilinear->AddDomainIntegrator(new mfem::DiffusionIntegrator());
+        poisson_bilinear->Assemble();
+        poisson_bilinear->Finalize();
+
+        auto *gf_potential = new mfem::GridFunction(potential_fes);
+        gf_potential->UseDevice(true);
+        *gf_potential = 0.0;
+
+        ctx.mfem_potential_fec = potential_fec;
+        ctx.mfem_potential_fes = potential_fes;
+        ctx.mfem_poisson_bilinear = poisson_bilinear;
+        ctx.mfem_gf_potential = gf_potential;
+
+        if (!initialize_demag_poisson_boundary_operator(
+                ctx,
+                *mesh,
+                *potential_fes,
+                *poisson_bilinear,
+                error)) {
+            context_destroy_poisson(ctx);
+            return false;
+        }
+
+        if (!initialize_demag_periodic_poisson_reduction(ctx, error)) {
+            context_destroy_poisson(ctx);
+            return false;
+        }
+
+        if (!initialize_demag_poisson_rhs_workspace(ctx, *potential_fes, error)) {
+            context_destroy_poisson(ctx);
+            return false;
+        }
+        ctx.mfem_poisson_solution_vec =
+            new mfem::Vector(potential_fes->GetTrueVSize());
+        if (!initialize_demag_poisson_recovery_workspace(
+                ctx,
+                *potential_fes,
+                error)) {
+            context_destroy_poisson(ctx);
+            return false;
+        }
+
+        ctx.poisson_ready = true;
+        debug_checkpoint("context_initialize_poisson:done");
+        return true;
+    } catch (const std::exception &ex) {
+        error = std::string("Poisson demag initialization failed: ") + ex.what();
+    } catch (...) {
+        error = "Poisson demag initialization failed with an unknown error";
+    }
+    context_destroy_poisson(ctx);
+    return false;
+}
+
+void context_destroy_poisson(Context &ctx)
+{
+    // Cached Hypre solver objects must be deleted before the matrix they reference.
+    destroy_demag_poisson_hypre_workspace(ctx);
+
+    delete static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    ctx.mfem_poisson_bc_op = nullptr;
+    delete static_cast<mfem::BilinearForm *>(ctx.mfem_boundary_mass);
+    ctx.mfem_boundary_mass = nullptr;
+    destroy_demag_periodic_poisson_reduction(ctx);
+    destroy_demag_poisson_rhs_workspace(ctx);
+    delete static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec);
+    ctx.mfem_poisson_solution_vec = nullptr;
+    destroy_demag_poisson_recovery_workspace(ctx);
+    delete static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+    delete static_cast<mfem::BilinearForm *>(ctx.mfem_poisson_bilinear);
+    delete static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    delete static_cast<mfem::FiniteElementCollection *>(ctx.mfem_potential_fec);
+    ctx.mfem_gf_potential = nullptr;
+    ctx.mfem_poisson_bilinear = nullptr;
+    ctx.mfem_potential_fes = nullptr;
+    ctx.mfem_potential_fec = nullptr;
+    ctx.poisson_ess_tdof_list.clear();
+    ctx.poisson_ready = false;
+}
+
+bool context_compute_demag_poisson(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    bool allow_interrupt,
+    PhaseTimings *timings,
+    std::string &error)
+{
+    if (!ctx.poisson_ready) {
+        error = "Poisson demag requested before initialization";
+        return false;
+    }
+    debug_checkpoint("context_compute_demag_poisson:enter");
+    const uint64_t demag_call_index = ++ctx.demag_call_count;
+
+    const auto assemble_wall_start = SteadyClock::now();
+    mfem::Vector *rhs = nullptr;
+    debug_checkpoint("context_compute_demag_poisson:assemble_rhs_enter");
+    if (!assemble_demag_poisson_rhs(ctx, m_xyz, rhs, error)) {
+        return false;
+    }
+    debug_checkpoint("context_compute_demag_poisson:assemble_rhs_done");
+    if (rhs == nullptr) {
+        error = "Poisson RHS assembly returned a null RHS vector";
+        return false;
+    }
+    const uint64_t assemble_wall_time_ns = elapsed_ns(assemble_wall_start);
+    if (allow_interrupt && poll_interrupt(ctx)) {
+        return false;
+    }
+
+    if (ctx.demag_periodic_enabled() && ctx.poisson_periodic_reduced_ready) {
+        mfem::Vector *full_solution = nullptr;
+        uint64_t solve_wall_time_ns_pbc = 0;
+        if (!solve_demag_periodic_poisson_reduced(
+                ctx,
+                *rhs,
+                full_solution,
+                solve_wall_time_ns_pbc,
+                error)) {
+            return false;
+        }
+        if (full_solution == nullptr) {
+            error = "Periodic Poisson reduced solve returned a null lifted solution";
+            return false;
+        }
+
+        debug_checkpoint("context_compute_demag_poisson:solve_done");
+        if (allow_interrupt && poll_interrupt(ctx)) {
+            return false;
+        }
+
+        uint64_t energy_wall_time_ns_pbc = 0;
+        const auto recover_wall_start_pbc = SteadyClock::now();
+        debug_checkpoint("context_compute_demag_poisson:recover_enter");
+        if (!recover_demag_poisson_field(
+                ctx,
+                *full_solution,
+                h_demag_xyz,
+                demag_energy,
+                m_xyz,
+                &energy_wall_time_ns_pbc,
+                error)) {
+            return false;
+        }
+        const uint64_t recover_total_wall_time_ns_pbc = elapsed_ns(recover_wall_start_pbc);
+        const uint64_t recover_wall_time_ns_pbc =
+            recover_total_wall_time_ns_pbc > energy_wall_time_ns_pbc
+                ? recover_total_wall_time_ns_pbc - energy_wall_time_ns_pbc
+                : 0;
+        debug_checkpoint("context_compute_demag_poisson:recover_done");
+
+        finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);
+
+        if (allow_interrupt && poll_interrupt(ctx)) {
+            return false;
+        }
+
+        auto *gf_potential_pbc =
+            static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+        gf_potential_pbc->SetFromTrueDofs(*full_solution);
+
+        log_demag_poisson_call_profile(
+            ctx,
+            demag_call_index,
+            assemble_wall_time_ns,
+            solve_wall_time_ns_pbc,
+            recover_wall_time_ns_pbc,
+            energy_wall_time_ns_pbc);
+        accumulate_demag_poisson_phase_timings(
+            timings != nullptr ? &timings->demag : nullptr,
+            assemble_wall_time_ns,
+            solve_wall_time_ns_pbc,
+            ctx.poisson_last_setup_wall_time_ns,
+            ctx.poisson_last_solver_apply_wall_time_ns,
+            ctx.poisson_last_solver_setup_reused,
+            recover_wall_time_ns_pbc,
+            energy_wall_time_ns_pbc);
+        ctx.demag_solves_current_step += 1;
+        return true;
+    }
+
+    auto *gf_potential = static_cast<mfem::GridFunction *>(ctx.mfem_gf_potential);
+    auto *fes = static_cast<mfem::FiniteElementSpace *>(ctx.mfem_potential_fes);
+    auto *solution = static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec);
+    if (gf_potential == nullptr || fes == nullptr || solution == nullptr) {
+        error = "Poisson solution workspace is null during non-PBC demag solve";
+        return false;
+    }
+    solution->SetSize(fes->GetTrueVSize());
+    if (!demag_poisson_hypre_has_warm_start(ctx)) {
+        gf_potential->GetTrueDofs(*solution);
+    }
+
+    const auto solve_wall_start = SteadyClock::now();
+    debug_checkpoint("context_compute_demag_poisson:solve_enter_hypre");
+    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, error)) {
+        return false;
+    }
+    debug_checkpoint("context_compute_demag_poisson:solve_done_hypre");
+    const uint64_t solve_wall_time_ns = elapsed_ns(solve_wall_start);
+    debug_checkpoint("context_compute_demag_poisson:solve_done");
+    if (allow_interrupt && poll_interrupt(ctx)) {
+        return false;
+    }
+
+    uint64_t energy_wall_time_ns = 0;
+    const auto recover_wall_start = SteadyClock::now();
+    debug_checkpoint("context_compute_demag_poisson:recover_enter");
+    if (!recover_demag_poisson_field(
+            ctx,
+            *solution,
+            h_demag_xyz,
+            demag_energy,
+            m_xyz,
+            &energy_wall_time_ns,
+            error)) {
+        return false;
+    }
+    const uint64_t recover_total_wall_time_ns = elapsed_ns(recover_wall_start);
+    const uint64_t recover_wall_time_ns =
+        recover_total_wall_time_ns > energy_wall_time_ns
+            ? recover_total_wall_time_ns - energy_wall_time_ns
+            : 0;
+    debug_checkpoint("context_compute_demag_poisson:recover_done");
+    if (allow_interrupt && poll_interrupt(ctx)) {
+        return false;
+    }
+
+    gf_potential->SetFromTrueDofs(*solution);
+    log_demag_poisson_call_profile(
+        ctx,
+        demag_call_index,
+        assemble_wall_time_ns,
+        solve_wall_time_ns,
+        recover_wall_time_ns,
+        energy_wall_time_ns);
+    accumulate_demag_poisson_phase_timings(
+        timings != nullptr ? &timings->demag : nullptr,
+        assemble_wall_time_ns,
+        solve_wall_time_ns,
+        ctx.poisson_last_setup_wall_time_ns,
+        ctx.poisson_last_solver_apply_wall_time_ns,
+        ctx.poisson_last_solver_setup_reused,
+        recover_wall_time_ns,
+        energy_wall_time_ns);
+    ctx.demag_solves_current_step += 1;
 
     return true;
 }

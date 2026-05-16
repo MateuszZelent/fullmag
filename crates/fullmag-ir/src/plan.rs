@@ -343,8 +343,8 @@ pub enum FemDomainMeshModeIR {
 /// Phase-1A: extended to multi-model hierarchy. The serde representation
 /// stays as simple strings for backward compatibility with existing Python
 /// scripts. The model concept (airbox/BEM/FK/FMM) is expressed through the
-/// variant names. BEM/FK/FMM are new variants that will be rejected by the
-/// planner as unimplemented.
+/// variant names. Fredkin-Koehler is the executable body-only FEM/BEM path;
+/// generic BEM/FMM remain future variants rejected by the planner.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestedFemDemagIR {
@@ -360,7 +360,7 @@ pub enum RequestedFemDemagIR {
     /// Not yet implemented — planner will reject.
     Bem,
     /// Fredkin–Koehler FEM/BEM hybrid (TetraX-style). Body-only mesh.
-    /// Not yet implemented — planner will reject.
+    /// Executable through the native FEM dense-reference FEM/BEM path.
     FredkinKoehler,
     /// Fast Multipole Method. Body-only mesh.
     /// Not yet implemented — planner will reject.
@@ -379,8 +379,8 @@ impl RequestedFemDemagIR {
     /// Whether this demag model is currently implemented.
     pub fn is_implemented(&self) -> bool {
         match self {
-            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin => true,
-            Self::Bem | Self::FredkinKoehler | Self::Fmm => false,
+            Self::Auto | Self::PoissonDirichlet | Self::PoissonRobin | Self::FredkinKoehler => true,
+            Self::Bem | Self::Fmm => false,
         }
     }
 
@@ -412,7 +412,7 @@ pub enum ResolvedFemDemagIR {
     PoissonRobin,
     /// Future: BEM-resolved (not yet implemented).
     Bem,
-    /// Future: Fredkin–Koehler-resolved (not yet implemented).
+    /// Fredkin–Koehler FEM/BEM-resolved body-only demag.
     FredkinKoehler,
     /// Future: FMM-resolved (not yet implemented).
     Fmm,
@@ -447,7 +447,10 @@ impl ResolvedFemDemagIR {
 
     /// Whether this realization is currently implemented in the backend.
     pub fn is_implemented(&self) -> bool {
-        matches!(self, Self::PoissonDirichlet | Self::PoissonRobin)
+        matches!(
+            self,
+            Self::PoissonDirichlet | Self::PoissonRobin | Self::FredkinKoehler
+        )
     }
 
     /// User-facing model name.
@@ -741,4 +744,29 @@ pub struct OutputPlanIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RequestedFemDemagIR, ResolvedFemDemagIR};
+
+    #[test]
+    fn fredkin_koehler_demag_is_body_only_and_executable() {
+        assert!(!RequestedFemDemagIR::FredkinKoehler.requires_airbox());
+        assert!(RequestedFemDemagIR::FredkinKoehler.is_implemented());
+        assert!(!ResolvedFemDemagIR::FredkinKoehler.requires_airbox());
+        assert!(ResolvedFemDemagIR::FredkinKoehler.is_implemented());
+        assert_eq!(
+            ResolvedFemDemagIR::FredkinKoehler.provenance_name(),
+            "fem_fredkin_koehler"
+        );
+    }
+
+    #[test]
+    fn generic_bem_and_fmm_remain_future_models() {
+        assert!(!RequestedFemDemagIR::Bem.requires_airbox());
+        assert!(!RequestedFemDemagIR::Bem.is_implemented());
+        assert!(!RequestedFemDemagIR::Fmm.requires_airbox());
+        assert!(!RequestedFemDemagIR::Fmm.is_implemented());
+    }
 }

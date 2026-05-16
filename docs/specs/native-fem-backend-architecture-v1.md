@@ -8,6 +8,8 @@
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
   - `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
   - `docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md`
+  - `docs/physics/0817-native-fem-cpu-demag-hot-path-profile.md`
+  - `docs/physics/0870-fem-bem-demag-open-boundary.md`
 - Related reports:
   - `docs/reports/16.05.2026/fullmag_fem_cpu_audit.md`
   - `docs/reports/16.05.2026/fullmag_fem_cpu_refactor_architecture.md`
@@ -64,6 +66,27 @@ names.
 Poisson demag is the current FEM bottleneck and the highest-risk nonlocal
 operator. It must be modeled as a subsystem, not as a block inside a bridge
 file.
+
+### Opt-in Profiler is a Runtime Contract
+
+The session-level solver profiler is part of the native FEM runtime contract,
+not a temporary debug print. Any solver rebuild, folder split, CPU/GPU
+separation, demag extraction, or integrator rewrite must preserve:
+
+- `POST /v2/sessions/current/simulation/commands` with
+  `kind: "set_solver_profile"`;
+- `GET /v2/sessions/current/diagnostics/solver-profile`;
+- bounded in-memory `SolverProfileState` snapshots;
+- stable phase identifiers: `step_total`, `rhs_total`, `exchange`,
+  `demag_total`, `demag_assemble`, `demag_solver_setup`,
+  `demag_solver_apply`, `demag_recover`, `demag_energy`, `local_terms`,
+  `normalization_projection`, `adaptive_error`, `snapshot`, and `host_sync`;
+- disabled-by-default behavior with no profiler sample allocation, JSONL
+  writes, or engine-log emission when the profiler is disabled.
+
+Status resources remain thin revision pointers. Realtime remains
+invalidation-only. Full profile samples live under the diagnostics resource and
+optional run artifacts.
 
 ## 3. Layer Model
 
@@ -291,7 +314,10 @@ demag_airbox_metadata
 ```
 
 Demag must be swappable behind the same contract so that Poisson airbox, Robin,
-FEM-BEM, Fredkin-Koehler, or FMM strategies can be compared honestly.
+FEM-BEM, Fredkin-Koehler, or FMM strategies can be compared honestly. The
+Fredkin-Koehler/FEM-BEM path is a body-only open-boundary method: it must not
+allocate or require a volumetric airbox, because the exterior is represented by
+a boundary integral operator on the magnetic surface.
 
 ## 8. Capability and Qualification
 

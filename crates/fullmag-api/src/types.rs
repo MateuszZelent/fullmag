@@ -1096,6 +1096,8 @@ mod tests {
             backend: None,
             cpu_threads: None,
             fem_demag_solver_policy: None,
+            exchange_enabled: true,
+            demag_enabled: true,
             demag_realization: None,
             external_field: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {

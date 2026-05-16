@@ -92,6 +92,10 @@ Trade-offs:
   validation matrix has explicit passing workloads for that feature and lane.
 - Performance work must preserve phase telemetry and use no hot-path heap
   allocation for accepted-step RHS/operator application.
+- Solver rebuilds must preserve the opt-in session profiler, including the
+  `set_solver_profile` command, `diagnostics/solver-profile` resource, stable
+  phase IDs, bounded ring buffer, and disabled-by-default/no-allocation
+  behavior.
 
 ## Migration Plan
 

@@ -3668,6 +3668,7 @@ fn fem_poisson_demag_provenance(
     let boundary_condition = match resolved_demag {
         fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "dirichlet",
         fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "robin",
+        fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => "fredkin_koehler_fem_bem",
         _ => return None,
     };
     let policy = plan.demag_solver_policy.clone().unwrap_or_default();
@@ -4238,6 +4239,28 @@ mod tests {
         assert_eq!(provenance.final_residual, Some(4.0e-9));
         assert_eq!(provenance.boundary_condition, "robin");
         assert_eq!(provenance.robin_beta, Some(2.5));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_fredkin_koehler_demag_provenance_records_method_and_solve_stats() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        plan.air_box_config = None;
+        let stats = StepStats {
+            poisson_iterations: 21,
+            poisson_final_residual: 7.0e-8,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("Fredkin-Koehler demag provenance should be present");
+
+        assert_eq!(provenance.boundary_condition, "fredkin_koehler_fem_bem");
+        assert_eq!(provenance.actual_iterations, Some(21));
+        assert_eq!(provenance.final_residual, Some(7.0e-8));
+        assert_eq!(provenance.robin_beta, None);
     }
 
     #[cfg(feature = "fem-gpu")]

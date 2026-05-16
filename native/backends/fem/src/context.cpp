@@ -1,10 +1,12 @@
 #include "context.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem.hpp"
+#include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <random>
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
@@ -14,9 +16,6 @@ namespace fullmag::fem {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kB  = 1.380649e-23;   // Boltzmann constant [J/K]
-constexpr double kMU0 = 4.0 * kPi * 1e-7;  // vacuum permeability [T·m/A]
 constexpr double kZeroThreshold = 1e-30; // FEM-040: named zero guard
 constexpr double kOrthogonalityDotTol = 1e-3;    // cubic axis dot-product tolerance
 constexpr double kOrthogonalityCrossMinNorm = 1e-6; // cubic axis cross-product minimum norm
@@ -220,31 +219,6 @@ double tetrahedron_volume(
     return std::abs(determinant) / 6.0;
 }
 
-double average_magnetic_node_volume(const Context &ctx) {
-    size_t magnetic_node_count = 0;
-    for (uint8_t magnetic : ctx.magnetic_node_mask) {
-        if (magnetic != 0u) {
-            magnetic_node_count += 1;
-        }
-    }
-    if (magnetic_node_count == 0) {
-        return 0.0;
-    }
-
-    double total_magnetic_volume = 0.0;
-    for (uint32_t element = 0; element < ctx.n_elements; ++element) {
-        if (!ctx.magnetic_element_mask.empty() &&
-            ctx.magnetic_element_mask[static_cast<size_t>(element)] == 0u) {
-            continue;
-        }
-        total_magnetic_volume += tetrahedron_volume(ctx.nodes_xyz, ctx.elements, element);
-    }
-    if (total_magnetic_volume <= 0.0) {
-        return 0.0;
-    }
-    return total_magnetic_volume / static_cast<double>(magnetic_node_count);
-}
-
 /// Compute per-node dual volume: each node receives 1/4 of the volume of every
 /// magnetic tetrahedron it belongs to (P1 lumped-mass semantics).
 void compute_node_volumes(Context &ctx) {
@@ -266,110 +240,7 @@ void compute_node_volumes(Context &ctx) {
     }
 }
 
-void refresh_thermal_field_for_current_state(Context &ctx) {
-    if (ctx.h_therm_xyz.size() != static_cast<size_t>(ctx.n_nodes) * 3u) {
-        ctx.h_therm_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-    }
-    if (ctx.temperature <= 0.0 || ctx.current_dt <= 0.0) {
-        ctx.thermal_sigma = 0.0;
-        std::fill(ctx.h_therm_xyz.begin(), ctx.h_therm_xyz.end(), 0.0);
-        return;
-    }
-    if (ctx.last_thermal_refresh_time == ctx.current_time &&
-        ctx.last_thermal_refresh_dt == ctx.current_dt) {
-        return;
-    }
-
-    const double gamma_red = ctx.material.gyromagnetic_ratio;
-    // Use per-node dual volumes for correct local noise scaling on
-    // non-uniform meshes.  Fall back to average only if the per-node
-    // vector was not computed (should not happen in normal flow).
-    const bool has_per_node_vol = !ctx.node_volumes.empty();
-    const double V_avg = has_per_node_vol ? 0.0 : average_magnetic_node_volume(ctx);
-
-    if (!(gamma_red > 0.0) || (!has_per_node_vol && !(V_avg > 0.0))) {
-        ctx.thermal_sigma = 0.0;
-        std::fill(ctx.h_therm_xyz.begin(), ctx.h_therm_xyz.end(), 0.0);
-        ctx.last_thermal_refresh_time = ctx.current_time;
-        ctx.last_thermal_refresh_dt = ctx.current_dt;
-        return;
-    }
-
-    // FND-008 fix: per-node thermal sigma using local alpha_i and Ms_i
-    // instead of mesh-averaged values.  ctx.thermal_sigma stores the
-    // maximum sigma across nodes for diagnostic purposes.
-    const bool has_per_node_alpha = !ctx.alpha_field.empty();
-    const bool has_per_node_ms    = !ctx.Ms_field.empty();
-
-    // Seed policy: 0 = system entropy (non-reproducible),
-    // otherwise use the provided seed for reproducible stochastic runs.
-    static thread_local bool rng_initialized = false;
-    static thread_local uint64_t rng_active_seed = 0;
-    static thread_local std::mt19937_64 rng;
-    if (!rng_initialized || rng_active_seed != ctx.thermal_seed) {
-        if (ctx.thermal_seed != 0) {
-            rng.seed(ctx.thermal_seed);
-        } else {
-            std::random_device rd;
-            rng.seed(rd());
-        }
-        rng_active_seed = ctx.thermal_seed;
-        rng_initialized = true;
-    }
-
-    double max_sigma = 0.0;
-    std::normal_distribution<double> unit_normal(0.0, 1.0);
-    for (size_t node = 0; node < static_cast<size_t>(ctx.n_nodes); ++node) {
-        const size_t base = node * 3u;
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
-            ctx.h_therm_xyz[base + 0] = 0.0;
-            ctx.h_therm_xyz[base + 1] = 0.0;
-            ctx.h_therm_xyz[base + 2] = 0.0;
-            continue;
-        }
-
-        const double alpha_i = has_per_node_alpha
-            ? ctx.alpha_field[node]
-            : ctx.material.damping;
-        const double Ms_i = has_per_node_ms
-            ? ctx.Ms_field[node]
-            : ctx.material.saturation_magnetisation;
-
-        if (!(alpha_i > 0.0) || !(Ms_i > 0.0)) {
-            ctx.h_therm_xyz[base + 0] = 0.0;
-            ctx.h_therm_xyz[base + 1] = 0.0;
-            ctx.h_therm_xyz[base + 2] = 0.0;
-            continue;
-        }
-
-        const double gamma0_i = gamma_red * (1.0 + alpha_i * alpha_i);
-        const double V_i = has_per_node_vol ? ctx.node_volumes[node] : V_avg;
-        if (!(V_i > 0.0)) {
-            ctx.h_therm_xyz[base + 0] = 0.0;
-            ctx.h_therm_xyz[base + 1] = 0.0;
-            ctx.h_therm_xyz[base + 2] = 0.0;
-            continue;
-        }
-        const double sigma_i = std::sqrt(
-            2.0 * alpha_i * kB * ctx.temperature /
-            (gamma0_i * kMU0 * Ms_i * V_i * ctx.current_dt)
-        );
-        if (sigma_i > max_sigma) max_sigma = sigma_i;
-
-        ctx.h_therm_xyz[base + 0] = unit_normal(rng) * sigma_i;
-        ctx.h_therm_xyz[base + 1] = unit_normal(rng) * sigma_i;
-        ctx.h_therm_xyz[base + 2] = unit_normal(rng) * sigma_i;
-    }
-    ctx.thermal_sigma = max_sigma;
-    ctx.last_thermal_refresh_time = ctx.current_time;
-    ctx.last_thermal_refresh_dt = ctx.current_dt;
-}
-
 } // namespace
-
-void context_refresh_thermal_field(Context &ctx) {
-    refresh_thermal_field_for_current_state(ctx);
-}
 
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error) {
     if (plan.mesh.n_nodes == 0) {
@@ -875,19 +746,8 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         ctx.oersted_center[i] = plan.oersted_center[i];
         ctx.oersted_axis[i] = plan.oersted_axis[i];
     }
-    if (ctx.has_oersted_cylinder) {
-        const double axis_norm = std::sqrt(
-            ctx.oersted_axis[0] * ctx.oersted_axis[0] +
-            ctx.oersted_axis[1] * ctx.oersted_axis[1] +
-            ctx.oersted_axis[2] * ctx.oersted_axis[2]);
-        if (!(axis_norm > kZeroThreshold) || !std::isfinite(axis_norm)) {
-            error = "oersted_axis must be finite and non-zero";
-            return false;
-        }
-        for (double &value : ctx.oersted_axis) {
-            value /= axis_norm;
-        }
-        // Arbitrary axis is now supported – no +Z restriction.
+    if (!normalize_oersted_cylinder_axis(ctx, error)) {
+        return false;
     }
     ctx.oersted_time_dep_kind = plan.oersted_time_dep_kind;
     ctx.oersted_time_dep_freq = plan.oersted_time_dep_freq;
@@ -900,69 +760,13 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         ctx.h_oe_xyz.assign(
             plan.oersted_field_xyz,
             plan.oersted_field_xyz + static_cast<size_t>(plan.oersted_field_len));
-    } else if (ctx.has_oersted_cylinder && ctx.oersted_radius > 0.0) {
-        // Precompute static Oersted field for I = 1 A on FEM node coordinates.
-        // Ampère's law for infinite cylinder along arbitrary axis â:
-        //   inside  (r_perp < R):  |H| = r_perp / (2π R²)
-        //   outside (r_perp >= R): |H| = 1 / (2π r_perp)
-        // Direction: H = |H| * (â × r̂_perp), where r̂_perp is the unit radial vector
-        // perpendicular to the axis.
-        const double inv_2pi = 1.0 / (2.0 * kPi);
-        const double R = ctx.oersted_radius;
-        const double R2 = R * R;
-        const double cx = ctx.oersted_center[0];
-        const double cy = ctx.oersted_center[1];
-        const double cz = ctx.oersted_center[2];
-        const double ax = ctx.oersted_axis[0];
-        const double ay = ctx.oersted_axis[1];
-        const double az = ctx.oersted_axis[2];
-
-        ctx.h_oe_xyz.resize(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-        for (uint32_t i = 0; i < ctx.n_nodes; ++i) {
-            const double px = ctx.nodes_xyz[i * 3 + 0] - cx;
-            const double py = ctx.nodes_xyz[i * 3 + 1] - cy;
-            const double pz = ctx.nodes_xyz[i * 3 + 2] - cz;
-
-            // Project p onto axis: p_parallel = (p·â) â
-            const double p_dot_a = px * ax + py * ay + pz * az;
-            // Perpendicular component: r_perp = p - p_parallel
-            const double rx = px - p_dot_a * ax;
-            const double ry = py - p_dot_a * ay;
-            const double rz = pz - p_dot_a * az;
-            const double r_perp = std::sqrt(rx * rx + ry * ry + rz * rz);
-
-            double H_mag;
-            if (r_perp < kZeroThreshold) {
-                H_mag = 0.0;
-            } else if (r_perp < R) {
-                H_mag = inv_2pi * r_perp / R2;
-            } else {
-                H_mag = inv_2pi / r_perp;
-            }
-
-            if (r_perp < kZeroThreshold) {
-                ctx.h_oe_xyz[i * 3 + 0] = 0.0;
-                ctx.h_oe_xyz[i * 3 + 1] = 0.0;
-                ctx.h_oe_xyz[i * 3 + 2] = 0.0;
-            } else {
-                // Direction: â × r̂_perp (tangential to circle around axis)
-                const double inv_r = 1.0 / r_perp;
-                const double rx_hat = rx * inv_r;
-                const double ry_hat = ry * inv_r;
-                const double rz_hat = rz * inv_r;
-                // H = H_mag * (â × r̂)
-                ctx.h_oe_xyz[i * 3 + 0] = H_mag * (ay * rz_hat - az * ry_hat);
-                ctx.h_oe_xyz[i * 3 + 1] = H_mag * (az * rx_hat - ax * rz_hat);
-                ctx.h_oe_xyz[i * 3 + 2] = H_mag * (ax * ry_hat - ay * rx_hat);
-            }
-        }
+    } else if (!initialize_oersted_cylinder_field(ctx, error)) {
+        return false;
     }
 
     // ── Thermal noise (Brown field) ──
     ctx.temperature = plan.temperature;
-    if (ctx.temperature > 0.0) {
-        ctx.h_therm_xyz.resize(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
-    }
+    initialize_thermal_brown_field(ctx);
 
     context_populate_device_info(ctx);
 
@@ -1051,11 +855,21 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }
-    // Initialize Poisson demag solver if requested
-    if (ctx.enable_demag && (ctx.demag_realization == 1 || ctx.demag_realization == 2)) {
+    // Initialize the requested demag operator only after the shared MFEM mesh is ready.
+    if (ctx.enable_demag &&
+        (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
+         ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN)) {
         if (!context_initialize_poisson(ctx, error)) {
             return false;
         }
+    } else if (ctx.enable_demag &&
+               ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+        if (!context_initialize_demag_fem_bem(ctx, error)) {
+            return false;
+        }
+    } else if (ctx.enable_demag) {
+        error = "unsupported native FEM demag realization";
+        return false;
     }
     if (plan.eager_initial_effective_field != 0 &&
         (ctx.enable_exchange || ctx.enable_demag) &&
@@ -1425,10 +1239,12 @@ void context_populate_device_info(Context &ctx) {
     if (ctx.mfem_exchange_ready) {
         if (!ctx.enable_demag) {
             backend_name = std::string("mfem_") + dev_tag + "_exchange_ready";
-        } else if (ctx.demag_realization == 1) {
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET) {
             backend_name = std::string("mfem_") + dev_tag + "_native_poisson_dirichlet_demag";
-        } else if (ctx.demag_realization == 2) {
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
             backend_name = std::string("mfem_") + dev_tag + "_native_poisson_robin_demag";
+        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+            backend_name = std::string("mfem_") + dev_tag + "_native_fem_bem_demag";
         } else {
             backend_name = std::string("mfem_") + dev_tag + "_unknown_demag_realization";
         }
@@ -1471,71 +1287,3 @@ void context_populate_device_info(Context &ctx) {
 }
 
 } // namespace fullmag::fem
-
-#if FULLMAG_HAS_MFEM_STACK
-void fullmag::fem::compute_magnetoelastic_field(
-    Context &ctx,
-    const std::vector<double> &m_xyz)
-{
-    // Implements (standard convention, B₂ = −3λ₁₁₁C₄₄, tensor strain ε₁₂):
-    //   H_mel,x = −(2 B₁ m_x ε₁₁ + 2 B₂ (m_y ε₁₂ + m_z ε₁₃)) / (μ₀ M_s)
-    //   H_mel,y = −(2 B₁ m_y ε₂₂ + 2 B₂ (m_x ε₁₂ + m_z ε₂₃)) / (μ₀ M_s)
-    //   H_mel,z = −(2 B₁ m_z ε₃₃ + 2 B₂ (m_x ε₁₃ + m_y ε₂₃)) / (μ₀ M_s)
-    // Voigt: [ε₁₁, ε₂₂, ε₃₃, 2ε₂₃, 2ε₁₃, 2ε₁₂]
-    constexpr double kMu0_local = 4.0e-7 * 3.14159265358979323846;
-    const size_t n = ctx.n_nodes;
-    ctx.h_mel_xyz.assign(n * 3u, 0.0);
-    ctx.mel_energy = 0.0;
-
-    if (!ctx.enable_magnetoelastic || ctx.mel_strain_voigt.empty()) {
-        return;
-    }
-
-    const double b1 = ctx.mel_b1;
-    const double b2 = ctx.mel_b2;
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
-    double energy = 0.0;
-
-    for (size_t i = 0; i < n; ++i) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[i] == 0u) {
-            continue;
-        }
-
-        const double Ms_i = ctx.Ms_field.empty() ? uniform_Ms : ctx.Ms_field[i];
-        const double inv_mu0_ms = -1.0 / (kMu0_local * Ms_i);
-
-        // Get strain for this node
-        const double *eps;
-        if (ctx.mel_uniform_strain) {
-            eps = ctx.mel_strain_voigt.data();  // always 6 values
-        } else {
-            eps = ctx.mel_strain_voigt.data() + i * 6u;  // per-node
-        }
-        const double e11 = eps[0];
-        const double e22 = eps[1];
-        const double e33 = eps[2];
-        const double e23 = eps[3] * 0.5;  // engineering → tensor
-        const double e13 = eps[4] * 0.5;
-        const double e12 = eps[5] * 0.5;
-
-        const size_t base = i * 3u;
-        const double mx = m_xyz[base + 0];
-        const double my = m_xyz[base + 1];
-        const double mz = m_xyz[base + 2];
-
-        ctx.h_mel_xyz[base + 0] = inv_mu0_ms * (2.0 * b1 * mx * e11 + 2.0 * b2 * (my * e12 + mz * e13));
-        ctx.h_mel_xyz[base + 1] = inv_mu0_ms * (2.0 * b1 * my * e22 + 2.0 * b2 * (mx * e12 + mz * e23));
-        ctx.h_mel_xyz[base + 2] = inv_mu0_ms * (2.0 * b1 * mz * e33 + 2.0 * b2 * (mx * e13 + my * e23));
-
-        // Energy density: e_mel = B₁(mx²ε₁₁ + my²ε₂₂ + mz²ε₃₃) + 2B₂(mx·my·ε₁₂ + mx·mz·ε₁₃ + my·mz·ε₂₃)
-        if (!ctx.mfem_lumped_mass.empty()) {
-            const double e_density =
-                b1 * (mx*mx*e11 + my*my*e22 + mz*mz*e33) +
-                2.0 * b2 * (mx*my*e12 + mx*mz*e13 + my*mz*e23);
-            energy += e_density * ctx.mfem_lumped_mass[i];
-        }
-    }
-
-    ctx.mel_energy = energy;
-}
-#endif

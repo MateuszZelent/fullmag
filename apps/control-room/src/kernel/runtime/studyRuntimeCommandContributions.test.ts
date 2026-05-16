@@ -493,7 +493,7 @@ describe("study runtime command contributions", () => {
       message: "State imported from session-imported.",
       status: "completed",
     });
-    expect(inspect).toHaveBeenCalledWith({ fms_base64: "Zm1z" });
+    expect(inspect).not.toHaveBeenCalled();
     expect(commit).toHaveBeenCalledWith({
       fms_base64: "Zm1z",
       restore_mode: "resume",

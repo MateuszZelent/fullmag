@@ -155,7 +155,7 @@ Demag(model="airbox")                       # default, COMSOL-style
 Demag(model="airbox", variant="robin")      # explicit Robin BC
 Demag(model="airbox", variant="dirichlet")  # explicit Dirichlet BC
 Demag(model="bem")                          # future: tetmag-style BEM
-Demag(model="fredkin_koehler")              # future: TetraX-style
+Demag(model="fredkin_koehler")              # native FEM/BEM, body-only
 Demag(model="fmm")                          # future: fast multipole
 
 # Study builder
@@ -185,7 +185,7 @@ ResolvedFemDemagIR:
   AirboxDirichlet
   AirboxRobin
   Bem                               → future
-  FredkinKoehler                    → future
+  FredkinKoehler                    → native dense-reference FEM/BEM
   Fmm                               → future
 ```
 
@@ -198,7 +198,7 @@ The planner must:
    - Airbox → require `shared_domain_mesh_with_air`, validate air elements exist
    - BEM/FK/FMM → require only body mesh, validate boundary faces exist
 3. **Reject unimplemented models** with clear error:
-   `"Demag model 'bem' is not yet implemented. Currently supported: airbox."`
+   `"Demag model 'bem' is not yet implemented. Currently supported: airbox and fredkin_koehler."`
 4. **Build `AirBoxConfigIR`** only when model is Airbox
 5. **Carry the resolved model** through to runner and provenance
 
@@ -219,7 +219,7 @@ For the airbox model (currently implemented):
 
 ### 5.2 Cross-backend checks
 
-When BEM/FK are implemented:
+For the implemented Fredkin-Koehler dense-reference path, and later BEM/FMM paths:
 - Same geometry, same $\mathbf{M}$ → same $\mathbf{H}_d$ within tolerance
 - Energy agreement across models
 - Airbox results must approach BEM/FK results as airbox grows
@@ -238,13 +238,13 @@ When BEM/FK are implemented:
 - [x] ProblemIR types (RequestedFemDemagIR, ResolvedFemDemagIR extended)
 - [x] Planner mesh-routing logic
 - [x] Capability declarations per model
-- [ ] Airbox Dirichlet backend — implemented
-- [ ] Airbox Robin backend — implemented
+- [x] Airbox Dirichlet backend — implemented
+- [x] Airbox Robin backend — implemented
 - [ ] BEM backend — architecture only, not implemented
-- [ ] Fredkin–Koehler backend — architecture only, not implemented
+- [x] Fredkin–Koehler backend — initial dense-reference native FEM/BEM path
 - [ ] FMM backend — architecture only, not implemented
 - [ ] Cross-model validation
-- [ ] Documentation updated
+- [x] Documentation updated
 
 ## 7. Known limits and deferred work
 

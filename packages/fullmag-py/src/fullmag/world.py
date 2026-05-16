@@ -1065,6 +1065,8 @@ class _WorldState:
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
     _domain_region_markers: list[dict[str, object]] | None = None
+    _exchange_enabled: bool = True
+    _demag_enabled: bool = True
     _demag_realization: str | None = None
 
     # Magnets (ordered)
@@ -2369,11 +2371,16 @@ class StudyBuilder:
     def demag(
         self,
         *,
+        enabled: bool = True,
         model: str | None = None,
         variant: str | None = None,
         realization: str | None = None,
     ) -> "StudyBuilder":
-        demag(model=model, variant=variant, realization=realization)
+        demag(enabled=enabled, model=model, variant=variant, realization=realization)
+        return self
+
+    def exchange(self, *, enabled: bool = True) -> "StudyBuilder":
+        exchange(enabled=enabled)
         return self
 
     def airbox(self, *args: object, **kwargs: object) -> "StudyBuilder":
@@ -2631,6 +2638,7 @@ def study(problem_name: str | None = None) -> StudyBuilder:
 
 def demag(
     *,
+    enabled: bool = True,
     model: str | None = None,
     variant: str | None = None,
     realization: str | None = None,
@@ -2648,7 +2656,13 @@ def demag(
     """
     # Validate by constructing a Demag instance
     d = Demag(model=model, variant=variant, realization=realization)
+    _state._demag_enabled = bool(enabled)
     _state._demag_realization = d._resolved_realization()
+
+
+def exchange(*, enabled: bool = True) -> None:
+    """Configure whether exchange contributes to H_eff in the flat API."""
+    _state._exchange_enabled = bool(enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -4124,8 +4138,13 @@ def _build_problem(
     # Convert handles to Ferromagnet objects
     magnets = [h._to_ferromagnet() for h in s._magnets]
 
-    # Energy terms — default to Exchange + Demag (like mumax)
-    energy: list = [Exchange(), Demag(realization=s._demag_realization)]
+    # Energy terms default to Exchange + Demag, but UI/Python authoring may
+    # explicitly remove either contribution from H_eff.
+    energy: list = []
+    if s._exchange_enabled:
+        energy.append(Exchange())
+    if s._demag_enabled:
+        energy.append(Demag(realization=s._demag_realization))
     # Check if any magnet has DMI
     for h in s._magnets:
         if h.Dind is not None:

@@ -64,11 +64,11 @@ export function FooterDiagnostics() {
         </div>
         {latestEntries.length > 0 ? (
           <div className="fm-footer-diagnostics__log" role="table">
-            {latestEntries.map((entry, index) => (
+            {latestEntries.map((entry) => (
               <div
                 className="fm-footer-diagnostics__log-row"
                 role="row"
-                key={`${entry.timestamp_unix_ms}-${index}`}
+                key={`${entry.timestamp_unix_ms}:${entry.level}:${entry.message}`}
               >
                 <time role="cell">
                   {formatTime(entry.timestamp_unix_ms)}
@@ -142,7 +142,7 @@ export function FooterDiagnostics() {
                 <span
                   className="fm-footer-diagnostics__phase"
                   data-phase-index={index % 5}
-                  key={`${phase.id}-${index}`}
+                  key={phase.id}
                   style={{ width: `${phase.percent}%` }}
                   title={`${phase.label}: ${phase.percent.toFixed(1)}%`}
                 />
@@ -204,17 +204,21 @@ export function buildSolverProfilePanelModel(
 ): SolverProfilePanelModel {
   const rows = (profile?.latest_samples ?? []).slice(-5).reverse().map((sample) => {
     const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
+    const phases = sample.phases.reduce<SolverProfilePhaseBar[]>((items, phase) => {
+      if (phase.wall_time_ns > 0) {
+        items.push({
+          id: phase.id,
+          label: phase.label,
+          percent: clampPercent(phase.percent_of_total),
+        });
+      }
+      return items;
+    }, []);
     return {
       demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
       exchange: formatNs(phaseById.get("exchange")?.wall_time_ns ?? 0),
       missing: formatNs(sample.missing_ns),
-      phases: sample.phases
-        .filter((phase) => phase.wall_time_ns > 0)
-        .map((phase) => ({
-          id: phase.id,
-          label: phase.label,
-          percent: clampPercent(phase.percent_of_total),
-        })),
+      phases,
       rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
       step: String(sample.step),
       total: formatNs(sample.total_ns),

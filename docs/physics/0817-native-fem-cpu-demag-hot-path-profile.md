@@ -2,7 +2,7 @@
 
 - Status: implementation note
 - Owners: Fullmag core
-- Last updated: 2026-05-15
+- Last updated: 2026-05-16
 - Related physics notes:
   - `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
   - `docs/physics/0533-fem-mfem-runtime-preflight-and-benchmark-gate.md`
@@ -55,6 +55,50 @@ The aggregate `demag_wall_time_ns` remains the outer demag phase wall time.
 The detailed fields are additive diagnostic evidence for benchmarking; they do
 not drive solver decisions.
 
+### Session-level profiler contract
+
+The demag hot-path telemetry feeds the opt-in session solver profiler. This
+profiler is the canonical way to diagnose native FEM/MFEM/hypre wall-clock
+costs from the control room and API.
+
+The profiler must remain disabled by default. When disabled, native and Rust
+runtime code must not allocate profile samples, write JSONL artifacts, or emit
+engine-log profiler lines. When enabled through `set_solver_profile`, samples
+are accumulated in a bounded session ring buffer and exposed through:
+
+```text
+GET /v2/sessions/current/diagnostics/solver-profile
+```
+
+The status resource may expose only a revision pointer for this diagnostics
+resource. Realtime events may only invalidate the resource; clients fetch the
+full profile through the resource hook.
+
+Any native FEM solver rebuild or subsystem extraction must preserve the stable
+phase vocabulary:
+
+```text
+step_total
+rhs_total
+exchange
+demag_total
+demag_assemble
+demag_solver_setup
+demag_solver_apply
+demag_recover
+demag_energy
+local_terms
+normalization_projection
+adaptive_error
+snapshot
+host_sync
+```
+
+If a phase temporarily has no implementation-specific timing, it should be
+reported as zero or folded into `missing_ns`; it should not be renamed or
+silently dropped. Demag `demag_total` must not be less than the sum of its
+reported demag subphases.
+
 ## 4. API, IR, and planner impact
 
 - Python API: no change.
@@ -64,6 +108,8 @@ not drive solver decisions.
 - Rust runner: carry fields through `StepStats` and `StepDiagnostics`.
 - Artifacts: include the latest demag timing breakdown in `metadata.json`
   under `demag_runtime`.
+- Control-room/API diagnostics: preserve the opt-in solver profile command and
+  `diagnostics/solver-profile` resource when solver timing fields move.
 
 ## 5. Validation strategy
 
@@ -86,3 +132,4 @@ to the CPU benchmark matrix.
 - [x] Diagnostics and metadata carry fields.
 - [x] Local ABI/wrapper tests pass.
 - [x] MFEM-host runtime timing smoke remains explicitly deferred when MFEM is absent.
+- [x] Session profiler contract is documented as a rebuild invariant.

@@ -51,8 +51,10 @@ export function matchesCommandShortcut(
 
   const tokens = shortcut
     .split("+")
-    .map((token) => normalizeKey(token))
-    .filter(Boolean);
+    .flatMap((token) => {
+      const normalized = normalizeKey(token);
+      return normalized ? [normalized] : [];
+    });
   const key = tokens.find((token) => !MODIFIER_KEYS.has(token));
   if (!key || normalizeKey(event.key) !== key) return false;
 

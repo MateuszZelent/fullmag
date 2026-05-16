@@ -187,6 +187,10 @@ details[open] > .fm-registry-tree__summary::before {
   font-size: 10px;
 }
 
+details[open] > .fm-registry-tree__summary .fm-registry-tree__compact {
+  display: none;
+}
+
 .fm-registry-tree__empty {
   color: var(--fm-text-muted);
 }

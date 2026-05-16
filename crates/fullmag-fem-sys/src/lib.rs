@@ -82,6 +82,7 @@ pub enum fullmag_fem_preconditioner {
 pub enum fullmag_fem_demag_realization {
     FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET = 1,
     FULLMAG_FEM_DEMAG_AIRBOX_ROBIN = 2,
+    FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER = 3,
 }
 
 #[repr(C)]

@@ -242,6 +242,10 @@ pub struct SceneStudyState {
     pub requested_cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default = "default_true")]
+    pub exchange_enabled: bool,
+    #[serde(default = "default_true")]
+    pub demag_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demag_realization: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

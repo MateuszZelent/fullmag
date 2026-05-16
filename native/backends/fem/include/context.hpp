@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "fullmag_fem.h"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -307,7 +308,8 @@ struct Context {
     void *mfem_cached_hypre_solver = nullptr;         // mfem::HypreSolver*
     bool poisson_solver_setup = false;
 
-    // Demag realization: 1 = airbox_dirichlet, 2 = airbox_robin
+    // Demag realization:
+    // 1 = airbox_dirichlet, 2 = airbox_robin, 3 = Fredkin-Koehler FEM/BEM.
     int demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     int poisson_boundary_marker = 99;
 
@@ -330,6 +332,11 @@ struct Context {
     void *mfem_periodic_poisson_solution = nullptr;  // mfem::Vector* (work: x_p)
     void *mfem_periodic_poisson_workspace = nullptr; // PeriodicPoissonReducedWorkspace*
     bool poisson_periodic_reduced_ready = false;
+
+    // Body-only Fredkin-Koehler FEM/BEM demag subsystem.
+    // Owned by cpu/mfem/interactions/demag_fem_bem.cpp.
+    void *mfem_demag_fem_bem_workspace = nullptr;
+    bool demag_fem_bem_ready = false;
 #endif
 
     // ── S12: CUDA stream management ──
@@ -381,7 +388,6 @@ int context_upload_magnetization_f64(
     uint64_t len,
     std::string &error);
 void context_populate_device_info(Context &ctx);
-void context_refresh_thermal_field(Context &ctx);
 #if FULLMAG_HAS_MFEM_STACK
 bool context_initialize_mfem(Context &ctx, std::string &error);
 bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);
@@ -409,10 +415,13 @@ const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator)
 void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
 bool context_initialize_poisson(Context &ctx, std::string &error);
 void context_destroy_poisson(Context &ctx);
-// Forward-declared so that context.cpp can call this without including
-// mfem_bridge.cpp internals. PhaseTimings is only ever passed as nullptr
-// from context.cpp.
-struct PhaseTimings;
+struct PhaseTimings {
+    uint64_t exchange_wall_time_ns = 0;
+    DemagPoissonPhaseTimings demag;
+    uint64_t rhs_wall_time_ns = 0;
+    uint64_t extra_energy_wall_time_ns = 0;
+    uint64_t snapshot_wall_time_ns = 0;
+};
 
 // MFEM device classification helpers (defined in cpu/mfem/runtime/mfem_device.cpp)
 const char *configured_mfem_device_string();
@@ -429,9 +438,6 @@ bool context_compute_demag_poisson(
     bool allow_interrupt,
     PhaseTimings *timings,
     std::string &error);
-void compute_magnetoelastic_field(
-    Context &ctx,
-    const std::vector<double> &m_xyz);
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

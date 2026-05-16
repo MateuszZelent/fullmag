@@ -917,9 +917,6 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
         return { message: "No .fms file selected.", status: "cancelled" };
       }
 
-      const inspection = await context.api.persistence.imports.inspect({
-        fms_base64: fmsBase64,
-      });
       const response = await context.api.persistence.imports.commit({
         fms_base64: fmsBase64,
         restore_mode: input?.restoreMode ?? "resume",
@@ -928,7 +925,7 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
       invalidateImportedSessionResources(context, response.session_id);
 
       return {
-        message: `State imported from ${inspection.inspection.session_id}.`,
+        message: `State imported from ${response.session_id}.`,
         status: "completed",
       };
     },

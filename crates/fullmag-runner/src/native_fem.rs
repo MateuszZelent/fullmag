@@ -495,9 +495,10 @@ impl NativeFemBackend {
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin => {
                     ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_AIRBOX_ROBIN
                 }
-                fullmag_ir::ResolvedFemDemagIR::Bem
-                | fullmag_ir::ResolvedFemDemagIR::FredkinKoehler
-                | fullmag_ir::ResolvedFemDemagIR::Fmm => {
+                fullmag_ir::ResolvedFemDemagIR::FredkinKoehler => {
+                    ffi::fullmag_fem_demag_realization::FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER
+                }
+                fullmag_ir::ResolvedFemDemagIR::Bem | fullmag_ir::ResolvedFemDemagIR::Fmm => {
                     return Err(RunError {
                         message: format!(
                             "native FEM runner: demag model '{}' is not yet implemented in the backend",
@@ -1818,6 +1819,37 @@ mod tests {
             "unexpected material-class rejection message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn native_fem_accepts_fredkin_koehler_demag_at_runner_boundary() {
+        let mut plan = make_test_plan();
+        plan.enable_exchange = false;
+        plan.enable_demag = true;
+        plan.mfem_device_string = Some("cpu".to_string());
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        plan.air_box_config = None;
+        plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh;
+        plan.mesh.boundary_faces = vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
+        plan.mesh.boundary_markers = vec![1, 1, 1, 1];
+
+        if let Err(err) = NativeFemBackend::create_with_initial_effective_field(&plan, false) {
+            assert!(
+                !err.message.contains("not yet implemented")
+                    && !err.message.contains("air-box demag requires"),
+                "runner must route Fredkin-Koehler demag to the native FEM/BEM backend, got: {}",
+                err.message
+            );
+            if !is_gpu_available()
+                && (err.message.contains("MFEM") || err.message.contains("scaffold"))
+            {
+                return;
+            }
+            panic!(
+                "unexpected native FEM Fredkin-Koehler create error: {}",
+                err.message
+            );
+        }
     }
 
     #[test]

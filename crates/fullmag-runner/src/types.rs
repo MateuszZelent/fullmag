@@ -443,7 +443,10 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(snapshot.latest_samples[1].step, 3);
         assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 425);
         assert_eq!(snapshot.latest_samples[1].missing_ns, 575);
-        assert_eq!(snapshot.latest_samples[1].threading.effective_omp_threads, 4);
+        assert_eq!(
+            snapshot.latest_samples[1].threading.effective_omp_threads,
+            4
+        );
         assert_eq!(snapshot.aggregates.sample_count, 2);
     }
 
@@ -462,6 +465,30 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert!(!snapshot.config.enabled);
         assert_eq!(snapshot.revision, 0);
         assert!(snapshot.latest_samples.is_empty());
+    }
+
+    #[test]
+    fn solver_profile_demag_total_covers_subphase_sum() {
+        let sample = crate::SolverProfileStepSample::from_step_stats(&StepStats {
+            step: 1,
+            wall_time_ns: 1_000,
+            demag_wall_time_ns: 10,
+            demag_assemble_wall_time_ns: 30,
+            demag_solver_setup_wall_time_ns: 40,
+            demag_solver_apply_wall_time_ns: 50,
+            demag_recover_wall_time_ns: 60,
+            demag_energy_wall_time_ns: 70,
+            ..StepStats::default()
+        });
+        let demag_total = sample
+            .phases
+            .iter()
+            .find(|phase| phase.id == "demag_total")
+            .expect("missing demag_total phase")
+            .wall_time_ns;
+
+        assert_eq!(sample.demag_subphase_sum_ns, 250);
+        assert_eq!(demag_total, sample.demag_subphase_sum_ns);
     }
 
     #[test]
@@ -1056,7 +1083,7 @@ pub struct ResolvedFallback {
     pub message: String,
 }
 
-/// FEM Poisson demag solver provenance.
+/// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
     pub linear_solver: String,

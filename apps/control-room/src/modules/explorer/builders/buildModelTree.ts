@@ -341,11 +341,13 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
 }
 
 function formatStudyStageKind(kind: string): string {
-  return kind
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts: string[] = [];
+  for (const part of kind.split("_")) {
+    if (part) {
+      parts.push(part[0]?.toUpperCase() + part.slice(1));
+    }
+  }
+  return parts.join(" ");
 }
 
 function studyStageKind(kind: string): ExplorerNode["kind"] {
