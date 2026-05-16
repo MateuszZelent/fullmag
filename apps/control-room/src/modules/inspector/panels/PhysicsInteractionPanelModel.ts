@@ -154,7 +154,7 @@ function isObjectInteractionKind(id: PhysicsInteractionId): id is ObjectInteract
   );
 }
 
-function jsonObject(value: JsonValue | undefined): JsonObject | null {
+function jsonObject(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)
     : null;

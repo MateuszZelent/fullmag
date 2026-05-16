@@ -76,6 +76,21 @@ describe("viewport3d visual profiles", () => {
     });
   });
 
+  it("lets the viewport antialias command override profile antialiasing", () => {
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive"),
+        false,
+      ),
+    ).toMatchObject({ antialias: false });
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive-lite"),
+        true,
+      ),
+    ).toMatchObject({ antialias: true });
+  });
+
   it("configures ACES tone mapping for quality profiles", () => {
     const renderer = {
       outputColorSpace: "",

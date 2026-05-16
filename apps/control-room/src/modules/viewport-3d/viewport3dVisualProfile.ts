@@ -171,6 +171,7 @@ export function resolveViewport3DCanvasDpr({
 
 export function resolveViewport3DCanvasGlOptions(
   profile: Viewport3DVisualProfile,
+  antialiasOverride?: boolean,
 ): {
   alpha: false;
   antialias: boolean;
@@ -179,7 +180,7 @@ export function resolveViewport3DCanvasGlOptions(
 } {
   return {
     alpha: false,
-    antialias: profile.antialias,
+    antialias: antialiasOverride ?? profile.antialias,
     powerPreference: "high-performance",
     preserveDrawingBuffer: profile.preserveDrawingBuffer,
   };

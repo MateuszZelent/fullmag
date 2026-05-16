@@ -1,6 +1,7 @@
 import type { DecodedTopology } from "./types";
 
 const HEADER_LEN = 32;
+const KIND_F64_U32 = 1;
 const MAGIC = "FMMT";
 const SUPPORTED_VERSION = 1;
 
@@ -74,6 +75,13 @@ export function decodeTopology(buffer: ArrayBuffer): DecodedTopology {
   if (version !== SUPPORTED_VERSION) {
     throw new Error(
       `Unsupported FMMT version: expected ${SUPPORTED_VERSION}, got ${version}`,
+    );
+  }
+
+  const kind = view.getUint8(5);
+  if (kind !== KIND_F64_U32) {
+    throw new Error(
+      `Unsupported FMMT topology kind: expected ${KIND_F64_U32}, got ${kind}`,
     );
   }
 

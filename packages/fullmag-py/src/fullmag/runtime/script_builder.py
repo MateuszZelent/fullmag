@@ -3559,11 +3559,6 @@ def _validate_energy_terms(problem: Problem) -> None:
             continue
         if isinstance(term, Demag):
             demag_count += 1
-            if term.realization == "transfer_grid":
-                raise ValueError(
-                    "FEM transfer_grid został usunięty. "
-                    "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
-                )
             if term.realization not in {
                 None,
                 "auto",

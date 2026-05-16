@@ -1,8 +1,9 @@
 use crate::{SceneDocument, SceneGeometry, SceneObject, Transform3D};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryBackendTarget {
     Fem,
@@ -33,7 +34,7 @@ impl GeometryBackendTarget {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometrySupportStatus {
     Production,
@@ -41,7 +42,7 @@ pub enum GeometrySupportStatus {
     Unsupported,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryDiagnosticSeverity {
     Info,
@@ -49,7 +50,7 @@ pub enum GeometryDiagnosticSeverity {
     Error,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryDiagnostic {
     pub id: String,
     pub severity: GeometryDiagnosticSeverity,
@@ -63,7 +64,7 @@ pub struct GeometryDiagnostic {
     pub blocks: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct PrimitiveGeometryCapability {
     pub id: String,
     pub label: String,
@@ -75,7 +76,7 @@ pub struct PrimitiveGeometryCapability {
     pub status: GeometrySupportStatus,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct BooleanGeometryCapability {
     pub op: String,
     pub fem: bool,
@@ -85,19 +86,27 @@ pub struct BooleanGeometryCapability {
     pub notes: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryCapabilitiesResource {
     pub revision: u64,
     pub primitive_capabilities: Vec<PrimitiveGeometryCapability>,
     pub csg_capabilities: Vec<BooleanGeometryCapability>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryValidationResource {
     pub scene_revision: u64,
     pub backend_target: GeometryBackendTarget,
     pub status: String,
     pub dirty: bool,
+    pub diagnostics: Vec<GeometryDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct GeometryDiagnosticsResource {
+    pub scene_revision: u64,
+    pub backend_target: GeometryBackendTarget,
+    pub status: String,
     pub diagnostics: Vec<GeometryDiagnostic>,
 }
 
@@ -131,7 +140,7 @@ pub struct GeometryBody {
     pub visible: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct GeometryRealizationSnapshot {
     pub source_scene_revision: u64,
     pub realization_revision: u64,
@@ -151,7 +160,7 @@ pub struct GeometryRealizationSnapshot {
     pub provenance: Vec<GeometryProvenanceEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RealizedGeometryBody {
     pub body_id: String,
     pub object_id: String,
@@ -168,7 +177,7 @@ pub struct RealizedGeometryBody {
     pub provenance: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct GeometryRegionCandidate {
     pub id: String,
     pub object_id: String,
@@ -183,7 +192,7 @@ pub struct GeometryRegionCandidate {
     pub source_geometry_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryProvenanceEntry {
     pub body_id: String,
     pub object_id: String,

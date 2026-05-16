@@ -13,6 +13,7 @@ import {
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -41,6 +42,66 @@ describe("RealtimeInvalidationBridge", () => {
     expect(handled).toBe(true);
     expect(resources.getRevision("session:status")).toBe(5);
     expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
+  });
+
+  it("coalesces session status invalidation once per backend batch", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    let statusInvalidations = 0;
+
+    bus.on("resource:invalidated", ({ resourceKey }) => {
+      if (resourceKey === "session:status") {
+        statusInvalidations += 1;
+      }
+    });
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: SIMULATION_COMMANDS_PATH,
+            resource: "commands",
+            revision: 5,
+          },
+          {
+            recommended_fetch: VISUALIZATION_STATE_PATH,
+            resource: "visualization_state",
+            revision: 6,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(statusInvalidations).toBe(1);
+    expect(resources.getRevision("session:status")).toBe(6);
+    expect(resources.getRevision(SIMULATION_COMMANDS_PATH)).toBe(5);
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(6);
+  });
+
+  it("does not refresh session status for visualization client ack batches", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: VISUALIZATION_CLIENT_ACKS_PATH,
+            resource: "visualization_client_acks",
+            revision: 9,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision("session:status")).toBeNull();
+    expect(resources.getRevision(VISUALIZATION_CLIENT_ACKS_PATH)).toBe(9);
   });
 
   it("suppresses invalidations that were already satisfied locally", () => {

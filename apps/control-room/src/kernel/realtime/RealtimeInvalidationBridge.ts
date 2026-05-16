@@ -7,6 +7,7 @@ import {
   MESHING_OBJECT_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MODEL_SCENE_PATH,
+  VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -100,6 +101,10 @@ function resourceFamilyPrefix(pathWithObjectId: string): string {
   return pathWithObjectId.slice(0, pathWithObjectId.indexOf("{object_id}"));
 }
 
+function shouldInvalidateSessionStatus(recommendedFetch?: string): boolean {
+  return recommendedFetch !== VISUALIZATION_CLIENT_ACKS_PATH;
+}
+
 export class RealtimeInvalidationBridge {
   constructor(
     private readonly resources: ResourceInvalidationController,
@@ -119,6 +124,7 @@ export class RealtimeInvalidationBridge {
     if (isRealtimeBatchChangedEvent(event)) {
       const changes = event.payload?.changes ?? [];
       let handled = false;
+      let statusRevision: ResourceRevision | null = null;
 
       for (const rawChange of changes) {
         const change = realtimeBatchChange(rawChange);
@@ -126,7 +132,9 @@ export class RealtimeInvalidationBridge {
           continue;
         }
 
-        this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, change.revision);
+        if (shouldInvalidateSessionStatus(change.recommended_fetch)) {
+          statusRevision = change.revision;
+        }
         if (change.recommended_fetch) {
           this.invalidateResource(change.recommended_fetch, change.revision);
           this.resources.invalidatePrefix(change.recommended_fetch, change.revision);
@@ -136,6 +144,10 @@ export class RealtimeInvalidationBridge {
           );
         }
         handled = true;
+      }
+
+      if (statusRevision !== null) {
+        this.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, statusRevision);
       }
 
       return handled;

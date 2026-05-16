@@ -40,6 +40,10 @@ export function decodeFieldVector(buffer: ArrayBuffer): DecodedFieldVector {
   }
 
   const nComp = view.getUint8(6);
+  if (nComp < 1 || nComp > 3) {
+    throw new Error(`Unsupported FMVP component count: expected 1-3, got ${nComp}`);
+  }
+
   const valueCount = view.getUint32(12, true);
   const gridX = view.getUint32(16, true);
   const gridY = view.getUint32(20, true);

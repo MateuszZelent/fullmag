@@ -204,6 +204,8 @@ When the user corrects your approach, append a one-line rule here before ending 
 - Treat `THREE.WebGLRenderer: Context Lost` during `apps/control-room` startup as a failing viewport lifecycle signal until proven to be teardown-only; verify with `gl.isContextLost()` and drawing-buffer dimensions before calling it harmless.
 - Keep `apps/control-room` development StrictMode disabled while the installed R3F/Three stack force-loses WebGL during React development remounts; do not re-enable `reactStrictMode` without a real browser smoke showing stable 3D canvas after load.
 - Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
+- FEM time-integration performance gates must cover every supported explicit RK integrator, not only Heun.
+- When FEM CPU and FEM GPU work are split between agents, keep this agent's changes to the FEM CPU path only and do not create GPU hot-loop or GPU-state artifacts.
 
 ---
 

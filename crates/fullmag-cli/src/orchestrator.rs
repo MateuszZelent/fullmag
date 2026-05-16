@@ -2924,6 +2924,12 @@ fn print_script_summary(summary: &ScriptRunSummary) {
     if let Some(final_e_ext) = summary.final_e_ext {
         println!("- final_E_ext: {:.6e} J", final_e_ext);
     }
+    if let Some(final_e_ani) = summary.final_e_ani {
+        println!("- final_E_ani: {:.6e} J", final_e_ani);
+    }
+    if let Some(final_e_dmi) = summary.final_e_dmi {
+        println!("- final_E_dmi: {:.6e} J", final_e_dmi);
+    }
     if let Some(final_e_total) = summary.final_e_total {
         println!("- final_E_total: {:.6e} J", final_e_total);
     }
@@ -4698,13 +4704,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 let display_selection = || display_selection_handle.display_selection_snapshot();
                 let interrupt_signal = display_selection_handle.running_interrupt_signal();
-                fullmag_runner::run_problem_with_live_preview_interruptible(
+                fullmag_runner::run_problem_with_live_preview_interruptible_with_initial_snapshot(
                     &stage.ir,
                     stage.until_seconds,
                     &current_stage_artifact_dir,
                     field_every_n,
                     &display_selection,
                     Some(interrupt_signal.as_ref()),
+                    !args.headless,
                     |update| {
                         let adjusted = offset_step_update(
                             &update,
@@ -6418,6 +6425,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_ex: aggregated_steps.last().map(|step| step.e_ex),
         final_e_demag: aggregated_steps.last().map(|step| step.e_demag),
         final_e_ext: aggregated_steps.last().map(|step| step.e_ext),
+        final_e_ani: aggregated_steps.last().map(|step| step.e_ani),
+        final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
         eigen_mode_count,
         eigen_lowest_frequency_hz,

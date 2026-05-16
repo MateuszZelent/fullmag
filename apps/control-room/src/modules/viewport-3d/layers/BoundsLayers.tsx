@@ -121,12 +121,16 @@ function BoundsVolumeWireframe({
   const geometry = useMemo(() => {
     const positions = buildBoundsVolumeWireframePositions(bounds);
     if (!positions) return null;
-    const next = tracker.track("geometry", new BufferGeometry());
+    const next = new BufferGeometry();
     next.setAttribute("position", new BufferAttribute(positions, 3));
     return next;
-  }, [bounds, tracker]);
+  }, [bounds]);
 
-  useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
+  useEffect(() => {
+    if (!geometry) return undefined;
+    tracker.track("geometry", geometry);
+    return () => tracker.release("geometry", geometry);
+  }, [geometry, tracker]);
 
   if (!geometry) return null;
 

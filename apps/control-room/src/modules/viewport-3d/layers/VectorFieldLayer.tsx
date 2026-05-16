@@ -143,6 +143,16 @@ export function VectorFieldLayer({
   );
   const useInstanceColors = Boolean(glyphs?.colors);
   const glyphCount = glyphs?.count ?? 0;
+  const transformScratch = useMemo(
+    () => ({
+      direction: new Vector3(),
+      matrix: new Matrix4(),
+      position: new Vector3(),
+      quaternion: new Quaternion(),
+      scale: new Vector3(),
+    }),
+    [],
+  );
 
   // Stable power-of-two capacity keeps allocations bounded without render-time
   // ref reads, which React Compiler rejects.
@@ -249,11 +259,7 @@ export function VectorFieldLayer({
     shaft.instanceMatrix.setUsage(DynamicDrawUsage);
     head.instanceMatrix.setUsage(DynamicDrawUsage);
 
-    const matrix = new Matrix4();
-    const quaternion = new Quaternion();
-    const position = new Vector3();
-    const scale = new Vector3();
-    const direction = new Vector3();
+    const { direction, matrix, position, quaternion, scale } = transformScratch;
 
     for (let index = 0; index < glyphs.count; index += 1) {
       const offset = index * 3;
@@ -302,7 +308,14 @@ export function VectorFieldLayer({
     head.instanceMatrix.needsUpdate = true;
     tracker.recordDirtyFrame("vector-glyphs");
     invalidate();
-  }, [glyphs, invalidate, material, resolvedStyle.materialColor, tracker]);
+  }, [
+    glyphs,
+    invalidate,
+    material,
+    resolvedStyle.materialColor,
+    tracker,
+    transformScratch,
+  ]);
 
   if (!glyphs || glyphs.count === 0) return null;
 

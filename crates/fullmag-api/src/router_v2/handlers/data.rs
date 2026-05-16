@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod domain;
+mod field_resolution;
 pub mod fields;
 pub mod quantities;
 pub mod scalars;

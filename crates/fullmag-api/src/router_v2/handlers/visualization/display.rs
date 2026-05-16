@@ -224,11 +224,14 @@ pub async fn patch_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_visualization_state_patch(&update)?;
     let display_patch = visualization_patch_to_display_patch(&update);
-    apply_display_patch(state.clone(), display_patch).await?;
-    {
+    let display_revision = {
+        let mut selection = state.current_display_selection.write().await;
         let mut presentation = state.current_display_presentation.write().await;
+        apply_display_patch_to_state(&mut selection, &mut presentation, display_patch);
         apply_visualization_presentation_patch(&mut presentation, &update)?;
-    }
+        selection.revision
+    };
+    emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
     let live_snapshot = state.current_live_state.read().await;
@@ -286,7 +289,20 @@ async fn apply_display_patch(
 ) -> Result<DisplaySelection, ApiError> {
     let mut sel = state.current_display_selection.write().await;
     let mut presentation = state.current_display_presentation.write().await;
+    let response = apply_display_patch_to_state(&mut sel, &mut presentation, update);
+    let display_revision = sel.revision;
+    drop(presentation);
+    drop(sel);
+    emit_display_realtime_change(&state, display_revision).await?;
 
+    Ok(response)
+}
+
+fn apply_display_patch_to_state(
+    sel: &mut CurrentDisplaySelection,
+    presentation: &mut DisplayPresentationState,
+    update: DisplayPatch,
+) -> DisplaySelection {
     if let Some(q) = update.active_quantity_id {
         sel.selection.quantity = q;
     }
@@ -340,13 +356,7 @@ async fn apply_display_patch(
     sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
-    let display_revision = sel.revision;
-    let response = build_display_selection_response(&sel, &presentation);
-    drop(presentation);
-    drop(sel);
-    emit_display_realtime_change(&state, display_revision).await?;
-
-    Ok(response)
+    build_display_selection_response(&sel, &presentation)
 }
 
 fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Result<(), ApiError> {
@@ -1217,21 +1227,35 @@ async fn emit_display_realtime_change(
     state: &Arc<AppState>,
     display_revision: u64,
 ) -> Result<(), ApiError> {
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        let realtime_state =
-            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
-                .await;
-        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-            .await?;
-    }
-    Ok(())
+    let (session_id, run_id) = current_live_realtime_identity(state).await;
+    crate::publish_current_live_realtime_resource_changes(
+        state,
+        session_id,
+        run_id,
+        vec![
+            RealtimeResourceChange {
+                resource: RealtimeResourceName::Display,
+                revision: display_revision,
+                resource_id: None,
+                domain_generation_id: None,
+                recommended_fetch: Some("/v2/sessions/current/visualization/display".to_string()),
+            },
+            RealtimeResourceChange {
+                resource: RealtimeResourceName::VisualizationState,
+                revision: display_revision,
+                resource_id: None,
+                domain_generation_id: None,
+                recommended_fetch: Some("/v2/sessions/current/visualization/state".to_string()),
+            },
+        ],
+        false,
+        0,
+    )
+    .await
 }
 
-async fn emit_visualization_client_ack_realtime_change(
-    state: &Arc<AppState>,
-    ack_revision: u64,
-) -> Result<(), ApiError> {
-    let (session_id, run_id) = state
+async fn current_live_realtime_identity(state: &Arc<AppState>) -> (String, Option<String>) {
+    state
         .current_live_state
         .read()
         .await
@@ -1242,7 +1266,14 @@ async fn emit_visualization_client_ack_realtime_change(
                 snapshot.run.as_ref().map(|run| run.run_id.clone()),
             )
         })
-        .unwrap_or_else(|| ("current".to_string(), None));
+        .unwrap_or_else(|| ("current".to_string(), None))
+}
+
+async fn emit_visualization_client_ack_realtime_change(
+    state: &Arc<AppState>,
+    ack_revision: u64,
+) -> Result<(), ApiError> {
+    let (session_id, run_id) = current_live_realtime_identity(state).await;
     crate::publish_current_live_realtime_resource_changes(
         state,
         session_id,

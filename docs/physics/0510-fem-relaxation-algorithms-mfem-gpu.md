@@ -294,6 +294,16 @@ validation and early workflows, but they are not the final mass-metric /
 preconditioned FEM minimizers. `tangent_plane_implicit` remains semantic-only
 and must be disabled in UI until a backend implementation exists.
 
+Status 2026-05-15: runner provenance now separates this bootstrap direct
+minimization contract from time integration. Direct FEM `projected_gradient_bb`
+and `nonlinear_cg` runs publish `requested_energy_minimizer`,
+`resolved_energy_minimizer`, and `energy_minimizer_realization =
+"bootstrap_snapshot_tangent_gradient"`, and clear `resolved_integrator` so
+metadata does not imply that Heun/RK time integration executed the stage.
+This is a provenance/contract closure only; FE-metric inner products,
+preconditioned native minimizers, and tangent-plane implicit relaxation remain
+open.
+
 ### 4.2 ProblemIR representation
 
 Use a shared `StudyIR::Relaxation` shape across backends.

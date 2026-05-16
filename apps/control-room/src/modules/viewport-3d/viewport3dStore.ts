@@ -11,7 +11,7 @@ import {
 export interface Viewport3DCameraState {
   position: [number, number, number];
   target: [number, number, number];
-  up?: [number, number, number];
+  up: [number, number, number];
 }
 
 export interface Viewport3DCommandState {
@@ -302,10 +302,7 @@ export function sameViewport3DCameraState(
   return (
     sameVector(left.position, right.position) &&
     sameVector(left.target, right.target) &&
-    sameVector(
-      left.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1],
-      right.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1],
-    )
+    sameVector(left.up, right.up)
   );
 }
 
@@ -319,7 +316,7 @@ export function viewport3DCameraViewSignature({
   return [
     ...camera.position,
     ...camera.target,
-    ...(camera.up ?? DEFAULT_VIEWPORT_3D_CAMERA_STATE.up ?? [0, 0, 1]),
+    ...camera.up,
     projection,
   ].join(":");
 }

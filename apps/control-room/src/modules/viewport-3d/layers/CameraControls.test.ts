@@ -43,6 +43,7 @@ describe("resolveViewport3DCameraFit", () => {
     const lastAutoFitCameraState = {
       position: [1, 2, 3] as [number, number, number],
       target: [0, 0, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
     };
 
     expect(
@@ -59,12 +60,34 @@ describe("resolveViewport3DCameraFit", () => {
         currentCameraState: {
           position: [4, 5, 6],
           target: [0, 0, 0],
+          up: [0, 0, 1],
         },
         lastAutoFitCameraState,
         nextBoundsSignature: "next",
         previousBoundsSignature: "previous",
       }),
     ).toBe(false);
+  });
+
+  it("treats sub-visual camera jitter as the same auto-fit camera", () => {
+    const lastAutoFitCameraState = {
+      position: [1, 2, 3] as [number, number, number],
+      target: [0, 0, 0] as [number, number, number],
+      up: [0, 0, 1] as [number, number, number],
+    };
+
+    expect(
+      shouldAutoFitViewport3DBoundsChange({
+        currentCameraState: {
+          position: [1 + 2e-8, 2, 3],
+          target: [0, 0, 0],
+          up: [0, 0, 1],
+        },
+        lastAutoFitCameraState,
+        nextBoundsSignature: "next",
+        previousBoundsSignature: "previous",
+      }),
+    ).toBe(true);
   });
 
   it("does not write orbit drag-end camera into the module store", () => {

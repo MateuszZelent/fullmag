@@ -167,6 +167,27 @@ describe("viewport3dRenderModel", () => {
     ).toEqual([3, 2, 1]);
   });
 
+  it("triangulates non-triangle manifest surface faces", () => {
+    expect(
+      Array.from(
+        buildPartSurfaceIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            surface_faces: [[0, 1, 2, 3], [4, 5, 6, 7, 8]],
+          },
+          topologyFixture(),
+        ) ?? [],
+      ),
+    ).toEqual([
+      0, 1, 2,
+      0, 2, 3,
+      4, 5, 6,
+      4, 6, 7,
+      4, 7, 8,
+    ]);
+  });
+
   it("builds part surface indices from topology boundary faces", () => {
     expect(
       Array.from(
@@ -255,6 +276,71 @@ describe("viewport3dRenderModel", () => {
             element_count: 0,
             element_start: 0,
             node_count: 4,
+            node_start: 1,
+          },
+          {
+            ...topologyFixture(),
+            elementCount: 2,
+            indices: new Uint32Array([
+              0, 1, 2, 3,
+              1, 2, 3, 4,
+            ]),
+            nodeCount: 5,
+          },
+        ) ?? [],
+      ),
+    ).toEqual([
+      1, 2,
+      1, 3,
+      1, 4,
+      2, 3,
+      2, 4,
+      3, 4,
+    ]);
+  });
+
+  it("infers a part node range from node_start when node_count is absent", () => {
+    expect(
+      Array.from(
+        buildPartVolumeEdgeIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            node_start: 1,
+          },
+          {
+            ...topologyFixture(),
+            elementCount: 2,
+            indices: new Uint32Array([
+              0, 1, 2, 3,
+              1, 2, 3, 4,
+            ]),
+            nodeCount: 5,
+          },
+        ) ?? [],
+      ),
+    ).toEqual([
+      1, 2,
+      1, 3,
+      1, 4,
+      2, 3,
+      2, 4,
+      3, 4,
+    ]);
+  });
+
+  it("infers a part node range from positive node_start when node_count is zero", () => {
+    expect(
+      Array.from(
+        buildPartVolumeEdgeIndices(
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            node_count: 0,
             node_start: 1,
           },
           {

@@ -65,6 +65,8 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_ex: Option<f64>,
     pub final_e_demag: Option<f64>,
     pub final_e_ext: Option<f64>,
+    pub final_e_ani: Option<f64>,
+    pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     /// Number of eigenmode frequencies found (FEM eigen only).
     pub eigen_mode_count: Option<usize>,

@@ -1,6 +1,7 @@
 # FEM static/time-domain demag PBC
 
-**Status**: PR-3 implementation (Rust reference path); PR-4 native MFEM/hypre path planned.
+**Status**: PR-3 implementation (Rust reference path); CPU reduced-CG
+warm-start added for time-domain reuse; PR-4 native MFEM/hypre path planned.
 
 ---
 
@@ -78,6 +79,11 @@ Solve the reduced system:
 $$
 A_p \, q = b_p
 $$
+
+For the Rust CPU reference time-domain path, the reduced CG solve may use the
+previous reduced scalar potential `q` as the next initial guess. This
+warm-start is a solver optimization only: it changes neither `A_p` nor `b_p`,
+and a converged solve has the same physical solution as a zero-start solve.
 
 Lift back to full space:
 
@@ -158,6 +164,10 @@ operator assembled on the shared-domain mesh (magnetic body + airbox).
 The Robin boundary is assembled only on open airbox faces (excluding periodic
 seam faces).
 
+The Rust CPU reference keeps the reduced potential in the reusable PBC demag
+workspace and reuses it as the initial CG iterate on later reduced solves. The
+non-PBC Robin/Dirichlet reference path remains zero-started in this slice.
+
 ---
 
 ## 9. Python API impact
@@ -231,21 +241,40 @@ Every run with demag PBC records:
 
 ### Golden test: repeated supercell
 
-1. Build a mesh of a thin disk with periodic pairs in x.
+1. Build a structured box mesh with periodic pairs in x.
 2. Run once with PBC demag.
-3. Build a 3× repeated supercell (no PBC).
+3. Build a 15x repeated supercell (no PBC) with the same local
+   discretization.
 4. Extract the central unit-cell demag field.
 5. Assert relative L2 error `≤ 5e-3`.
+
+The repository fixture keeps the Robin beta approximation fixed to the
+primitive-cell value when building the repeated supercell. This is required
+because the Robin coefficient is a finite-airbox approximation derived from
+the computational volume; letting it change with the supercell length would
+compare two different open-boundary models instead of testing only the x-PBC
+reduction. The deterministic magnetization has zero mean in the periodic
+x-component so the finite non-PBC comparison does not introduce a macroscopic
+linear-potential mode absent from the reduced periodic solve.
 
 ### Class consistency test
 
 Assert `max_i |H_demag[i] - H_demag[rep(i)]| < 1e-10 * |H_demag[rep(i)]|`
 for all periodic pairs.
 
+### CPU reference benchmark fixture
+
+The repository CPU reference fixture uses a structured box with x-periodic
+faces and open y/z boundaries. It is intentionally small and deterministic so
+CI can check topology and finite demag observables. It reports elapsed time for
+local comparisons, but CI must not use elapsed time as a pass/fail physics
+oracle.
+
 ### Energy sign test
 
-Assert `E_demag < 0` for a uniform-magnetization state (demagnetising energy
-is always negative in the convention `E = -μ₀/2 ∫ H·M dV`).
+Assert `E_demag >= 0` for a uniform-magnetization state. In the convention
+`E = -μ0/2 integral(H dot M) dV`, the demag field opposes the magnetization in
+the tested state, so the stored demag energy is non-negative.
 
 ---
 
@@ -255,11 +284,15 @@ is always negative in the convention `E = -μ₀/2 ∫ H·M dV`).
 - [x] RHS reduction `reduce_rhs_by_periodic_classes` implemented
 - [x] Lift operator `lift_scalar_by_periodic_classes` implemented
 - [x] Field projection `project_vector_field_by_periodic_classes` implemented
+- [x] `build_boundary_mass_excluding_periodic_faces` implemented in `fem.rs`
+- [x] `periodic_robin_demag_observables_from_vectors` integrated in `fem.rs`
+- [x] Rust CPU reduced-CG warm-start reuses the previous potential in the PBC demag workspace
+- [x] Rust CPU reference semantics accepts demag + static PBC on the reduced path
+- [x] Rust CPU reference benchmark fixture with x-periodic/open-yz mesh
+- [x] Golden repeated-supercell test passing for the Rust CPU reference path
+- [x] Native MFEM CPU reduced solve reuses `x_p` as warm-start and keeps serial solver workspace in the context
 - [ ] Planner accepts demag + PBC when `periodic_boundary_pairs.len() > 0`
-- [ ] `build_boundary_mass_excluding_periodic_faces` implemented in `fem.rs`
-- [ ] `periodic_robin_demag_observables_from_vectors` integrated in `fem.rs`
-- [ ] Golden repeated-supercell test passing
-- [ ] Native MFEM/hypre path (PR-4)
+- [ ] Native MFEM/hypre/AMG path (PR-4)
 
 ---
 
@@ -268,5 +301,7 @@ is always negative in the convention `E = -μ₀/2 ∫ H·M dV`).
 - **Fully periodic 3D demag**: requires k=0 gauge convention (out of scope v1).
 - **DMI PBC**: separate physics note `0810-fem-static-pbc-dmi.md` (PR-5).
 - **Native MFEM/hypre demag PBC**: PR-4 — reduced sparse Poisson + hypre/AMG solve.
+  The current native MFEM CPU path is only a serial reduced CG/GSSmoother path
+  with warm-start and context-owned workspace.
 - **Floquet + dynamic demag**: not supported in static/time-domain path;
   frequency-domain Floquet demag is a separate problem.

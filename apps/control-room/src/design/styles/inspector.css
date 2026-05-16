@@ -959,3 +959,67 @@
   border-bottom-right-radius: var(--fm-radius-md);
   border-bottom: 1px solid var(--fm-border-subtle);
 }
+
+/* ── Per-part vector toggles ── */
+.fm-visualization-part-toggles {
+  display: grid;
+  gap: 2px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-visualization-part-toggles__label {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  padding-bottom: var(--fm-space-1);
+}
+
+.fm-visualization-part-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding: 2px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fm-visualization-part-toggle input[type="checkbox"] {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-canvas);
+  cursor: pointer;
+  position: relative;
+  transition:
+    border-color var(--fm-transition-fast),
+    background-color var(--fm-transition-fast);
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:checked {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent-soft);
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  background: var(--fm-accent);
+  border-radius: 1px;
+}
+
+.fm-visualization-part-toggle input[type="checkbox"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.fm-visualization-part-toggle span {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -118,7 +118,10 @@ typedef struct {
     fullmag_fem_linear_solver solver;
     fullmag_fem_preconditioner preconditioner;
     double relative_tolerance;
+    int has_absolute_tolerance;
+    double absolute_tolerance;
     uint32_t max_iterations;
+    uint32_t print_level;
 } fullmag_fem_solver_config;
 
 typedef struct {
@@ -245,12 +248,18 @@ typedef struct {
     /* FND-013: use consistent (full) mass matrix instead of lumped for exchange.
        0 = lumped (default), 1 = consistent (CG solve). */
     int                        use_consistent_mass;
+    /* Compute initial effective field during backend creation.
+       0 = lazy, 1 = eager (default for interactive/live paths). */
+    int                        eager_initial_effective_field;
 } fullmag_fem_plan_desc;
 
 typedef struct {
     uint64_t step;
     double time_seconds;
     double dt_seconds;
+    double mx;
+    double my;
+    double mz;
     double exchange_energy_joules;
     double demag_energy_joules;
     double external_energy_joules;
@@ -262,11 +271,19 @@ typedef struct {
     double max_demag_field_amplitude;
     double max_rhs_amplitude;
     double max_torque_Apm;                 /* max |m × H_eff|  (A/m) */
+    uint32_t demag_solve_count;
     uint32_t demag_linear_iterations;
     double demag_linear_residual;
     uint64_t wall_time_ns;
     uint64_t exchange_wall_time_ns;
     uint64_t demag_wall_time_ns;
+    uint64_t demag_assemble_wall_time_ns;
+    uint64_t demag_solve_wall_time_ns;
+    uint64_t demag_solver_setup_wall_time_ns;
+    uint64_t demag_solver_apply_wall_time_ns;
+    int demag_solver_setup_reused;
+    uint64_t demag_recover_wall_time_ns;
+    uint64_t demag_energy_wall_time_ns;
     uint64_t rhs_wall_time_ns;
     uint64_t extra_energy_wall_time_ns;
     uint64_t snapshot_wall_time_ns;
@@ -294,11 +311,62 @@ typedef struct {
     int built_with_mfem_stack;
     int built_with_cuda_runtime;
     int built_with_ceed;
+    int native_fem_cpu_available;
+    int native_fem_gpu_available;
+    int mfem_cuda_available;
+    int hypre_gpu_available;
+    int libceed_used_hot_path;
     int visible_cuda_device_count;
     int requested_gpu_index;
     int resolved_gpu_index;
     char reason[256];
 } fullmag_fem_availability_info;
+
+typedef struct {
+    uint64_t h2d_bytes;
+    uint64_t d2h_bytes;
+    uint64_t host_read_count;
+    uint64_t host_write_count;
+    uint64_t host_read_write_count;
+    uint64_t hot_loop_h2d_bytes;
+    uint64_t hot_loop_d2h_bytes;
+    uint64_t hot_loop_host_read_count;
+    uint64_t hot_loop_host_write_count;
+    uint64_t hot_loop_host_read_write_count;
+    uint64_t hot_loop_host_sync_count;
+    uint64_t hot_loop_exchange_h2d_bytes;
+    uint64_t hot_loop_exchange_d2h_bytes;
+    uint64_t hot_loop_exchange_host_sync_count;
+    uint64_t hot_loop_compute_h2d_bytes;
+    uint64_t hot_loop_compute_d2h_bytes;
+    uint64_t hot_loop_compute_host_sync_count;
+} fullmag_fem_transfer_audit;
+
+typedef enum {
+    FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH = 0,
+    FULLMAG_FEM_RESIDENCY_MIXED = 1,
+    FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH = 2,
+} fullmag_fem_data_residency;
+
+typedef struct {
+    int allocated;
+    uint64_t node_count;
+    uint64_t dof_len;
+    uint32_t stage_count;
+    uint64_t device_bytes;
+    uint64_t reduction_workspace_bytes;
+    fullmag_fem_data_residency source_of_truth;
+} fullmag_fem_gpu_state_info;
+
+typedef struct {
+    int exchange_only_enabled;
+    uint32_t stage_count;
+    int uses_cuda_kernels;
+    int allows_exchange_host_sync;
+    int stage_exchange_device_resident;
+    char exchange_operator_mode[64];
+    char reason[256];
+} fullmag_fem_gpu_rk_plan_info;
 
 typedef struct fullmag_fem_backend fullmag_fem_backend;
 
@@ -347,6 +415,21 @@ int fullmag_fem_backend_stage_completion(
 int fullmag_fem_backend_get_device_info(
     fullmag_fem_backend *handle,
     fullmag_fem_device_info *out_info
+);
+
+int fullmag_fem_backend_get_transfer_audit(
+    fullmag_fem_backend *handle,
+    fullmag_fem_transfer_audit *out_audit
+);
+
+int fullmag_fem_backend_get_gpu_state_info(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_state_info *out_info
+);
+
+int fullmag_fem_backend_get_gpu_rk_plan_info(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_rk_plan_info *out_info
 );
 
 int fullmag_fem_backend_upload_strain(

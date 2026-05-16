@@ -548,7 +548,7 @@ export function AppMenuBar() {
             className="fm-header__run-btn"
             data-run-control={action.id}
             disabled={
-              action.disabled || isCommandDisabled(action.id)
+              (action.disabled || isCommandDisabled(action.id)) || undefined
             }
             size="icon"
             title={action.label}

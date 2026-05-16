@@ -72,6 +72,7 @@ export interface Viewport3DFieldRenderModel {
 export interface Viewport3DFieldRenderOptions {
   fullVectorBudget?: number;
   partVectorBudgets?: ReadonlyMap<string, number>;
+  partVectorScales?: ReadonlyMap<string, number>;
   partVectorScopes?: ReadonlyMap<string, "surface" | "full">;
   scalarColorModes?: ReadonlySet<string>;
   scalarColorsVisible?: boolean;
@@ -191,6 +192,7 @@ export function buildViewport3DFieldRenderModel(
       vectorScope === "surface"
         ? partModel.surfaceNodeSelection ?? partModel.part
         : partModel.part;
+    const partScale = options.partVectorScales?.get(partModel.part.id) ?? 1;
     partVectorSegments.set(
       partModel.part.id,
       buildCachedPartVectorSegments(
@@ -199,7 +201,7 @@ export function buildViewport3DFieldRenderModel(
         fieldVector,
         vectorSelection,
         vectorScope,
-        scale,
+        scale * partScale,
         partBudget,
       ),
     );
@@ -426,7 +428,7 @@ export function buildTetraSurfaceIndices(indices: Uint32Array): Uint32Array {
 
 export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
   const tetraCount = Math.floor(indices.length / 4);
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   const edges: number[] = [];
 
   for (let tetra = 0; tetra < tetraCount; tetra += 1) {
@@ -449,17 +451,21 @@ export function buildTetraVolumeEdgeIndices(indices: Uint32Array): Uint32Array {
 
 function appendTetraEdge(
   edges: number[],
-  seen: Set<string>,
+  seen: Set<number>,
   first: number,
   second: number,
 ): void {
   if (first === second) return;
   const a = Math.min(first, second);
   const b = Math.max(first, second);
-  const key = `${a}:${b}`;
+  const key = szudzikPair(a, b);
   if (seen.has(key)) return;
   seen.add(key);
   edges.push(a, b);
+}
+
+function szudzikPair(a: number, b: number): number {
+  return a >= b ? a * a + a + b : b * b + a;
 }
 
 export function buildPartSurfaceIndices(
@@ -547,50 +553,13 @@ function buildUnclaimedVolumeEdgeIndices(
     return buildTetraVolumeEdgeIndices(topology.indices);
   }
 
-  const claimedElements = new Set<number>();
-  for (const part of claimedParts) {
-    markClaimedElements(part, topology, claimedElements);
-  }
-  if (claimedElements.size === 0) return null;
+  const claims = claimedParts
+    .map((part) => buildPartElementClaim(part, topology))
+    .filter((claim): claim is PartElementClaim => claim !== null);
+  if (claims.length === 0) return null;
 
   const selectedTetraIndices: number[] = [];
-  for (
-    let elementIndex = 0, source = 0;
-    source + 3 < topology.indices.length;
-    elementIndex += 1, source += 4
-  ) {
-    if (claimedElements.has(elementIndex)) continue;
-    selectedTetraIndices.push(
-      topology.indices[source] ?? 0,
-      topology.indices[source + 1] ?? 0,
-      topology.indices[source + 2] ?? 0,
-      topology.indices[source + 3] ?? 0,
-    );
-  }
-
-  return selectedTetraIndices.length
-    ? buildTetraVolumeEdgeIndices(new Uint32Array(selectedTetraIndices))
-    : null;
-}
-
-function markClaimedElements(
-  part: Viewport3DSurfacePart,
-  topology: DecodedTopology,
-  claimedElements: Set<number>,
-): void {
-  const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
-  const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
-  const topologyElementCount = Math.floor(topology.indices.length / 4);
-  if (elementCount > 0 && elementStart < topologyElementCount) {
-    const end = Math.min(topologyElementCount, elementStart + elementCount);
-    for (let elementIndex = elementStart; elementIndex < end; elementIndex += 1) {
-      claimedElements.add(elementIndex);
-    }
-    return;
-  }
-
-  const nodeSet = buildPartNodeSet(part, topology.nodeCount);
-  if (!nodeSet) return;
+  let claimedElementCount = 0;
   for (
     let elementIndex = 0, source = 0;
     source + 3 < topology.indices.length;
@@ -600,15 +569,65 @@ function markClaimedElements(
     const b = topology.indices[source + 1] ?? 0;
     const c = topology.indices[source + 2] ?? 0;
     const d = topology.indices[source + 3] ?? 0;
+    if (isElementClaimed(elementIndex, a, b, c, d, claims)) {
+      claimedElementCount += 1;
+      continue;
+    }
+    selectedTetraIndices.push(a, b, c, d);
+  }
+
+  if (claimedElementCount === 0) return null;
+
+  return selectedTetraIndices.length
+    ? buildTetraVolumeEdgeIndices(new Uint32Array(selectedTetraIndices))
+    : null;
+}
+
+type PartElementClaim =
+  | { end: number; start: number; type: "range" }
+  | { nodeSet: Set<number>; type: "nodes" };
+
+function buildPartElementClaim(
+  part: Viewport3DSurfacePart,
+  topology: DecodedTopology,
+): PartElementClaim | null {
+  const elementStart = Math.max(0, Math.floor(part.element_start ?? 0));
+  const elementCount = Math.max(0, Math.floor(part.element_count ?? 0));
+  const topologyElementCount = Math.floor(topology.indices.length / 4);
+  if (elementCount > 0 && elementStart < topologyElementCount) {
+    const end = Math.min(topologyElementCount, elementStart + elementCount);
+    return { end, start: elementStart, type: "range" };
+  }
+
+  const nodeSet = buildPartNodeSet(part, topology.nodeCount);
+  return nodeSet ? { nodeSet, type: "nodes" } : null;
+}
+
+function isElementClaimed(
+  elementIndex: number,
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  claims: readonly PartElementClaim[],
+): boolean {
+  for (const claim of claims) {
+    if (claim.type === "range") {
+      if (elementIndex >= claim.start && elementIndex < claim.end) {
+        return true;
+      }
+      continue;
+    }
     if (
-      nodeSet.has(a) &&
-      nodeSet.has(b) &&
-      nodeSet.has(c) &&
-      nodeSet.has(d)
+      claim.nodeSet.has(a) &&
+      claim.nodeSet.has(b) &&
+      claim.nodeSet.has(c) &&
+      claim.nodeSet.has(d)
     ) {
-      claimedElements.add(elementIndex);
+      return true;
     }
   }
+  return false;
 }
 
 function buildPartNodeSet(
@@ -625,7 +644,11 @@ function buildPartNodeSet(
   }
 
   const start = Math.max(0, Math.floor(part.node_start ?? 0));
-  const count = Math.max(0, Math.floor(part.node_count ?? 0));
+  const rawCount = part.node_count ?? part.nodeCount;
+  const count =
+    rawCount === undefined || (rawCount <= 0 && start > 0)
+      ? nodeCount - start
+      : Math.max(0, Math.floor(rawCount));
   if (count <= 0 || start >= nodeCount) return null;
 
   const end = Math.min(nodeCount, start + count);
@@ -1078,17 +1101,17 @@ function asVec3(value: unknown): [number, number, number] | null {
 function flattenSurfaceFaces(
   surfaceFaces: readonly (readonly number[])[],
 ): Uint32Array {
-  const indices = new Uint32Array(surfaceFaces.length * 3);
+  const indices: number[] = [];
 
-  for (let faceIndex = 0; faceIndex < surfaceFaces.length; faceIndex += 1) {
-    const face = surfaceFaces[faceIndex];
-    const offset = faceIndex * 3;
-    indices[offset] = face?.[0] ?? 0;
-    indices[offset + 1] = face?.[1] ?? 0;
-    indices[offset + 2] = face?.[2] ?? 0;
+  for (const face of surfaceFaces) {
+    if (face.length < 3) continue;
+    const anchor = face[0] ?? 0;
+    for (let index = 1; index + 1 < face.length; index += 1) {
+      indices.push(anchor, face[index] ?? 0, face[index + 1] ?? 0);
+    }
   }
 
-  return indices;
+  return new Uint32Array(indices);
 }
 
 function surfaceIndicesFromBoundaryFaces(

@@ -8,6 +8,10 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::Json;
 use serde::Deserialize;
 
+use super::field_resolution::{
+    extract_fdm_field, extract_fem_field, flatten_json_field_values, json_field_grid,
+    live_magnetization_available, live_magnetization_values,
+};
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
 use crate::fem_slice_overlay::{
@@ -281,14 +285,6 @@ pub async fn get_field_meta(
     )))
 }
 
-fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
-    snapshot
-        .live_state
-        .as_ref()
-        .and_then(|state| state.latest_step.magnetization.as_deref())
-        .is_some_and(|values| !values.is_empty() && values.len() % 3 == 0)
-}
-
 fn push_field_descriptor(
     quantities: &mut Vec<FieldDescriptor>,
     quantity_id: &str,
@@ -316,42 +312,6 @@ fn push_field_descriptor(
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-fn flatten_json_field_values(raw: &serde_json::Value) -> Vec<f64> {
-    raw.get("values")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .flat_map(|v| {
-                    if let Some(inner) = v.as_array() {
-                        inner.iter().filter_map(|c| c.as_f64()).collect::<Vec<_>>()
-                    } else if let Some(f) = v.as_f64() {
-                        vec![f]
-                    } else {
-                        vec![]
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn json_field_grid(raw: &serde_json::Value) -> Option<[u32; 3]> {
-    raw.get("layout")
-        .and_then(|l| l.get("grid_cells"))
-        .and_then(|g| g.as_array())
-        .and_then(|g| {
-            if g.len() == 3 {
-                Some([
-                    g[0].as_u64().unwrap_or(0) as u32,
-                    g[1].as_u64().unwrap_or(0) as u32,
-                    g[2].as_u64().unwrap_or(0) as u32,
-                ])
-            } else {
-                None
-            }
-        })
-}
 
 #[derive(Debug, Clone)]
 struct ResolvedFieldScope {
@@ -583,23 +543,6 @@ fn apply_field_scope(
     scoped
 }
 
-fn live_magnetization_values(
-    snapshot: &crate::types::SessionStateResponse,
-) -> Option<(Vec<f64>, [u32; 3])> {
-    snapshot.live_state.as_ref().and_then(|ls| {
-        let mag = ls.latest_step.magnetization.as_deref()?;
-        if mag.is_empty() || mag.len() % 3 != 0 {
-            return None;
-        }
-        let grid = if ls.latest_step.grid.iter().any(|v| *v > 0) {
-            ls.latest_step.grid
-        } else {
-            [(mag.len() / 3) as u32, 1, 1]
-        };
-        Some((mag.to_vec(), grid))
-    })
-}
-
 // ── Binary vector — P1 ───────────────────────────────────────────────────────
 
 #[utoipa::path(
@@ -720,8 +663,8 @@ pub async fn get_field_vector(
         if let Some(cached) = proj_cache.get(&cache_key) {
             let binary = cached.bytes.clone();
             drop(proj_cache);
-            // Derive point/value counts from cached payload for headers.
-            let point_count = if binary.len() > 48 {
+            // Derive point/value counts from cached FMVP payload for headers.
+            let total_value_count = if binary.len() > 48 {
                 (binary.len() - 48) / 8
             } else {
                 0
@@ -731,13 +674,7 @@ pub async fn get_field_vector(
             } else {
                 1
             };
-            let value_count = point_count;
-            let out_n_comp_header = if out_n_comp_for_header > 0 {
-                out_n_comp_for_header
-            } else {
-                1
-            };
-            let _ = out_n_comp_header; // used for header insertion
+            let point_count = total_value_count / out_n_comp_for_header.max(1);
             let mut resp = crate::router_v2::handlers::shared::conditional_binary_response(
                 &headers, &etag, binary,
             );
@@ -747,8 +684,8 @@ pub async fn get_field_vector(
                 &component,
                 field_revision,
                 gen_id,
-                point_count / out_n_comp_for_header.max(1),
-                value_count,
+                point_count,
+                total_value_count,
             );
             insert_scope_headers(&mut resp, resolved_scope.as_ref());
             return Ok(resp);
@@ -771,7 +708,8 @@ pub async fn get_field_vector(
         scoped_grid
     };
 
-    let binary = serialize_field_vector_binary_v2(&quantity_id, out_n_comp, out_grid, &projected);
+    let binary = serialize_field_vector_binary_v2(&quantity_id, out_n_comp, out_grid, &projected)
+        .map_err(ApiError::internal)?;
 
     // P4: populate projection cache
     {
@@ -798,90 +736,6 @@ pub async fn get_field_vector(
 }
 
 // ── 2D slice — P2 ────────────────────────────────────────────────────────────
-
-/// Build an `FdmField` from the snapshot, returning `None` if no data is available.
-fn extract_fdm_field(
-    snapshot: &crate::types::SessionStateResponse,
-    quantity_id: &str,
-    n_comp: usize,
-) -> Option<FdmField> {
-    if quantity_id == "m" {
-        if let Some((values, grid)) = live_magnetization_values(snapshot) {
-            return Some(FdmField {
-                n_comp: 3,
-                grid,
-                values,
-                origin: None,
-                spacing: None,
-            });
-        }
-    }
-    // Try latest_fields
-    if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-        let values = flatten_json_field_values(raw);
-        let grid = json_field_grid(raw)?;
-        return Some(FdmField {
-            n_comp,
-            grid,
-            values,
-            origin: None,
-            spacing: None,
-        });
-    }
-    // Try preview_cache
-    if let Some(field) = snapshot.preview_cache.get(quantity_id) {
-        return Some(FdmField {
-            n_comp,
-            grid: field.preview_grid,
-            values: field.vector_field_values.clone(),
-            origin: None,
-            spacing: None,
-        });
-    }
-    None
-}
-
-fn extract_raw_field_values(
-    snapshot: &crate::types::SessionStateResponse,
-    quantity_id: &str,
-    n_comp: usize,
-) -> Option<Vec<f64>> {
-    if quantity_id == "m" {
-        if let Some((values, _grid)) = live_magnetization_values(snapshot) {
-            return Some(values);
-        }
-    }
-    if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
-        return Some(flatten_json_field_values(raw));
-    }
-    snapshot
-        .preview_cache
-        .get(quantity_id)
-        .map(|field| field.vector_field_values.clone())
-        .filter(|values| n_comp == 0 || values.len() % n_comp == 0)
-}
-
-fn extract_fem_field(
-    snapshot: &crate::types::SessionStateResponse,
-    quantity_id: &str,
-    n_comp: usize,
-) -> Option<FemField> {
-    let mesh = snapshot.fem_mesh.as_ref()?;
-    if mesh.nodes.is_empty() || mesh.elements.is_empty() {
-        return None;
-    }
-    let values = extract_raw_field_values(snapshot, quantity_id, n_comp)?;
-    if n_comp == 0 || values.len() / n_comp != mesh.nodes.len() {
-        return None;
-    }
-    Some(FemField {
-        n_comp,
-        nodes: mesh.nodes.clone(),
-        elements: mesh.elements.clone(),
-        element_markers: mesh.element_markers.clone(),
-        values,
-    })
-}
 
 fn compute_projection(
     fdm_field: &FdmField,
@@ -1972,7 +1826,8 @@ pub async fn get_field_projection_scalar(
         1,
         [projection.x_size, projection.y_size, 1],
         &projection.scalar_values,
-    );
+    )
+    .map_err(ApiError::internal)?;
     {
         let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
         cache.insert(cache_key, binary.clone(), etag.clone());
@@ -2740,7 +2595,8 @@ pub async fn get_field_slice_scalar(
         slice_result.n_comp_out,
         grid,
         &slice_result.scalar_values,
-    );
+    )
+    .map_err(ApiError::internal)?;
 
     {
         let mut cache = state.quantity_data_plane.scalar_slice_cache.lock().await;
@@ -2867,7 +2723,8 @@ pub async fn get_field_slice_arrows(
         2,
         [arrow_count, 1, 1],
         &slice_result.arrow_values,
-    );
+    )
+    .map_err(ApiError::internal)?;
 
     {
         let mut cache = state.quantity_data_plane.arrow_slice_cache.lock().await;

@@ -13,7 +13,12 @@ set(FEM_PUBLIC_HEADERS
 set(FEM_SOURCES
     src/api.cpp
     src/context.cpp
+    src/dmi_weak_residual.cpp
     src/error.cpp
+    src/gpu_exchange.cpp
+    src/gpu_rk.cpp
+    src/gpu_state.cpp
+    src/transfer_audit.cpp
 )
 
 if(FULLMAG_USE_MFEM_STACK)
@@ -26,7 +31,10 @@ if(FULLMAG_USE_MFEM_STACK)
     # S11: CUDA fused kernels (LLG RHS, normalize, accumulate)
     if(FULLMAG_ENABLE_CUDA)
         enable_language(CUDA)
-        list(APPEND FEM_SOURCES src/kernels.cu)
+        list(APPEND FEM_SOURCES
+            src/kernels.cu
+            src/gpu_rk.cu
+        )
     endif()
 endif()
 
@@ -62,6 +70,28 @@ set_target_properties(fullmag_fem PROPERTIES
     SOVERSION 0
     PUBLIC_HEADER "${FEM_PUBLIC_HEADERS}"
 )
+
+# ── Tests ──
+enable_testing()
+
+add_executable(fem_gpu_state_info tests/gpu_state_info.cpp)
+target_link_libraries(fem_gpu_state_info PRIVATE fullmag_fem)
+add_test(NAME fem_gpu_state_info COMMAND fem_gpu_state_info)
+
+add_executable(fem_gpu_rk_plan tests/gpu_rk_plan.cpp)
+target_link_libraries(fem_gpu_rk_plan PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_rk_plan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fem_gpu_rk_plan COMMAND fem_gpu_rk_plan)
+
+add_executable(fem_transfer_audit tests/transfer_audit.cpp)
+target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
+target_include_directories(fem_transfer_audit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fem_transfer_audit COMMAND fem_transfer_audit)
+
+add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)
+target_link_libraries(fem_dmi_weak_residual PRIVATE fullmag_fem)
+target_include_directories(fem_dmi_weak_residual PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fem_dmi_weak_residual COMMAND fem_dmi_weak_residual)
 
 # S14: PA vs Assembled benchmark (opt-in)
 if(FULLMAG_USE_MFEM_STACK)

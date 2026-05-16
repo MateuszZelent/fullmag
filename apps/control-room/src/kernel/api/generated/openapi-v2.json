@@ -468,6 +468,37 @@
         ],
         "type": "object"
       },
+      "BooleanGeometryCapability": {
+        "properties": {
+          "dsl": {
+            "type": "boolean"
+          },
+          "fdm": {
+            "type": "boolean"
+          },
+          "fem": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GeometrySupportStatus"
+          }
+        },
+        "required": [
+          "op",
+          "fem",
+          "fdm",
+          "dsl",
+          "status",
+          "notes"
+        ],
+        "type": "object"
+      },
       "Bounds2": {
         "properties": {
           "u_max": {
@@ -1861,7 +1892,8 @@
       "DomainMeta": {
         "properties": {
           "bounds": {
-            "$ref": "#/components/schemas/Bounds3"
+            "$ref": "#/components/schemas/Bounds3",
+            "description": "Physical cell-edge bounds in meters. For structured FDM grids, `min`\nis the grid edge origin and `max` is `origin + shape * spacing`.\nCell centers are offset by `spacing / 2` on non-zero axes."
           },
           "coordinate_system": {
             "type": "string"
@@ -2231,6 +2263,274 @@
         "required": [
           "x_chosen_size",
           "y_chosen_size"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationDemagPolicyMetadata": {
+        "properties": {
+          "absolute_tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "actual_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "boundary_variant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "final_residual_norm": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "linear_solver": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preconditioner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "print_level": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "relative_tolerance": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "solver_setup_reused": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "timings_ns": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FemCpuRelaxationDemagTimingsNs"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FemCpuRelaxationDemagTimingsNs": {
+        "properties": {
+          "assemble": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "energy": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recover": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solve": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_apply": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "solver_setup": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "assemble",
+          "solve",
+          "solver_setup",
+          "solver_apply",
+          "recover",
+          "energy",
+          "total"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationEnergyTerms": {
+        "properties": {
+          "E_ani": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_demag": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_dmi": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_ex": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_ext": {
+            "format": "double",
+            "type": "number"
+          },
+          "E_total": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "E_ex",
+          "E_demag",
+          "E_ext",
+          "E_ani",
+          "E_dmi",
+          "E_total"
+        ],
+        "type": "object"
+      },
+      "FemCpuRelaxationQualificationMetadata": {
+        "properties": {
+          "assembly_mode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "benchmark_gate_version": {
+            "type": "string"
+          },
+          "demag_policy": {
+            "$ref": "#/components/schemas/FemCpuRelaxationDemagPolicyMetadata"
+          },
+          "executed_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "final_energy_terms_j": {
+            "$ref": "#/components/schemas/FemCpuRelaxationEnergyTerms"
+          },
+          "final_torque_apm": {
+            "format": "double",
+            "type": "number"
+          },
+          "final_torque_t": {
+            "format": "double",
+            "type": "number"
+          },
+          "norm_defect": {
+            "format": "double",
+            "type": "number"
+          },
+          "physics_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "relaxation_algorithm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solver_mesh_signature": {
+            "type": "string"
+          },
+          "stop_metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stop_metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stop_threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "benchmark_gate_version",
+          "physics_terms",
+          "solver_mesh_signature",
+          "demag_policy",
+          "final_energy_terms_j",
+          "final_torque_apm",
+          "final_torque_t",
+          "norm_defect",
+          "executed_steps"
         ],
         "type": "object"
       },
@@ -3114,6 +3414,140 @@
         },
         "type": "object"
       },
+      "GeometryBackendTarget": {
+        "enum": [
+          "fem",
+          "fdm"
+        ],
+        "type": "string"
+      },
+      "GeometryCapabilitiesResource": {
+        "properties": {
+          "csg_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/BooleanGeometryCapability"
+            },
+            "type": "array"
+          },
+          "primitive_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/PrimitiveGeometryCapability"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "primitive_capabilities",
+          "csg_capabilities"
+        ],
+        "type": "object"
+      },
+      "GeometryDiagnostic": {
+        "properties": {
+          "blocks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "code": {
+            "type": "string"
+          },
+          "geometry_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "$ref": "#/components/schemas/GeometryDiagnosticSeverity"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "GeometryDiagnosticSeverity": {
+        "enum": [
+          "info",
+          "warning",
+          "error"
+        ],
+        "type": "string"
+      },
+      "GeometryDiagnosticsResource": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "backend_target",
+          "status",
+          "diagnostics"
+        ],
+        "type": "object"
+      },
+      "GeometryProvenanceEntry": {
+        "properties": {
+          "body_id": {
+            "type": "string"
+          },
+          "geometry_path": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "body_id",
+          "object_id",
+          "geometry_path",
+          "source"
+        ],
+        "type": "object"
+      },
       "GeometryRealizationRequest": {
         "properties": {
           "backend_target": {
@@ -3123,6 +3557,172 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "GeometryRealizationSnapshot": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "bodies": {
+            "items": {
+              "$ref": "#/components/schemas/RealizedGeometryBody"
+            },
+            "type": "array"
+          },
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryProvenanceEntry"
+            },
+            "type": "array"
+          },
+          "realization_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryRegionCandidate"
+            },
+            "type": "array"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_scene_revision",
+          "realization_revision",
+          "backend_target",
+          "status"
+        ],
+        "type": "object"
+      },
+      "GeometryRegionCandidate": {
+        "properties": {
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "source_body_id": {
+            "type": "string"
+          },
+          "source_body_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source_geometry_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object_id",
+          "source_body_id",
+          "material_ref",
+          "bounds_min",
+          "bounds_max",
+          "source_geometry_path"
+        ],
+        "type": "object"
+      },
+      "GeometrySupportStatus": {
+        "enum": [
+          "production",
+          "preview",
+          "unsupported"
+        ],
+        "type": "string"
+      },
+      "GeometryValidationResource": {
+        "properties": {
+          "backend_target": {
+            "$ref": "#/components/schemas/GeometryBackendTarget"
+          },
+          "diagnostics": {
+            "items": {
+              "$ref": "#/components/schemas/GeometryDiagnostic"
+            },
+            "type": "array"
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "backend_target",
+          "status",
+          "dirty",
+          "diagnostics"
+        ],
         "type": "object"
       },
       "GpuTelemetryDevice": {
@@ -3428,6 +4028,7 @@
       "MagnetizationAssetPatchRequest": {
         "properties": {
           "asset": {
+            "additionalProperties": true,
             "type": "object"
           },
           "base_revision": {
@@ -3447,6 +4048,7 @@
       "MagnetizationAssetResource": {
         "properties": {
           "asset": {
+            "additionalProperties": true,
             "type": "object"
           },
           "scene_revision": {
@@ -5631,6 +6233,45 @@
         },
         "type": "object"
       },
+      "PrimitiveGeometryCapability": {
+        "properties": {
+          "boolean": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string"
+          },
+          "dsl": {
+            "type": "boolean"
+          },
+          "fdm": {
+            "type": "boolean"
+          },
+          "fem": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/GeometrySupportStatus"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "category",
+          "fem",
+          "fdm",
+          "dsl",
+          "boolean",
+          "status"
+        ],
+        "type": "object"
+      },
       "QuantityCatalogEntry": {
         "properties": {
           "description": {
@@ -5807,6 +6448,69 @@
           "field_component",
           "colormap",
           "auto_contrast"
+        ],
+        "type": "object"
+      },
+      "RealizedGeometryBody": {
+        "properties": {
+          "body_id": {
+            "type": "string"
+          },
+          "bounds_max": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "bounds_min": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "geometry_kind": {
+            "type": "string"
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "object_name": {
+            "type": "string"
+          },
+          "provenance": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "body_id",
+          "object_id",
+          "object_name",
+          "geometry_kind",
+          "material_ref",
+          "visible",
+          "status",
+          "bounds_min",
+          "bounds_max"
         ],
         "type": "object"
       },
@@ -6549,6 +7253,150 @@
         ],
         "type": "object"
       },
+      "SceneMaterialResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "properties"
+        ],
+        "type": "object"
+      },
+      "SceneMetadataResource": {
+        "properties": {
+          "authoring_schema": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source_of_truth": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "source_of_truth",
+          "authoring_schema"
+        ],
+        "type": "object"
+      },
+      "SceneObjectResource": {
+        "properties": {
+          "geometry": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "locked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "magnetization_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "material_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_override": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "object_mesh": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "physics_stack": {
+            "items": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "region_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_overrides": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "transform": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "ScenePatchRequest": {
         "properties": {
           "merge_patch": {
@@ -6558,6 +7406,100 @@
         "required": [
           "merge_patch"
         ],
+        "type": "object"
+      },
+      "SceneResource": {
+        "properties": {
+          "current_modules": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "editor": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "magnetization_assets": {
+            "items": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/SceneMaterialResource"
+            },
+            "type": "array"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/SceneObjectResource"
+            },
+            "type": "array"
+          },
+          "outputs": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scene": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneMetadataResource"
+              }
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "study": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "universe": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "ScriptSourceResponse": {
@@ -8000,6 +8942,7 @@
       "StructuredGridDescriptor": {
         "properties": {
           "origin": {
+            "description": "Physical grid edge origin in meters. Cell centers are\n`origin + (i + 0.5) * spacing` on non-zero axes.",
             "items": {
               "format": "double",
               "type": "number"
@@ -13540,7 +14483,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryCapabilitiesResource"
+                }
               }
             },
             "description": "Backend-owned geometry primitive and CSG capability matrix"
@@ -13561,7 +14506,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryDiagnosticsResource"
+                }
               }
             },
             "description": "Current geometry diagnostics"
@@ -13593,7 +14540,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryDiagnostic"
+                }
               }
             },
             "description": "Current geometry diagnostic"
@@ -13624,7 +14573,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryRealizationSnapshot"
+                }
               }
             },
             "description": "Derived geometry realization snapshot for the current scene"
@@ -13648,7 +14599,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryRealizationSnapshot"
+                }
               }
             },
             "description": "Current derived geometry realization snapshot"
@@ -13669,7 +14622,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryValidationResource"
+                }
               }
             },
             "description": "Backend geometry validation diagnostics for the current scene"
@@ -14164,7 +15119,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Current canonical authoring scene document"
@@ -14193,7 +15150,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Committed canonical authoring scene after merge patch"
@@ -14223,7 +15182,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SceneResource"
+                }
               }
             },
             "description": "Committed canonical authoring scene document"

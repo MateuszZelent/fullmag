@@ -11,7 +11,7 @@
 use fullmag_engine::{add, dot, normalized, scale, sub, ExchangeLlgProblem, FftWorkspace, Vector3};
 use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR, StageCompletionIR, StageStopReason};
 
-use crate::types::{RunStatus, StepStats};
+use crate::types::{ExecutionProvenance, RunStatus, StepStats};
 
 // ---------------------------------------------------------------------------
 // Convergence check (shared by all algorithms)
@@ -219,6 +219,32 @@ pub(crate) fn infer_stage_completion(
         metric_value: None,
         threshold: None,
     }
+}
+
+fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'static str> {
+    match algorithm {
+        RelaxationAlgorithmIR::ProjectedGradientBb => Some("projected_gradient_bb"),
+        RelaxationAlgorithmIR::NonlinearCg => Some("nonlinear_cg"),
+        RelaxationAlgorithmIR::LlgOverdamped | RelaxationAlgorithmIR::TangentPlaneImplicit => None,
+    }
+}
+
+pub(crate) fn apply_energy_minimizer_provenance(
+    provenance: &mut ExecutionProvenance,
+    relaxation: Option<&RelaxationControlIR>,
+) {
+    let Some(name) = relaxation
+        .and_then(|control| direct_energy_minimizer_name(control.algorithm))
+        .map(str::to_string)
+    else {
+        return;
+    };
+
+    provenance.requested_energy_minimizer = Some(name.clone());
+    provenance.resolved_energy_minimizer = Some(name);
+    provenance.energy_minimizer_realization =
+        Some("bootstrap_snapshot_tangent_gradient".to_string());
+    provenance.resolved_integrator = None;
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +630,7 @@ pub(crate) fn execute_nonlinear_cg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ExecutionProvenance;
     use fullmag_ir::{RelaxStopIR, RelaxationAlgorithmIR};
 
     fn control(
@@ -620,6 +647,56 @@ mod tests {
                 max_physical_time_s: None,
             },
         }
+    }
+
+    #[test]
+    fn fem_relaxation_provenance_serializes_bootstrap_energy_minimizer() {
+        let control = control(Some(1e-4), Some(1e-18));
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            requested_integrator: Some("Heun".to_string()),
+            resolved_integrator: Some("Heun".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        apply_energy_minimizer_provenance(&mut provenance, Some(&control));
+
+        let value = serde_json::to_value(&provenance).expect("provenance should serialize");
+        assert_eq!(
+            value["requested_energy_minimizer"],
+            serde_json::json!("projected_gradient_bb")
+        );
+        assert_eq!(
+            value["resolved_energy_minimizer"],
+            serde_json::json!("projected_gradient_bb")
+        );
+        assert_eq!(
+            value["energy_minimizer_realization"],
+            serde_json::json!("bootstrap_snapshot_tangent_gradient")
+        );
+        assert!(value.get("resolved_integrator").is_none());
+    }
+
+    #[test]
+    fn fem_relaxation_provenance_omits_minimizer_for_llg_time_integration() {
+        let mut control = control(Some(1e-4), Some(1e-18));
+        control.algorithm = RelaxationAlgorithmIR::LlgOverdamped;
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            requested_integrator: Some("Heun".to_string()),
+            resolved_integrator: Some("Heun".to_string()),
+            ..ExecutionProvenance::default()
+        };
+
+        apply_energy_minimizer_provenance(&mut provenance, Some(&control));
+
+        let value = serde_json::to_value(&provenance).expect("provenance should serialize");
+        assert!(value.get("requested_energy_minimizer").is_none());
+        assert!(value.get("resolved_energy_minimizer").is_none());
+        assert!(value.get("energy_minimizer_realization").is_none());
+        assert_eq!(value["resolved_integrator"], serde_json::json!("Heun"));
     }
 
     #[test]

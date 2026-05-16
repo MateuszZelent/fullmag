@@ -20,6 +20,7 @@ function makeTopologyBuffer(): ArrayBuffer {
     view.setUint8(index, code.charCodeAt(0));
   }
   view.setUint8(4, 1);
+  view.setUint8(5, 1);
   view.setUint32(8, nodeCount, true);
   view.setUint32(12, elementCount, true);
   view.setUint32(16, boundaryFaceCount, true);
@@ -60,5 +61,12 @@ describe("decodeTopology", () => {
     new Uint32Array(buffer, indexOffset, 4).set([0, 1, 2, 9]);
 
     expect(() => decodeTopology(buffer)).toThrow(/out of range/);
+  });
+
+  it("rejects unsupported topology payload kinds", () => {
+    const buffer = makeTopologyBuffer();
+    new DataView(buffer).setUint8(5, 2);
+
+    expect(() => decodeTopology(buffer)).toThrow(/Unsupported FMMT topology kind/);
   });
 });

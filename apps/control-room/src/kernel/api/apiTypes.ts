@@ -37,27 +37,26 @@ export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
-export type GeometryCapabilitiesResource = JsonValue;
-export type GeometryDiagnosticsResource = JsonValue;
+export type GeometryCapabilitiesResource =
+  components["schemas"]["GeometryCapabilitiesResource"];
+export type GeometryDiagnosticsResource =
+  components["schemas"]["GeometryDiagnosticsResource"];
 export type GeometryRealizationRequest =
   components["schemas"]["GeometryRealizationRequest"];
-export type GeometryRealizationResource = JsonValue;
-export type GeometryValidationResource = JsonValue;
+export type GeometryRealizationResource =
+  components["schemas"]["GeometryRealizationSnapshot"];
+export type GeometryValidationResource =
+  components["schemas"]["GeometryValidationResource"];
 export type GpuTelemetryResource =
   components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
 export type MaterialResource = components["schemas"]["MaterialResource"];
-// Wygenerowane typy używają `Record<string, never>` dla `asset` (pusty schemat OpenAPI),
-// ale faktycznie jest to dowolny JSON object — utrzymujemy silniejsze typy po stronie frontendu.
-export interface MagnetizationAssetPatchRequest extends BaseAuthoringTransaction {
-  asset: JsonObject;
-}
-export interface MagnetizationAssetResource {
-  asset: JsonObject;
-  scene_revision: number;
-}
+export type MagnetizationAssetPatchRequest =
+  components["schemas"]["MagnetizationAssetPatchRequest"];
+export type MagnetizationAssetResource =
+  components["schemas"]["MagnetizationAssetResource"];
 export type MeshActiveBuildResource =
   components["schemas"]["MeshActiveBuildResource"];
 export type MeshBuildHistoryResource =
@@ -217,7 +216,7 @@ export interface ObjectMetricsResource {
   step: number;
   time_seconds: number;
 }
-export type SceneResource = JsonObject;
+export type SceneResource = components["schemas"]["SceneResource"];
 export type RuntimeCommandPrecondition =
   components["schemas"]["RuntimeCommandPrecondition"];
 export type RuntimeCommandTarget =

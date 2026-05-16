@@ -25,10 +25,6 @@ _DEMAG_LEGACY_ALIASES: dict[str, str] = {
 }
 
 _DEMAG_ALLOWED = frozenset({None}) | _DEMAG_CANONICAL | frozenset(_DEMAG_LEGACY_ALIASES)
-_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE = (
-    "FEM transfer_grid został usunięty. "
-    "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
-)
 
 # Phase-1C: canonical demag model vocabulary.
 _DEMAG_MODELS = frozenset({"airbox", "bem", "fredkin_koehler", "fmm"})
@@ -94,8 +90,6 @@ class Demag:
                 )
         elif self.realization is not None:
             # Legacy realization= API
-            if self.realization == "transfer_grid":
-                raise ValueError(_DEMAG_TRANSFER_GRID_REMOVAL_MESSAGE)
             if self.realization not in _DEMAG_ALLOWED:
                 raise ValueError(
                     f"Demag realization must be one of "

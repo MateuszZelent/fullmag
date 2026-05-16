@@ -1,8 +1,8 @@
-# Bootstrap executable FEM demagnetization: Robin scalar potential and transfer-grid exact demag
+# Bootstrap executable FEM demagnetization: Robin scalar potential reference
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-04-16
+- Last updated: 2026-05-15
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -16,7 +16,7 @@
 
 ## 1. Problem statement
 
-This note freezes the **bootstrap executable FEM demagnetization paths** used by the historical
+This note freezes the **bootstrap executable FEM demagnetization path** used by the historical
 Rust reference FEM helper and by the current native MFEM executable seam.
 
 The long-term FEM demagnetization direction for Fullmag remains:
@@ -34,21 +34,16 @@ reference implementation that:
 - supports session streaming and control-room observables,
 - stays explicit about its approximations.
 
-The bootstrap design now has two layers:
+The bootstrap design now has one executable FEM demag family:
 
-1. **historical/reference seam**:
-   solve the scalar-potential magnetostatic problem on the supplied `MeshIR`, using a Robin
-   boundary term as the first open-boundary surrogate;
-2. **current executable runner path**:
-   project the magnetic FEM state to a transfer FDM grid, compute exact Newell tensor demag on
-   that grid, and sample `H_demag` back to FEM nodes.
+1. solve the scalar-potential magnetostatic problem on the supplied shared-domain `MeshIR`,
+   using Dirichlet or Robin outer airbox boundary conditions;
+2. recover `H_demag` from the mesh-native potential gradient;
+3. publish `H_demag` and `E_demag` through the same public quantity contract as FDM.
 
-The reason for the current executable default is pragmatic and explicit:
-
-> **for the public executable FEM CPU/GPU runtime, transfer-grid exact tensor demag gives much better
-> FDM↔FEM parity than the old dense Robin solve, while keeping the same public `Demag()` surface.**
-
-This is still not the final FEM demag backend. The final target remains MFEM/libCEED/hypre on GPU.
+This is still not the final high-performance FEM demag backend. The final target remains
+MFEM/libCEED/hypre on GPU with the same Poisson-airbox physics contract and clear room for later
+higher-fidelity open-boundary realizations.
 
 ## 1.1 Current executable default
 
@@ -56,16 +51,11 @@ At the time of writing, the executable `fullmag` FEM runner uses:
 
 - FEM exchange on the mesh,
 - FEM Zeeman on the mesh,
-- **transfer-grid exact tensor demag** for `H_demag` / `E_demag`,
+- **Poisson-airbox demag** for `H_demag` / `E_demag`,
 - `LLG(heun)` in the bootstrap reference/helper path.
 
-When the native MFEM backend is available, the same executable bootstrap contract is reused
-there too: exchange stays on the FEM mesh, while demag is still supplied through the
-transfer-grid demag seam rather than through the final mesh-native hypre/open-boundary solver.
-
-The older Robin scalar-potential solve remains in the engine as a reference seam for tests and
-non-runner experimentation, but it is no longer the preferred executable path for cross-backend
-validation.
+When the native MFEM backend is available, the same executable bootstrap contract is reused there
+too: exchange stays on the FEM mesh, and demag is supplied by the mesh-native Poisson seam.
 
 For the still-supported explicit `poisson_robin` native FEM runtime path, CPU execution now resolves
 to one mesh-native solver family only:

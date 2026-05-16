@@ -763,7 +763,7 @@ export class ControlRoomApi {
       signal: options.signal,
     } as never);
 
-    if (result.response?.status === 204) {
+    if (result.response?.status === 204 || result.response?.status === 304) {
       return null;
     }
 
@@ -858,20 +858,21 @@ export class ControlRoomApi {
     pathParams?: PathParams,
     query?: QueryParams,
   ): Promise<BinaryResourceResult<TData>> {
-    const headers = new Headers();
+    const headers: Record<string, string> = {};
     if (options.etag) {
-      headers.set("if-none-match", options.etag);
+      headers["if-none-match"] = options.etag;
     }
 
-    const response = await this.executeFetchRequest(
-      buildApiUrl(this.baseUrl, path, pathParams, query),
-      "GET",
-      {
-        headers,
-        signal: options.signal,
-      },
-      new Set([204, 304]),
-    );
+    const result = await this.transport.GET(path as never, {
+      cache: "no-store",
+      fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+        this.executeBinaryOpenApiFetch(input, init),
+      headers,
+      params: { path: pathParams, query },
+      parseAs: "arrayBuffer",
+      signal: options.signal,
+    } as never);
+    const response = result.response;
     const etag = response.headers.get("etag");
 
     if (response.status === 304) {
@@ -882,14 +883,18 @@ export class ControlRoomApi {
       return { etag, status: "not-applicable" };
     }
 
-    if (!response.ok) {
+    if (!response.ok || result.error) {
       throw new ControlRoomApiError(
         await formatResponseError(response),
         response.status,
       );
     }
 
-    const buffer = await response.arrayBuffer();
+    const buffer = result.data as unknown;
+    if (!(buffer instanceof ArrayBuffer)) {
+      throw new ControlRoomApiError("Expected binary response body", 0);
+    }
+
     this.requestDiagnostics?.record({
       byteLength: buffer.byteLength,
       channel: "http",
@@ -912,6 +917,20 @@ export class ControlRoomApi {
     };
   }
 
+  private async executeBinaryOpenApiFetch(
+    input: RequestInfo | URL,
+    init: RequestInit | undefined,
+  ): Promise<Response> {
+    const request = await normalizeFetchInput(input, init);
+    return this.executeFetchRequest(
+      request.url,
+      request.method,
+      request.init,
+      new Set([204, 304]),
+      true,
+    );
+  }
+
   private async executeOpenApiFetch(
     input: RequestInfo | URL,
     init: RequestInit | undefined,
@@ -925,6 +944,7 @@ export class ControlRoomApi {
     method: string,
     init: RequestInit,
     acceptedStatuses = new Set<number>(),
+    allowMissingContractVersion = false,
   ): Promise<Response> {
     const headers = new Headers(init.headers);
     const requestId = this.requestIdFactory();
@@ -959,7 +979,9 @@ export class ControlRoomApi {
           method,
         });
 
-        const contractVersionError = resolveContractVersionError(response);
+        const contractVersionError = resolveContractVersionError(response, {
+          allowMissing: allowMissingContractVersion,
+        });
         const accepted =
           (response.ok || acceptedStatuses.has(response.status)) &&
           !contractVersionError;
@@ -1182,38 +1204,14 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function buildApiUrl(
-  baseUrl: string,
-  path: OpenApiV2Path,
-  pathParams: PathParams = {},
-  query: QueryParams = {},
-): string {
-  let resolvedPath = path as string;
-  for (const [name, value] of Object.entries(pathParams)) {
-    resolvedPath = resolvedPath.replace(
-      `{${name}}`,
-      encodeURIComponent(String(value)),
-    );
-  }
-
-  if (resolvedPath.includes("{")) {
-    throw new ControlRoomApiError(
-      `Missing path parameter for ${resolvedPath}`,
-      0,
-    );
-  }
-
-  const url = new URL(resolvedPath, `${baseUrl}/`);
-  for (const [name, value] of Object.entries(query)) {
-    if (value === null || value === undefined) continue;
-    url.searchParams.set(name, String(value));
-  }
-
-  return url.toString();
-}
-
-function resolveContractVersionError(response: Response): ControlRoomApiError | null {
+function resolveContractVersionError(
+  response: Response,
+  options: { allowMissing?: boolean } = {},
+): ControlRoomApiError | null {
   const actual = response.headers.get(API_CONTRACT_VERSION_HEADER);
+  if (actual == null && options.allowMissing) {
+    return null;
+  }
   if (actual === EXPECTED_API_CONTRACT_VERSION) {
     return null;
   }
@@ -1233,6 +1231,10 @@ function readOpenApiResult<T>(result: {
 
   if (!response) {
     throw new ControlRoomApiError("OpenAPI transport returned no response", 0);
+  }
+
+  if (response.status === 304) {
+    return undefined as T;
   }
 
   if (!response.ok) {

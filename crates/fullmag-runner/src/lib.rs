@@ -121,7 +121,9 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
 
 #[cfg(test)]
 mod initial_timestep_tests {
-    use super::resolve_initial_timestep;
+    use super::{
+        is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_initial_timestep,
+    };
 
     #[test]
     fn resolve_initial_timestep_prefers_fixed_value() {
@@ -193,6 +195,14 @@ mod initial_timestep_tests {
         };
         assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
     }
+
+    #[test]
+    fn cpu_availability_drives_native_fem_time_domain_probe() {
+        assert_eq!(
+            is_native_fem_time_domain_available(),
+            is_native_fem_cpu_available()
+        );
+    }
 }
 
 pub fn is_native_fdm_cuda_available() -> bool {
@@ -203,8 +213,12 @@ pub fn is_native_fem_gpu_available() -> bool {
     native_fem::is_gpu_available()
 }
 
+pub fn is_native_fem_cpu_available() -> bool {
+    native_fem::is_cpu_available()
+}
+
 pub fn is_native_fem_time_domain_available() -> bool {
-    cfg!(feature = "fem-gpu")
+    native_fem::is_cpu_available()
 }
 
 /// Plan and run a problem, writing artifacts to `output_dir`.
@@ -336,6 +350,7 @@ pub fn run_problem_with_callback(
                 Some(types::LiveStepConsumer {
                     grid,
                     field_every_n,
+                    initial_snapshot: false,
                     display_selection: None,
                     interrupt_requested: None,
                     on_step: &mut on_step,
@@ -367,6 +382,7 @@ pub fn run_problem_with_callback(
                 Some(types::LiveStepConsumer {
                     grid: [0, 0, 0],
                     field_every_n,
+                    initial_snapshot: false,
                     display_selection: None,
                     interrupt_requested: None,
                     on_step: &mut on_step,
@@ -487,6 +503,28 @@ pub fn run_problem_with_live_preview_interruptible(
     field_every_n: u64,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_problem_with_live_preview_interruptible_with_initial_snapshot(
+        problem,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        true,
+        on_step,
+    )
+}
+
+pub fn run_problem_with_live_preview_interruptible_with_initial_snapshot(
+    problem: &ProblemIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
@@ -510,6 +548,7 @@ pub fn run_problem_with_live_preview_interruptible(
                 Some(types::LiveStepConsumer {
                     grid,
                     field_every_n,
+                    initial_snapshot,
                     display_selection: Some(display_selection),
                     interrupt_requested,
                     on_step: &mut on_step,
@@ -546,6 +585,7 @@ pub fn run_problem_with_live_preview_interruptible(
                 Some(types::LiveStepConsumer {
                     grid: [0, 0, 0],
                     field_every_n,
+                    initial_snapshot,
                     display_selection: Some(display_selection),
                     interrupt_requested,
                     on_step: &mut on_step,

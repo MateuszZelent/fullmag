@@ -36,4 +36,11 @@ describe("decodeFieldVector", () => {
 
     expect(() => decodeFieldVector(buffer)).toThrow(/Invalid FMVP magic/);
   });
+
+  it("rejects invalid FMVP component counts", () => {
+    const buffer = makeFieldVectorBuffer();
+    new DataView(buffer).setUint8(6, 0);
+
+    expect(() => decodeFieldVector(buffer)).toThrow(/Unsupported FMVP component count/);
+  });
 });

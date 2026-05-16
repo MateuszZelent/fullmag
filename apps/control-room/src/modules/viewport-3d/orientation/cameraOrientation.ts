@@ -25,6 +25,7 @@ export function snapCameraToDirection(
       current.target[2] + normalized[2] * distance,
     ],
     target: current.target,
+    up: current.up,
   };
 }
 
@@ -45,6 +46,7 @@ export function rotateCameraAroundCenter(
       current.position[2],
     ],
     target: [center[0], center[1], center[2]],
+    up: current.up,
   };
 }
 

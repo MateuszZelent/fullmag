@@ -3,7 +3,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-24
+- Last updated: 2026-05-15
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -151,7 +151,57 @@ The only additional FEM cost is that each stage requires:
 3. mass-lumped inverse application,
 4. possible output-space projections.
 
-#### 3.2.3 Recommended rollout order
+#### 3.2.3 Final-field freshness and reported stage cost
+
+Native FEM production telemetry must report the actual effective-field work
+performed by the backend. `H_eff` is the source for the LLG RHS, torque
+observable, stop criteria, and live field readback. In the default scientific
+mode, the accepted step must therefore leave `H_eff` fresh for the final
+magnetization state.
+
+That rule has a direct performance consequence:
+
+- non-FSAL methods such as Heun and RK4 need a post-step final `H_eff` refresh
+  after the accepted state is formed;
+- FSAL methods such as Bogacki-Shampine RK23 and Dormand-Prince RK45 may reuse
+  the final stage only when that stage is evaluated at the accepted final state;
+- `rhs_evals` must include the post-step RHS/effective-field refresh when it is
+  executed;
+- `demag_solve_count` must include every Poisson demag solve, including the
+  final refresh.
+
+For one fixed, accepted step without rejection in exact-telemetry mode, the
+expected first-step costs are:
+
+| Integrator | Stages | FSAL | Expected reported RHS evaluations | Final refresh |
+|---|---:|---|---:|---|
+| Heun | 2 | no | 3 | explicit post-step refresh |
+| RK4 | 4 | no | 5 | explicit post-step refresh |
+| RK23 / Bogacki-Shampine 3(2) | 4 | yes | 4 on first step, then 3 when FSAL is reused | cached final stage |
+| RK45 / Dormand-Prince 5(4) | 7 | yes | 7 on first step, then 6 when FSAL is reused | cached final stage |
+
+Any future performance mode that skips the final refresh must be explicit in
+runtime metadata and must not present stale torque or energy as exact final-step
+observables.
+
+#### 3.2.4 CPU reference history/cache allocation contract
+
+The Rust FEM CPU reference path is allowed to use host-owned scratch storage,
+but repeated accepted steps should not allocate new RHS history vectors when the
+caller uses `FemLlgProblem::step_with_workspace`.
+
+For ABM3, the first startup steps initialize the three RHS history slots
+`f_n`, `f_{n-1}`, and `f_{n-2}`. After all three slots exist, accepted ABM3
+steps must rotate and overwrite those slots instead of allocating a fresh
+history vector. This preserves the Adams-Bashforth-Moulton formula and only
+changes buffer lifetime.
+
+For RK45, the FSAL cache is a reusable RHS slot for the final stage of an
+accepted Dormand-Prince step. Reusing its allocation is valid only when the
+cached stage corresponds to the accepted final state and is consumed as the
+next step's first RHS sample.
+
+#### 3.2.5 Recommended rollout order
 
 ##### A. SSPRK3 / RK3
 
@@ -186,7 +236,7 @@ Why:
 Useful for high-accuracy research runs and smooth dynamics traces.
 Not the default because the extra stages multiply demag and operator-application cost.
 
-#### 3.2.4 Adaptive controller
+#### 3.2.5 Adaptive controller
 
 Use the same normalized embedded-error formula as FDM, but define the FE vector norm locally per node or DOF block.
 
@@ -210,7 +260,7 @@ dt_{\mathrm{new}} = \mathrm{safety}\,dt\,\eta^{-1/q},
 
 with the same estimator-order logic as in the FDM note.
 
-#### 3.2.5 GPU architecture with MFEM + libCEED + hypre
+#### 3.2.6 GPU architecture with MFEM + libCEED + hypre
 
 Explicit RK stage execution should be organized as:
 
@@ -232,7 +282,7 @@ u \mapsto M_L^{-1}F(u,t),
 not on the details of exchange, DMI, or demag.
 That keeps the stepper reusable.
 
-#### 3.2.6 Honesty about stiffness
+#### 3.2.7 Honesty about stiffness
 
 Exchange on fine unstructured meshes can produce severe stability limits for explicit methods:
 
@@ -319,6 +369,11 @@ Capability matrix should distinguish:
 - lumped-mass vs reference consistent-mass smooth-case parity,
 - CPU fallback vs GPU partial-assembly parity,
 - adaptive-step accept/reject determinism in fixed precision.
+- native FEM telemetry for Heun, RK4, RK23, and RK45 must assert the expected
+  `rhs_evals`, `demag_solve_count`, and FSAL reuse contract described in
+  section 3.2.3.
+- benchmark harnesses must sweep an explicit integrator axis instead of
+  benchmarking a hard-coded Heun run.
 
 ## 6. Completeness checklist
 

@@ -227,6 +227,8 @@ function VisualizationWireframeSection({
 }
 
 function VisualizationVectorsSection({
+  meshParts,
+  onTogglePartVectors,
   patch,
   patchColor,
   patchNumber,
@@ -234,10 +236,12 @@ function VisualizationVectorsSection({
   sectionDisabled,
   settings,
 }: {
+  meshParts?: ReadonlyArray<{ id: string; label: string; vectorsVisible: boolean }>;
+  onTogglePartVectors?: (partId: string, visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
-    field: "vectorAlphaPercent" | "vectorThickness",
+    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorThickness",
     value: number,
   ) => void;
   pending: boolean;
@@ -263,6 +267,38 @@ function VisualizationVectorsSection({
       <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
+      <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
+      <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow budget" max={4096} min={8} step={8} value={settings.vectorBudget} onChange={(value) => patchNumber("vectorBudget", value)} />
+      <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
+        {GEOMETRY_SCOPES.map((scope) => (
+          <Button
+            key={scope.value}
+            size="sm"
+            type="button"
+            disabled={pending || sectionDisabled("vectors")}
+            variant={settings.geometryScope === scope.value ? "primary" : "secondary"}
+            onClick={() => void patch({ geometryScope: scope.value })}
+          >
+            {scope.label}
+          </Button>
+        ))}
+      </div>
+      {meshParts && meshParts.length > 1 && onTogglePartVectors && (
+        <div className="fm-visualization-part-toggles" role="group" aria-label="Per-part vector visibility">
+          <span className="fm-visualization-part-toggles__label">Surfaces</span>
+          {meshParts.map((part) => (
+            <label key={part.id} className="fm-visualization-part-toggle">
+              <input
+                type="checkbox"
+                checked={part.vectorsVisible}
+                disabled={pending || sectionDisabled("vectors")}
+                onChange={(e) => onTogglePartVectors(part.id, e.target.checked)}
+              />
+              <span>{part.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
     </InspectorSection>
   );
 }
@@ -419,7 +455,9 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         patchValue,
       ),
     });
-    visualization.clearTarget(target);
+    // Keep the patch locally so forward-compatible fields (vectorBudget,
+    // vectorLengthScale) survive even if the backend drops them.
+    visualization.patchTarget(target, patchValue);
     setFeedback(null);
   }
 
@@ -475,12 +513,22 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   function patchNumber(
     field:
       | "vectorAlphaPercent"
+      | "vectorBudget"
+      | "vectorLengthScale"
       | "vectorThickness"
       | "wireframeOpacityPercent",
     value: number,
   ) {
     if (field === "vectorAlphaPercent") {
       void patch({ vectorAlphaPercent: value });
+      return;
+    }
+    if (field === "vectorBudget") {
+      void patch({ vectorBudget: value });
+      return;
+    }
+    if (field === "vectorLengthScale") {
+      void patch({ vectorLengthScale: value });
       return;
     }
     if (field === "vectorThickness") {
@@ -502,6 +550,46 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
 
   const displaySettings = renderResolution?.finalSettings ?? effectiveSettings ?? settings;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
+
+  // Build per-part arrow visibility list from manifest
+  const vectorMeshParts = React.useMemo(() => {
+    const parts = manifest.data?.mesh_parts;
+    if (!parts || parts.length === 0) return undefined;
+    // Filter to magnetic parts only (exclude airbox)
+    const magneticParts = parts.filter((p) => p.role !== "airbox");
+    if (magneticParts.length <= 1) return undefined;
+    return magneticParts.map((p) => {
+      const partTarget = p.object_id
+        ? { id: p.object_id, kind: "object" as const }
+        : { id: p.id, kind: "part" as const };
+      const partSettings = resolveTargetVisualization({
+        snapshot,
+        target: partTarget,
+        visualizationState: visualizationState.data,
+      }).settings;
+      return {
+        id: p.id,
+        label: p.label,
+        objectId: p.object_id ?? null,
+        vectorsVisible: partSettings.vectorsVisible,
+      };
+    });
+  }, [manifest.data?.mesh_parts, snapshot, visualizationState.data]);
+
+  function onTogglePartVectors(partId: string, visible: boolean) {
+    const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
+    if (!part || !visualizationState.data) return;
+    const partTarget = part.object_id
+      ? { id: part.object_id, kind: "object" as const, label: part.label }
+      : { id: part.id, kind: "part" as const, label: part.label };
+    visualizationSync.queuePatch({
+      overrides: mergeVisualizationStateTargetOverride(
+        visualizationState.data.overrides ?? [],
+        partTarget,
+        { vectorsVisible: visible },
+      ),
+    });
+  }
 
   return (
     <div className="fm-inspector-panel" data-visualization-revision={revision}>
@@ -548,6 +636,8 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         settings={settings}
       />
       <VisualizationVectorsSection
+        meshParts={vectorMeshParts}
+        onTogglePartVectors={onTogglePartVectors}
         patch={patch}
         patchColor={patchColor}
         patchNumber={patchNumber}

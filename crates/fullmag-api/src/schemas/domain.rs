@@ -13,6 +13,9 @@ pub struct DomainMeta {
     pub dimension: u8,
     pub coordinate_system: String,
     pub units: HashMap<String, String>,
+    /// Physical cell-edge bounds in meters. For structured FDM grids, `min`
+    /// is the grid edge origin and `max` is `origin + shape * spacing`.
+    /// Cell centers are offset by `spacing / 2` on non-zero axes.
     pub bounds: Bounds3,
     pub counts: DomainCounts,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,8 +40,74 @@ pub struct DomainCounts {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StructuredGridDescriptor {
     pub shape: [u32; 3],
+    /// Physical grid edge origin in meters. Cell centers are
+    /// `origin + (i + 0.5) * spacing` on non-zero axes.
     pub origin: [f64; 3],
     pub spacing: [f64; 3],
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FemCpuRelaxationQualificationMetadata {
+    pub schema_version: String,
+    pub benchmark_gate_version: String,
+    pub physics_terms: Vec<String>,
+    pub solver_mesh_signature: String,
+    pub demag_policy: FemCpuRelaxationDemagPolicyMetadata,
+    pub assembly_mode: Option<String>,
+    pub relaxation_algorithm: Option<String>,
+    pub stop_reason: Option<String>,
+    pub stop_metric_name: Option<String>,
+    pub stop_metric_value: Option<f64>,
+    pub stop_threshold: Option<f64>,
+    pub final_energy_terms_j: FemCpuRelaxationEnergyTerms,
+    pub final_torque_apm: f64,
+    pub final_torque_t: f64,
+    pub norm_defect: f64,
+    pub executed_steps: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FemCpuRelaxationDemagPolicyMetadata {
+    pub model: Option<String>,
+    pub boundary_variant: Option<String>,
+    pub linear_solver: Option<String>,
+    pub preconditioner: Option<String>,
+    pub relative_tolerance: Option<f64>,
+    pub absolute_tolerance: Option<f64>,
+    pub max_iterations: Option<u32>,
+    pub print_level: Option<i32>,
+    pub actual_iterations: Option<u32>,
+    pub final_residual_norm: Option<f64>,
+    pub solver_setup_reused: Option<bool>,
+    pub timings_ns: Option<FemCpuRelaxationDemagTimingsNs>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FemCpuRelaxationDemagTimingsNs {
+    pub assemble: u64,
+    pub solve: u64,
+    pub solver_setup: u64,
+    pub solver_apply: u64,
+    pub recover: u64,
+    pub energy: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[allow(non_snake_case)]
+pub struct FemCpuRelaxationEnergyTerms {
+    #[serde(rename = "E_ex")]
+    pub e_ex: f64,
+    #[serde(rename = "E_demag")]
+    pub e_demag: f64,
+    #[serde(rename = "E_ext")]
+    pub e_ext: f64,
+    #[serde(rename = "E_ani")]
+    pub e_ani: f64,
+    #[serde(rename = "E_dmi")]
+    pub e_dmi: f64,
+    #[serde(rename = "E_total")]
+    pub e_total: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

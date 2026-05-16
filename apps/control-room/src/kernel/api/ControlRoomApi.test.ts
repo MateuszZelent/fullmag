@@ -133,6 +133,7 @@ function makeTopologyBuffer(): ArrayBuffer {
     view.setUint8(index, code.charCodeAt(0));
   }
   view.setUint8(4, 1);
+  view.setUint8(5, 1);
   view.setUint32(8, nodeCount, true);
   view.setUint32(12, elementCount, true);
   view.setUint32(16, boundaryFaceCount, true);
@@ -778,6 +779,36 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("allows missing contract version only on binary data-plane responses", async () => {
+    const api = new ControlRoomApi({
+      fetchImpl: async () =>
+        new Response(makeTopologyBuffer(), {
+          headers: { etag: '"topology-2"' },
+        }),
+    });
+
+    await expect(api.data.domain.topology()).resolves.toMatchObject({
+      etag: '"topology-2"',
+      status: "ready",
+    });
+  });
+
+  it("rejects wrong contract version on binary data-plane responses", async () => {
+    const api = new ControlRoomApi({
+      fetchImpl: async () => binaryResponse(makeTopologyBuffer(), {
+        headers: {
+          "x-api-contract-version": "0.9.0",
+          etag: '"topology-2"',
+        },
+      }),
+    });
+
+    await expect(api.data.domain.topology()).rejects.toMatchObject({
+      status: 0,
+      message: "API contract version mismatch: expected 1.0.0, got 0.9.0",
+    });
+  });
+
   it("returns not-applicable for absent binary topology resources", async () => {
     const api = new ControlRoomApi({
       fetchImpl: async () =>
@@ -791,6 +822,18 @@ describe("ControlRoomApi", () => {
       etag: null,
       status: "not-applicable",
     });
+  });
+
+  it("treats 304 JSON resources as not modified instead of API errors", async () => {
+    const api = new ControlRoomApi({
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: { etag: '"manifest-1"', ...contractHeaders },
+          status: 304,
+        }),
+    });
+
+    await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
   });
 
   it("propagates aborted binary resource requests", async () => {

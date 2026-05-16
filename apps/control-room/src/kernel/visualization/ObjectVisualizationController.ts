@@ -44,7 +44,9 @@ export interface VisualizationTargetSettings {
   shaderVisible: boolean;
   surfaceColorSource: SurfaceColorSource;
   vectorAlphaPercent: number;
+  vectorBudget: number;
   vectorColorMode: VisualizationColorMode;
+  vectorLengthScale: number;
   vectorMonoColor: string;
   vectorThickness: number;
   vectorsVisible: boolean;
@@ -100,7 +102,9 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   shaderVisible: true,
   surfaceColorSource: "orientation",
   vectorAlphaPercent: 100,
+  vectorBudget: 1200,
   vectorColorMode: "orientation",
+  vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
   vectorThickness: 1,
   vectorsVisible: false,
@@ -121,7 +125,9 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   shaderVisible: false,
   surfaceColorSource: "solid",
   vectorAlphaPercent: 100,
+  vectorBudget: 1200,
   vectorColorMode: "orientation",
+  vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
   vectorThickness: 1,
   vectorsVisible: false,
@@ -382,7 +388,12 @@ export function resolveVisualizationStateTargetOverride(
   );
   if (!override) return null;
   const display = override.display ?? null;
-  const style = override.style ?? null;
+  // Extend the generated style type with forward-compatible fields not yet in
+  // the OpenAPI schema.  All existing fields keep their original types.
+  const style = (override.style ?? null) as (typeof override.style & {
+    vector_budget?: number | null;
+    vector_length_scale?: number | null;
+  }) | null;
   const visible = display?.visible ?? override.visible;
   const patch: VisualizationTargetPatch = {
     ...(display?.geometry_scope === undefined || display.geometry_scope === null
@@ -430,6 +441,9 @@ export function resolveVisualizationStateTargetOverride(
     ...(style?.vector_alpha === undefined || style.vector_alpha === null
       ? {}
       : { vectorAlphaPercent: layerOpacityToPercent(style.vector_alpha) }),
+    ...(style?.vector_budget === undefined || style.vector_budget === null
+      ? {}
+      : { vectorBudget: Math.max(0, Math.floor(style.vector_budget)) }),
     ...(style?.vector_color_mode === undefined ||
     style.vector_color_mode === null
       ? {}
@@ -441,7 +455,10 @@ export function resolveVisualizationStateTargetOverride(
     ...(style?.vector_thickness === undefined ||
     style.vector_thickness === null
       ? {}
-      : { vectorThickness: style.vector_thickness }),
+      : { vectorThickness: style.vector_thickness as number }),
+    ...(style?.vector_length_scale === undefined || style.vector_length_scale === null
+      ? {}
+      : { vectorLengthScale: style.vector_length_scale as number }),
     ...(style?.wireframe_color === undefined || style.wireframe_color === null
       ? {}
       : { wireframeColor: style.wireframe_color }),
@@ -501,6 +518,9 @@ export function visualizationStateOverrideFromTargetPatch(
     ...(normalized.vectorAlphaPercent === undefined
       ? {}
       : { vector_alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
+    ...(normalized.vectorBudget === undefined
+      ? {}
+      : { vector_budget: Math.max(0, Math.floor(normalized.vectorBudget)) }),
     ...(normalized.vectorColorMode === undefined
       ? {}
       : { vector_color_mode: normalized.vectorColorMode }),
@@ -565,6 +585,9 @@ export function visualizationStatePatchFromDefaultTargetPatch(
     ...(normalized.vectorsVisible === undefined
       ? {}
       : { visible: normalized.vectorsVisible }),
+    ...(normalized.vectorBudget === undefined
+      ? {}
+      : { density: Math.max(0, Math.floor(normalized.vectorBudget)) }),
   };
   const vectorColorMode =
     normalized.surfaceColorSource === undefined
@@ -583,9 +606,15 @@ export function visualizationStatePatchFromDefaultTargetPatch(
     ...(normalized.vectorAlphaPercent === undefined
       ? {}
       : { alpha: clampOpacity(normalized.vectorAlphaPercent) / 100 }),
+    ...(normalized.vectorLengthScale === undefined
+      ? {}
+      : { length_scale: Math.max(0.1, Math.min(5, normalized.vectorLengthScale)) }),
     ...(normalized.vectorThickness === undefined
       ? {}
       : { thickness: clampScale(normalized.vectorThickness) }),
+    ...(normalized.vectorLengthScale === undefined
+      ? {}
+      : { vector_length_scale: Math.max(0.1, Math.min(5, normalized.vectorLengthScale)) }),
   };
 
   if (normalized.boundsVisible !== undefined) {
@@ -836,9 +865,15 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorAlphaPercent === undefined
       ? {}
       : { vectorAlphaPercent: patch.vectorAlphaPercent }),
+    ...(patch.vectorBudget === undefined
+      ? {}
+      : { vectorBudget: patch.vectorBudget }),
     ...(patch.vectorColorMode === undefined
       ? {}
       : { vectorColorMode: patch.vectorColorMode }),
+    ...(patch.vectorLengthScale === undefined
+      ? {}
+      : { vectorLengthScale: patch.vectorLengthScale }),
     ...(patch.vectorMonoColor === undefined
       ? {}
       : { vectorMonoColor: patch.vectorMonoColor }),
@@ -910,6 +945,12 @@ function normalizePatch(
   }
   if (normalized.vectorThickness !== undefined) {
     normalized.vectorThickness = clampScale(normalized.vectorThickness);
+  }
+  if (normalized.vectorBudget !== undefined) {
+    normalized.vectorBudget = Math.max(0, Math.floor(normalized.vectorBudget));
+  }
+  if (normalized.vectorLengthScale !== undefined) {
+    normalized.vectorLengthScale = Math.max(0.1, Math.min(5, normalized.vectorLengthScale));
   }
   if (normalized.shaderColorMode !== undefined) {
     normalized.shaderColorMode =

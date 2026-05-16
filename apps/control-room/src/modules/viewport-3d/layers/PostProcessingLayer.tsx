@@ -34,7 +34,6 @@ export function PostProcessingLayer() {
   return (
     <EffectComposer 
       multisampling={effectAntialias ? 4 : 0}
-      autoClear={false}
     >
       {children}
     </EffectComposer>

@@ -724,8 +724,8 @@ export default function UniversePanel() {
               />
               <MetricField label="Effective" value={outerBoundaryLabel} />
               <div className="rounded-lg border border-border/10 bg-card/40 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
-                `Dirichlet` and `Robin` keep the solve on the shared airbox FEM path.
-                FEM `transfer_grid` has been removed; use a shared-domain mesh with air.
+                `Dirichlet` and `Robin` keep demag on the shared airbox FEM path.
+                Use a shared-domain mesh with air for executable FEM demag.
               </div>
             </div>
           </InspectorSection>

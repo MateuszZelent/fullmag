@@ -86,12 +86,16 @@ export function MeshPartLayer({
     return next;
   }, [partModel, topologyModel, tracker]);
   const edgeGeometry = useMemo(() => {
-    if (!topologyModel || !partModel.edgeIndices) return null;
+    const edgeIndices = resolveMeshPartWireframeEdgeIndices(
+      settings.geometryScope,
+      partModel,
+    );
+    if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
     next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
-    next.setIndex(new BufferAttribute(partModel.edgeIndices, 1));
+    next.setIndex(new BufferAttribute(edgeIndices, 1));
     return tracker.track("geometry", next);
-  }, [partModel.edgeIndices, topologyModel, tracker]);
+  }, [partModel, settings.geometryScope, topologyModel, tracker]);
 
   useEffect(() => () => tracker.release("geometry", geometry), [geometry, tracker]);
   useEffect(
@@ -218,4 +222,18 @@ export function MeshPartLayer({
       ) : null}
     </group>
   );
+}
+
+export function resolveMeshPartWireframeEdgeIndices(
+  geometryScope: VisualizationTargetSettings["geometryScope"],
+  partModel: Pick<
+    Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+    "edgeIndices" | "volumeEdgeIndices"
+  >,
+): Uint32Array | null {
+  if (geometryScope === "full") {
+    return partModel.volumeEdgeIndices;
+  }
+
+  return partModel.edgeIndices;
 }

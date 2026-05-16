@@ -1905,6 +1905,14 @@ export interface components {
             opacity: number;
             visible: boolean;
         };
+        BooleanGeometryCapability: {
+            dsl: boolean;
+            fdm: boolean;
+            fem: boolean;
+            notes: string;
+            op: string;
+            status: components["schemas"]["GeometrySupportStatus"];
+        };
         Bounds2: {
             /** Format: double */
             u_max: number;
@@ -2232,6 +2240,11 @@ export interface components {
             nodes?: number | null;
         };
         DomainMeta: {
+            /**
+             * @description Physical cell-edge bounds in meters. For structured FDM grids, `min`
+             *     is the grid edge origin and `max` is `origin + shape * spacing`.
+             *     Cell centers are offset by `spacing / 2` on non-zero axes.
+             */
             bounds: components["schemas"]["Bounds3"];
             coordinate_system: string;
             counts: components["schemas"]["DomainCounts"];
@@ -2327,6 +2340,80 @@ export interface components {
             x_chosen_size: number;
             /** Format: int32 */
             y_chosen_size: number;
+        };
+        FemCpuRelaxationDemagPolicyMetadata: {
+            /** Format: double */
+            absolute_tolerance?: number | null;
+            /** Format: int32 */
+            actual_iterations?: number | null;
+            boundary_variant?: string | null;
+            /** Format: double */
+            final_residual_norm?: number | null;
+            linear_solver?: string | null;
+            /** Format: int32 */
+            max_iterations?: number | null;
+            model?: string | null;
+            preconditioner?: string | null;
+            /** Format: int32 */
+            print_level?: number | null;
+            /** Format: double */
+            relative_tolerance?: number | null;
+            solver_setup_reused?: boolean | null;
+            timings_ns?: null | components["schemas"]["FemCpuRelaxationDemagTimingsNs"];
+        };
+        FemCpuRelaxationDemagTimingsNs: {
+            /** Format: int64 */
+            assemble: number;
+            /** Format: int64 */
+            energy: number;
+            /** Format: int64 */
+            recover: number;
+            /** Format: int64 */
+            solve: number;
+            /** Format: int64 */
+            solver_apply: number;
+            /** Format: int64 */
+            solver_setup: number;
+            /** Format: int64 */
+            total: number;
+        };
+        FemCpuRelaxationEnergyTerms: {
+            /** Format: double */
+            E_ani: number;
+            /** Format: double */
+            E_demag: number;
+            /** Format: double */
+            E_dmi: number;
+            /** Format: double */
+            E_ex: number;
+            /** Format: double */
+            E_ext: number;
+            /** Format: double */
+            E_total: number;
+        };
+        FemCpuRelaxationQualificationMetadata: {
+            assembly_mode?: string | null;
+            benchmark_gate_version: string;
+            demag_policy: components["schemas"]["FemCpuRelaxationDemagPolicyMetadata"];
+            /** Format: int64 */
+            executed_steps: number;
+            final_energy_terms_j: components["schemas"]["FemCpuRelaxationEnergyTerms"];
+            /** Format: double */
+            final_torque_apm: number;
+            /** Format: double */
+            final_torque_t: number;
+            /** Format: double */
+            norm_defect: number;
+            physics_terms: string[];
+            relaxation_algorithm?: string | null;
+            schema_version: string;
+            solver_mesh_signature: string;
+            stop_metric_name?: string | null;
+            /** Format: double */
+            stop_metric_value?: number | null;
+            stop_reason?: string | null;
+            /** Format: double */
+            stop_threshold?: number | null;
         };
         /** @enum {string} */
         FemTopologyMode: "surface" | "boundary" | "volume" | "auto";
@@ -2598,8 +2685,75 @@ export interface components {
              */
             scope_kind?: string | null;
         };
+        /** @enum {string} */
+        GeometryBackendTarget: "fem" | "fdm";
+        GeometryCapabilitiesResource: {
+            csg_capabilities: components["schemas"]["BooleanGeometryCapability"][];
+            primitive_capabilities: components["schemas"]["PrimitiveGeometryCapability"][];
+            /** Format: int64 */
+            revision: number;
+        };
+        GeometryDiagnostic: {
+            blocks?: string[];
+            code: string;
+            geometry_path?: string | null;
+            id: string;
+            message: string;
+            object_id?: string | null;
+            severity: components["schemas"]["GeometryDiagnosticSeverity"];
+        };
+        /** @enum {string} */
+        GeometryDiagnosticSeverity: "info" | "warning" | "error";
+        GeometryDiagnosticsResource: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            diagnostics: components["schemas"]["GeometryDiagnostic"][];
+            /** Format: int64 */
+            scene_revision: number;
+            status: string;
+        };
+        GeometryProvenanceEntry: {
+            body_id: string;
+            geometry_path: string;
+            object_id: string;
+            source: string;
+        };
         GeometryRealizationRequest: {
             backend_target?: string | null;
+        };
+        GeometryRealizationSnapshot: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            bodies?: components["schemas"]["RealizedGeometryBody"][];
+            bounds_max?: number[] | null;
+            bounds_min?: number[] | null;
+            diagnostics?: components["schemas"]["GeometryDiagnostic"][];
+            provenance?: components["schemas"]["GeometryProvenanceEntry"][];
+            /** Format: int64 */
+            realization_revision: number;
+            region_candidates?: components["schemas"]["GeometryRegionCandidate"][];
+            /** Format: int64 */
+            source_scene_revision: number;
+            status: string;
+        };
+        GeometryRegionCandidate: {
+            bounds_max: number[];
+            bounds_min: number[];
+            id: string;
+            magnetization_ref?: string | null;
+            material_ref: string;
+            object_id: string;
+            source_body_id: string;
+            source_body_ids?: string[];
+            source_geometry_path: string;
+        };
+        /** @enum {string} */
+        GeometrySupportStatus: "production" | "preview" | "unsupported";
+        GeometryValidationResource: {
+            backend_target: components["schemas"]["GeometryBackendTarget"];
+            diagnostics: components["schemas"]["GeometryDiagnostic"][];
+            dirty: boolean;
+            /** Format: int64 */
+            scene_revision: number;
+            status: string;
         };
         GpuTelemetryDevice: {
             /** Format: int32 */
@@ -2680,12 +2834,16 @@ export interface components {
             solver: components["schemas"]["SolverSummary"];
         };
         MagnetizationAssetPatchRequest: {
-            asset: Record<string, never>;
+            asset: {
+                [key: string]: unknown;
+            };
             /** Format: int64 */
             base_revision?: number | null;
         };
         MagnetizationAssetResource: {
-            asset: Record<string, never>;
+            asset: {
+                [key: string]: unknown;
+            };
             /** Format: int64 */
             scene_revision: number;
         };
@@ -3221,6 +3379,16 @@ export interface components {
             transform?: Record<string, never> | null;
             visible?: boolean | null;
         };
+        PrimitiveGeometryCapability: {
+            boolean: boolean;
+            category: string;
+            dsl: boolean;
+            fdm: boolean;
+            fem: boolean;
+            id: string;
+            label: string;
+            status: components["schemas"]["GeometrySupportStatus"];
+        };
         QuantityCatalogEntry: {
             description: string;
             domain: string;
@@ -3263,6 +3431,19 @@ export interface components {
             /** Format: double */
             contrast_min?: number | null;
             field_component: components["schemas"]["FieldComponent"];
+        };
+        RealizedGeometryBody: {
+            body_id: string;
+            bounds_max: number[];
+            bounds_min: number[];
+            geometry_kind: string;
+            magnetization_ref?: string | null;
+            material_ref: string;
+            object_id: string;
+            object_name: string;
+            provenance?: string[];
+            status: string;
+            visible: boolean;
         };
         RecoveryClearResponse: {
             cleared: number;
@@ -3450,8 +3631,78 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        SceneMaterialResource: {
+            id: string;
+            name: string;
+            properties: {
+                [key: string]: unknown;
+            };
+        };
+        SceneMetadataResource: {
+            authoring_schema: string;
+            id: string;
+            name: string;
+            source_of_truth: string;
+        };
+        SceneObjectResource: {
+            geometry?: {
+                [key: string]: unknown;
+            } | null;
+            id: string;
+            locked?: boolean | null;
+            magnetization_ref?: string | null;
+            material_ref?: string | null;
+            mesh_override?: {
+                [key: string]: unknown;
+            } | null;
+            name?: string | null;
+            notes?: string | null;
+            object_mesh?: {
+                [key: string]: unknown;
+            } | null;
+            physics_stack?: {
+                [key: string]: unknown;
+            }[];
+            region_name?: string | null;
+            region_overrides?: {
+                [key: string]: unknown;
+            };
+            tags?: string[];
+            transform?: {
+                [key: string]: unknown;
+            } | null;
+            visible?: boolean | null;
+        };
         ScenePatchRequest: {
             merge_patch: Record<string, never>;
+        };
+        SceneResource: {
+            current_modules?: {
+                [key: string]: unknown;
+            } | null;
+            editor?: {
+                [key: string]: unknown;
+            } | null;
+            magnetization_assets?: {
+                [key: string]: unknown;
+            }[];
+            materials?: components["schemas"]["SceneMaterialResource"][];
+            objects?: components["schemas"]["SceneObjectResource"][];
+            outputs?: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: int64 */
+            revision?: number | null;
+            scene?: null | components["schemas"]["SceneMetadataResource"];
+            /** Format: int64 */
+            scene_revision?: number | null;
+            study?: {
+                [key: string]: unknown;
+            } | null;
+            universe?: {
+                [key: string]: unknown;
+            } | null;
+            version?: string | null;
         };
         ScriptSourceResponse: {
             bytes: number;
@@ -3786,6 +4037,10 @@ export interface components {
             kind: "mesh_build";
         });
         StructuredGridDescriptor: {
+            /**
+             * @description Physical grid edge origin in meters. Cell centers are
+             *     `origin + (i + 0.5) * spacing` on non-zero axes.
+             */
             origin: number[];
             shape: number[];
             spacing: number[];
@@ -6870,7 +7125,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryCapabilitiesResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6897,7 +7152,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryDiagnosticsResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -6927,7 +7182,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryDiagnostic"];
                 };
             };
             /** @description No active workspace, scene document, or diagnostic */
@@ -6958,7 +7213,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryRealizationSnapshot"];
                 };
             };
             /** @description Invalid backend target */
@@ -6992,7 +7247,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryRealizationSnapshot"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -7019,7 +7274,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GeometryValidationResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -7474,7 +7729,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description No active workspace or scene document */
@@ -7505,7 +7760,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description Invalid scene document payload */
@@ -7543,7 +7798,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["SceneResource"];
                 };
             };
             /** @description Invalid scene patch payload */

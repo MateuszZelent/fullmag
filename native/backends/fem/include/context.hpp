@@ -1,6 +1,8 @@
 #pragma once
 
 #include "fullmag_fem.h"
+#include "gpu_state.hpp"
+#include "transfer_audit.hpp"
 
 #include <array>
 #include <cstdint>
@@ -165,6 +167,9 @@ struct Context {
     std::vector<double> h_dmi_xyz;
     std::vector<double> h_bulk_dmi_xyz;   // Per-node bulk DMI field (AOS-3)
     std::vector<double> h_eff_xyz;
+    double last_anisotropy_energy_joules = 0.0;
+    double last_dmi_energy_joules = 0.0;
+    double last_magnetoelastic_energy_joules = 0.0;
 
     // Full-domain H_demag for visualization (includes airbox nodes).
     // h_demag_xyz is zeroed on non-magnetic nodes for LLG/energy,
@@ -272,8 +277,13 @@ struct Context {
     void *mfem_poisson_bc_op = nullptr;
 
     // RHS and solver workspace
-    void *mfem_poisson_rhs = nullptr;     // mfem::LinearForm* (reusable handle)
-    void *mfem_poisson_rhs_vec = nullptr; // mfem::Vector* (assembled RHS b)
+    void *mfem_poisson_rhs_workspace = nullptr; // PoissonRhsWorkspace* (owns RHS objects)
+    void *mfem_poisson_rhs = nullptr;           // mfem::LinearForm* (reusable handle)
+    void *mfem_poisson_rhs_vec = nullptr;       // mfem::Vector* (assembled RHS b)
+    void *mfem_poisson_solution_vec = nullptr;  // mfem::Vector* (reusable non-PBC true DOF solution)
+    void *mfem_demag_recovery_workspace = nullptr; // DemagRecoveryWorkspace* (owns recovery scratch)
+    void *mfem_poisson_hypre_workspace = nullptr;  // PoissonHypreWorkspace* (owns Hypre transfer vectors)
+    void *mfem_dmi_workspace = nullptr;             // DmiElementWorkspace* (owns DMI element scratch)
 
     // Dirichlet boundary: DOFs on outer air-box boundary (marker = boundary_marker)
     std::vector<int> poisson_ess_tdof_list;
@@ -282,6 +292,10 @@ struct Context {
     // Solver state for warm-start
     int poisson_last_iterations = 0;
     double poisson_last_residual = 0.0;
+    uint64_t poisson_last_setup_wall_time_ns = 0;
+    uint64_t poisson_last_solver_apply_wall_time_ns = 0;
+    bool poisson_last_solver_setup_reused = false;
+    uint32_t demag_solves_current_step = 0;
 
     // Cached Hypre solver/preconditioner (persistent across solves)
     void *mfem_cached_hypre_par = nullptr;            // mfem::HypreParMatrix* (wraps bc_op)
@@ -310,6 +324,7 @@ struct Context {
     void *mfem_periodic_poisson_matrix = nullptr;    // mfem::SparseMatrix* (P^T A_open P)
     void *mfem_periodic_poisson_rhs = nullptr;       // mfem::Vector* (work: b_p)
     void *mfem_periodic_poisson_solution = nullptr;  // mfem::Vector* (work: x_p)
+    void *mfem_periodic_poisson_workspace = nullptr; // PeriodicPoissonReducedWorkspace*
     bool poisson_periodic_reduced_ready = false;
 #endif
 
@@ -326,6 +341,18 @@ struct Context {
 
     fullmag_fem_device_info device_info_cache{};
     bool device_info_valid = false;
+    mutable TransferAudit transfer_audit;
+    FemGpuState gpu_state;
+
+    // Legacy sparse exchange operator metadata captured after MFEM assembly.
+    // This is not sufficient for all-in GPU by itself; the CSR and mass
+    // vectors still need device-resident upload before operator_mode can move
+    // from unsupported to legacy_sparse_gpu.
+    bool gpu_exchange_legacy_sparse_metadata_ready = false;
+    uint64_t gpu_exchange_legacy_sparse_rows = 0;
+    uint64_t gpu_exchange_legacy_sparse_cols = 0;
+    uint64_t gpu_exchange_legacy_sparse_nnz = 0;
+    bool gpu_exchange_lumped_mass_ready = false;
 
     // ── Unified RK stepper workspace ──
     StepperWorkspace stepper;
@@ -337,6 +364,7 @@ struct Context {
 };
 
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
+bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error);
 int context_copy_field_f64(
     const Context &ctx,
     fullmag_fem_observable observable,
@@ -352,6 +380,7 @@ void context_populate_device_info(Context &ctx);
 void context_refresh_thermal_field(Context &ctx);
 #if FULLMAG_HAS_MFEM_STACK
 bool context_initialize_mfem(Context &ctx, std::string &error);
+bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);
 void context_destroy_mfem(Context &ctx);
 bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error);
 bool context_step_exchange_heun_mfem(
@@ -369,10 +398,17 @@ bool context_snapshot_stats_mfem(
     Context &ctx,
     fullmag_fem_step_stats &stats,
     std::string &error);
+void context_update_stage_completion_from_stats(
+    Context &ctx,
+    const fullmag_fem_step_stats &stats);
 const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator);
 void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
 bool context_initialize_poisson(Context &ctx, std::string &error);
 void context_destroy_poisson(Context &ctx);
+// Forward-declared so that context.cpp can call this without including
+// mfem_bridge.cpp internals. PhaseTimings is only ever passed as nullptr
+// from context.cpp.
+struct PhaseTimings;
 
 // MFEM device classification helpers (defined in mfem_bridge.cpp)
 const char *configured_mfem_device_string();
@@ -387,14 +423,11 @@ bool context_compute_demag_poisson(
     std::vector<double> &h_demag_xyz,
     double &demag_energy,
     bool allow_interrupt,
+    PhaseTimings *timings,
     std::string &error);
 void compute_magnetoelastic_field(
     Context &ctx,
     const std::vector<double> &m_xyz);
-// Forward-declared so that context.cpp can call this without including
-// mfem_bridge.cpp internals. PhaseTimings is only ever passed as nullptr
-// from context.cpp.
-struct PhaseTimings;
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

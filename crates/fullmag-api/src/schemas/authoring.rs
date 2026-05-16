@@ -1,5 +1,7 @@
+use fullmag_authoring::SceneDocument;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -44,6 +46,99 @@ pub struct StudyRuntimePatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneMetadataResource {
+    pub id: String,
+    pub name: String,
+    pub source_of_truth: String,
+    pub authoring_schema: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneObjectResource {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub geometry: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub transform: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schema(additional_properties)]
+    pub region_overrides: BTreeMap<String, BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub physics_stack: Vec<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub object_mesh: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub mesh_override: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneMaterialResource {
+    pub id: String,
+    pub name: String,
+    #[schema(additional_properties)]
+    pub properties: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SceneResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene: Option<SceneMetadataResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub universe: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<SceneObjectResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<SceneMaterialResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub magnetization_assets: Vec<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub current_modules: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub study: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub outputs: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(additional_properties, nullable)]
+    pub editor: Option<BTreeMap<String, Value>>,
+}
+
+impl SceneResource {
+    pub fn from_scene_document(scene: SceneDocument) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(scene)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MaterialPropertiesResource {
     #[serde(rename = "Ms")]
     pub ms: Option<f64>,
@@ -64,16 +159,16 @@ pub struct MaterialResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MagnetizationAssetResource {
     pub scene_revision: u64,
-    #[schema(value_type = Object)]
-    pub asset: Value,
+    #[schema(additional_properties)]
+    pub asset: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MagnetizationAssetPatchRequest {
     #[serde(default)]
     pub base_revision: Option<u64>,
-    #[schema(value_type = Object)]
-    pub asset: Value,
+    #[schema(additional_properties)]
+    pub asset: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

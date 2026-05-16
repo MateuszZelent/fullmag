@@ -7,6 +7,7 @@ pub mod fem_error_estimator;
 pub mod fem_face_topology;
 pub mod fem_goal_estimator;
 pub mod fem_hcurl_estimator;
+pub mod fem_pbc_benchmark;
 pub mod fem_size_field;
 pub mod fem_solution_transfer;
 pub mod fem_sparse;

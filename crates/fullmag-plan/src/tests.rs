@@ -1285,7 +1285,7 @@ fn fem_backend_with_air_elements_rejects_unknown_boundary_marker_in_strict_mode(
 }
 
 #[test]
-fn fem_backend_without_air_elements_rejects_removed_transfer_grid_path() {
+fn fem_backend_without_air_elements_rejects_missing_shared_airbox_mesh() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.problem_meta.runtime_metadata.insert(
@@ -1348,7 +1348,7 @@ fn fem_backend_without_air_elements_rejects_removed_transfer_grid_path() {
     let err = plan(&ir).expect_err("FEM mesh without air elements must be rejected");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("transfer_grid został usunięty")
+            reason.contains("FEM demag requires a conformal shared-domain mesh")
                 && (reason.contains("Shared-domain FEM mesh")
                     || reason.contains("shared-domain FEM mesh")
                     || reason.contains("no air elements"))
@@ -1912,6 +1912,52 @@ fn fem_backend_multibody_rejects_incompatible_material_law() {
         .reasons
         .iter()
         .any(|reason| reason.contains("native GPU FEM path")));
+}
+
+#[test]
+fn fem_plan_rejects_invalid_cubic_anisotropy_axes() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.energy_terms = vec![EnergyTermIR::Exchange];
+    ir.materials[0].cubic_anisotropy_kc1 = Some(-1.0e5);
+    ir.materials[0].cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+    ir.materials[0].cubic_anisotropy_axis2 = Some([2.0, 0.0, 0.0]);
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![fullmag_ir::FemMeshAssetIR {
+            geometry_name: "strip".to_string(),
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 1, 2]],
+                boundary_markers: vec![1],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+        }],
+        fem_domain_mesh_asset: None,
+    });
+
+    let err = plan(&ir).expect_err("parallel cubic axes must fail FEM planning");
+
+    assert!(
+        err.reasons.iter().any(|reason| {
+            reason.contains(
+                "cubic anisotropy axes must be finite, normalized and mutually orthogonal",
+            )
+        }),
+        "unexpected FEM planning errors: {:?}",
+        err.reasons
+    );
 }
 
 #[test]

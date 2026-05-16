@@ -1261,6 +1261,23 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
         exposed_headers.contains("etag"),
         "browser clients must be able to read etag, got {exposed_headers}"
     );
+    for header_name in [
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+    ] {
+        assert!(
+            exposed_headers.contains(header_name),
+            "browser clients must be able to read {header_name}, got {exposed_headers}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1375,6 +1392,29 @@ async fn status_returns_200_with_live_session() {
     assert!(json["metrics"].is_object());
 }
 
+#[tokio::test]
+async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
+    let app = test_router_with_runtime_read_models().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["metrics"]["total_steps"], 42);
+    assert_eq!(
+        json["metrics"]["steps_per_second"],
+        serde_json::json!(420_000_000.0)
+    );
+}
+
 // ─── domain endpoints ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1425,6 +1465,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
             "artifact_layout": {
                 "backend": "fdm",
                 "grid_cells": [4, 3, 2],
+                "origin": [1.0e-9, -2.0e-9, 3.0e-9],
                 "cell_size": [2.0e-9, 3.0e-9, 4.0e-9]
             }
         }));
@@ -1477,9 +1518,76 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
         serde_json::json!([2.0e-9, 3.0e-9, 4.0e-9])
     );
     assert_eq!(
-        json["bounds"]["max"],
-        serde_json::json!([8.0e-9, 9.0e-9, 8.0e-9])
+        json["grid"]["origin"],
+        serde_json::json!([1.0e-9, -2.0e-9, 3.0e-9])
     );
+    let max = json["bounds"]["max"].as_array().unwrap();
+    for (index, expected) in [9.0e-9, 7.0e-9, 11.0e-9].iter().enumerate() {
+        assert!(
+            (max[index].as_f64().unwrap() - expected).abs() < 1e-18,
+            "bounds.max[{index}]"
+        );
+    }
+}
+
+#[tokio::test]
+async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 3, 1],
+                "cell_size": [2.0e-9, 3.0e-9, 0.0]
+            }
+        }));
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [4, 3, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(
+        json["grid"]["spacing"],
+        serde_json::json!([2.0e-9, 3.0e-9, 0.0])
+    );
+    assert_eq!(json["bounds"]["max"][2], serde_json::json!(0.0));
 }
 
 #[tokio::test]
@@ -2252,6 +2360,19 @@ async fn visualization_camera_patch_publishes_visualization_state_invalidation()
         }),
         "camera patch must invalidate the visualization state resource: {json:#}"
     );
+    let forbidden_fetches = [
+        "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+    ];
+    for forbidden_fetch in forbidden_fetches {
+        assert!(
+            changes
+                .iter()
+                .all(|change| change["recommended_fetch"] != forbidden_fetch),
+            "visualization-only patch must not invalidate {forbidden_fetch}: {json:#}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -8027,6 +8148,46 @@ async fn field_vector_full_returns_ncomp_3() {
 }
 
 #[tokio::test]
+async fn field_vector_cached_projection_reports_point_and_value_counts_separately() {
+    let app = test_router_with_mock_field().await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?component=magnitude")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-point-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("4")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-value-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("4")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+}
+
+#[tokio::test]
 async fn v2_field_catalog_exposes_live_magnetization_fallback() {
     let app = test_router_with_live_magnetization().await;
     let catalog_response = app
@@ -8089,6 +8250,75 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
             .and_then(|value| value.to_str().ok()),
         Some("m")
     );
+}
+
+#[tokio::test]
+async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 1.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![f64::NAN, 0.0, 0.0]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let quantities = catalog["quantities"]
+        .as_array()
+        .expect("field catalog quantities should be an array");
+    assert!(
+        quantities
+            .iter()
+            .all(|entry| entry["quantity_id"].as_str() != Some("m")),
+        "non-finite live magnetization must not be advertised"
+    );
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -9548,6 +9778,28 @@ fn openapi_contains_domain_slice_mesh_overlay_contract() {
         components.contains_key("DomainSliceMeshOverlaySegment"),
         "OpenAPI missing DomainSliceMeshOverlaySegment schema"
     );
+}
+
+#[test]
+fn openapi_contains_fem_cpu_relaxation_qualification_contract() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let components = openapi
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    for schema in [
+        "FemCpuRelaxationQualificationMetadata",
+        "FemCpuRelaxationDemagPolicyMetadata",
+        "FemCpuRelaxationDemagTimingsNs",
+        "FemCpuRelaxationEnergyTerms",
+    ] {
+        assert!(
+            components.contains_key(schema),
+            "OpenAPI missing {schema} schema"
+        );
+    }
 }
 
 #[test]
