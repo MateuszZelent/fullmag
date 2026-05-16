@@ -6,7 +6,6 @@ import type {
 import {
   resolveDomainBounds,
   type Viewport3DBounds,
-  type Viewport3DNodeSelection,
 } from "./viewport3dRenderModel";
 
 type MeshPart = NonNullable<
@@ -187,16 +186,6 @@ export function resolveMeshPartBounds(
     ],
     radius: Math.max(Math.hypot(size[0], size[1], size[2]) / 2, 1e-12),
     size,
-  };
-}
-
-export function resolveMeshPartNodeSelection(
-  part: MeshPart,
-): Viewport3DNodeSelection {
-  return {
-    nodeCount: part.node_count,
-    nodeIndices: part.node_indices,
-    nodeStart: part.node_start,
   };
 }
 

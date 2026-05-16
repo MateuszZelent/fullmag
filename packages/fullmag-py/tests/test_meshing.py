@@ -805,6 +805,35 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(payload["mesh_provenance"]["geometry_kind"], "box")
         self.assertEqual(payload["size_field_stats"]["n_nodes"], 4)
 
+    def test_remesh_cli_payload_spills_large_topology_to_artifact(self) -> None:
+        mesh = self._unit_tet_mesh()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            payload = _mesh_result_payload(
+                mesh,
+                mesh_name="large_mesh",
+                generation_mode="manual_remesh",
+                mesh_provenance={"geometry_kind": "box", "order": 1, "hmax": 0.1},
+                topology_artifact_dir=Path(tmp_dir),
+                inline_topology_max_bytes=1,
+            )
+
+            artifact = payload.get("topology_artifact")
+            self.assertIsInstance(artifact, dict)
+            artifact_path = Path(artifact["path"])
+            self.assertTrue(artifact_path.is_file())
+            self.assertEqual(payload["nodes"], [])
+            self.assertEqual(payload["elements"], [])
+            self.assertEqual(payload["boundary_faces"], [])
+
+            artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            self.assertEqual(artifact_payload["mesh_name"], "large_mesh")
+            self.assertEqual(artifact_payload["nodes"], mesh.nodes.tolist())
+            self.assertEqual(artifact_payload["elements"], mesh.elements.tolist())
+            self.assertEqual(artifact_payload["element_markers"], mesh.element_markers.tolist())
+            self.assertEqual(artifact_payload["boundary_faces"], mesh.boundary_faces.tolist())
+            self.assertEqual(artifact_payload["boundary_markers"], mesh.boundary_markers.tolist())
+
     def test_remesh_cli_payload_preserves_shared_domain_region_markers(self) -> None:
         mesh = self._unit_tet_mesh()
 

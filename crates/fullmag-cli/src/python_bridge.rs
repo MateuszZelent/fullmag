@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -99,9 +99,56 @@ pub(crate) struct RemeshCliResponse {
     /// Per-domain element quality, keyed by domain marker string (from Python).
     #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
+    #[serde(default)]
+    topology_artifact: Option<RemeshTopologyArtifactRef>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemeshTopologyArtifactRef {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RemeshTopologyArtifactPayload {
+    nodes: Vec<[f64; 3]>,
+    elements: Vec<[u32; 4]>,
+    element_markers: Vec<u32>,
+    boundary_faces: Vec<[u32; 3]>,
+    boundary_markers: Vec<u32>,
+    #[serde(default)]
+    periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
+    #[serde(default)]
+    periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
 }
 
 impl RemeshCliResponse {
+    fn hydrate_topology_artifact(mut self) -> Result<Self> {
+        let Some(artifact) = self.topology_artifact.as_ref() else {
+            return Ok(self);
+        };
+        let text = std::fs::read_to_string(&artifact.path).with_context(|| {
+            format!(
+                "failed to read remesh topology artifact {}",
+                artifact.path.display()
+            )
+        })?;
+        let topology: RemeshTopologyArtifactPayload =
+            serde_json::from_str(&text).with_context(|| {
+                format!(
+                    "failed to parse remesh topology artifact {}",
+                    artifact.path.display()
+                )
+            })?;
+        self.nodes = topology.nodes;
+        self.elements = topology.elements;
+        self.element_markers = topology.element_markers;
+        self.boundary_faces = topology.boundary_faces;
+        self.boundary_markers = topology.boundary_markers;
+        self.periodic_boundary_pairs = topology.periodic_boundary_pairs;
+        self.periodic_node_pairs = topology.periodic_node_pairs;
+        Ok(self)
+    }
+
     pub(crate) fn into_mesh_ir(self) -> fullmag_ir::MeshIR {
         let per_domain_quality = self
             .per_domain_quality
@@ -1058,5 +1105,54 @@ mod tests {
     fn filter_non_progress_stderr_strips_progress_lines() {
         let stderr = "[fullmag-progress] Remesh: accepted\nplain error\n[fullmag-progress] Gmsh: mesh ready\n";
         assert_eq!(filter_non_progress_stderr(stderr), "plain error");
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_loads_topology_artifact() {
+        let artifact_path = std::env::temp_dir().join(format!(
+            "fullmag-remesh-topology-artifact-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "mesh_name": "large_mesh",
+                "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                "elements": [[0, 1, 2, 3]],
+                "element_markers": [7],
+                "boundary_faces": [[0, 1, 2]],
+                "boundary_markers": [11],
+                "periodic_boundary_pairs": [],
+                "periodic_node_pairs": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stdout = serde_json::json!({
+            "mesh_name": "large_mesh",
+            "nodes": [],
+            "elements": [],
+            "element_markers": [],
+            "boundary_faces": [],
+            "boundary_markers": [],
+            "topology_artifact": {
+                "path": artifact_path
+            },
+            "quality": null
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+
+        assert_eq!(parsed.nodes.len(), 4);
+        assert_eq!(parsed.elements, vec![[0, 1, 2, 3]]);
+        assert_eq!(parsed.element_markers, vec![7]);
+        assert_eq!(parsed.boundary_faces, vec![[0, 1, 2]]);
+        assert_eq!(parsed.boundary_markers, vec![11]);
+        let _ = std::fs::remove_file(artifact_path);
     }
 }

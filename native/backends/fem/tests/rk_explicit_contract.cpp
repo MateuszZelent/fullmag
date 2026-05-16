@@ -45,6 +45,8 @@ void rk_workspace_is_owned_by_integrator_module() {
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string rk_explicit =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit.cpp");
+    const std::string rk_explicit_step =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
     const std::string rk_stage_rhs =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
 
@@ -60,6 +62,12 @@ void rk_workspace_is_owned_by_integrator_module() {
     check(
         rk_stage_rhs.find("bool evaluate_rk_stage_rhs(") != std::string::npos,
         "explicit RK stage RHS evaluator must be defined in rk_stage_rhs.cpp");
+    check(
+        bridge.find("bool context_step_explicit_rk_mfem(") == std::string::npos,
+        "explicit RK stepper must not be defined in mfem_bridge.cpp");
+    check(
+        rk_explicit_step.find("bool context_step_explicit_rk_mfem(") != std::string::npos,
+        "explicit RK stepper must be defined in rk_explicit_step.cpp");
 }
 
 void workspace_reallocates_when_stage_count_grows() {

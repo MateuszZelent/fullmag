@@ -25,15 +25,19 @@ set(FEM_SOURCES
     cpu/mfem/interactions/zeeman.cpp
     cpu/mfem/integrators/adaptive_dt.cpp
     cpu/mfem/integrators/heun.cpp
+    cpu/mfem/integrators/heun_step.cpp
     cpu/mfem/integrators/llg_rhs.cpp
     cpu/mfem/integrators/rk_explicit.cpp
+    cpu/mfem/integrators/rk_explicit_step.cpp
     cpu/mfem/integrators/rk_stage_rhs.cpp
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
+    cpu/mfem/runtime/snapshot.cpp
     cpu/mfem/runtime/stage_completion.cpp
     cpu/mfem/runtime/step_metrics.cpp
     src/api.cpp
@@ -215,6 +219,14 @@ target_include_directories(fem_rk_explicit_contract PRIVATE
 )
 add_test(NAME fem_rk_explicit_contract COMMAND fem_rk_explicit_contract)
 
+add_executable(fem_heun_step_contract tests/heun_step_contract.cpp)
+target_link_libraries(fem_heun_step_contract PRIVATE fullmag_fem)
+target_include_directories(fem_heun_step_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_heun_step_contract COMMAND fem_heun_step_contract)
+
 add_executable(fem_cpu_threads_contract tests/cpu_threads_contract.cpp)
 target_link_libraries(fem_cpu_threads_contract PRIVATE fullmag_fem)
 target_include_directories(fem_cpu_threads_contract PRIVATE
@@ -222,6 +234,22 @@ target_include_directories(fem_cpu_threads_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cpu_threads_contract COMMAND fem_cpu_threads_contract)
+
+add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
+target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)
+target_include_directories(fem_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_snapshot_contract COMMAND fem_snapshot_contract)
+
+add_executable(fem_mfem_context_contract tests/mfem_context_contract.cpp)
+target_link_libraries(fem_mfem_context_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mfem_context_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mfem_context_contract COMMAND fem_mfem_context_contract)
 
 add_executable(fem_step_metrics_contract tests/step_metrics_contract.cpp)
 target_link_libraries(fem_step_metrics_contract PRIVATE fullmag_fem)

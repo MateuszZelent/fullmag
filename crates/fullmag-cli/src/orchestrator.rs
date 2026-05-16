@@ -1001,7 +1001,7 @@ fn current_mesh_workspace(
     ))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct CurrentMeshBuildOverlay {
     active_build: Option<serde_json::Value>,
     effective_airbox_target: Option<serde_json::Value>,
@@ -1009,6 +1009,10 @@ struct CurrentMeshBuildOverlay {
     last_build_summary: Option<serde_json::Value>,
     last_build_error: Option<String>,
     active_phase: Option<String>,
+    progress_percent: Option<u8>,
+    progress_label: Option<String>,
+    phase_started_at: Instant,
+    phase_durations_ms: Vec<(String, u64)>,
     failed: bool,
 }
 
@@ -1082,6 +1086,10 @@ fn mesh_build_pipeline_status_json(
     active_phase: Option<&str>,
     failed: bool,
     failure_detail: Option<&str>,
+    progress_percent: Option<u8>,
+    progress_label: Option<&str>,
+    active_elapsed_ms: Option<u64>,
+    phase_durations_ms: &[(String, u64)],
 ) -> serde_json::Value {
     let phase_details = [
         (
@@ -1125,15 +1133,58 @@ fn mesh_build_pipeline_status_json(
                 } else {
                     *detail
                 };
-                serde_json::json!({
+                let mut phase = serde_json::json!({
                     "id": id,
                     "label": label,
                     "status": status,
                     "detail": resolved_detail,
-                })
+                });
+                if Some(*id) == active_phase {
+                    if let Some(percent) = progress_percent {
+                        phase["progress_percent"] = serde_json::json!(percent);
+                    }
+                    if let Some(label) = progress_label {
+                        phase["progress_label"] = serde_json::json!(label);
+                    }
+                    if let Some(duration_ms) = active_elapsed_ms {
+                        phase["duration_ms"] = serde_json::json!(duration_ms);
+                    }
+                } else if let Some((_, duration_ms)) =
+                    phase_durations_ms.iter().find(|(phase_id, _)| phase_id == id)
+                {
+                    phase["duration_ms"] = serde_json::json!(duration_ms);
+                }
+                phase
             })
             .collect(),
     )
+}
+
+fn saturating_duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn transition_mesh_build_phase(overlay: &mut CurrentMeshBuildOverlay, next_phase: &str) {
+    let now = Instant::now();
+    if overlay.active_phase.as_deref() == Some(next_phase) {
+        return;
+    }
+    if let Some(previous_phase) = overlay.active_phase.as_deref() {
+        let duration_ms = saturating_duration_millis_u64(overlay.phase_started_at.elapsed());
+        if let Some((_, previous_duration_ms)) = overlay
+            .phase_durations_ms
+            .iter_mut()
+            .find(|(phase_id, _)| phase_id == previous_phase)
+        {
+            *previous_duration_ms = duration_ms;
+        } else {
+            overlay
+                .phase_durations_ms
+                .push((previous_phase.to_string(), duration_ms));
+        }
+    }
+    overlay.active_phase = Some(next_phase.to_string());
+    overlay.phase_started_at = now;
 }
 
 fn overlay_mesh_workspace(
@@ -1188,6 +1239,13 @@ fn overlay_mesh_workspace(
             overlay.active_phase.as_deref(),
             overlay.failed,
             overlay.last_build_error.as_deref(),
+            overlay.progress_percent,
+            overlay.progress_label.as_deref(),
+            overlay
+                .active_phase
+                .as_ref()
+                .map(|_| saturating_duration_millis_u64(overlay.phase_started_at.elapsed())),
+            &overlay.phase_durations_ms,
         ),
     );
 }
@@ -1866,6 +1924,10 @@ fn execute_manual_interactive_remesh(
             last_build_summary: None,
             last_build_error: None,
             active_phase: Some("queued".to_string()),
+            progress_percent: None,
+            progress_label: None,
+            phase_started_at: Instant::now(),
+            phase_durations_ms: Vec::new(),
             failed: false,
         }));
         live_workspace.update(|state| {
@@ -1914,7 +1976,9 @@ fn execute_manual_interactive_remesh(
                                             "queued"
                                         };
                                         if let Ok(mut overlay) = build_overlay.lock() {
-                                            overlay.active_phase = Some(next_phase.to_string());
+                                            transition_mesh_build_phase(&mut overlay, next_phase);
+                                            overlay.progress_percent = Some(stage.percent);
+                                            overlay.progress_label = Some(stage.label.to_string());
                                             overlay.failed = false;
                                             let overlay_snapshot = overlay.clone();
                                             live_workspace.update(|state| {
@@ -2170,7 +2234,9 @@ fn execute_manual_interactive_remesh(
                             .cloned();
                         overlay.last_build_summary = Some(summary);
                         overlay.last_build_error = None;
-                        overlay.active_phase = Some("ready".to_string());
+                        transition_mesh_build_phase(&mut overlay, "ready");
+                        overlay.progress_percent = Some(100);
+                        overlay.progress_label = Some("mesh ready".to_string());
                         overlay.failed = false;
                         let overlay_snapshot = overlay.clone();
                         overlay_mesh_workspace(&mut workspace, &overlay_snapshot);
@@ -6650,7 +6716,8 @@ mod tests {
     use super::{
         apply_current_fem_overrides, apply_live_step_update_to_workspace_state,
         classify_wait_for_solve_command, default_domain_region_markers, execute_synthetic_stage,
-        fem_mesh_payload_from_backend_plan, has_heavy_live_payload, scripted_stage_execution_state,
+        fem_mesh_payload_from_backend_plan, has_heavy_live_payload,
+        mesh_build_pipeline_status_json, scripted_stage_execution_state,
         user_cancelled_stage_completion, wait_for_solve_prompt, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, WaitForSolveCommandAction,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
@@ -6767,6 +6834,38 @@ mod tests {
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
         }
+    }
+
+    #[test]
+    fn mesh_build_pipeline_status_publishes_active_gmsh_progress() {
+        let phases = mesh_build_pipeline_status_json(
+            Some("meshing"),
+            false,
+            None,
+            Some(75),
+            Some("generating 3D mesh"),
+            Some(420),
+            &[("queued".to_string(), 12)],
+        );
+        let phases = phases
+            .as_array()
+            .expect("pipeline status should be an array");
+        let meshing = phases
+            .iter()
+            .find(|phase| phase.get("id").and_then(|value| value.as_str()) == Some("meshing"))
+            .expect("meshing phase should be present");
+
+        assert_eq!(meshing["progress_percent"], 75);
+        assert_eq!(meshing["progress_label"], "generating 3D mesh");
+        assert_eq!(meshing["duration_ms"], 420);
+        assert_eq!(phases[0]["duration_ms"], 12);
+        assert_eq!(
+            phases
+                .iter()
+                .filter(|phase| phase.get("progress_percent").is_some())
+                .count(),
+            1
+        );
     }
 
     #[test]

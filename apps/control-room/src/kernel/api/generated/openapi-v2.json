@@ -4385,6 +4385,14 @@
               "null"
             ]
           },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "id": {
             "type": [
               "string",
@@ -4394,6 +4402,20 @@
           "label": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "progress_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_percent": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },

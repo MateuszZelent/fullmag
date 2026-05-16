@@ -2940,8 +2940,13 @@ export interface components {
         };
         MeshBuildPipelinePhaseResource: {
             detail?: string | null;
+            /** Format: int64 */
+            duration_ms?: number | null;
             id?: string | null;
             label?: string | null;
+            progress_label?: string | null;
+            /** Format: int32 */
+            progress_percent?: number | null;
             status?: string | null;
         };
         MeshCapabilitiesResource: {

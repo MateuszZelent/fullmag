@@ -96,7 +96,7 @@ interface Viewport3DPositionSource {
   positions: ArrayLike<number>;
 }
 
-export const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
+const DEFAULT_VIEWPORT_3D_VECTOR_GLYPH_BUDGET = 2048;
 
 const scalarColorCache = new WeakMap<
   DecodedFieldVector,
@@ -111,7 +111,7 @@ const partVectorSegmentCache = new WeakMap<
   WeakMap<DecodedFieldVector, Map<string, Float32Array | null>>
 >();
 
-export function buildTopologyPositions(topology: DecodedTopology): Float32Array {
+function buildTopologyPositions(topology: DecodedTopology): Float32Array {
   return Float32Array.from(topology.positions);
 }
 
@@ -787,7 +787,7 @@ export function buildVectorLineSegments(
 }
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
-export const VECTOR_SEGMENT_STRIDE = 7;
+const VECTOR_SEGMENT_STRIDE = 7;
 const VECTOR_SCALE_SAMPLE_LIMIT = 512;
 const VECTOR_LOCAL_SPACING_RATIO = 0.9;
 
@@ -844,7 +844,7 @@ export function resolveViewport3DVectorSegmentScale(
   return Math.min(safeScale, localCap);
 }
 
-export function buildVectorLineSegmentsFromPositions(
+function buildVectorLineSegmentsFromPositions(
   topology: Viewport3DPositionSource,
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
@@ -930,7 +930,7 @@ export function buildVectorLineSegmentsForNodeSelection(
   );
 }
 
-export function buildVectorLineSegmentsForNodeSelectionFromPositions(
+function buildVectorLineSegmentsForNodeSelectionFromPositions(
   topology: Viewport3DPositionSource,
   fieldVector: DecodedFieldVector | null | undefined,
   nodeSelection: Viewport3DNodeSelection | null | undefined,

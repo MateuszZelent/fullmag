@@ -37,7 +37,7 @@ export interface Viewport3DVisualProfile {
 export const DEFAULT_VIEWPORT_3D_VISUAL_PROFILE_ID: Viewport3DVisualProfileId =
   "interactive";
 
-export const VIEWPORT_3D_VISUAL_PROFILES: Record<
+const VIEWPORT_3D_VISUAL_PROFILES: Record<
   Viewport3DVisualProfileId,
   Viewport3DVisualProfile
 > = {

@@ -1,50 +1,42 @@
+#include "cpu/mfem/runtime/mfem_context.hpp"
+
 #include "context.hpp"
+
+#if FULLMAG_HAS_MFEM_STACK
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "transfer_audit.hpp"
 
 #include <mfem.hpp>
 
 #include <algorithm>
-#include <array>
-#include <cmath>
+#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <cstdlib>
-#include <limits>
-#include <memory>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
-#include <tuple>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include <vector>
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #endif
+#endif
 
 namespace fullmag::fem {
 
+#if FULLMAG_HAS_MFEM_STACK
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kMu0 = 4.0e-7 * kPi;
-constexpr double kGeomEps = 1e-30;
-constexpr double kPoissonAbsResidualTol = 1e-6;
-constexpr int kInterruptPollStride = 256;
-
-using Vec3 = std::array<double, 3>;
-
-std::optional<int> selected_cuda_device_from_env() {
+std::optional<int> selected_cuda_device_from_env()
+{
     const char *specific = std::getenv("FULLMAG_FEM_GPU_INDEX");
     const char *generic = std::getenv("FULLMAG_CUDA_DEVICE_INDEX");
     const char *raw = specific != nullptr ? specific : generic;
@@ -59,11 +51,8 @@ std::optional<int> selected_cuda_device_from_env() {
     return static_cast<int>(parsed);
 }
 
-} // namespace
-
-namespace {
-
-bool env_flag_enabled(const char *name) {
+bool env_flag_enabled(const char *name)
+{
     const char *raw = std::getenv(name);
     if (raw == nullptr || *raw == '\0') {
         return false;
@@ -77,24 +66,13 @@ bool env_flag_enabled(const char *name) {
            std::strcmp(raw, "YES") == 0;
 }
 
-void debug_checkpoint(const char *stage) {
+void debug_checkpoint(const char *stage)
+{
     if (!env_flag_enabled("FULLMAG_FEM_DEBUG_STARTUP")) {
         return;
     }
     std::fprintf(stderr, "[fullmag_fem][debug] %s\n", stage);
     std::fflush(stderr);
-}
-
-double dot3(const Vec3 &a, const Vec3 &b) {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-Vec3 cross3(const Vec3 &a, const Vec3 &b) {
-    return {
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
 }
 
 double scalar_field_value(
@@ -105,104 +83,28 @@ double scalar_field_value(
     return index < field.size() ? field[index] : fallback;
 }
 
-double average_magnetic_scalar_field(
-    const std::vector<double> &field,
-    const std::vector<uint8_t> &magnetic_node_mask,
-    double fallback)
+uint64_t vector_bytes(const mfem::Vector &vector)
 {
-    if (field.empty()) {
-        return fallback;
-    }
-
-    double sum = 0.0;
-    size_t count = 0;
-    const size_t node_count = std::min(field.size(), magnetic_node_mask.size());
-    for (size_t node = 0; node < node_count; ++node) {
-        if (magnetic_node_mask[node] == 0u) {
-            continue;
-        }
-        sum += field[node];
-        count += 1;
-    }
-    if (count == 0) {
-        return fallback;
-    }
-    return sum / static_cast<double>(count);
-}
-
-bool is_fully_magnetic(const Context &ctx) {
-    if (ctx.element_markers.empty()) {
-        return true;
-    }
-    const uint32_t first = ctx.element_markers.front();
-    return std::all_of(
-        ctx.element_markers.begin(),
-        ctx.element_markers.end(),
-        [first](uint32_t marker) { return marker == first; });
-}
-
-uint64_t vector_bytes(const mfem::Vector &vector) {
     return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
 }
 
-const double *audited_host_read(const mfem::Vector &vector) {
-    record_mfem_host_read(vector_bytes(vector));
-    return vector.HostRead();
-}
-
-double *audited_host_write(mfem::Vector &vector) {
+double *audited_host_write(mfem::Vector &vector)
+{
     record_mfem_host_write(vector_bytes(vector));
     return vector.HostWrite();
 }
 
-double *audited_host_read_write(mfem::Vector &vector) {
-    record_mfem_host_read_write(vector_bytes(vector));
-    return vector.HostReadWrite();
-}
-
-void copy_host_vector_to_mfem(const std::vector<double> &src, mfem::Vector &dst) {
-    dst.SetSize(static_cast<int>(src.size()));
-    dst.UseDevice(true);
-    double *host = audited_host_write(dst);
-    for (size_t i = 0; i < src.size(); ++i) {
-        host[static_cast<int>(i)] = src[i];
-    }
-}
-
-void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst) {
-    const int n = src.Size();
-    dst.resize(static_cast<size_t>(n));
-    const double *host = audited_host_read(src);
-    for (int i = 0; i < n; ++i) {
-        dst[static_cast<size_t>(i)] = host[i];
-    }
-}
-
-double dot_host_vectors(const std::vector<double> &a, const std::vector<double> &b) {
-    double value = 0.0;
-    for (size_t i = 0; i < a.size(); ++i) {
-        value += a[i] * b[i];
-    }
-    return value;
-}
-
 } // namespace
 
-bool context_initialize_mfem(Context &ctx, std::string &error) {
+bool context_initialize_mfem(Context &ctx, std::string &error)
+{
     try {
         debug_checkpoint("context_initialize_mfem:enter");
-        // mfem::Device is a process-global singleton; creating it more than once
-        // triggers an abort ("mfem::Device is already configured!").  We use
-        // std::call_once so that multi-stage simulations AND parallel test
-        // threads share the same device safely.
         static std::once_flag s_mfem_device_once;
 #if FULLMAG_HAS_CUDA_RUNTIME
-        // FEM-030: use plan override > env var > compiled default.
         const char *device_config = configured_mfem_device_string(ctx);
         const bool use_gpu_device = is_gpu_device_string(device_config);
         if (use_gpu_device) {
-            // FEM-029: honour explicit gpu_device_index from the plan; fall
-            // back to the env-var path, then to device 0.
             const int selected_device = (ctx.gpu_device_index >= 0)
                 ? ctx.gpu_device_index
                 : selected_cuda_device_from_env().value_or(0);
@@ -227,10 +129,11 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
             });
             ctx.mfem_selected_device_index = selected_device;
 
-            // S12: Create prioritized CUDA streams
-            int low_priority = 0, high_priority = 0;
+            int low_priority = 0;
+            int high_priority = 0;
             cudaDeviceGetStreamPriorityRange(&low_priority, &high_priority);
-            cudaStream_t cs{}, ios{};
+            cudaStream_t cs{};
+            cudaStream_t ios{};
             cudaStreamCreateWithPriority(&cs, cudaStreamNonBlocking, high_priority);
             cudaStreamCreateWithPriority(&ios, cudaStreamNonBlocking, low_priority);
             ctx.compute_stream = reinterpret_cast<void *>(cs);
@@ -240,8 +143,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
             ctx.compute_event = reinterpret_cast<void *>(ev);
         } else {
             configure_cpu_openmp_runtime(ctx);
-            // Phase-0B fix: pass the original host device string (e.g. "omp",
-            // "ceed-cpu") to MFEM instead of hard-coding "cpu".
             const char *host_device = (device_config != nullptr && *device_config != '\0')
                 ? device_config : "cpu";
             std::call_once(s_mfem_device_once, [&ctx, host_device]() {
@@ -269,8 +170,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         }
 
         for (uint32_t i = 0; i < ctx.n_elements; ++i) {
-            const int *ignored = nullptr;
-            (void)ignored;
             const uint32_t *tet = ctx.elements.data() + static_cast<size_t>(i) * 4u;
             const int vi[4] = {
                 static_cast<int>(tet[0]),
@@ -278,9 +177,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
                 static_cast<int>(tet[2]),
                 static_cast<int>(tet[3]),
             };
-            // MFEM attributes must be >= 1.  Our markers: 1 = magnetic, 0 = air.
-            // Map: marker 0 -> attr 2 (air), marker 1 -> attr 1 (magnetic).
-            // Any other marker m -> attr m (unchanged, already >= 1).
             int attr = 1;
             if (!ctx.element_markers.empty()) {
                 const uint32_t marker = ctx.element_markers[static_cast<size_t>(i)];
@@ -325,8 +221,6 @@ bool context_initialize_mfem(Context &ctx, std::string &error) {
         auto *gf_a = new mfem::GridFunction(fes);
         auto *gf_ms = new mfem::GridFunction(fes);
         auto *a_coeff = new mfem::GridFunctionCoefficient(gf_a);
-        // S09: enable device memory so that future GPU operators find data
-        // already on device without extra H2D copies.
         gf_mx->UseDevice(true);
         gf_my->UseDevice(true);
         gf_mz->UseDevice(true);
@@ -407,15 +301,12 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
     return true;
 }
 
-void context_destroy_mfem(Context &ctx) {
-    // Destroy demag resources first.
+void context_destroy_mfem(Context &ctx)
+{
     context_destroy_demag_fem_bem(ctx);
     context_destroy_poisson(ctx);
-
     destroy_dmi_workspace(ctx);
 
-    // NOTE: mfem::Device is a process-global singleton — do NOT delete it here,
-    // because a subsequent NativeFemBackend may need the already-configured device.
     delete static_cast<mfem::Coefficient *>(ctx.mfem_a_coeff);
     delete static_cast<mfem::Vector *>(ctx.mfem_exchange_out_vec);
     delete static_cast<mfem::Vector *>(ctx.mfem_exchange_tmp_vec);
@@ -457,7 +348,6 @@ void context_destroy_mfem(Context &ctx) {
     ctx.gpu_exchange_legacy_sparse_nnz = 0;
     ctx.gpu_exchange_lumped_mass_ready = false;
 
-    // S12: Destroy CUDA streams and events
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (ctx.compute_stream != nullptr) {
         cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.compute_stream));
@@ -471,7 +361,6 @@ void context_destroy_mfem(Context &ctx) {
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.compute_event));
         ctx.compute_event = nullptr;
     }
-    // S13: Free pinned snapshot buffers
     for (auto &buf : ctx.pinned_snapshot) {
         if (buf != nullptr) {
             cudaFreeHost(buf);
@@ -481,5 +370,6 @@ void context_destroy_mfem(Context &ctx) {
     ctx.pinned_snapshot_bytes = 0;
 #endif
 }
+#endif
 
 } // namespace fullmag::fem

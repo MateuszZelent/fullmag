@@ -1,9 +1,7 @@
 import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
-  DEFAULT_OBJECT_VISUALIZATION,
   type VisualizationTargetRef,
-  type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
 
 import {
@@ -17,9 +15,6 @@ export const FULL_FIELD_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
 };
-
-export const FALLBACK_OBJECT_VISUALIZATION: VisualizationTargetSettings =
-  DEFAULT_OBJECT_VISUALIZATION;
 
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
