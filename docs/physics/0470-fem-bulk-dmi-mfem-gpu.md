@@ -328,10 +328,13 @@ Strict-mode rules:
 
 ### 5.1 Analytical checks
 
-1. **Uniform state**
+1. **Uniform state without free-surface contribution**
    \[
    m=\text{const}\Rightarrow H_{bDMI}=0,\ E_{bDMI}=0.
    \]
+   This check applies to closed/periodic domains or to the interior strong-form field.
+   In a weak-residual FEM implementation on an open domain, the same uniform state can
+   still expose the natural bulk-DMI surface residual through the projected boundary DOFs.
 
 2. **1D Bloch spiral**
    \[

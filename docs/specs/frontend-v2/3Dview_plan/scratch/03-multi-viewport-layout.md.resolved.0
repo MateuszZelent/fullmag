@@ -1,0 +1,254 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 03 — Multi-Viewport Layout (ViewportGrid)
+
+## 1. Concept
+
+Like 3ds Max, Blender, and SolidWorks — the viewport area can be split into multiple panes showing the same model from different perspectives and with different display modes.
+
+## 2. Layout Presets
+
+```typescript
+export type ViewportGridLayout =
+  | "single"        // 1×1 — full viewport
+  | "split-h"       // 1×2 — left + right
+  | "split-v"       // 2×1 — top + bottom
+  | "quad"           // 2×2 — four equal panes
+  | "one-plus-two"   // large left + two stacked right
+  | "one-plus-three"; // large top + three below
+```
+
+### Visual
+
+```
+single:        split-h:       split-v:       quad:
+┌──────────┐   ┌─────┬─────┐  ┌──────────┐  ┌─────┬─────┐
+│          │   │     │     │  │          │  │     │     │
+│  persp.  │   │  L  │  R  │  │   top    │  │ TL  │ TR  │
+│          │   │     │     │  ├──────────┤  ├─────┼─────┤
+└──────────┘   └─────┴─────┘  │  bottom  │  │ BL  │ BR  │
+                               └──────────┘  └─────┴─────┘
+
+one-plus-two:          one-plus-three:
+┌────────┬────┐        ┌──────────────┐
+│        │ R1 │        │    main      │
+│  main  ├────┤        ├────┬────┬────┤
+│        │ R2 │        │ B1 │ B2 │ B3 │
+└────────┴────┘        └────┴────┴────┘
+```
+
+## 3. Pane Configuration
+
+Each pane has independent configuration:
+
+```typescript
+export interface ViewportPaneConfig {
+  id: string;                          // "tl" | "tr" | "bl" | "br" | "main" | "left" | "right" | ...
+  cameraPreset: CameraPreset;         // initial camera
+  displayMode: DisplayMode;           // shaded, wireframe, etc.
+  projection: ProjectionType;         // perspective | orthographic
+  label: string;                      // "Perspective" | "Top" | "Front" | "Right"
+  cameraLinked: boolean;              // if true, follows master pane camera
+}
+
+export type CameraPreset =
+  | "perspective"
+  | "top"
+  | "bottom"
+  | "front"
+  | "back"
+  | "left"
+  | "right"
+  | "isometric";
+
+export type ProjectionType = "perspective" | "orthographic";
+```
+
+### Default Presets by Layout
+
+| Layout | Panes |
+|---|---|
+| `single` | `[{ perspective, shaded }]` |
+| `split-h` | `[{ perspective, shaded }, { top, wireframe, ortho }]` |
+| `split-v` | `[{ perspective, shaded }, { front, wireframe, ortho }]` |
+| `quad` | `[{ perspective, shaded }, { top, wireframe, ortho }, { front, wireframe, ortho }, { right, wireframe, ortho }]` |
+| `one-plus-two` | `[{ perspective, shaded }, { top, wireframe, ortho }, { front, wireframe, ortho }]` |
+
+## 4. Architecture
+
+### Component Tree
+
+```
+ViewportGrid
+  ├── ViewportPane (id="tl")
+  │     ├── <canvas>
+  │     ├── SceneController (owns Three.js)
+  │     ├── DirtyRenderLoop
+  │     └── PaneLabel overlay
+  ├── ViewportPane (id="tr")
+  │     └── ...
+  ├── ViewportPane (id="bl")
+  │     └── ...
+  └── ViewportPane (id="br")
+        └── ...
+```
+
+### ViewportGrid Component
+
+```typescript
+export function ViewportGrid({
+  renderModel,
+  kernel,
+}: {
+  renderModel: Viewport3DRenderModel | null;
+  kernel: KernelApi;
+}) {
+  const layout = useViewport3DStore((s) => s.gridLayout);
+  const panes = useViewport3DStore((s) => s.panes);
+  const activePaneId = useViewport3DStore((s) => s.activePaneId);
+
+  return (
+    <div
+      className="fm-viewport-grid"
+      data-layout={layout}
+    >
+      {panes.map((pane) => (
+        <ViewportPane
+          key={pane.id}
+          config={pane}
+          renderModel={renderModel}
+          isActive={pane.id === activePaneId}
+          onActivate={() => setActivePane(pane.id)}
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+### CSS Grid Layouts
+
+```css
+.fm-viewport-grid {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  gap: 2px;
+  background: var(--fm-viewport-grid-gap-color);
+}
+
+.fm-viewport-grid[data-layout="single"] {
+  grid-template: 1fr / 1fr;
+}
+
+.fm-viewport-grid[data-layout="split-h"] {
+  grid-template: 1fr / 1fr 1fr;
+}
+
+.fm-viewport-grid[data-layout="split-v"] {
+  grid-template: 1fr 1fr / 1fr;
+}
+
+.fm-viewport-grid[data-layout="quad"] {
+  grid-template: 1fr 1fr / 1fr 1fr;
+}
+
+.fm-viewport-grid[data-layout="one-plus-two"] {
+  grid-template: 1fr 1fr / 2fr 1fr;
+}
+.fm-viewport-grid[data-layout="one-plus-two"] > :first-child {
+  grid-row: 1 / -1;
+}
+```
+
+## 5. Per-Pane Resource Sharing
+
+All panes share the **same** `Viewport3DRenderModel` (same topology, field data, selection). The differences are:
+
+| Shared across panes | Per-pane |
+|---|---|
+| Topology geometry data | Camera position/orientation |
+| Field buffer data | Display mode |
+| Selection identity | Projection type |
+| Layer visibility (from command) | Label |
+| Clipping config | Active/focused state |
+
+**GPU resource sharing:** Each pane has its own `SceneController` and `WebGLRenderer`. Three.js `BufferGeometry` can be shared between scenes when panes use the same topology. The `MeshLayerRenderer` should check topology revision and reuse the geometry object if unchanged.
+
+## 6. Camera Linking
+
+Two modes:
+
+### Independent (default)
+Each pane has its own camera. Mouse interaction in one pane affects only that pane.
+
+### Linked
+One pane is designated master. Other linked panes derive their camera from the master but maintain their preset orientation offset.
+
+```typescript
+export function deriveLinkedCamera(
+  master: CameraState,
+  preset: CameraPreset,
+): CameraState {
+  // Linked panes follow master's target and distance
+  // but apply their own orientation from the preset
+  return {
+    target: master.target,
+    distance: master.distance,
+    up: presetUp(preset),
+    azimuth: presetAzimuth(preset),
+    elevation: presetElevation(preset),
+  };
+}
+```
+
+Camera linking is toggled per-pane via the toolbar or `Ctrl+L` shortcut.
+
+## 7. Active Pane
+
+One pane is "active" at a time (blue border). The active pane:
+- Receives keyboard shortcuts
+- Is the target for toolbar commands
+- Is shown maximized on double-click of pane label
+- Camera controls apply to active pane
+
+Clicking inside a pane makes it active.
+
+## 8. Pane Maximise
+
+Double-clicking the pane label temporarily maximises that pane to fill the entire viewport area. Double-click again to restore the grid layout. This is purely CSS — no unmounting of other panes (their render loops just stop because they're zero-size and the resize observer marks them as not needing frames).
+
+## 9. Store Schema
+
+```typescript
+interface Viewport3DStoreState {
+  gridLayout: ViewportGridLayout;
+  panes: ViewportPaneConfig[];
+  activePaneId: string;
+  setGridLayout: (layout: ViewportGridLayout) => void;
+  setPaneDisplayMode: (paneId: string, mode: DisplayMode) => void;
+  setPaneCameraPreset: (paneId: string, preset: CameraPreset) => void;
+  toggleCameraLink: (paneId: string) => void;
+  setActivePane: (paneId: string) => void;
+  maximisedPaneId: string | null;
+  toggleMaximise: (paneId: string) => void;
+}
+```
+
+## 10. Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `1` | Single viewport |
+| `2` | Split horizontal |
+| `3` | Split vertical |
+| `4` | Quad viewport |
+| `5` | One + two layout |
+| `Space` | Maximise/restore active pane |
+| `Ctrl+L` | Toggle camera linking for active pane |
+| `Numpad 0` | Perspective preset |
+| `Numpad 1` | Front |
+| `Numpad 3` | Right |
+| `Numpad 7` | Top |
+| `Numpad 5` | Toggle perspective/orthographic |

@@ -1,18 +1,27 @@
 {
   "name": "fullmag",
   "private": true,
+  "engines": {
+    "node": ">=22.15.0 <23",
+    "pnpm": "10.8.1"
+  },
   "packageManager": "pnpm@10.8.1",
   "scripts": {
-    "web:dev": "pnpm --dir apps/web dev",
-    "web:clean": "pnpm --dir apps/web clean",
-    "web:generate-api": "pnpm --dir apps/web generate:api",
-    "web:generate-openapi": "pnpm --dir apps/web generate:openapi-v2",
-    "web:generate-api-types": "pnpm --dir apps/web generate:api-v2-types",
-    "web:typegen": "pnpm --dir apps/web typegen",
-    "web:typecheck": "pnpm --dir apps/web typecheck",
-    "web:build": "pnpm --dir apps/web build",
-    "web:lint": "pnpm --dir apps/web lint",
-    "web:test:quantity-api-gates": "pnpm --dir apps/web test:quantity-api-gates",
+    "web:dev": "pnpm --dir apps/control-room dev",
+    "web:clean": "rm -rf apps/control-room/.next",
+    "web:generate-api": "pnpm --dir apps/control-room generate:api",
+    "web:generate-openapi": "pnpm --dir apps/control-room generate:openapi-v2",
+    "web:generate-api-types": "pnpm --dir apps/control-room generate:api-v2-types",
+    "web:typegen": "pnpm --dir apps/control-room typecheck",
+    "web:typecheck": "pnpm --dir apps/control-room typecheck",
+    "web:build": "pnpm --dir apps/control-room build",
+    "web:lint": "pnpm --dir apps/control-room lint",
+    "web:test:quantity-api-gates": "pnpm --dir apps/control-room check:api-hygiene",
+    "control-room:dev": "pnpm --dir apps/control-room dev",
+    "control-room:build": "pnpm --dir apps/control-room build",
+    "control-room:lint": "pnpm --dir apps/control-room lint",
+    "control-room:test": "pnpm --dir apps/control-room test",
+    "control-room:typecheck": "pnpm --dir apps/control-room typecheck",
     "fullmag:check-api-clean": "bash ./scripts/ci-resource-first-gates.sh --strict"
   }
 }

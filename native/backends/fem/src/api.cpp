@@ -1,6 +1,9 @@
 #include "fullmag_fem.h"
 
 #include "context.hpp"
+#include "gpu_rk.hpp"
+#include "gpu_state.hpp"
+#include "transfer_audit.hpp"
 
 #include <cctype>
 #include <cstdio>
@@ -96,6 +99,7 @@ fullmag_fem_availability_info query_availability() {
 
 #if FULLMAG_HAS_MFEM_STACK
     info.built_with_mfem_stack = 1;
+    info.native_fem_cpu_available = 1;
 #else
     set_reason(info, kUnavailableMessage);
     return info;
@@ -104,13 +108,31 @@ fullmag_fem_availability_info query_availability() {
 #if FULLMAG_HAS_CUDA_RUNTIME
     info.built_with_cuda_runtime = 1;
 #else
-    set_reason(info, "fullmag_fem native backend was built without CUDA runtime support");
+    set_reason(
+        info,
+        "native FEM CPU backend is available; native FEM GPU backend is unavailable because fullmag_fem was built without CUDA runtime support");
     return info;
 #endif
 
 #ifdef MFEM_USE_CEED
     info.built_with_ceed = 1;
 #endif
+    info.libceed_used_hot_path = 0;
+
+#ifdef MFEM_USE_CUDA
+    info.mfem_cuda_available = 1;
+#endif
+
+#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
+    info.hypre_gpu_available = 1;
+#endif
+
+    if (!info.mfem_cuda_available) {
+        set_reason(
+            info,
+            "native FEM GPU backend requires an MFEM build with CUDA device support");
+        return info;
+    }
 
     if (mfem_device_request_needs_ceed() && !info.built_with_ceed) {
         set_reason(
@@ -158,6 +180,7 @@ fullmag_fem_availability_info query_availability() {
     }
 
     info.available = 1;
+    info.native_fem_gpu_available = 1;
     if (info.built_with_ceed) {
         set_reason(info, "native FEM GPU backend is available (MFEM + CUDA + libCEED)");
     } else {
@@ -172,7 +195,7 @@ extern "C" {
 
 int fullmag_fem_is_available(void) {
     const auto info = query_availability();
-    return info.available != 0 ? 1 : 0;
+    return (info.native_fem_cpu_available != 0 || info.native_fem_gpu_available != 0) ? 1 : 0;
 }
 
 int fullmag_fem_get_availability_info(fullmag_fem_availability_info *out_info) {
@@ -204,6 +227,10 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
         delete handle;
         return nullptr;
     }
+    handle->context.transfer_audit.assert_no_hot_loop_host_sync =
+        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_HOST_SYNC");
+    handle->context.transfer_audit.assert_no_hot_loop_compute_sync =
+        env_flag("FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC");
 
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
@@ -227,15 +254,23 @@ int fullmag_fem_backend_step(
     bool ok = false;
     auto &ctx = handle->context;
     ctx.step_interrupted = false;
-    if (ctx.integrator == FULLMAG_FEM_INTEGRATOR_HEUN) {
-        // Legacy Heun path (unchanged behavior)
-        ok = fullmag::fem::context_step_exchange_heun_mfem(
-            ctx, dt_seconds, *out_stats, handle->last_error);
-    } else {
-        // Unified explicit-RK engine
-        const auto &tab = fullmag::fem::tableau_for_integrator(ctx.integrator);
+    ctx.transfer_audit.reset_step_violation();
+    const auto &tab = fullmag::fem::tableau_for_integrator(ctx.integrator);
+    {
+        fullmag::fem::TransferAuditScope hot_loop(
+            ctx.transfer_audit,
+            fullmag::fem::TransferAuditScopeKind::HotLoop);
         ok = fullmag::fem::context_step_explicit_rk_mfem(
             ctx, tab, dt_seconds, *out_stats, handle->last_error);
+    }
+    if (ctx.transfer_audit.hot_loop_violation) {
+        set_stage_completion_reason(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+        fullmag_fem_set_handle_error(
+            handle,
+            ctx.transfer_audit.hot_loop_violation_message);
+        return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!ok) {
         set_stage_completion_reason(
@@ -243,6 +278,13 @@ int fullmag_fem_backend_step(
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    if (!fullmag::fem::gpu_rk_finalize_step_stats(ctx, *out_stats, handle->last_error)) {
+        set_stage_completion_reason(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (ctx.step_interrupted) {
         if (!fullmag::fem::context_snapshot_stats_mfem(
@@ -292,6 +334,13 @@ int fullmag_fem_backend_copy_field_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
     handle->last_error.clear();
+    if (observable == FULLMAG_FEM_OBSERVABLE_M &&
+        !fullmag::fem::context_sync_gpu_magnetization_to_host(
+            handle->context,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
     return fullmag::fem::context_copy_field_f64(
         handle->context,
         observable,
@@ -381,6 +430,76 @@ int fullmag_fem_backend_get_device_info(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_get_transfer_audit(
+    fullmag_fem_backend *handle,
+    fullmag_fem_transfer_audit *out_audit
+) {
+    if (out_audit == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_transfer_audit received null out_audit");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_get_transfer_audit received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_audit = handle->context.transfer_audit.counters;
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_state_info(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_state_info *out_info
+) {
+    if (out_info == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_state_info received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_get_gpu_state_info received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_info = fullmag::fem::gpu_state_info(handle->context.gpu_state);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_rk_plan_info(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_rk_plan_info *out_info
+) {
+    if (out_info == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_rk_plan_info received null out_info");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_get_gpu_rk_plan_info received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::string reason;
+    const auto plan = fullmag::fem::gpu_rk_plan_exchange_only(handle->context, reason);
+    *out_info = {};
+    out_info->exchange_only_enabled = plan.enabled ? 1 : 0;
+    out_info->stage_count = plan.stage_count;
+    out_info->uses_cuda_kernels = plan.uses_cuda_kernels ? 1 : 0;
+    out_info->allows_exchange_host_sync = plan.allows_exchange_host_sync ? 1 : 0;
+    out_info->stage_exchange_device_resident =
+        plan.stage_exchange_device_resident ? 1 : 0;
+    std::snprintf(
+        out_info->exchange_operator_mode,
+        sizeof(out_info->exchange_operator_mode),
+        "%s",
+        plan.exchange_operator_mode != nullptr ? plan.exchange_operator_mode : "unsupported");
+    if (!reason.empty()) {
+        std::snprintf(out_info->reason, sizeof(out_info->reason), "%s", reason.c_str());
+    }
+    return FULLMAG_FEM_OK;
+}
+
 const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle) {
     if (handle != nullptr) {
         return handle->last_error.empty() ? nullptr : handle->last_error.c_str();
@@ -389,6 +508,9 @@ const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle) {
 }
 
 void fullmag_fem_backend_destroy(fullmag_fem_backend *handle) {
+    if (handle != nullptr) {
+        fullmag::fem::gpu_state_destroy(handle->context.gpu_state);
+    }
 #if FULLMAG_HAS_MFEM_STACK
     if (handle != nullptr) {
         fullmag::fem::context_destroy_mfem(handle->context);
@@ -415,6 +537,18 @@ int fullmag_fem_backend_upload_strain(
     auto &ctx = handle->context;
     ctx.mel_uniform_strain = uniform != 0;
     ctx.mel_strain_voigt.assign(strain_voigt, strain_voigt + static_cast<size_t>(len));
+    if (ctx.gpu_state.allocated && !ctx.mel_uniform_strain) {
+        std::string error;
+        if (!fullmag::fem::gpu_state_upload_magnetoelastic_strain(
+                ctx.gpu_state,
+                ctx.mel_strain_voigt.data(),
+                static_cast<uint64_t>(ctx.mel_strain_voigt.size()),
+                ctx.transfer_audit,
+                error)) {
+            fullmag_fem_set_handle_error(handle, error);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+    }
     // Recompute H_mel with new strain
     if (ctx.enable_magnetoelastic) {
 #if FULLMAG_HAS_MFEM_STACK

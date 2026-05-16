@@ -9,13 +9,14 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::field_store::serialize_fem_mesh_topology_binary_v1;
 use crate::schemas::domain::*;
-use crate::types::AppState;
+use crate::types::{AppState, SessionStateResponse};
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -74,15 +75,14 @@ pub async fn get_domain_meta(
         .and_then(|g| g.parse::<u64>().ok())
         .unwrap_or(0);
 
-    let grid = if !is_fem && grid_shape.iter().any(|v| *v > 0) {
-        Some(StructuredGridDescriptor {
-            shape: grid_shape,
-            origin: [0.0, 0.0, 0.0],
-            spacing: [1.0, 1.0, 1.0],
-        })
-    } else {
-        None
-    };
+    let fdm_grid =
+        (!is_fem && grid_shape.iter().any(|v| *v > 0)).then(|| fdm_grid_descriptor(snapshot));
+
+    let grid = fdm_grid.as_ref().map(|layout| StructuredGridDescriptor {
+        shape: grid_shape,
+        origin: layout.origin,
+        spacing: layout.spacing,
+    });
 
     let bounds = if is_fem {
         let m = snapshot.fem_mesh.as_ref().unwrap();
@@ -101,14 +101,19 @@ pub async fn get_domain_meta(
             min: bmin,
             max: bmax,
         }
+    } else if let Some(layout) = fdm_grid.as_ref() {
+        Bounds3 {
+            min: layout.origin,
+            max: [
+                layout.origin[0] + grid_shape[0] as f64 * layout.spacing[0],
+                layout.origin[1] + grid_shape[1] as f64 * layout.spacing[1],
+                layout.origin[2] + grid_shape[2] as f64 * layout.spacing[2],
+            ],
+        }
     } else {
         Bounds3 {
             min: [0.0, 0.0, 0.0],
-            max: [
-                grid_shape[0] as f64,
-                grid_shape[1] as f64,
-                grid_shape[2] as f64,
-            ],
+            max: [0.0, 0.0, 0.0],
         }
     };
 
@@ -135,9 +140,69 @@ pub async fn get_domain_meta(
     }))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FdmGridLayout {
+    origin: [f64; 3],
+    spacing: [f64; 3],
+}
+
+fn fdm_grid_descriptor(snapshot: &SessionStateResponse) -> FdmGridLayout {
+    let layout = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .filter(|layout| layout.get("backend").and_then(Value::as_str) == Some("fdm"));
+    let origin = layout
+        .and_then(|layout| {
+            layout
+                .get("origin")
+                .or_else(|| layout.get("grid_origin"))
+                .or_else(|| layout.get("native_origin"))
+        })
+        .and_then(value_array3_f64_any_finite)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let spacing = layout
+        .and_then(|layout| layout.get("cell_size"))
+        .and_then(value_array3_f64_allow_planar)
+        .unwrap_or([1.0, 1.0, 1.0]);
+
+    FdmGridLayout { origin, spacing }
+}
+
+fn value_array3_f64_any_finite(value: &Value) -> Option<[f64; 3]> {
+    let array = value.as_array()?;
+    let values = [
+        array.first()?.as_f64()?,
+        array.get(1)?.as_f64()?,
+        array.get(2)?.as_f64()?,
+    ];
+    values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(values)
+}
+
+fn value_array3_f64_allow_planar(value: &Value) -> Option<[f64; 3]> {
+    let array = value.as_array()?;
+    let values = [
+        array.first()?.as_f64()?,
+        array.get(1)?.as_f64()?,
+        array.get(2)?.as_f64()?,
+    ];
+    let positive_axes = values.iter().filter(|value| **value > 0.0).count();
+    values
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+        .then_some(values)
+        .filter(|_| positive_axes >= 2)
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/domain/topology",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous domain topology response")
+    ),
     responses(
         (status = 200, description = "Binary FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Domain topology not modified for the supplied ETag"),

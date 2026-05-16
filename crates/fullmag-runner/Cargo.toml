@@ -22,4 +22,5 @@ nalgebra = "0.33"
 num-complex = "0.4"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }

@@ -1,0 +1,91 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
+
+import { MAGNETIZATION_TEXTURE_COMMANDS } from "./commands";
+
+const uniformCommand = MAGNETIZATION_TEXTURE_COMMANDS.find(
+  (command) => command.id === "magnetization-texture.assign-uniform",
+);
+
+describe("magnetization texture commands", () => {
+  it("assigns a uniform texture to the selected region target", async () => {
+    const patchMagnetizationAsset = vi.fn(async () => ({
+      asset: { id: "mag:body:region:body:uniform" },
+      scene_revision: 6,
+    }));
+    const patchRegion = vi.fn(async () => ({ revision: 7 }));
+    const context = {
+      api: {
+        model: {
+          patchMagnetizationAsset,
+          patchRegion,
+        },
+      },
+      resourceData: {
+        [MODEL_SCENE_PATH]: { revision: 5 },
+      },
+      selection: {
+        get: () => ({
+          kind: "object.region-magnetic-texture",
+          label: "Magnetic Texture",
+          moduleSource: "explorer",
+          nodeId: "node-1",
+          objectId: "body",
+          ref: {
+            kind: "object.region-magnetic-texture",
+            nodeId: "node-1",
+            objectId: "body",
+            regionId: "region:body",
+            type: "scene-object",
+            visualizationTargetId: "object:body",
+          },
+        }),
+      },
+      source: "test",
+    } as unknown as CommandContext;
+
+    expect(uniformCommand?.isEnabled?.(context)).toBe(true);
+    await expect(uniformCommand?.run(context)).resolves.toMatchObject({
+      status: "completed",
+    });
+
+    expect(patchMagnetizationAsset).toHaveBeenCalledWith(
+      "mag:body:region:body:uniform",
+      expect.objectContaining({
+        asset: expect.objectContaining({
+          id: "mag:body:region:body:uniform",
+          kind: "preset_texture",
+          preset_kind: "uniform",
+          preset_params: { direction: [1, 0, 0] },
+        }),
+        base_revision: 5,
+      }),
+    );
+    expect(patchRegion).toHaveBeenCalledWith("region:body", {
+      magnetization_ref: "mag:body:region:body:uniform",
+    });
+  });
+
+  it("disables assignment when no object or region target is selected", () => {
+    const context = {
+      selection: {
+        get: () => ({
+          kind: null,
+          label: null,
+          moduleSource: null,
+          nodeId: null,
+          objectId: null,
+          ref: null,
+        }),
+      },
+      source: "test",
+    } as unknown as CommandContext;
+
+    expect(uniformCommand?.isEnabled?.(context)).toBe(false);
+    expect(uniformCommand?.disabledReason?.(context)).toBe(
+      "Select an object or region texture target.",
+    );
+  });
+});

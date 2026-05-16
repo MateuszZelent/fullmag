@@ -13,7 +13,7 @@ use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt; // for `oneshot`
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -358,6 +358,8 @@ fn test_app_state() -> Arc<AppState> {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
@@ -443,6 +445,56 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
     *state.current_live_state.write().await = Some(snapshot);
 
     state
+}
+
+async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 3,
+            completed_stage_indexes: vec![0],
+            stages: vec![
+                StageExecutionRecord {
+                    status: StageLifecycleState::Completed,
+                    command_id: Some("cmd-stage-0".into()),
+                    started_at_unix_ms: Some(1_700_000_000_000),
+                    completed_at_unix_ms: Some(1_700_000_001_000),
+                    reason: None,
+                    artifact_refs: vec!["artifacts/stage-000".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: None,
+                    metric_name: None,
+                    metric_value: None,
+                    threshold: None,
+                },
+                StageExecutionRecord {
+                    status: StageLifecycleState::Running,
+                    command_id: Some("cmd-stage-1".into()),
+                    started_at_unix_ms: Some(1_700_000_002_000),
+                    completed_at_unix_ms: None,
+                    reason: None,
+                    artifact_refs: vec!["artifacts/stage-001".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: None,
+                    metric_name: None,
+                    metric_value: None,
+                    threshold: None,
+                },
+            ],
+            stage_statuses: vec![
+                StageLifecycleState::Completed,
+                StageLifecycleState::Running,
+                StageLifecycleState::Pending,
+            ],
+            active_stage_index: Some(1),
+            active_stage_kind: Some("relax".into()),
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+        snapshot.state_version = state_version;
+    }
 }
 
 fn test_router() -> axum::Router {
@@ -549,6 +601,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 grid: [4, 4, 1],
                 fem_mesh: None,
                 magnetization: None,
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -599,14 +652,30 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
             stages: vec![
                 StageExecutionRecord {
                     status: StageLifecycleState::Completed,
+                    command_id: Some("cmd-stage-0".into()),
+                    started_at_unix_ms: Some(1_700_000_000_000),
+                    completed_at_unix_ms: Some(1_700_000_001_000),
                     reason: None,
+                    artifact_refs: vec!["artifacts/stage-000".into()],
+                    checkpoint_ref: Some("cp-000041".into()),
+                    loaded_state_ref: None,
+                    resume_from_checkpoint_ref: None,
+                    state_transition: Some("preserved".into()),
                     metric_name: None,
                     metric_value: None,
                     threshold: None,
                 },
                 StageExecutionRecord {
                     status: StageLifecycleState::Running,
+                    command_id: Some("cmd-stage-1".into()),
+                    started_at_unix_ms: Some(1_700_000_002_000),
+                    completed_at_unix_ms: None,
                     reason: None,
+                    artifact_refs: vec!["artifacts/stage-001".into()],
+                    checkpoint_ref: None,
+                    loaded_state_ref: Some("states/imported-state.fmstate".into()),
+                    resume_from_checkpoint_ref: Some("cp-000041".into()),
+                    state_transition: Some("restored".into()),
                     metric_name: Some("max_torque_T".into()),
                     metric_value: Some(14.0),
                     threshold: Some(1.0e-4),
@@ -652,6 +721,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-1".into(),
                 kind: "run".into(),
                 created_at_unix_ms: 1_700_000_000_500,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: Some(1.0e-9),
                 max_steps: Some(1000),
                 torque_tolerance: None,
@@ -672,6 +746,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-1".into()),
             status: CommandLifecycleState::Queued,
             dispatched_at_unix_ms: None,
             completed_at_unix_ms: None,
@@ -684,6 +759,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-2".into(),
                 kind: "pause".into(),
                 created_at_unix_ms: 1_700_000_000_700,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -704,6 +784,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-2".into()),
             status: CommandLifecycleState::Dispatched,
             dispatched_at_unix_ms: Some(1_700_000_000_800),
             completed_at_unix_ms: None,
@@ -716,6 +797,11 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 command_id: "cmd-3".into(),
                 kind: "stop".into(),
                 created_at_unix_ms: 1_700_000_000_900,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
                 until_seconds: None,
                 max_steps: None,
                 torque_tolerance: None,
@@ -736,6 +822,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
             },
+            request_id: Some("req-cmd-3".into()),
             status: CommandLifecycleState::Completed,
             dispatched_at_unix_ms: Some(1_700_000_000_950),
             completed_at_unix_ms: Some(1_700_000_001_000),
@@ -829,6 +916,11 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
 }
 
 async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
+    let (router, _state, repo_root) = test_router_with_session_store_state().await;
+    (router, repo_root)
+}
+
+async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>, PathBuf) {
     let repo_root = std::env::temp_dir().join(format!(
         "fullmag-api-router-v1-session-store-{}-{}",
         std::process::id(),
@@ -850,6 +942,8 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(Default::default())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
@@ -897,7 +991,33 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
         capability_profile_version: "1.0.0".into(),
         session,
         run: None,
-        live_state: None,
+        live_state: Some(LiveState {
+            status: "paused".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 42,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 15.0,
+                max_dm_dt: 10.0,
+                max_h_eff: 11.0,
+                max_h_demag: 12.0,
+                max_torque_Apm: 13.0,
+                max_torque_T: 14.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        }),
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -928,7 +1048,11 @@ async fn test_router_with_session_store() -> (axum::Router, PathBuf) {
 
     *state.current_live_state.write().await = Some(snapshot);
 
-    (build_v2_router().with_state(state), repo_root)
+    (
+        build_v2_router().with_state(state.clone()),
+        state,
+        repo_root,
+    )
 }
 
 /// Read the response body into bytes.
@@ -1103,6 +1227,108 @@ async fn contract_version_header_present() {
     );
 }
 
+#[tokio::test]
+async fn contract_version_header_is_exposed_to_browser_clients() {
+    let app = test_router().layer(super::middleware::cors::cors_layer());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/platform/health")
+                .header(header::ORIGIN, "http://localhost:3100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let exposed_headers = response
+        .headers()
+        .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+        .expect("access-control-expose-headers should be present for browser clients")
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+
+    assert!(
+        exposed_headers.contains("x-api-contract-version"),
+        "browser clients must be able to read x-api-contract-version, got {exposed_headers}"
+    );
+    assert!(
+        exposed_headers.contains("x-request-id"),
+        "browser clients must be able to read x-request-id, got {exposed_headers}"
+    );
+    assert!(
+        exposed_headers.contains("etag"),
+        "browser clients must be able to read etag, got {exposed_headers}"
+    );
+    for header_name in [
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+    ] {
+        assert!(
+            exposed_headers.contains(header_name),
+            "browser clients must be able to read {header_name}, got {exposed_headers}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn browser_clients_can_preflight_authoring_transactions() {
+    let app = test_router().layer(super::middleware::cors::cors_layer());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/v2/sessions/current/model/transactions")
+                .header(header::ORIGIN, "http://localhost:3100")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_some(),
+        "preflight response must allow the browser origin"
+    );
+    let allowed_methods = response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+        .expect("access-control-allow-methods should be present")
+        .to_str()
+        .unwrap()
+        .to_ascii_uppercase();
+    assert!(
+        allowed_methods == "*" || allowed_methods.contains("POST"),
+        "authoring transaction preflight must allow POST, got {allowed_methods}"
+    );
+    let allowed_headers = response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+        .expect("access-control-allow-headers should be present")
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(
+        allowed_headers == "*" || allowed_headers.contains("content-type"),
+        "authoring transaction preflight must allow content-type, got {allowed_headers}"
+    );
+}
+
 // ─── status endpoint ────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1166,6 +1392,29 @@ async fn status_returns_200_with_live_session() {
     assert!(json["metrics"].is_object());
 }
 
+#[tokio::test]
+async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
+    let app = test_router_with_runtime_read_models().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["metrics"]["total_steps"], 42);
+    assert_eq!(
+        json["metrics"]["steps_per_second"],
+        serde_json::json!(420_000_000.0)
+    );
+}
+
 // ─── domain endpoints ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1206,6 +1455,139 @@ async fn domain_meta_returns_json_with_session() {
     assert_eq!(json["coordinate_system"], "cartesian");
     assert!(json["bounds"].is_object());
     assert!(json["counts"].is_object());
+}
+
+#[tokio::test]
+async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 3, 2],
+                "origin": [1.0e-9, -2.0e-9, 3.0e-9],
+                "cell_size": [2.0e-9, 3.0e-9, 4.0e-9]
+            }
+        }));
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [4, 3, 2],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["discretization"], "fdm");
+    assert_eq!(json["grid"]["shape"], serde_json::json!([4, 3, 2]));
+    assert_eq!(
+        json["grid"]["spacing"],
+        serde_json::json!([2.0e-9, 3.0e-9, 4.0e-9])
+    );
+    assert_eq!(
+        json["grid"]["origin"],
+        serde_json::json!([1.0e-9, -2.0e-9, 3.0e-9])
+    );
+    let max = json["bounds"]["max"].as_array().unwrap();
+    for (index, expected) in [9.0e-9, 7.0e-9, 11.0e-9].iter().enumerate() {
+        assert!(
+            (max[index].as_f64().unwrap() - expected).abs() < 1e-18,
+            "bounds.max[{index}]"
+        );
+    }
+}
+
+#[tokio::test]
+async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [4, 3, 1],
+                "cell_size": [2.0e-9, 3.0e-9, 0.0]
+            }
+        }));
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 2.5e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [4, 3, 1],
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(
+        json["grid"]["spacing"],
+        serde_json::json!([2.0e-9, 3.0e-9, 0.0])
+    );
+    assert_eq!(json["bounds"]["max"][2], serde_json::json!(0.0));
 }
 
 #[tokio::test]
@@ -1675,7 +2057,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 3);
+    assert_eq!(json["schema_version"], 4);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -1694,8 +2076,60 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["trim"]["enabled"], false);
     assert_eq!(json["trim"]["axes"]["x"]["min_percent"], 0.0);
     assert_eq!(json["trim"]["axes"]["x"]["max_percent"], 100.0);
+    assert_eq!(json["camera"]["projection"], "perspective");
+    assert_eq!(
+        json["camera"]["position"],
+        serde_json::json!([2e-6, 1.4e-6, 2e-6])
+    );
+    assert_eq!(json["camera"]["target"], serde_json::json!([0.0, 0.0, 0.0]));
+    assert_eq!(json["camera"]["up"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(json["camera"]["fov_degrees"], 45.0);
+    assert_eq!(
+        json["camera"]["orthographic_scale"],
+        serde_json::Value::Null
+    );
     assert!(json["overrides"].as_array().is_some());
     assert!(json["diagnostics"]["warnings"].as_array().is_some());
+}
+
+#[tokio::test]
+async fn visualization_state_exposes_effective_scene_object_targets() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "arch_waveguide".to_string();
+    scene.objects[0].name = "arch_waveguide".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let objects = json["targets"]["objects"]
+        .as_array()
+        .expect("visualization target registry should expose scene objects");
+    let target = objects
+        .iter()
+        .find(|target| target["scope_id"] == "arch_waveguide")
+        .expect("arch_waveguide target should be present");
+
+    assert_eq!(target["scope"], "object");
+    assert_eq!(target["label"], "arch_waveguide");
+    assert_eq!(target["source"], "scene_object");
+    assert_eq!(target["settings"]["visible"], true);
+    assert_eq!(target["settings"]["surface_visible"], true);
+    assert_eq!(target["settings"]["wireframe_visible"], false);
+    assert_eq!(target["settings"]["render_mode"], "surface");
 }
 
 #[tokio::test]
@@ -1738,7 +2172,41 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                             "show_airbox_vectors": true,
                             "show_vectors": true,
                             "render_mode": "vectors"
-                        }
+                        },
+                        "camera": {
+                            "projection": "orthographic",
+                            "position": [1.0e-6, 2.0e-6, 3.0e-6],
+                            "target": [0.0, 0.0, 0.0],
+                            "up": [0.0, 0.0, 1.0],
+                            "fov_degrees": 35.0,
+                            "orthographic_scale": 2.5e-6
+                        },
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "free-layer",
+                                "visible": true,
+                                "display": {
+                                    "visible": true,
+                                    "bounds": { "visible": true },
+                                    "surface": { "visible": true },
+                                    "wireframe": { "visible": true, "opacity": 0.65 },
+                                    "points": { "visible": false },
+                                    "vectors": { "visible": false },
+                                    "opacity": 0.55,
+                                    "geometry_scope": "surface"
+                                },
+                                "style": {
+                                    "surface_color_source": "orientation",
+                                    "surface_mono_color": "#00ffaa",
+                                    "vector_color_mode": "orientation",
+                                    "vector_mono_color": "#ff00aa",
+                                    "vector_alpha": 0.45,
+                                    "vector_thickness": 2.0,
+                                    "wireframe_color": "#111111"
+                                }
+                            }
+                        ]
                     })
                     .to_string(),
                 ))
@@ -1749,7 +2217,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 3);
+    assert_eq!(json["schema_version"], 4);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -1764,6 +2232,22 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(json["slice"]["airbox_render_mode"], "points");
     assert_eq!(json["slice"]["show_airbox_vectors"], true);
     assert_eq!(json["slice"]["render_mode"], "vectors");
+    assert_eq!(json["camera"]["projection"], "orthographic");
+    assert_eq!(
+        json["camera"]["position"],
+        serde_json::json!([1.0e-6, 2.0e-6, 3.0e-6])
+    );
+    assert_eq!(json["camera"]["orthographic_scale"], 2.5e-6);
+    assert_eq!(json["overrides"][0]["scope"], "object");
+    assert_eq!(json["overrides"][0]["scope_id"], "free-layer");
+    assert_eq!(json["overrides"][0]["display"]["bounds"]["visible"], true);
+    assert_eq!(json["overrides"][0]["display"]["vectors"]["visible"], false);
+    assert_eq!(json["overrides"][0]["display"]["geometry_scope"], "surface");
+    assert_eq!(
+        json["overrides"][0]["style"]["surface_color_source"],
+        "orientation"
+    );
+    assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
 }
 
 #[tokio::test]
@@ -1801,6 +2285,196 @@ async fn visualization_state_rejects_invalid_airbox_vector_domain() {
     );
 }
 
+#[tokio::test]
+async fn visualization_state_rejects_invalid_camera_patch() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "camera": {
+                            "projection": "perspective",
+                            "position": [0.0, 0.0, 0.0],
+                            "target": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "camera.position must not equal camera.target"
+    );
+}
+
+#[tokio::test]
+async fn visualization_camera_patch_publishes_visualization_state_invalidation() {
+    let state = test_app_state_with_live_session().await;
+    let mut events = state.current_live_realtime_events.subscribe();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "camera": {
+                            "position": [1.0e-6, 2.0e-6, 3.0e-6],
+                            "target": [0.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("camera patch should publish a realtime event")
+        .expect("realtime channel should stay open");
+    let json: serde_json::Value =
+        serde_json::from_str(&event.json).expect("event payload should be valid JSON");
+    let changes = json["payload"]["changes"]
+        .as_array()
+        .expect("resource.batch_changed should include changes");
+    assert!(
+        changes.iter().any(|change| {
+            change["recommended_fetch"] == "/v2/sessions/current/visualization/state"
+        }),
+        "camera patch must invalidate the visualization state resource: {json:#}"
+    );
+    let forbidden_fetches = [
+        "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
+        "/v2/sessions/current/data/domain/topology",
+        "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full",
+    ];
+    for forbidden_fetch in forbidden_fetches {
+        assert!(
+            changes
+                .iter()
+                .all(|change| change["recommended_fetch"] != forbidden_fetch),
+            "visualization-only patch must not invalidate {forbidden_fetch}: {json:#}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn visualization_client_ack_records_frontend_feedback() {
+    let state = test_app_state_with_live_session().await;
+    let mut events = state.current_live_realtime_events.subscribe();
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "client_id": "browser-1",
+                        "client_label": "operator viewport",
+                        "viewport_id": "slot-main",
+                        "revision": 41,
+                        "status": "rendered",
+                        "effective_render_mode": "surface"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["client_id"], "browser-1");
+    assert_eq!(json["viewport_id"], "slot-main");
+    assert_eq!(json["revision"], 41);
+    assert_eq!(json["status"], "rendered");
+    assert_eq!(json["effective_render_mode"], "surface");
+    assert!(json["received_at_unix_ms"].as_u64().unwrap_or(0) > 0);
+
+    let resource_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resource_response.status(), StatusCode::OK);
+
+    let resource_json = body_json(resource_response).await;
+    assert_eq!(resource_json["revision"], 1);
+    assert_eq!(resource_json["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(resource_json["entries"][0]["client_id"], "browser-1");
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("client ack should publish a realtime event")
+        .expect("realtime channel should stay open");
+    let event_json: serde_json::Value =
+        serde_json::from_str(&event.json).expect("event payload should be valid JSON");
+    let changes = event_json["payload"]["changes"]
+        .as_array()
+        .expect("resource.batch_changed should include changes");
+    assert!(
+        changes.iter().any(|change| {
+            change["resource"] == "visualization_client_acks"
+                && change["recommended_fetch"] == "/v2/sessions/current/visualization/client-acks"
+        }),
+        "client ACK must invalidate the acknowledgement resource: {event_json:#}"
+    );
+}
+
+#[tokio::test]
+async fn visualization_client_ack_rejects_empty_client_id() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/visualization/client-acks")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "client_id": " ",
+                        "revision": 41,
+                        "status": "applied"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let json = body_json(response).await;
+    assert_eq!(json["error"], "client_id must not be empty");
+}
+
 // ─── scalar history endpoints ───────────────────────────────────────────────
 
 #[tokio::test]
@@ -1829,8 +2503,9 @@ async fn scalar_history_returns_windowed_columnar_rows() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["revision"], 2);
     assert_eq!(json["total_rows"], 2);
     assert_eq!(json["returned_rows"], 1);
@@ -2105,6 +2780,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                 .body(Body::from(
                     serde_json::json!({
                         "layers": {
+                            "bounds": { "visible": true },
                             "surface": { "visible": false, "opacity": 0.42 },
                             "wireframe": { "visible": true },
                             "points": { "visible": true },
@@ -2112,6 +2788,7 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
                             "airbox": {
                                 "visible": true,
                                 "opacity": 0.25,
+                                "bounds": { "visible": true },
                                 "wireframe": { "visible": true },
                                 "vectors": { "visible": true, "domain": "airbox_only" }
                             }
@@ -2158,10 +2835,12 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
 
     assert_eq!(patched.status(), StatusCode::OK);
     let patched_json = body_json(patched).await;
+    assert_eq!(patched_json["layers"]["bounds"]["visible"], true);
     assert_eq!(patched_json["layers"]["surface"]["visible"], false);
     assert_eq!(patched_json["layers"]["wireframe"]["visible"], true);
     assert_eq!(patched_json["layers"]["points"]["visible"], true);
     assert_eq!(patched_json["layers"]["airbox"]["visible"], true);
+    assert_eq!(patched_json["layers"]["airbox"]["bounds"]["visible"], true);
     assert_eq!(patched_json["sampling"]["max_points"], 4096);
     assert_eq!(patched_json["sampling"]["max_glyphs"], 512);
     assert_eq!(patched_json["fem"]["topology_mode"], "volume");
@@ -2185,8 +2864,10 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
 
     assert_eq!(fetched.status(), StatusCode::OK);
     let fetched_json = body_json(fetched).await;
+    assert_eq!(fetched_json["layers"]["bounds"]["visible"], true);
     assert_eq!(fetched_json["layers"]["surface"]["visible"], false);
     assert_eq!(fetched_json["layers"]["surface"]["opacity"], 0.42);
+    assert_eq!(fetched_json["layers"]["airbox"]["bounds"]["visible"], true);
     assert_eq!(fetched_json["layers"]["airbox"]["opacity"], 0.25);
     assert_eq!(fetched_json["layers"]["vectors"]["visible"], true);
     assert_eq!(fetched_json["layers"]["vectors"]["density"], 8);
@@ -2962,7 +3643,20 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
 async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.scene_document = Some(sample_scene_document());
+        let mut scene = sample_scene_document();
+        let object_mesh = fullmag_authoring::ScriptBuilderPerGeometryMeshState {
+            mode: "custom".to_string(),
+            maximum_element_size: Some("6e-9".to_string()),
+            mesh_strategy: Some("swept_prism".to_string()),
+            order: Some(1),
+            through_thickness_elements: Some(1),
+            through_thickness_distribution: Some("fixed".to_string()),
+            sweep_face_meshing: Some("triangular".to_string()),
+            ..Default::default()
+        };
+        scene.objects[0].object_mesh = Some(object_mesh.clone());
+        scene.objects[0].mesh_override = Some(object_mesh);
+        snapshot.scene_document = Some(scene);
     }
     let app = build_v2_router().with_state(state.clone());
 
@@ -3024,6 +3718,42 @@ async fn mesh_build_command_enqueues_remesh_via_mesh_family() {
             .as_ref()
             .and_then(|snapshot| snapshot.scene_document.as_ref())
             .map(|scene| scene.revision)
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("geometry"))
+            .and_then(serde_json::Value::as_str),
+        Some("body")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("maximum_element_size"))
+            .and_then(serde_json::Value::as_str),
+        Some("6e-9")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("mesh_strategy"))
+            .and_then(serde_json::Value::as_str),
+        Some("swept_prism")
+    );
+    assert_eq!(
+        mesh_options
+            .get("per_geometry")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|value| value.get("through_thickness_elements"))
+            .and_then(serde_json::Value::as_i64),
+        Some(1)
     );
 }
 
@@ -3660,6 +4390,101 @@ async fn mesh_shared_domain_manifest_returns_tree_metadata() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_manifest_reports_clean_scene_provenance_without_build_summary() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 93;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 96;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 96);
+    assert_eq!(json["source_scene_revision"], 93);
+    assert_eq!(json["geometry_realization_revision"], 93);
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_keeps_provenance_unknown_for_dirty_scene_without_build_summary(
+) {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 94;
+    scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 97;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["source_scene_revision"], serde_json::Value::Null);
+    assert_eq!(
+        json["geometry_realization_revision"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn mesh_build_resources_report_clean_scene_provenance_without_build_summary() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 95;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_build_revision = 99;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state);
+
+    for path in [
+        "/v2/sessions/current/meshing/builds/current",
+        "/v2/sessions/current/meshing/builds/latest-successful",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let json = body_json(response).await;
+        assert_eq!(json["revision"], 99);
+        assert_eq!(json["source_scene_revision"], 95);
+        assert_eq!(json["geometry_realization_revision"], 95);
+    }
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_manifest_returns_304_when_etag_matches() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -3701,6 +4526,60 @@ async fn mesh_shared_domain_manifest_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn mesh_shared_domain_manifest_etag_changes_when_provenance_is_recovered() {
+    let state = test_app_state_with_live_session().await;
+    let mut dirty_scene = sample_scene_document();
+    dirty_scene.objects[0].tags.push("mesh:dirty".to_string());
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        snapshot.mesh_revision = 41;
+        snapshot.scene_document = Some(dirty_scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({}));
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+    let json = body_json(first).await;
+    assert_eq!(json["source_scene_revision"], serde_json::Value::Null);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+    }
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::OK);
+    let json = body_json(second).await;
+    assert_eq!(json["source_scene_revision"], 3);
 }
 
 #[tokio::test]
@@ -4618,8 +5497,9 @@ async fn authoring_regions_returns_object_derived_regions() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     assert_eq!(json["scene_revision"], 21);
     assert_eq!(json["geometry_realization_revision"], 21);
     assert_eq!(json["regions"][0]["name"], "free_layer");
@@ -4666,8 +5546,9 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
     let object = &json["objects"][0];
     assert_eq!(object["region_name"], "renamed_region");
     assert_eq!(object["visible"], false);
@@ -4676,6 +5557,230 @@ async fn authoring_region_patch_commits_name_and_marks_mesh_dirty() {
         .unwrap()
         .iter()
         .any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn authoring_region_patch_commits_magnetization_override_without_mesh_dirty() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 23;
+    let object_magnetization_ref = scene.objects[0]
+        .magnetization_ref
+        .clone()
+        .expect("sample object has magnetization ref");
+    let mut region_asset = scene.magnetization_assets[0].clone();
+    region_asset.id = "mag-region".to_string();
+    region_asset.name = "Region override".to_string();
+    region_asset.ui_label = Some("Region override".to_string());
+    scene.magnetization_assets.push(region_asset);
+    scene.objects[0].tags.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/regions/region:body")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "magnetization_ref": "mag-region"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let object = &json["objects"][0];
+    assert_eq!(object["magnetization_ref"], object_magnetization_ref);
+    assert_eq!(
+        object["region_overrides"]["region:body"]["magnetization_ref"],
+        "mag-region"
+    );
+    let mesh_dirty = object["tags"]
+        .as_array()
+        .map(|tags| tags.iter().any(|tag| tag == "mesh:dirty"))
+        .unwrap_or(false);
+    assert!(!mesh_dirty);
+
+    let regions_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/model/regions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(regions_response.status(), StatusCode::OK);
+    let regions = body_json(regions_response).await;
+    assert_eq!(regions["regions"][0]["magnetization_ref"], "mag-region");
+}
+
+#[tokio::test]
+async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 24;
+    let asset_id = scene.magnetization_assets[0].id.clone();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let asset_path_id = asset_id.replace(':', "%3A");
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let get_json = body_json(get_response).await;
+    assert_eq!(get_json["asset"]["id"], asset_id);
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 24,
+                        "asset": {
+                            "id": asset_id,
+                            "name": "Edited texture",
+                            "kind": "preset_texture",
+                            "mapping": {
+                                "space": "object",
+                                "projection": "object_local",
+                                "clamp_mode": "none"
+                            },
+                            "texture_transform": {
+                                "translation": [1.0, 2.0, 3.0],
+                                "rotation_quat": [0.0, 0.0, 0.70710678, 0.70710678],
+                                "scale": [2.0, 1.0, 1.0],
+                                "pivot": [0.5, 0.0, 0.0]
+                            },
+                            "preset_kind": "uniform",
+                            "preset_params": { "direction": [0.0, 1.0, 0.0] },
+                            "preset_version": 1,
+                            "ui_label": "Edited texture"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let patch_status = patch_response.status();
+    let patch_json = body_json(patch_response).await;
+    assert_eq!(patch_status, StatusCode::OK, "{patch_json:#}");
+    assert_eq!(patch_json["scene_revision"], 25);
+    assert_eq!(patch_json["asset"]["name"], "Edited texture");
+    assert_eq!(patch_json["asset"]["preset_params"]["direction"][1], 1.0);
+    assert_eq!(
+        patch_json["asset"]["texture_transform"]["translation"],
+        serde_json::json!([1.0, 2.0, 3.0])
+    );
+
+    let get_after_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/model/magnetization-assets/{asset_path_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get_after_response.status(), StatusCode::OK);
+    let get_after_json = body_json(get_after_response).await;
+    assert_eq!(get_after_json["asset"]["name"], "Edited texture");
+    assert_eq!(
+        get_after_json["asset"]["texture_transform"]["scale"],
+        serde_json::json!([2.0, 1.0, 1.0])
+    );
+}
+
+#[tokio::test]
+async fn authoring_magnetization_asset_patch_upserts_new_asset() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 26;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/magnetization-assets/mag%3Aribbon")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": 26,
+                        "asset": {
+                            "id": "mag:ribbon",
+                            "name": "Ribbon uniform",
+                            "kind": "preset_texture",
+                            "mapping": {
+                                "space": "object",
+                                "projection": "object_local",
+                                "clamp_mode": "none"
+                            },
+                            "texture_transform": {
+                                "translation": [0.0, 0.0, 0.0],
+                                "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                                "scale": [1.0, 1.0, 1.0],
+                                "pivot": [0.0, 0.0, 0.0]
+                            },
+                            "preset_kind": "uniform",
+                            "preset_params": { "direction": [1.0, 0.0, 0.0] },
+                            "preset_version": 1,
+                            "ui_label": "Ribbon uniform"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    assert_eq!(json["scene_revision"], 27);
+    assert_eq!(json["asset"]["id"], "mag:ribbon");
 }
 
 #[tokio::test]
@@ -5138,6 +6243,433 @@ async fn commands_endpoint_enqueues_compute_fields_command() {
 }
 
 #[tokio::test]
+async fn commands_endpoint_enqueues_compute_energies_command() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "compute_energies"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    assert_eq!(
+        queue.front().map(|command| command.kind.as_str()),
+        Some("compute_energies")
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_exposes_runtime_control_readiness() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.runtime_status = RuntimeStatusView {
+            kind: RuntimeStatus::Running,
+            code: "running".into(),
+            is_busy: true,
+            can_accept_commands: true,
+        };
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("response should be json");
+    let controls = json["runtime_controls"]
+        .as_array()
+        .expect("runtime_controls should be an array");
+    assert_runtime_control(controls, "pause", true, None);
+    assert_runtime_control(controls, "stop", true, None);
+    assert_runtime_control(controls, "skip", true, None);
+    assert_runtime_control(controls, "resume", false, Some("Runtime is not paused."));
+    assert_runtime_control(controls, "solve", false, Some("Runtime is already active."));
+}
+
+#[tokio::test]
+async fn commands_endpoint_disables_skip_without_active_stage() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.runtime_status = RuntimeStatusView {
+            kind: RuntimeStatus::Running,
+            code: "running".into(),
+            is_busy: true,
+            can_accept_commands: true,
+        };
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 0,
+            completed_stage_indexes: Vec::new(),
+            stages: Vec::new(),
+            stage_statuses: Vec::new(),
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Running,
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let controls = json["runtime_controls"]
+        .as_array()
+        .expect("runtime_controls should be an array");
+    assert_runtime_control(
+        controls,
+        "skip",
+        false,
+        Some("No active stage is available to skip."),
+    );
+}
+
+fn assert_runtime_control(
+    controls: &[serde_json::Value],
+    kind: &str,
+    enabled: bool,
+    reason: Option<&str>,
+) {
+    let control = controls
+        .iter()
+        .find(|entry| entry["kind"] == kind)
+        .unwrap_or_else(|| panic!("missing runtime control {kind}"));
+    assert_eq!(control["enabled"], enabled);
+    assert_eq!(
+        control.get("reason").and_then(|value| value.as_str()),
+        reason
+    );
+}
+
+fn assert_command_invalidation(
+    invalidations: &[serde_json::Value],
+    resource_key: &str,
+    state: &str,
+) {
+    let invalidation = invalidations
+        .iter()
+        .find(|entry| entry["resource_key"] == resource_key)
+        .unwrap_or_else(|| panic!("missing command invalidation for {resource_key}"));
+    assert_eq!(invalidation["state"], state);
+    assert!(
+        invalidation["revision"].as_u64().is_some(),
+        "invalidation revision should be numeric for {resource_key}"
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_persists_runtime_intent_fields() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .header("x-request-id", "req-runtime-stop-1")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "stop",
+                        "target": {
+                            "kind": "stage_index",
+                            "stage_index": 1
+                        },
+                        "reason": "user_requested",
+                        "precondition": {
+                            "stage_execution_revision": 7,
+                            "runtime_state": "running"
+                        },
+                        "client_intent_id": "intent-stop-1",
+                        "requested_at_unix_ms": 1_700_000_002_000u64
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = body_bytes(response).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let submitted: serde_json::Value =
+        serde_json::from_slice(&body).expect("response should be json");
+    let command_id = submitted["command_id"]
+        .as_str()
+        .expect("command_id should be present");
+    assert_eq!(submitted["request_id"], "req-runtime-stop-1");
+
+    {
+        let queue = state.current_control_queue.lock().await;
+        let command = queue.front().expect("command should be queued");
+        assert_eq!(command.kind, "stop");
+        assert_eq!(command.reason.as_deref(), Some("user_requested"));
+        assert_eq!(command.client_intent_id.as_deref(), Some("intent-stop-1"));
+        assert_eq!(command.requested_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/v2/sessions/current/simulation/commands/{command_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["kind"], "stop");
+    assert_eq!(detail["request_id"], "req-runtime-stop-1");
+    assert_eq!(detail["target"]["kind"], "stage_index");
+    assert_eq!(detail["target"]["stage_index"], 1);
+    assert_eq!(detail["reason"], "user_requested");
+    assert_eq!(detail["precondition"]["stage_execution_revision"], 7);
+    assert_eq!(detail["precondition"]["runtime_state"], "running");
+    assert_eq!(detail["client_intent_id"], "intent-stop-1");
+    assert_eq!(detail["requested_at_unix_ms"], 1_700_000_002_000u64);
+    assert_eq!(detail["stage_id"], "stage-001");
+    assert_eq!(detail["stage_index"], 1);
+    assert_eq!(detail["run_id"], "test-run");
+    assert_eq!(detail["requested_execution"]["backend"], "cpu-fdm");
+    assert_eq!(detail["requested_execution"]["device"], "auto");
+    assert_eq!(detail["requested_execution"]["precision"], "double");
+    assert_eq!(detail["requested_execution"]["mode"], "strict");
+    assert_eq!(detail["resolved_execution"]["backend"], "cpu-fdm");
+    assert_eq!(detail["resolved_execution"]["device"], "cpu");
+    assert_eq!(detail["resolved_execution"]["precision"], "double");
+    assert_eq!(detail["resolved_execution"]["mode"], "strict");
+    let invalidations = detail["resource_invalidations"]
+        .as_array()
+        .expect("resource_invalidations should be an array");
+    assert_command_invalidation(invalidations, "simulation/commands", "observed");
+    assert_command_invalidation(invalidations, "simulation/stages/execution", "expected");
+    assert_command_invalidation(invalidations, "simulation/solver/status", "expected");
+    assert_command_invalidation(invalidations, "diagnostics/engine-log", "expected");
+    let diagnostics = detail["diagnostics"]
+        .as_array()
+        .expect("diagnostics should be an array");
+    assert_eq!(diagnostics[0]["resource_key"], "diagnostics/engine-log");
+    assert_eq!(detail["accepted_at_unix_ms"], detail["created_at_unix_ms"]);
+    assert_eq!(detail["started_at_unix_ms"], 1_700_000_002_000u64);
+    assert!(detail.get("terminal_at_unix_ms").is_none());
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_runtime_precondition_mismatch() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "pause",
+                        "target": { "kind": "current_stage" },
+                        "precondition": {
+                            "runtime_state": "paused"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "runtime_state precondition failed: expected paused, got running"
+    );
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.mesh_revision = 5;
+    }
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command: SessionCommand {
+                seq: 1,
+                command_id: "cmd-existing".into(),
+                kind: "compute_fields".into(),
+                created_at_unix_ms: 1_700_000_000_000,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
+                until_seconds: None,
+                max_steps: None,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                max_error: None,
+                relax_algorithm: None,
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            },
+            request_id: None,
+            status: CommandLifecycleState::Queued,
+            dispatched_at_unix_ms: None,
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (precondition, expected_error) in [
+        (
+            serde_json::json!({ "scene_revision": 4 }),
+            "scene_revision precondition failed: expected 4, got 3",
+        ),
+        (
+            serde_json::json!({ "mesh_revision": 6 }),
+            "mesh_revision precondition failed: expected 6, got 5",
+        ),
+        (
+            serde_json::json!({ "command_revision": 2 }),
+            "command_revision precondition failed: expected 2, got 1",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/simulation/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "kind": "compute_fields",
+                            "precondition": precondition
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let json = body_json(response).await;
+        assert_eq!(json["error"], expected_error);
+    }
+}
+
+#[tokio::test]
+async fn commands_endpoint_rejects_stage_target_mismatch() {
+    let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 7).await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "stop",
+                        "target": {
+                            "kind": "stage_index",
+                            "stage_index": 2
+                        },
+                        "precondition": {
+                            "runtime_state": "running"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "stage target mismatch: expected stage_index 1, got 2"
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_rejects_solve_when_authoring_geometry_is_invalid() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -5269,6 +6801,7 @@ async fn commands_endpoint_reuses_response_for_same_request_id() {
 #[tokio::test]
 async fn commands_endpoint_does_not_dedupe_by_request_id_only() {
     let state = test_app_state_with_live_session().await;
+    set_running_stage_execution(&state, 0).await;
     let app = build_v2_router().with_state(state.clone());
 
     let first_response = app
@@ -5368,6 +6901,9 @@ async fn command_status_endpoint_returns_queue_and_dispatch_ledger() {
     assert_eq!(json["rejected_count"], 0);
     assert_eq!(json["failed_count"], 0);
     assert_eq!(json["commands"].as_array().map(Vec::len), Some(3));
+    assert_eq!(json["commands"][0]["request_id"], "req-cmd-1");
+    assert_eq!(json["commands"][1]["request_id"], "req-cmd-2");
+    assert_eq!(json["commands"][2]["request_id"], "req-cmd-3");
 }
 
 #[tokio::test]
@@ -5387,6 +6923,7 @@ async fn command_detail_endpoint_returns_command_payload() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["kind"], "run");
+    assert_eq!(json["request_id"], "req-cmd-1");
     assert_eq!(json["status"], "queued");
     assert_eq!(json["integrator"], "rk45");
 }
@@ -5411,6 +6948,103 @@ async fn command_detail_endpoint_exposes_completion_fields_for_terminal_commands
     assert_eq!(json["status"], "completed");
     assert_eq!(json["completion_status"], "completed");
     assert_eq!(json["completed_at_unix_ms"], 1_700_000_001_000u64);
+}
+
+#[tokio::test]
+async fn command_detail_endpoint_exposes_stage_state_linkage() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 7;
+        snapshot.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-stage-0".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_001_000),
+                reason: None,
+                artifact_refs: vec!["artifacts/stage-000".into()],
+                checkpoint_ref: Some("cp-000041".into()),
+                loaded_state_ref: Some("states/imported-state.fmstate".into()),
+                resume_from_checkpoint_ref: Some("cp-000040".into()),
+                state_transition: Some("restored".into()),
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+    }
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        ledger.push_back(TrackedCommandRecord {
+            command: SessionCommand {
+                seq: 1,
+                command_id: "cmd-stage-0".into(),
+                kind: "relax".into(),
+                created_at_unix_ms: 1_700_000_000_000,
+                target: None,
+                reason: None,
+                precondition: None,
+                client_intent_id: None,
+                requested_at_unix_ms: None,
+                until_seconds: None,
+                max_steps: None,
+                torque_tolerance: None,
+                energy_tolerance: None,
+                integrator: None,
+                fixed_timestep: None,
+                max_error: None,
+                relax_algorithm: Some("llg_overdamped".into()),
+                relax_alpha: None,
+                mesh_options: None,
+                mesh_target: None,
+                mesh_reason: None,
+                state_path: None,
+                state_format: None,
+                state_dataset: None,
+                state_sample_index: None,
+                display_selection: None,
+                preview_config: None,
+                stages: None,
+            },
+            request_id: None,
+            status: CommandLifecycleState::Completed,
+            dispatched_at_unix_ms: Some(1_700_000_000_100),
+            completed_at_unix_ms: Some(1_700_000_001_000),
+            completion_status: Some(CommandCompletionState::Completed),
+            error: None,
+        });
+    }
+
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/commands/cmd-stage-0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["stage_id"], "stage-000");
+    assert_eq!(json["stage_index"], 0);
+    assert_eq!(json["artifact_refs"][0], "artifacts/stage-000");
+    assert_eq!(json["checkpoint_ref"], "cp-000041");
+    assert_eq!(json["loaded_state_ref"], "states/imported-state.fmstate");
+    assert_eq!(json["resume_from_checkpoint_ref"], "cp-000040");
+    assert_eq!(json["state_transition"], "restored");
+    assert_eq!(json["accepted_at_unix_ms"], 1_700_000_000_000u64);
+    assert_eq!(json["started_at_unix_ms"], 1_700_000_000_100u64);
+    assert_eq!(json["terminal_at_unix_ms"], 1_700_000_001_000u64);
 }
 
 #[tokio::test]
@@ -5492,6 +7126,36 @@ async fn stage_execution_endpoint_returns_current_stage_tree() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["active_stage_index"], 1);
     assert_eq!(json["stages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(json["stages"][0]["stage_id"], "stage-000");
+    assert_eq!(json["stages"][0]["index"], 0);
+    assert_eq!(json["stages"][0]["label"], "Stage 1");
+    assert_eq!(json["stages"][0]["command_id"], "cmd-stage-0");
+    assert_eq!(
+        json["stages"][0]["started_at_unix_ms"],
+        1_700_000_000_000u64
+    );
+    assert_eq!(
+        json["stages"][0]["completed_at_unix_ms"],
+        1_700_000_001_000u64
+    );
+    assert_eq!(json["stages"][0]["artifact_refs"][0], "artifacts/stage-000");
+    assert_eq!(json["stages"][0]["checkpoint_ref"], "cp-000041");
+    assert_eq!(json["stages"][0]["state_transition"], "preserved");
+    assert_eq!(json["stages"][1]["stage_id"], "stage-001");
+    assert_eq!(json["stages"][1]["kind"], "relax");
+    assert_eq!(json["stages"][1]["command_id"], "cmd-stage-1");
+    assert_eq!(
+        json["stages"][1]["started_at_unix_ms"],
+        1_700_000_002_000u64
+    );
+    assert!(json["stages"][1]["completed_at_unix_ms"].is_null());
+    assert_eq!(json["stages"][1]["artifact_refs"][0], "artifacts/stage-001");
+    assert_eq!(
+        json["stages"][1]["loaded_state_ref"],
+        "states/imported-state.fmstate"
+    );
+    assert_eq!(json["stages"][1]["resume_from_checkpoint_ref"], "cp-000041");
+    assert_eq!(json["stages"][1]["state_transition"], "restored");
 }
 
 #[tokio::test]
@@ -5555,6 +7219,106 @@ async fn solver_energies_history_endpoint_honors_limit() {
     assert_eq!(json["total_rows"], 2);
     assert_eq!(json["returned_rows"], 1);
     assert_eq!(json["rows"][0]["step"], 42);
+}
+
+#[tokio::test]
+async fn object_metrics_endpoint_returns_zero_energies_before_solver_sample() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.state_version = 12;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["object_id"], "body");
+    assert_eq!(json["has_solver_sample"], false);
+    assert_eq!(json["magnetization_average"]["mx"], 1.0);
+    assert_eq!(json["magnetization_average"]["my"], 0.0);
+    assert_eq!(json["magnetization_average"]["mz"], 0.0);
+    assert_eq!(json["energies"]["total"], 0.0);
+}
+
+#[tokio::test]
+async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 4.2e-12,
+                dt: 1.0e-13,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 15.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![0.1, 0.2, 0.3]),
+                per_object_scalars: HashMap::from([(
+                    "body".to_string(),
+                    HashMap::from([
+                        ("mx".to_string(), 0.25),
+                        ("my".to_string(), 0.5),
+                        ("mz".to_string(), 0.75),
+                        ("e_ex".to_string(), 11.0),
+                        ("e_demag".to_string(), 12.0),
+                        ("e_ext".to_string(), 13.0),
+                        ("e_ani".to_string(), 14.0),
+                        ("e_dmi".to_string(), 15.0),
+                        ("e_total".to_string(), 65.0),
+                    ]),
+                )]),
+                preview_field: None,
+                finished: false,
+            },
+        });
+        snapshot.scalar_revision = 21;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 21);
+    assert_eq!(json["has_solver_sample"], true);
+    assert_eq!(json["source"], "solver_per_object");
+    assert_eq!(json["magnetization_average"]["mx"], 0.25);
+    assert_eq!(json["energies"]["exchange"], 11.0);
+    assert_eq!(json["energies"]["total"], 65.0);
 }
 
 // ─── session endpoints ──────────────────────────────────────────────────────
@@ -5723,6 +7487,177 @@ async fn session_import_commit_round_trips_exported_session() {
 }
 
 #[tokio::test]
+async fn session_checkpoint_create_captures_live_magnetization() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "profile": "resume",
+                        "reason": "manual_test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["checkpoint"]["checkpoint_id"], "cp-000042");
+    assert_eq!(json["checkpoint"]["run_id"], "test-run");
+    assert_eq!(json["checkpoint"]["step"], 42);
+    assert_eq!(json["checkpoint"]["source"], "manual_test");
+    assert_eq!(json["checkpoint"]["vector_count"], 2);
+    assert_eq!(json["checkpoint"]["coordinate_frame"], "solver_domain");
+    assert_eq!(json["checkpoint"]["resume_class"], "logical_resume");
+    assert_eq!(json["checkpoint"]["stage_id"], "stage-001");
+    assert_eq!(json["checkpoint"]["command_id"], "cmd-stage-1");
+    let checkpoint_artifact_ref = json["checkpoint"]["artifact_ref"]
+        .as_str()
+        .expect("checkpoint artifact_ref should be present")
+        .to_string();
+    assert!(json["checkpoint"]["checksum"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    let stage_after_create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stage_after_create_response.status(), StatusCode::OK);
+    let stage_after_create = body_json(stage_after_create_response).await;
+    assert_eq!(
+        stage_after_create["stages"][1]["checkpoint_ref"],
+        "cp-000042"
+    );
+    assert_eq!(
+        stage_after_create["stages"][1]["state_transition"],
+        "preserved"
+    );
+    assert!(stage_after_create["stages"][1]["artifact_refs"]
+        .as_array()
+        .expect("stage artifact_refs should be an array")
+        .iter()
+        .any(|value| value.as_str() == Some(checkpoint_artifact_ref.as_str())));
+
+    let detail_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail = body_json(detail_response).await;
+    assert_eq!(detail["checkpoint_id"], "cp-000042");
+    assert_eq!(detail["vector_count"], 2);
+
+    let restore_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "reason": "restore_test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(restore_response.status(), StatusCode::OK);
+    let restored = body_json(restore_response).await;
+    assert_eq!(restored["checkpoint"]["checkpoint_id"], "cp-000042");
+    assert_eq!(restored["restore_class"], "logical_resume");
+    assert_eq!(restored["restored_vector_count"], 2);
+    assert_eq!(restored["field_revision"], 2);
+    assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
+    assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
+
+    let stage_after_restore_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/stages/execution")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(stage_after_restore_response.status(), StatusCode::OK);
+    let stage_after_restore = body_json(stage_after_restore_response).await;
+    assert_eq!(
+        stage_after_restore["stages"][1]["resume_from_checkpoint_ref"],
+        "cp-000042"
+    );
+    assert_eq!(
+        stage_after_restore["stages"][1]["loaded_state_ref"],
+        checkpoint_artifact_ref
+    );
+    assert_eq!(
+        stage_after_restore["stages"][1]["state_transition"],
+        "restored"
+    );
+
+    let status_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(status_response.status(), StatusCode::OK);
+    let status = body_json(status_response).await;
+    assert_eq!(status["resources"]["field_revision"], 2);
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = body_json(list_response).await;
+    assert_eq!(listed["checkpoints"][0]["checkpoint_id"], "cp-000042");
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn session_recovery_returns_200() {
     let (app, repo_root) = test_router_with_session_store().await;
     let response = app
@@ -5858,6 +7793,45 @@ async fn engine_log_returns_304_when_etag_matches() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn gpu_telemetry_endpoint_returns_contract_shape() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/gpu")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let status = json["status"]
+        .as_str()
+        .expect("gpu telemetry status should be a string");
+    assert!(
+        matches!(status, "ok" | "unavailable"),
+        "unexpected gpu telemetry status: {status}"
+    );
+    assert!(
+        json["sample_time_unix_ms"].as_u64().is_some(),
+        "gpu telemetry should include sample_time_unix_ms"
+    );
+    assert!(
+        json["devices"].as_array().is_some(),
+        "gpu telemetry should include devices array"
+    );
+    if status == "unavailable" {
+        assert!(
+            json["reason"].as_str().is_some(),
+            "unavailable gpu telemetry should include reason"
+        );
+    }
 }
 
 #[tokio::test]
@@ -6090,6 +8064,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 grid: [2, 1, 1],
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -6173,6 +8148,46 @@ async fn field_vector_full_returns_ncomp_3() {
 }
 
 #[tokio::test]
+async fn field_vector_cached_projection_reports_point_and_value_counts_separately() {
+    let app = test_router_with_mock_field().await;
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/data/fields/m/samples/vector?component=magnitude")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-point-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("4")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-value-count")
+                .and_then(|value| value.to_str().ok()),
+            Some("4")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+}
+
+#[tokio::test]
 async fn v2_field_catalog_exposes_live_magnetization_fallback() {
     let app = test_router_with_live_magnetization().await;
     let catalog_response = app
@@ -6238,6 +8253,75 @@ async fn v2_field_catalog_exposes_live_magnetization_fallback() {
 }
 
 #[tokio::test]
+async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 23;
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 7,
+                time: 1.0e-9,
+                dt: 1.0e-13,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [1, 1, 1],
+                fem_mesh: None,
+                magnetization: Some(vec![f64::NAN, 0.0, 0.0]),
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let quantities = catalog["quantities"]
+        .as_array()
+        .expect("field catalog quantities should be an array");
+    assert!(
+        quantities
+            .iter()
+            .all(|entry| entry["quantity_id"].as_str() != Some("m")),
+        "non-finite live magnetization must not be advertised"
+    );
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -6276,6 +8360,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 grid: [2, 1, 1],
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                per_object_scalars: Default::default(),
                 preview_field: None,
                 finished: false,
             },
@@ -7696,6 +9781,28 @@ fn openapi_contains_domain_slice_mesh_overlay_contract() {
 }
 
 #[test]
+fn openapi_contains_fem_cpu_relaxation_qualification_contract() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let components = openapi
+        .get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(|s| s.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    for schema in [
+        "FemCpuRelaxationQualificationMetadata",
+        "FemCpuRelaxationDemagPolicyMetadata",
+        "FemCpuRelaxationDemagTimingsNs",
+        "FemCpuRelaxationEnergyTerms",
+    ] {
+        assert!(
+            components.contains_key(schema),
+            "OpenAPI missing {schema} schema"
+        );
+    }
+}
+
+#[test]
 fn openapi_contains_mesh_semantics_path() {
     let openapi = crate::openapi_v2::openapi_json();
     let value = openapi;
@@ -7836,6 +9943,14 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         .and_then(|value| value.as_object())
         .expect("OpenAPI schemas must be present");
     let state_props = schema_property_names(schemas, "VisualizationStateResource");
+    let target_registry_props = schema_property_names(schemas, "VisualizationTargetRegistryState");
+    let target_entry_props = schema_property_names(schemas, "VisualizationTargetRegistryEntry");
+    let target_settings_props =
+        schema_property_names(schemas, "VisualizationResolvedTargetSettings");
+    let override_props = schema_property_names(schemas, "VisualizationOverrideState");
+    let override_display_props =
+        schema_property_names(schemas, "VisualizationTargetDisplayOverride");
+    let override_style_props = schema_property_names(schemas, "VisualizationTargetStyleOverride");
 
     for required in [
         "revision",
@@ -7847,9 +9962,11 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "fdm",
         "fem",
         "slice",
+        "camera",
         "clip",
         "vector_style",
         "overrides",
+        "targets",
         "diagnostics",
     ] {
         assert!(
@@ -7868,6 +9985,71 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         assert!(
             state_props.contains(compatibility_field),
             "VisualizationStateResource must retain compatibility projection `{compatibility_field}`"
+        );
+    }
+
+    for required in ["airbox", "objects", "parts"] {
+        assert!(
+            target_registry_props.contains(required),
+            "VisualizationTargetRegistryState missing field `{required}`"
+        );
+    }
+    for required in ["scope", "scope_id", "label", "source", "settings"] {
+        assert!(
+            target_entry_props.contains(required),
+            "VisualizationTargetRegistryEntry missing field `{required}`"
+        );
+    }
+    for required in [
+        "visible",
+        "bounds_visible",
+        "surface_visible",
+        "wireframe_visible",
+        "points_visible",
+        "vectors_visible",
+        "render_mode",
+        "surface_color_source",
+        "vector_color_mode",
+    ] {
+        assert!(
+            target_settings_props.contains(required),
+            "VisualizationResolvedTargetSettings missing field `{required}`"
+        );
+    }
+
+    for required in ["scope", "scope_id", "visible", "display", "style"] {
+        assert!(
+            override_props.contains(required),
+            "VisualizationOverrideState missing target override field `{required}`"
+        );
+    }
+    for required in [
+        "visible",
+        "bounds",
+        "surface",
+        "wireframe",
+        "points",
+        "vectors",
+        "opacity",
+        "geometry_scope",
+    ] {
+        assert!(
+            override_display_props.contains(required),
+            "VisualizationTargetDisplayOverride missing field `{required}`"
+        );
+    }
+    for required in [
+        "surface_color_source",
+        "surface_mono_color",
+        "vector_color_mode",
+        "vector_mono_color",
+        "vector_alpha",
+        "vector_thickness",
+        "wireframe_color",
+    ] {
+        assert!(
+            override_style_props.contains(required),
+            "VisualizationTargetStyleOverride missing field `{required}`"
         );
     }
 }
@@ -7916,9 +10098,11 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
         BTreeSet::from([
             "effective_airbox_target".to_string(),
             "effective_per_object_targets".to_string(),
+            "geometry_realization_revision".to_string(),
             "last_build_error".to_string(),
+            "source_scene_revision".to_string(),
         ]),
-        "active/latest-success overlap must not grow beyond transitional target and error projections"
+        "active/latest-success overlap must not grow beyond transitional target, provenance, and error projections"
     );
 
     for field in [

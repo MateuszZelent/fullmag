@@ -13,9 +13,27 @@ pub struct StepDiagnostics {
     pub dt: f64,
     pub wall_time_ns: u64,
     pub exchange_wall_time_ns: u64,
+    #[serde(default)]
     pub demag_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_assemble_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solve_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_setup_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_apply_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_setup_reused: bool,
+    #[serde(default)]
+    pub demag_recover_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_energy_wall_time_ns: u64,
+    #[serde(default)]
     pub rhs_wall_time_ns: u64,
+    #[serde(default)]
     pub extra_energy_wall_time_ns: u64,
+    #[serde(default)]
     pub snapshot_wall_time_ns: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,

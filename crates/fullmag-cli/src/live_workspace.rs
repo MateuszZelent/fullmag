@@ -343,6 +343,8 @@ mod tests {
             boundary_markers: Vec::new(),
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
             domain_mesh_mode: None,
             domain_frame: None,
             generation_id: Some(generation_id.to_string()),
@@ -479,8 +481,7 @@ fn current_live_publisher_loop(
                             pending.store(true, Ordering::Release);
                             eprintln!(
                                 "fullmag live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
-                                error,
-                                fallback_error
+                                error, fallback_error
                             );
                         }
                     }
@@ -529,6 +530,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             grid: [0, 0, 0],
             fem_mesh: None,
             magnetization: None,
+            per_object_scalars: Default::default(),
             preview_field: None,
             finished: false,
         },

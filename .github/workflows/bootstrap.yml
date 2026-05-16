@@ -21,7 +21,7 @@ jobs:
       - name: Run Rust contract tests
         run: cargo test -p fullmag-ir -p fullmag-plan -p fullmag-authoring
 
-  web-contracts:
+  control-room-contracts:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,18 +38,30 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.15.0
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck web app
-        run: pnpm --dir apps/web typecheck
+      - name: Check control-room architecture hygiene
+        run: pnpm --dir apps/control-room check:architecture-hygiene
 
-      - name: Build web app
-        run: pnpm --dir apps/web build
+      - name: Check control-room API hygiene
+        run: pnpm --dir apps/control-room check:api-hygiene
+
+      - name: Check control-room idle performance
+        run: pnpm --dir apps/control-room audit:idle-performance
+
+      - name: Typecheck control-room app
+        run: pnpm --dir apps/control-room typecheck
+
+      - name: Test control-room app
+        run: pnpm --dir apps/control-room test
+
+      - name: Build control-room app
+        run: pnpm --dir apps/control-room build
 
   python-contracts:
     runs-on: ubuntu-latest

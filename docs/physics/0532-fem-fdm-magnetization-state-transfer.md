@@ -4,7 +4,7 @@
 - Owners: fullmag core
 - Last updated: 2026-04-16
 - Related ADRs: —
-- Related specs: docs/physics/0531-fem-demag-transfer-grid-removal.md
+- Related specs: docs/specs/capability-matrix-v0.md
 
 ## 1. Problem statement
 
@@ -14,9 +14,10 @@ After computing an equilibrium or time-evolved magnetization state on an FEM
 time integration. This requires transferring the magnetization field **m** from
 FEM node positions to FDM cell centers.
 
-This is a **state-transfer** operation, not a demag realization. The old
-`transfer_grid` demag path (removed in 0531) conflated resampling with demag
-computation. This note defines a clean, demag-independent mechanism.
+This is a **state-transfer** operation, not a demag realization. Resampling a
+magnetization state between discretizations must stay independent from the FEM
+demag operator, which remains a mesh-native Poisson-airbox realization in the
+current executable contract.
 
 ## 2. Physical model
 
@@ -169,6 +170,6 @@ hard validation gate for v1.
 
 ## 9. References
 
-- `docs/physics/0531-fem-demag-transfer-grid-removal.md`
+- `docs/specs/capability-matrix-v0.md`
 - `crates/fullmag-engine/src/fem_solution_transfer.rs` (existing BVH + P1 interpolation)
 - `docs/specs/magnetization-init-policy-v0.md` (SampledField contract)

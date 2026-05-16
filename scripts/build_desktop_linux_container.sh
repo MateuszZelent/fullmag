@@ -20,7 +20,7 @@ docker run --rm \
   bash -lc '
     set -euo pipefail
     pnpm install --frozen-lockfile
-    pnpm --dir apps/web build
+    pnpm --dir apps/control-room build
     cargo build --release -p fullmag-desktop
   '
 

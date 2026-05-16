@@ -25,7 +25,7 @@ unexpected="$tmp_dir/unexpected"
 stale="$tmp_dir/stale"
 raw="$tmp_dir/raw"
 
-if rg -n --no-heading -o '\bfetch\(' apps/web/src \
+if rg -n --no-heading -o '\bfetch\(' apps/control-room/src \
   --glob '!**/*.test.*' \
   --glob '!**/*.spec.*' \
   --glob '!**/*.stories.*' \

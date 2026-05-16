@@ -1,0 +1,210 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 02 — Render Pipeline (R3F Revision)
+
+## 1. Overview
+
+With R3F, the render pipeline becomes declarative. Layers are R3F components that manage Three.js objects through React's lifecycle. R3F handles disposal, frame scheduling, and canvas management.
+
+```
+Viewport3DRenderModel
+       │
+       ▼
+  <Canvas frameloop="demand">
+       │
+       ├── <MeshSurfaceLayer />      (topology surface)
+       ├── <ScalarFieldLayer />      (vertex colors from field)
+       ├── <VectorGlyphLayer />      (instanced arrows)
+       ├── <WireframeLayer />        (edge overlay)
+       ├── <SelectionLayer />        (outline/tint)
+       ├── <AxesGridLayer />         (axes + grid)
+       ├── <AirboxLayer />           (domain boundary wireframe)
+       └── <ClipPlaneLayer />        (clipping plane + cap)
+```
+
+## 2. R3F Canvas Setup
+
+```tsx
+function ViewportPane({ config, renderModel }: Props) {
+  return (
+    <Canvas
+      frameloop="demand"          // ← no continuous rendering
+      gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+      camera={{ fov: 45, near: 0.1, far: 10000 }}
+      onCreated={({ gl }) => {
+        gl.toneMapping = THREE.NoToneMapping;
+      }}
+    >
+      <SyncedOrbitControls />
+      <SceneLighting displayMode={config.displayMode} />
+
+      {config.layers.meshSurface && (
+        <MeshSurfaceLayer topology={renderModel.topology} mode={config.displayMode} />
+      )}
+      {config.layers.scalarField && renderModel.scalarField && (
+        <ScalarFieldLayer field={renderModel.scalarField} topology={renderModel.topology} />
+      )}
+      {/* ...more layers... */}
+    </Canvas>
+  );
+}
+```
+
+### Dirty Rendering
+
+R3F's `frameloop="demand"` means:
+- No frame rendered unless `invalidate()` is called
+- Layer components call `invalidate()` via `useThree()` when their props change
+- Camera controls call `invalidate()` on interaction
+- **Zero frames when idle** — the spec requirement is met by default
+
+## 3. Layer Components
+
+### MeshSurfaceLayer
+
+```tsx
+function MeshSurfaceLayer({ topology, mode }: {
+  topology: TopologyRenderData | null;
+  mode: DisplayMode;
+}) {
+  const geometryRef = useRef<THREE.BufferGeometry>(null);
+  const { invalidate } = useThree();
+
+  // Update geometry when topology revision changes
+  useEffect(() => {
+    if (!topology || !geometryRef.current) return;
+    const geo = geometryRef.current;
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(topology.positions, 3));
+    if (topology.indices) geo.setIndex(new THREE.Uint32BufferAttribute(topology.indices, 1));
+    if (topology.normals) geo.setAttribute("normal", new THREE.Float32BufferAttribute(topology.normals, 3));
+    geo.computeBoundingSphere();
+    invalidate();
+  }, [topology?.topologyRevision, invalidate]);
+
+  if (!topology) return null;
+
+  return (
+    <mesh>
+      <bufferGeometry ref={geometryRef} />
+      <meshStandardMaterial
+        wireframe={mode === "wireframe"}
+        flatShading={mode === "flat-shaded"}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+```
+
+**Key:** Geometry is updated via imperative `useEffect` keyed on `topologyRevision`. R3F handles disposal of the old geometry when the component unmounts.
+
+### ScalarFieldLayer
+
+```tsx
+function ScalarFieldLayer({ field, topology }: {
+  field: ScalarFieldRenderData;
+  topology: TopologyRenderData | null;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const { invalidate } = useThree();
+
+  useEffect(() => {
+    if (!meshRef.current || !topology) return;
+    const geo = meshRef.current.geometry;
+    const colors = colormapValues(field.values, field.min, field.max, field.colorMapName);
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    invalidate();
+  }, [field.fieldRevision, invalidate]);
+
+  // ... renders mesh with vertexColors: true
+}
+```
+
+**Critical rule preserved:** quantity switch updates color attribute, not geometry. `topology.topologyRevision` doesn't change → no geometry rebuild.
+
+### VectorGlyphLayer
+
+```tsx
+function VectorGlyphLayer({ vectors }: { vectors: VectorFieldRenderData | null }) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const { invalidate } = useThree();
+
+  useEffect(() => {
+    if (!vectors || !meshRef.current) return;
+    const mesh = meshRef.current;
+    // Update instance matrices from positions + directions + magnitudes
+    updateInstanceMatrices(mesh, vectors);
+    mesh.count = vectors.sampledCount;
+    mesh.instanceMatrix.needsUpdate = true;
+    invalidate();
+  }, [vectors?.fieldRevision, invalidate]);
+
+  if (!vectors) return null;
+
+  return (
+    <instancedMesh ref={meshRef} args={[undefined, undefined, vectors.sampledCount]}>
+      <coneGeometry args={[0.3, 1, 8]} />
+      <meshStandardMaterial />
+    </instancedMesh>
+  );
+}
+```
+
+### AirboxLayer
+
+```tsx
+function AirboxLayer({ bounds }: { bounds: Bounds3 | null }) {
+  if (!bounds) return null;
+  const size = bounds.max.map((v, i) => v - bounds.min[i]) as [number, number, number];
+  const center = bounds.min.map((v, i) => v + size[i] / 2) as [number, number, number];
+
+  return (
+    <lineSegments position={center}>
+      <edgesGeometry args={[new THREE.BoxGeometry(...size)]} />
+      <lineBasicMaterial color="#4c9eff" opacity={0.5} transparent />
+    </lineSegments>
+  );
+}
+```
+
+## 4. Disposal
+
+R3F handles Three.js resource disposal automatically:
+- When a layer component unmounts, its geometries, materials, and textures are disposed
+- When the `<Canvas>` unmounts, the WebGL context and all resources are released
+- `instancedMesh` instance buffers are cleaned up on unmount
+
+**Non-R3F resources** (workers, large CPU-side typed arrays, object URLs) still need manual cleanup via `useEffect` return functions.
+
+## 5. Display Modes
+
+| Mode | R3F implementation |
+|---|---|
+| `shaded` | `<meshStandardMaterial />` with 3-point lighting |
+| `wireframe` | `<meshBasicMaterial wireframe />` |
+| `shaded+wireframe` | Two `<mesh>`: standard + wireframe overlay with `depthTest` offset |
+| `flat-shaded` | `<meshStandardMaterial flatShading />` |
+| `points` | `<points>` with `<pointsMaterial />` |
+
+Display mode is a prop on `MeshSurfaceLayer`. Changing mode swaps the material — no geometry rebuild.
+
+## 6. Lighting
+
+```tsx
+function SceneLighting({ displayMode }: { displayMode: DisplayMode }) {
+  if (displayMode === "wireframe" || displayMode === "points") return null;
+
+  return (
+    <>
+      <ambientLight intensity={0.4} />
+      <directionalLight position={[10, 10, 10]} intensity={0.6} />
+      <directionalLight position={[-5, 5, -5]} intensity={0.3} />
+    </>
+  );
+}
+```
+
+## 7. Context Loss
+
+R3F handles WebGL context loss/recovery internally. The `<Canvas>` component catches `webglcontextlost`, prevents default, and rebuilds on `webglcontextrestored`. All declarative scene objects are recreated from the current React tree — no manual recovery needed.

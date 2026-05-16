@@ -789,6 +789,8 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     fill_zero_vector_field(ctx.h_demag_xyz, ctx.n_nodes);
     fill_zero_vector_field(ctx.h_ani_xyz, ctx.n_nodes);
     fill_zero_vector_field(ctx.h_dmi_xyz, ctx.n_nodes);
+    fill_zero_vector_field(ctx.h_cubic_ani_xyz, ctx.n_nodes);
+    fill_zero_vector_field(ctx.h_bulk_dmi_xyz, ctx.n_nodes);
 
     // Precompute per-node dual volumes for thermal noise (must come after
     // magnetic_element_mask and elements are populated).
@@ -993,12 +995,154 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
             return false;
         }
     }
-    if ((ctx.enable_exchange || ctx.enable_demag) &&
+    if (plan.eager_initial_effective_field != 0 &&
+        (ctx.enable_exchange || ctx.enable_demag) &&
         !context_refresh_exchange_field_mfem(ctx, error)) {
         return false;
     }
     context_populate_device_info(ctx);
 #endif
+    bool allocate_gpu_state = false;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    allocate_gpu_state = ctx.device_info_cache.is_gpu_enabled != 0;
+#endif
+    if (!gpu_state_initialize(
+            ctx.gpu_state,
+            ctx.n_nodes,
+            ctx.integrator,
+            allocate_gpu_state,
+            ctx.m_xyz.data(),
+            static_cast<uint64_t>(ctx.m_xyz.size()),
+            ctx.transfer_audit,
+            error)) {
+#if FULLMAG_HAS_MFEM_STACK
+        context_destroy_mfem(ctx);
+#endif
+        return false;
+    }
+    if (!gpu_state_upload_runtime_coefficients(
+            ctx.gpu_state,
+            ctx.node_volumes.data(),
+            static_cast<uint64_t>(ctx.node_volumes.size()),
+            ctx.Ms_field.data(),
+            static_cast<uint64_t>(ctx.Ms_field.size()),
+            ctx.material.saturation_magnetisation,
+            ctx.A_field.data(),
+            static_cast<uint64_t>(ctx.A_field.size()),
+            ctx.material.exchange_stiffness,
+            ctx.alpha_field.data(),
+            static_cast<uint64_t>(ctx.alpha_field.size()),
+            ctx.material.damping,
+            ctx.Ku_field.data(),
+            static_cast<uint64_t>(ctx.Ku_field.size()),
+            ctx.Ku2_field.data(),
+            static_cast<uint64_t>(ctx.Ku2_field.size()),
+            ctx.Dind_field.data(),
+            static_cast<uint64_t>(ctx.Dind_field.size()),
+            ctx.Dbulk_field.data(),
+            static_cast<uint64_t>(ctx.Dbulk_field.size()),
+            ctx.Kc1_field.data(),
+            static_cast<uint64_t>(ctx.Kc1_field.size()),
+            ctx.Kc2_field.data(),
+            static_cast<uint64_t>(ctx.Kc2_field.size()),
+            ctx.Kc3_field.data(),
+            static_cast<uint64_t>(ctx.Kc3_field.size()),
+            ctx.magnetic_node_mask.data(),
+            static_cast<uint64_t>(ctx.magnetic_node_mask.size()),
+            ctx.periodic_reduced_node.data(),
+            static_cast<uint64_t>(ctx.periodic_reduced_node.size()),
+            ctx.periodic_representative_nodes.data(),
+            static_cast<uint64_t>(ctx.periodic_representative_nodes.size()),
+            ctx.transfer_audit,
+            error)) {
+#if FULLMAG_HAS_MFEM_STACK
+        context_destroy_mfem(ctx);
+#endif
+        return false;
+    }
+    if (ctx.enable_magnetoelastic && !ctx.mel_uniform_strain) {
+        if (!gpu_state_upload_magnetoelastic_strain(
+                ctx.gpu_state,
+                ctx.mel_strain_voigt.data(),
+                static_cast<uint64_t>(ctx.mel_strain_voigt.size()),
+                ctx.transfer_audit,
+                error)) {
+#if FULLMAG_HAS_MFEM_STACK
+            context_destroy_mfem(ctx);
+#endif
+            return false;
+        }
+    }
+    if (!gpu_state_upload_mesh_geometry(
+            ctx.gpu_state,
+            ctx.nodes_xyz.data(),
+            static_cast<uint64_t>(ctx.nodes_xyz.size()),
+            ctx.elements.data(),
+            static_cast<uint64_t>(ctx.elements.size()),
+            ctx.magnetic_element_mask.data(),
+            static_cast<uint64_t>(ctx.magnetic_element_mask.size()),
+            ctx.transfer_audit,
+            error)) {
+#if FULLMAG_HAS_MFEM_STACK
+        context_destroy_mfem(ctx);
+#endif
+        return false;
+    }
+#if FULLMAG_HAS_MFEM_STACK
+    if (!context_upload_mfem_exchange_to_gpu_state(ctx, error)) {
+        context_destroy_mfem(ctx);
+        return false;
+    }
+#endif
+    if (!gpu_state_upload_effective_fields_aos(
+            ctx.gpu_state,
+            ctx.h_ex_xyz.data(),
+            ctx.h_demag_xyz.data(),
+            ctx.h_ext_xyz.data(),
+            ctx.h_eff_xyz.data(),
+            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.transfer_audit,
+            error)) {
+#if FULLMAG_HAS_MFEM_STACK
+        context_destroy_mfem(ctx);
+#endif
+        return false;
+    }
+    if (!gpu_state_upload_local_vector_fields_aos(
+            ctx.gpu_state,
+            ctx.h_ani_xyz.data(),
+            ctx.h_cubic_ani_xyz.data(),
+            ctx.h_dmi_xyz.data(),
+            ctx.h_bulk_dmi_xyz.data(),
+            ctx.h_oe_xyz.data(),
+            ctx.h_therm_xyz.data(),
+            ctx.h_mel_xyz.data(),
+            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.transfer_audit,
+            error)) {
+#if FULLMAG_HAS_MFEM_STACK
+        context_destroy_mfem(ctx);
+#endif
+        return false;
+    }
+    return true;
+}
+
+bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error)
+{
+    if (!ctx.gpu_state.allocated ||
+        ctx.gpu_state.source_of_truth != FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH ||
+        ctx.gpu_state.host_state != FemGpuSyncState::HostStale) {
+        return true;
+    }
+    if (!gpu_state_download_magnetization_aos(
+            ctx.gpu_state,
+            ctx.m_xyz,
+            ctx.transfer_audit,
+            error)) {
+        error = "GPU magnetization readback failed: " + error;
+        return false;
+    }
     return true;
 }
 
@@ -1087,7 +1231,9 @@ int context_copy_field_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
-    std::memcpy(out_xyz, source->data(), sizeof(double) * static_cast<size_t>(out_len));
+    const uint64_t bytes = sizeof(double) * out_len;
+    record_device_to_host(ctx.transfer_audit, bytes);
+    std::memcpy(out_xyz, source->data(), static_cast<size_t>(bytes));
     return FULLMAG_FEM_OK;
 }
 
@@ -1109,6 +1255,18 @@ int context_upload_magnetization_f64(
     }
 
     ctx.m_xyz.assign(m_xyz, m_xyz + static_cast<size_t>(len));
+    if (ctx.gpu_state.allocated) {
+        if (!gpu_state_upload_magnetization_aos(
+                ctx.gpu_state,
+                ctx.m_xyz.data(),
+                static_cast<uint64_t>(ctx.m_xyz.size()),
+                ctx.transfer_audit,
+                error)) {
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+    } else {
+        record_host_to_device(ctx.transfer_audit, sizeof(double) * len);
+    }
     ctx.stepper.fsal_valid = false;
     ctx.prev_error_norm = 1.0;
     ctx.demag_cache_valid = false;
@@ -1162,6 +1320,32 @@ int context_upload_magnetization_f64(
     std::fill(ctx.h_therm_xyz.begin(), ctx.h_therm_xyz.end(), 0.0);
     ctx.last_thermal_refresh_time = -1.0;
     ctx.last_thermal_refresh_dt = -1.0;
+
+    if (!gpu_state_upload_effective_fields_aos(
+            ctx.gpu_state,
+            ctx.h_ex_xyz.data(),
+            ctx.h_demag_xyz.data(),
+            ctx.h_ext_xyz.data(),
+            ctx.h_eff_xyz.data(),
+            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.transfer_audit,
+            error)) {
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (!gpu_state_upload_local_vector_fields_aos(
+            ctx.gpu_state,
+            ctx.h_ani_xyz.data(),
+            ctx.h_cubic_ani_xyz.data(),
+            ctx.h_dmi_xyz.data(),
+            ctx.h_bulk_dmi_xyz.data(),
+            ctx.h_oe_xyz.data(),
+            ctx.h_therm_xyz.data(),
+            ctx.h_mel_xyz.data(),
+            static_cast<uint64_t>(ctx.h_eff_xyz.size()),
+            ctx.transfer_audit,
+            error)) {
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
 
     return FULLMAG_FEM_OK;
 }

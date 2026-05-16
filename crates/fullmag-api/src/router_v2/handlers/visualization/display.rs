@@ -1,25 +1,35 @@
 //! Display mutation endpoints.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::display::DisplayPatch;
+use crate::schemas::realtime::{RealtimeResourceChange, RealtimeResourceName};
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::schemas::visualization_state::{
     AirboxLayerPatch, AirboxLayerState, BasicLayerPatch, BasicLayerState, ClipAxis,
     ClipVisualizationState, DomainVisualizationState, FdmVisualizationState, FemTopologyMode,
     FemVisualizationState, FerromagnetVisibilityMode, SamplingProfile, SamplingVisualizationState,
     SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode, SliceVisualizationState,
-    TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
-    TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
-    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationDiagnostics,
-    VisualizationLayerPatch, VisualizationLayerState, VisualizationScopeKind,
-    VisualizationStatePatch, VisualizationStateResource,
+    SurfaceColorSource, TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch,
+    TrimAxisVisualizationPatch, TrimAxisVisualizationState, TrimVisualizationState,
+    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
+    VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
+    VisualizationCameraState, VisualizationClientAckEntry, VisualizationClientAckRequest,
+    VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
+    VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
+    VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
+    VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
+    VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
 };
-use crate::types::{AppState, CurrentDisplaySelection, DisplayPresentationState};
+use crate::types::{
+    AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
+};
 use fullmag_runner::{DisplayFieldComponent, DisplayViewMode as RunnerDisplayViewMode};
 
 #[utoipa::path(
@@ -56,10 +66,65 @@ pub async fn get_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/visualization/client-acks",
+    responses(
+        (status = 200, description = "Latest visualization client acknowledgements", body = VisualizationClientAckResource),
+    ),
+    tag = "visualization"
+)]
+pub async fn get_visualization_client_acks(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<VisualizationClientAckResource>, ApiError> {
+    let entries = state.current_visualization_client_acks.read().await;
+    Ok(Json(VisualizationClientAckResource {
+        revision: state
+            .current_visualization_client_ack_revision
+            .load(Ordering::Relaxed),
+        entries: entries.values().cloned().collect(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/visualization/client-acks",
+    request_body = VisualizationClientAckRequest,
+    responses(
+        (status = 200, description = "Visualization client acknowledgement recorded", body = VisualizationClientAckEntry),
+        (status = 400, description = "Invalid client acknowledgement"),
+    ),
+    tag = "visualization"
+)]
+pub async fn post_visualization_client_ack(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<VisualizationClientAckRequest>,
+) -> Result<Json<VisualizationClientAckEntry>, ApiError> {
+    let entry = build_visualization_client_ack_entry(&request)?;
+    {
+        let mut entries = state.current_visualization_client_acks.write().await;
+        entries.insert(visualization_client_ack_key(&entry), entry.clone());
+        while entries.len() > 128 {
+            let Some(oldest_key) = entries.keys().next().cloned() else {
+                break;
+            };
+            entries.remove(&oldest_key);
+        }
+    }
+    let ack_revision = state
+        .current_visualization_client_ack_revision
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    emit_visualization_client_ack_realtime_change(&state, ack_revision).await?;
+    Ok(Json(entry))
 }
 
 #[utoipa::path(
@@ -99,6 +164,7 @@ pub async fn replace_visualization_state(
     State(state): State<Arc<AppState>>,
     Json(replacement): Json<VisualizationStateResource>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
+    validate_camera_state(&replacement.camera)?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(state.clone(), display_replacement).await?;
     {
@@ -109,15 +175,18 @@ pub async fn replace_visualization_state(
         presentation.visualization_fem = Some(replacement.fem);
         presentation.visualization_slice = Some(replacement.slice);
         presentation.visualization_trim = Some(replacement.trim.clone());
+        presentation.visualization_camera = Some(replacement.camera);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
         presentation.visualization_overrides = Some(replacement.overrides);
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
 }
 
@@ -155,16 +224,21 @@ pub async fn patch_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_visualization_state_patch(&update)?;
     let display_patch = visualization_patch_to_display_patch(&update);
-    apply_display_patch(state.clone(), display_patch).await?;
-    {
+    let display_revision = {
+        let mut selection = state.current_display_selection.write().await;
         let mut presentation = state.current_display_presentation.write().await;
-        apply_visualization_presentation_patch(&mut presentation, &update);
-    }
+        apply_display_patch_to_state(&mut selection, &mut presentation, display_patch);
+        apply_visualization_presentation_patch(&mut presentation, &update)?;
+        selection.revision
+    };
+    emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
+    let live_snapshot = state.current_live_state.read().await;
     Ok(Json(build_visualization_state_response(
         &selection,
         &presentation,
+        live_snapshot.as_ref(),
     )))
 }
 
@@ -215,7 +289,20 @@ async fn apply_display_patch(
 ) -> Result<DisplaySelection, ApiError> {
     let mut sel = state.current_display_selection.write().await;
     let mut presentation = state.current_display_presentation.write().await;
+    let response = apply_display_patch_to_state(&mut sel, &mut presentation, update);
+    let display_revision = sel.revision;
+    drop(presentation);
+    drop(sel);
+    emit_display_realtime_change(&state, display_revision).await?;
 
+    Ok(response)
+}
+
+fn apply_display_patch_to_state(
+    sel: &mut CurrentDisplaySelection,
+    presentation: &mut DisplayPresentationState,
+    update: DisplayPatch,
+) -> DisplaySelection {
     if let Some(q) = update.active_quantity_id {
         sel.selection.quantity = q;
     }
@@ -269,13 +356,7 @@ async fn apply_display_patch(
     sel.selection.canonicalize();
 
     sel.revision = sel.revision.wrapping_add(1);
-    let display_revision = sel.revision;
-    let response = build_display_selection_response(&sel, &presentation);
-    drop(presentation);
-    drop(sel);
-    emit_display_realtime_change(&state, display_revision).await?;
-
-    Ok(response)
+    build_display_selection_response(&sel, &presentation)
 }
 
 fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Result<(), ApiError> {
@@ -318,6 +399,9 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             ));
         }
     }
+    if let Some(camera) = &update.camera {
+        validate_camera_patch(camera)?;
+    }
     if let Some(layers) = &update.layers {
         if matches!(
             layers.vectors.as_ref().and_then(|vectors| vectors.density),
@@ -346,7 +430,127 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
             }
         }
     }
+    if let Some(overrides) = &update.overrides {
+        for (index, target_override) in overrides.iter().enumerate() {
+            if target_override.scope_id.trim().is_empty() {
+                return Err(ApiError::bad_request(format!(
+                    "overrides[{index}].scope_id must not be empty"
+                )));
+            }
+            if let Some(display) = &target_override.display {
+                if matches!(display.opacity, Some(value) if !(0.0..=1.0).contains(&value)) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].display.opacity must be between 0 and 1"
+                    )));
+                }
+                for (label, layer) in [
+                    ("surface", display.surface.as_ref()),
+                    ("wireframe", display.wireframe.as_ref()),
+                    ("points", display.points.as_ref()),
+                ] {
+                    if matches!(
+                        layer.and_then(|layer| layer.opacity),
+                        Some(value) if !(0.0..=1.0).contains(&value)
+                    ) {
+                        return Err(ApiError::bad_request(format!(
+                            "overrides[{index}].display.{label}.opacity must be between 0 and 1"
+                        )));
+                    }
+                }
+                if matches!(
+                    display.vectors.as_ref().and_then(|vectors| vectors.density),
+                    Some(0)
+                ) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].display.vectors.density must be greater than zero"
+                    )));
+                }
+            }
+            if let Some(style) = &target_override.style {
+                if matches!(style.vector_alpha, Some(value) if !(0.0..=1.0).contains(&value)) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_alpha must be between 0 and 1"
+                    )));
+                }
+                if matches!(style.vector_thickness, Some(value) if value <= 0.0) {
+                    return Err(ApiError::bad_request(format!(
+                        "overrides[{index}].style.vector_thickness must be greater than zero"
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
+}
+
+fn validate_camera_patch(camera: &VisualizationCameraPatch) -> Result<(), ApiError> {
+    if let Some(position) = camera.position {
+        validate_camera_vector("camera.position", position)?;
+        if matches!(camera.target, Some(target) if position == target) {
+            return Err(ApiError::bad_request(
+                "camera.position must not equal camera.target",
+            ));
+        }
+    }
+    if let Some(target) = camera.target {
+        validate_camera_vector("camera.target", target)?;
+    }
+    if let Some(up) = camera.up {
+        validate_camera_vector("camera.up", up)?;
+        if vector_length_squared(up) <= f64::EPSILON {
+            return Err(ApiError::bad_request("camera.up must not be zero"));
+        }
+    }
+    if matches!(camera.fov_degrees, Some(value) if !value.is_finite() || !(1.0..=179.0).contains(&value))
+    {
+        return Err(ApiError::bad_request(
+            "camera.fov_degrees must be between 1 and 179",
+        ));
+    }
+    if matches!(camera.orthographic_scale, Some(value) if !value.is_finite() || value <= 0.0) {
+        return Err(ApiError::bad_request(
+            "camera.orthographic_scale must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_camera_state(camera: &VisualizationCameraState) -> Result<(), ApiError> {
+    validate_camera_vector("camera.position", camera.position)?;
+    validate_camera_vector("camera.target", camera.target)?;
+    validate_camera_vector("camera.up", camera.up)?;
+    if camera.position == camera.target {
+        return Err(ApiError::bad_request(
+            "camera.position must not equal camera.target",
+        ));
+    }
+    if vector_length_squared(camera.up) <= f64::EPSILON {
+        return Err(ApiError::bad_request("camera.up must not be zero"));
+    }
+    if !camera.fov_degrees.is_finite() || !(1.0..=179.0).contains(&camera.fov_degrees) {
+        return Err(ApiError::bad_request(
+            "camera.fov_degrees must be between 1 and 179",
+        ));
+    }
+    if matches!(camera.orthographic_scale, Some(value) if !value.is_finite() || value <= 0.0) {
+        return Err(ApiError::bad_request(
+            "camera.orthographic_scale must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_camera_vector(label: &str, vector: [f64; 3]) -> Result<(), ApiError> {
+    if vector.iter().all(|value| value.is_finite()) {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(format!(
+        "{label} must contain finite values"
+    )))
+}
+
+fn vector_length_squared(vector: [f64; 3]) -> f64 {
+    vector.iter().map(|component| component * component).sum()
 }
 
 fn default_visualization_layers(
@@ -354,6 +558,7 @@ fn default_visualization_layers(
     vector_density: u32,
 ) -> VisualizationLayerState {
     VisualizationLayerState {
+        bounds: basic_layer(false, 1.0),
         surface: basic_layer(true, 1.0),
         quantity_overlay: basic_layer(true, 1.0),
         wireframe: basic_layer(false, 1.0),
@@ -367,6 +572,7 @@ fn default_visualization_layers(
         primitives: basic_layer(true, 1.0),
         airbox: AirboxLayerState {
             visible: false,
+            bounds: basic_layer(false, 1.0),
             surface: basic_layer(false, 0.18),
             wireframe: basic_layer(false, 1.0),
             points: basic_layer(false, 1.0),
@@ -468,6 +674,17 @@ fn default_clip_visualization() -> ClipVisualizationState {
         axis: ClipAxis::X,
         position_percent: 50.0,
         flipped: false,
+    }
+}
+
+fn default_camera_visualization() -> VisualizationCameraState {
+    VisualizationCameraState {
+        projection: VisualizationCameraProjection::Perspective,
+        position: [2e-6, 1.4e-6, 2e-6],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 0.0, 1.0],
+        fov_degrees: 45.0,
+        orthographic_scale: None,
     }
 }
 
@@ -633,6 +850,9 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     if let Some(visible) = patch.visible {
         state.visible = visible;
     }
+    if let Some(bounds) = &patch.bounds {
+        apply_basic_layer_patch(&mut state.bounds, bounds);
+    }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
     }
@@ -654,6 +874,9 @@ fn apply_visualization_layer_patch(
     state: &mut VisualizationLayerState,
     patch: &VisualizationLayerPatch,
 ) {
+    if let Some(bounds) = &patch.bounds {
+        apply_basic_layer_patch(&mut state.bounds, bounds);
+    }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
     }
@@ -683,7 +906,7 @@ fn apply_visualization_layer_patch(
 fn apply_visualization_presentation_patch(
     presentation: &mut DisplayPresentationState,
     update: &VisualizationStatePatch,
-) {
+) -> Result<(), ApiError> {
     if let Some(layers_patch) = &update.layers {
         let mut layers = presentation
             .visualization_layers
@@ -835,6 +1058,15 @@ fn apply_visualization_presentation_patch(
         presentation.visualization_trim = Some(trim);
         presentation.visualization_clip = Some(clip);
     }
+    if let Some(camera_patch) = &update.camera {
+        let mut camera = presentation
+            .visualization_camera
+            .take()
+            .unwrap_or_else(default_camera_visualization);
+        apply_camera_patch(&mut camera, camera_patch);
+        validate_camera_state(&camera)?;
+        presentation.visualization_camera = Some(camera);
+    }
     if let Some(clip_patch) = &update.clip {
         let trim_updated_directly = update.trim.is_some();
         let mut clip = presentation.visualization_clip.take().unwrap_or_else(|| {
@@ -891,6 +1123,31 @@ fn apply_visualization_presentation_patch(
             style.ferromagnet_visibility = ferromagnet_visibility;
         }
         presentation.visualization_vector_style = Some(style);
+    }
+    if let Some(overrides) = &update.overrides {
+        presentation.visualization_overrides = Some(overrides.clone());
+    }
+    Ok(())
+}
+
+fn apply_camera_patch(camera: &mut VisualizationCameraState, patch: &VisualizationCameraPatch) {
+    if let Some(projection) = patch.projection {
+        camera.projection = projection;
+    }
+    if let Some(position) = patch.position {
+        camera.position = position;
+    }
+    if let Some(target) = patch.target {
+        camera.target = target;
+    }
+    if let Some(up) = patch.up {
+        camera.up = up;
+    }
+    if let Some(fov_degrees) = patch.fov_degrees {
+        camera.fov_degrees = fov_degrees;
+    }
+    if let Some(orthographic_scale) = patch.orthographic_scale {
+        camera.orthographic_scale = Some(orthographic_scale);
     }
 }
 
@@ -970,14 +1227,136 @@ async fn emit_display_realtime_change(
     state: &Arc<AppState>,
     display_revision: u64,
 ) -> Result<(), ApiError> {
-    if let Some(snapshot) = state.current_live_state.read().await.as_ref().cloned() {
-        let realtime_state =
-            crate::current_live_realtime_state_from_snapshot(state, &snapshot, display_revision)
-                .await;
-        crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-            .await?;
+    let (session_id, run_id) = current_live_realtime_identity(state).await;
+    crate::publish_current_live_realtime_resource_changes(
+        state,
+        session_id,
+        run_id,
+        vec![
+            RealtimeResourceChange {
+                resource: RealtimeResourceName::Display,
+                revision: display_revision,
+                resource_id: None,
+                domain_generation_id: None,
+                recommended_fetch: Some("/v2/sessions/current/visualization/display".to_string()),
+            },
+            RealtimeResourceChange {
+                resource: RealtimeResourceName::VisualizationState,
+                revision: display_revision,
+                resource_id: None,
+                domain_generation_id: None,
+                recommended_fetch: Some("/v2/sessions/current/visualization/state".to_string()),
+            },
+        ],
+        false,
+        0,
+    )
+    .await
+}
+
+async fn current_live_realtime_identity(state: &Arc<AppState>) -> (String, Option<String>) {
+    state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .map(|snapshot| {
+            (
+                snapshot.session.session_id.clone(),
+                snapshot.run.as_ref().map(|run| run.run_id.clone()),
+            )
+        })
+        .unwrap_or_else(|| ("current".to_string(), None))
+}
+
+async fn emit_visualization_client_ack_realtime_change(
+    state: &Arc<AppState>,
+    ack_revision: u64,
+) -> Result<(), ApiError> {
+    let (session_id, run_id) = current_live_realtime_identity(state).await;
+    crate::publish_current_live_realtime_resource_changes(
+        state,
+        session_id,
+        run_id,
+        vec![RealtimeResourceChange {
+            resource: RealtimeResourceName::VisualizationClientAcks,
+            revision: ack_revision,
+            resource_id: None,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/visualization/client-acks".to_string()),
+        }],
+        false,
+        0,
+    )
+    .await
+}
+
+fn build_visualization_client_ack_entry(
+    request: &VisualizationClientAckRequest,
+) -> Result<VisualizationClientAckEntry, ApiError> {
+    let client_id = validated_ack_string("client_id", &request.client_id, 128)?;
+    let client_label =
+        validated_optional_ack_string("client_label", request.client_label.as_deref(), 128)?;
+    let viewport_id =
+        validated_optional_ack_string("viewport_id", request.viewport_id.as_deref(), 96)?;
+    let effective_render_mode = validated_optional_ack_string(
+        "effective_render_mode",
+        request.effective_render_mode.as_deref(),
+        128,
+    )?;
+    let error = validated_optional_ack_string("error", request.error.as_deref(), 512)?;
+
+    Ok(VisualizationClientAckEntry {
+        client_id,
+        client_label,
+        viewport_id,
+        revision: request.revision,
+        status: request.status,
+        effective_render_mode,
+        error,
+        received_at_unix_ms: unix_ms_now(),
+    })
+}
+
+fn visualization_client_ack_key(entry: &VisualizationClientAckEntry) -> String {
+    match entry.viewport_id.as_deref() {
+        Some(viewport_id) => format!("{}\u{1f}{viewport_id}", entry.client_id),
+        None => entry.client_id.clone(),
     }
-    Ok(())
+}
+
+fn validated_ack_string(
+    field: &'static str,
+    value: &str,
+    max_len: usize,
+) -> Result<String, ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::bad_request(format!("{field} must not be empty")));
+    }
+    if trimmed.len() > max_len {
+        return Err(ApiError::bad_request(format!(
+            "{field} must be at most {max_len} bytes"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validated_optional_ack_string(
+    field: &'static str,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<Option<String>, ApiError> {
+    value
+        .map(|value| validated_ack_string(field, value, max_len))
+        .transpose()
+}
+
+fn unix_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 fn visualization_state_to_display_selection(
@@ -1042,6 +1421,7 @@ fn basic_layer(visible: bool, opacity: f64) -> BasicLayerState {
 pub(crate) fn build_visualization_state_response(
     selection: &CurrentDisplaySelection,
     presentation: &DisplayPresentationState,
+    live_snapshot: Option<&SessionStateResponse>,
 ) -> VisualizationStateResource {
     let quantity = QuantityProjection {
         active_quantity_id: selection.selection.quantity.clone(),
@@ -1085,6 +1465,10 @@ pub(crate) fn build_visualization_state_response(
         .visualization_trim
         .clone()
         .unwrap_or_else(default_trim_visualization);
+    let camera = presentation
+        .visualization_camera
+        .clone()
+        .unwrap_or_else(default_camera_visualization);
     let clip = presentation
         .visualization_clip
         .clone()
@@ -1097,10 +1481,12 @@ pub(crate) fn build_visualization_state_response(
         .visualization_overrides
         .clone()
         .unwrap_or_default();
+    let targets =
+        build_visualization_target_registry(&layers, &vector_style, &overrides, live_snapshot);
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 3,
+        schema_version: 4,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1119,9 +1505,11 @@ pub(crate) fn build_visualization_state_response(
         fem,
         slice,
         trim,
+        camera,
         clip,
         vector_style,
         overrides,
+        targets,
         diagnostics: VisualizationDiagnostics {
             warnings: Vec::new(),
             degraded_reasons: Vec::new(),
@@ -1147,6 +1535,241 @@ pub(crate) fn build_visualization_state_response(
         max_points,
         x_chosen_size: selection.selection.x_chosen_size,
         y_chosen_size: selection.selection.y_chosen_size,
+    }
+}
+
+fn build_visualization_target_registry(
+    layers: &VisualizationLayerState,
+    vector_style: &VectorStyleVisualizationState,
+    overrides: &[VisualizationOverrideState],
+    live_snapshot: Option<&SessionStateResponse>,
+) -> VisualizationTargetRegistryState {
+    VisualizationTargetRegistryState {
+        airbox: visualization_target_registry_entry(
+            VisualizationScopeKind::Airbox,
+            "airbox",
+            "Airbox",
+            VisualizationTargetSource::Airbox,
+            airbox_target_settings(layers),
+            overrides,
+        ),
+        objects: live_snapshot
+            .and_then(|snapshot| snapshot.scene_document.as_ref())
+            .map(|scene| {
+                scene
+                    .objects
+                    .iter()
+                    .map(|object| {
+                        visualization_target_registry_entry(
+                            VisualizationScopeKind::Object,
+                            &object.id,
+                            &object.name,
+                            VisualizationTargetSource::SceneObject,
+                            object_target_settings(layers, vector_style),
+                            overrides,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        parts: live_snapshot
+            .and_then(|snapshot| snapshot.fem_mesh.as_ref())
+            .map(|mesh| {
+                mesh.mesh_parts
+                    .iter()
+                    .map(|part| {
+                        visualization_target_registry_entry(
+                            VisualizationScopeKind::Part,
+                            &part.id,
+                            &part.label,
+                            VisualizationTargetSource::MeshPart,
+                            object_target_settings(layers, vector_style),
+                            overrides,
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn visualization_target_registry_entry(
+    scope: VisualizationScopeKind,
+    scope_id: &str,
+    label: &str,
+    source: VisualizationTargetSource,
+    settings: VisualizationResolvedTargetSettings,
+    overrides: &[VisualizationOverrideState],
+) -> VisualizationTargetRegistryEntry {
+    let override_state = overrides
+        .iter()
+        .find(|entry| entry.scope == scope && entry.scope_id == scope_id)
+        .cloned();
+    let settings = override_state
+        .as_ref()
+        .map(|entry| apply_visualization_target_override(settings.clone(), entry))
+        .unwrap_or(settings);
+
+    VisualizationTargetRegistryEntry {
+        scope,
+        scope_id: scope_id.to_string(),
+        label: label.to_string(),
+        source,
+        settings,
+        override_state,
+    }
+}
+
+fn object_target_settings(
+    layers: &VisualizationLayerState,
+    vector_style: &VectorStyleVisualizationState,
+) -> VisualizationResolvedTargetSettings {
+    let mut settings = VisualizationResolvedTargetSettings {
+        visible: true,
+        bounds_visible: layers.bounds.visible,
+        geometry_scope: VisualizationTargetGeometryScope::Full,
+        opacity: layers.surface.opacity,
+        points_visible: layers.points.visible,
+        render_mode: VisualizationTargetRenderMode::Surface,
+        surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
+        surface_mono_color: vector_style.mono_color.clone(),
+        surface_visible: layers.surface.visible,
+        vector_alpha: vector_style.alpha,
+        vector_color_mode: vector_style.color_mode,
+        vector_mono_color: vector_style.mono_color.clone(),
+        vector_thickness: vector_style.thickness,
+        vectors_visible: layers.vectors.visible,
+        wireframe_color: "var(--fm-border-strong)".to_string(),
+        wireframe_opacity: layers.wireframe.opacity,
+        wireframe_visible: layers.wireframe.visible,
+    };
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn airbox_target_settings(layers: &VisualizationLayerState) -> VisualizationResolvedTargetSettings {
+    let mut settings = VisualizationResolvedTargetSettings {
+        visible: layers.airbox.visible,
+        bounds_visible: layers.airbox.bounds.visible,
+        geometry_scope: VisualizationTargetGeometryScope::Full,
+        opacity: layers.airbox.opacity,
+        points_visible: layers.airbox.points.visible,
+        render_mode: VisualizationTargetRenderMode::Wireframe,
+        surface_color_source: SurfaceColorSource::Solid,
+        surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+        surface_visible: layers.airbox.surface.visible,
+        vector_alpha: 1.0,
+        vector_color_mode: VectorColorMode::Orientation,
+        vector_mono_color: "var(--fm-accent)".to_string(),
+        vector_thickness: 1.0,
+        vectors_visible: layers.airbox.vectors.visible,
+        wireframe_color: "var(--fm-airbox-wire)".to_string(),
+        wireframe_opacity: layers.airbox.wireframe.opacity,
+        wireframe_visible: layers.airbox.wireframe.visible,
+    };
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn apply_visualization_target_override(
+    mut settings: VisualizationResolvedTargetSettings,
+    override_state: &VisualizationOverrideState,
+) -> VisualizationResolvedTargetSettings {
+    if let Some(visible) = override_state.visible {
+        settings.visible = visible;
+    }
+    if let Some(display) = &override_state.display {
+        if let Some(visible) = display.visible {
+            settings.visible = visible;
+        }
+        if let Some(bounds) = &display.bounds {
+            if let Some(visible) = bounds.visible {
+                settings.bounds_visible = visible;
+            }
+        }
+        if let Some(surface) = &display.surface {
+            if let Some(visible) = surface.visible {
+                settings.surface_visible = visible;
+            }
+            if let Some(opacity) = surface.opacity {
+                settings.opacity = opacity;
+            }
+        }
+        if let Some(wireframe) = &display.wireframe {
+            if let Some(visible) = wireframe.visible {
+                settings.wireframe_visible = visible;
+            }
+            if let Some(opacity) = wireframe.opacity {
+                settings.wireframe_opacity = opacity;
+            }
+        }
+        if let Some(points) = &display.points {
+            if let Some(visible) = points.visible {
+                settings.points_visible = visible;
+            }
+        }
+        if let Some(vectors) = &display.vectors {
+            if let Some(visible) = vectors.visible {
+                settings.vectors_visible = visible;
+            }
+        }
+        if let Some(opacity) = display.opacity {
+            settings.opacity = opacity;
+        }
+        if let Some(geometry_scope) = display.geometry_scope {
+            settings.geometry_scope = geometry_scope;
+        }
+    }
+    if let Some(style) = &override_state.style {
+        if let Some(surface_color_source) = style.surface_color_source {
+            settings.surface_color_source = surface_color_source;
+        }
+        if let Some(surface_mono_color) = &style.surface_mono_color {
+            settings.surface_mono_color = surface_mono_color.clone();
+        }
+        if let Some(vector_color_mode) = style.vector_color_mode {
+            settings.vector_color_mode = vector_color_mode;
+        }
+        if let Some(vector_mono_color) = &style.vector_mono_color {
+            settings.vector_mono_color = vector_mono_color.clone();
+        }
+        if let Some(vector_alpha) = style.vector_alpha {
+            settings.vector_alpha = vector_alpha;
+        }
+        if let Some(vector_thickness) = style.vector_thickness {
+            settings.vector_thickness = vector_thickness;
+        }
+        if let Some(wireframe_color) = &style.wireframe_color {
+            settings.wireframe_color = wireframe_color.clone();
+        }
+    }
+    settings.render_mode = visualization_target_render_mode(&settings);
+    settings
+}
+
+fn visualization_target_render_mode(
+    settings: &VisualizationResolvedTargetSettings,
+) -> VisualizationTargetRenderMode {
+    if settings.points_visible {
+        return VisualizationTargetRenderMode::Points;
+    }
+    if settings.surface_visible && settings.wireframe_visible {
+        return VisualizationTargetRenderMode::SurfaceEdges;
+    }
+    if settings.surface_visible {
+        return VisualizationTargetRenderMode::Surface;
+    }
+    VisualizationTargetRenderMode::Wireframe
+}
+
+fn surface_color_source_from_vector_color_mode(color_mode: VectorColorMode) -> SurfaceColorSource {
+    match color_mode {
+        VectorColorMode::Orientation => SurfaceColorSource::Orientation,
+        VectorColorMode::X => SurfaceColorSource::ComponentX,
+        VectorColorMode::Y => SurfaceColorSource::ComponentY,
+        VectorColorMode::Z => SurfaceColorSource::ComponentZ,
+        VectorColorMode::Magnitude => SurfaceColorSource::Magnitude,
+        VectorColorMode::Monochrome => SurfaceColorSource::Solid,
     }
 }
 

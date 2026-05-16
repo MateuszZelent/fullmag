@@ -16,10 +16,22 @@ rm -rf .fullmag/runtimes/fem-gpu-host/openmpi
 mkdir -p .fullmag/runtimes/fem-gpu-host/openmpi/bin
 echo "[export_fem_gpu_runtime] cleaning stale FDM demag build cache"
 cargo +nightly clean -p fullmag-fdm-demag >/dev/null 2>&1 || true
-echo "[export_fem_gpu_runtime] building fullmag-cli with cuda fem-gpu release features"
-FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli --features "cuda fem-gpu" --release >/tmp/fullmag-build.log
-echo "[export_fem_gpu_runtime] copying launcher binary"
+echo "[export_fem_gpu_runtime] cleaning stale quantity/runtime release metadata"
+cargo +nightly clean -p fullmag-quantities -p fullmag-runner -p fullmag-cli -p fullmag-api >/dev/null 2>&1 || true
+rm -rf \
+  target/release/deps/*fullmag_quantities* \
+  target/release/deps/*fullmag_runner* \
+  target/release/deps/*fullmag_cli* \
+  target/release/deps/*fullmag_api* \
+  target/release/.fingerprint/fullmag-quantities-* \
+  target/release/.fingerprint/fullmag-runner-* \
+  target/release/.fingerprint/fullmag-cli-* \
+  target/release/.fingerprint/fullmag-api-*
+echo "[export_fem_gpu_runtime] building fullmag-cli with cuda fem-gpu release features and fullmag-api"
+FULLMAG_USE_MFEM_STACK=ON cargo +nightly build -p fullmag-cli -p fullmag-api --features "fullmag-cli/cuda fullmag-cli/fem-gpu" --release >/tmp/fullmag-build.log
+echo "[export_fem_gpu_runtime] copying launcher and API binaries"
 cp -f target/release/fullmag .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu-bin
+cp -f target/release/fullmag-api .fullmag/runtimes/fem-gpu-host/bin/fullmag-api
 latest_native_lib_dir() {
   local pattern="$1"
   local selected

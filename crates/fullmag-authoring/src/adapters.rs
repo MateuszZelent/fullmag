@@ -528,8 +528,41 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
             .unwrap_or(Value::Null),
     );
     map.insert(
+        "mesh_strategy".to_string(),
+        mesh.mesh_strategy
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
         "order".to_string(),
         serde_json::to_value(mesh.order).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "through_thickness_elements".to_string(),
+        serde_json::to_value(mesh.through_thickness_elements).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "through_thickness_distribution".to_string(),
+        mesh.through_thickness_distribution
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    map.insert(
+        "through_thickness_element_ratio".to_string(),
+        serde_json::to_value(mesh.through_thickness_element_ratio).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "through_thickness_symmetric".to_string(),
+        serde_json::to_value(mesh.through_thickness_symmetric).unwrap_or(Value::Null),
+    );
+    map.insert(
+        "sweep_face_meshing".to_string(),
+        mesh.sweep_face_meshing
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
     );
     map.insert(
         "source".to_string(),
@@ -703,9 +736,11 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         material_ref: material_id_for_geometry(&geometry.name),
         region_name: geometry.region_name.clone(),
         magnetization_ref: Some(magnetization_id_for_geometry(&geometry.name)),
+        region_overrides: BTreeMap::new(),
         physics_stack: ensure_object_physics_stack(&geometry.physics_stack, geometry.material.dind),
         object_mesh: geometry.mesh.clone(),
         mesh_override: geometry.mesh.clone(),
+        notes: None,
         visible: true,
         locked: false,
         tags: Vec::new(),
@@ -1404,7 +1439,13 @@ mod tests {
                     minimum_element_size: Some(String::new()),
                     calibrate_for: Some("general_physics".to_string()),
                     size_preset: Some("normal".to_string()),
+                    mesh_strategy: Some("swept_prism".to_string()),
                     order: Some(1),
+                    through_thickness_elements: Some(1),
+                    through_thickness_distribution: Some("fixed".to_string()),
+                    through_thickness_element_ratio: None,
+                    through_thickness_symmetric: None,
+                    sweep_face_meshing: Some("triangular".to_string()),
                     source: None,
                     algorithm_2d: Some(6),
                     algorithm_3d: Some(10),
@@ -1453,7 +1494,13 @@ mod tests {
                     minimum_element_size: None,
                     calibrate_for: None,
                     size_preset: None,
+                    mesh_strategy: None,
                     order: None,
+                    through_thickness_elements: None,
+                    through_thickness_distribution: None,
+                    through_thickness_element_ratio: None,
+                    through_thickness_symmetric: None,
+                    sweep_face_meshing: None,
                     source: None,
                     algorithm_2d: None,
                     algorithm_3d: None,
@@ -1527,6 +1574,27 @@ mod tests {
         assert_eq!(
             round_trip.geometries[0].physics_stack,
             builder.geometries[0].physics_stack
+        );
+        assert_eq!(
+            round_trip.geometries[0]
+                .mesh
+                .as_ref()
+                .and_then(|mesh| mesh.mesh_strategy.as_deref()),
+            Some("swept_prism")
+        );
+        assert_eq!(
+            round_trip.geometries[0]
+                .mesh
+                .as_ref()
+                .and_then(|mesh| mesh.through_thickness_elements),
+            Some(1)
+        );
+        assert_eq!(
+            round_trip.geometries[0]
+                .mesh
+                .as_ref()
+                .and_then(|mesh| mesh.sweep_face_meshing.as_deref()),
+            Some("triangular")
         );
         assert_eq!(
             round_trip.geometries[0].geometry_params.get("translation"),
@@ -1662,6 +1730,32 @@ mod tests {
                 .and_then(|values| values.first())
                 .and_then(Value::as_f64),
             Some(0.0)
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("mesh"))
+                .and_then(Value::as_object)
+                .and_then(|mesh| mesh.get("mesh_strategy"))
+                .and_then(Value::as_str),
+            Some("swept_prism")
+        );
+        assert_eq!(
+            projection
+                .rewrite_overrides
+                .get("geometries")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_object)
+                .and_then(|geo| geo.get("mesh"))
+                .and_then(Value::as_object)
+                .and_then(|mesh| mesh.get("through_thickness_elements"))
+                .and_then(Value::as_i64),
+            Some(1)
         );
     }
 

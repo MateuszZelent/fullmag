@@ -1,8 +1,9 @@
 use crate::{SceneDocument, SceneGeometry, SceneObject, Transform3D};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use utoipa::ToSchema;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryBackendTarget {
     Fem,
@@ -33,7 +34,7 @@ impl GeometryBackendTarget {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometrySupportStatus {
     Production,
@@ -41,7 +42,7 @@ pub enum GeometrySupportStatus {
     Unsupported,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryDiagnosticSeverity {
     Info,
@@ -49,7 +50,7 @@ pub enum GeometryDiagnosticSeverity {
     Error,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryDiagnostic {
     pub id: String,
     pub severity: GeometryDiagnosticSeverity,
@@ -63,7 +64,7 @@ pub struct GeometryDiagnostic {
     pub blocks: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct PrimitiveGeometryCapability {
     pub id: String,
     pub label: String,
@@ -75,7 +76,7 @@ pub struct PrimitiveGeometryCapability {
     pub status: GeometrySupportStatus,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct BooleanGeometryCapability {
     pub op: String,
     pub fem: bool,
@@ -85,19 +86,27 @@ pub struct BooleanGeometryCapability {
     pub notes: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryCapabilitiesResource {
     pub revision: u64,
     pub primitive_capabilities: Vec<PrimitiveGeometryCapability>,
     pub csg_capabilities: Vec<BooleanGeometryCapability>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryValidationResource {
     pub scene_revision: u64,
     pub backend_target: GeometryBackendTarget,
     pub status: String,
     pub dirty: bool,
+    pub diagnostics: Vec<GeometryDiagnostic>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct GeometryDiagnosticsResource {
+    pub scene_revision: u64,
+    pub backend_target: GeometryBackendTarget,
+    pub status: String,
     pub diagnostics: Vec<GeometryDiagnostic>,
 }
 
@@ -131,7 +140,7 @@ pub struct GeometryBody {
     pub visible: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct GeometryRealizationSnapshot {
     pub source_scene_revision: u64,
     pub realization_revision: u64,
@@ -151,7 +160,7 @@ pub struct GeometryRealizationSnapshot {
     pub provenance: Vec<GeometryProvenanceEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct RealizedGeometryBody {
     pub body_id: String,
     pub object_id: String,
@@ -168,7 +177,7 @@ pub struct RealizedGeometryBody {
     pub provenance: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct GeometryRegionCandidate {
     pub id: String,
     pub object_id: String,
@@ -183,7 +192,7 @@ pub struct GeometryRegionCandidate {
     pub source_geometry_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub struct GeometryProvenanceEntry {
     pub body_id: String,
     pub object_id: String,
@@ -195,27 +204,192 @@ pub fn geometry_capabilities(revision: u64) -> GeometryCapabilitiesResource {
     GeometryCapabilitiesResource {
         revision,
         primitive_capabilities: vec![
-            primitive("box", "Box", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("cylinder", "Cylinder", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("sphere", "Sphere", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("ellipsoid", "Ellipsoid", "mumax", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("disk", "Disk", "core", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("thin_film", "Thin Film", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("pillar", "Pillar", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("nanowire", "Nanowire", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("ring", "Ring", "mumax", true, true, true, true, GeometrySupportStatus::Production),
-            primitive("arch_waveguide", "Arch Waveguide", "core", true, true, true, false, GeometrySupportStatus::Production),
-            primitive("triangular_prism", "Triangular Prism", "core", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("cone", "Cone", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("capsule", "Capsule", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("tube", "Tube", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("wedge", "Wedge", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
-            primitive("polygon_prism", "Polygon Prism", "dcc", false, false, false, true, GeometrySupportStatus::Preview),
+            primitive(
+                "box",
+                "Box",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "cylinder",
+                "Cylinder",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "sphere",
+                "Sphere",
+                "mumax",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "ellipsoid",
+                "Ellipsoid",
+                "mumax",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "disk",
+                "Disk",
+                "core",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "thin_film",
+                "Thin Film",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "pillar",
+                "Pillar",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "nanowire",
+                "Nanowire",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "ring",
+                "Ring",
+                "mumax",
+                true,
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "arch_waveguide",
+                "Arch Waveguide",
+                "core",
+                true,
+                true,
+                true,
+                false,
+                GeometrySupportStatus::Production,
+            ),
+            primitive(
+                "triangular_prism",
+                "Triangular Prism",
+                "core",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "cone",
+                "Cone",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "capsule",
+                "Capsule",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "tube",
+                "Tube",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "wedge",
+                "Wedge",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
+            primitive(
+                "polygon_prism",
+                "Polygon Prism",
+                "dcc",
+                false,
+                false,
+                false,
+                true,
+                GeometrySupportStatus::Preview,
+            ),
         ],
         csg_capabilities: vec![
-            boolean("union", false, false, false, GeometrySupportStatus::Unsupported, "Union is represented in SceneDocument but not yet realized by the production mesh pipeline."),
-            boolean("subtract", true, true, true, GeometrySupportStatus::Production, "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings."),
-            boolean("intersect", false, false, false, GeometrySupportStatus::Unsupported, "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline."),
+            boolean(
+                "union",
+                false,
+                false,
+                false,
+                GeometrySupportStatus::Unsupported,
+                "Union is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+            ),
+            boolean(
+                "subtract",
+                true,
+                true,
+                true,
+                GeometrySupportStatus::Production,
+                "Difference is supported for Box/Cylinder inputs, including Cylinder minus Cylinder rings.",
+            ),
+            boolean(
+                "intersect",
+                false,
+                false,
+                false,
+                GeometrySupportStatus::Unsupported,
+                "Intersection is represented in SceneDocument but not yet realized by the production mesh pipeline.",
+            ),
         ],
     }
 }
@@ -310,6 +484,15 @@ pub fn build_geometry_workspace(
         };
         let geometry_path = format!("objects/{}/geometry", object.id);
         let body_id = stable_body_id(&object.id, &geometry_path);
+        let region_id = object
+            .region_name
+            .clone()
+            .unwrap_or_else(|| format!("region:{}", object.id));
+        let magnetization_ref = object
+            .region_overrides
+            .get(&region_id)
+            .and_then(|override_entry| override_entry.magnetization_ref.clone())
+            .or_else(|| object.magnetization_ref.clone());
         bodies.push(GeometryBody {
             body_id: body_id.clone(),
             object_id: object.id.clone(),
@@ -320,8 +503,8 @@ pub fn build_geometry_workspace(
             bounds_min,
             bounds_max,
             material_ref: object.material_ref.clone(),
-            magnetization_ref: object.magnetization_ref.clone(),
-            region_hint: object.region_name.clone(),
+            magnetization_ref,
+            region_hint: Some(region_id),
             visible: object.visible,
         });
         provenance.push(GeometryProvenanceEntry {
@@ -1239,9 +1422,11 @@ mod tests {
                 material_ref: "mat:free".to_string(),
                 region_name: None,
                 magnetization_ref: Some("mag:free".to_string()),
+                region_overrides: Default::default(),
                 physics_stack: vec![],
                 object_mesh: None,
                 mesh_override: None,
+                notes: None,
                 visible: true,
                 locked: false,
                 tags: vec!["mesh:dirty".to_string()],

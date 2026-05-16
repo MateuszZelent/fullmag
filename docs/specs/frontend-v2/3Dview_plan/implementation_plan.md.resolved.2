@@ -1,0 +1,192 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 3D Visualization System — Master Implementation Plan
+
+**Phase:** 5 of frontend-v2 implementation plan
+**Status:** Draft v3 — cuboid/tet premise, universe model, picking, LOD, R3F, synced camera
+
+---
+
+## 1. Core Architectural Premises
+
+### Premise 1: Cuboids vs Tetrahedra — Nothing Else Differs
+
+FDM renders **cuboids** (instanced boxes from grid shape + spacing). FEM renders **tetrahedral boundary faces** (triangles from FMMT topology binary). This is the **only** difference. One adapter, two geometry builders, one renderer.
+
+### Premise 2: Universe / Multi-Object Space
+
+A simulation creates a Universe containing one or more objects (e.g., disk, waveguide) and optionally an airbox. The viewport must:
+- Render each object as a distinct entity with per-object color
+- Allow clicking on any face to identify which object/cell it belongs to
+- Show airbox as a separate toggleable layer (some simulations have no airbox)
+- Support visualization scopes: `full` / `magnetic` / `airbox` / `object` / `part` / `selection`
+
+### Premise 3: Interactive Picking & Probing
+
+R3F raycasting → `faceIndex` + `elementMarkers` → object ID + cell index → field value. This enables COMSOL/Paraview-style point probes and object selection directly in the viewport.
+
+### Premise 4: Large Simulation LOD
+
+Giant simulations (millions of cells) need density reduction:
+- Backend `SamplingProfile` (quality / balanced / interactive / memory_saver)
+- Backend `max_glyphs` and `max_points` budgets
+- Client-side stride-based decimation for FDM cuboids
+- Client-side glyph subsampling
+
+### Premise 5: Wireframe = Mesh View
+
+Wireframe is not just a "debug overlay" — it IS the mesh visualization for inspection. This is a first-class display mode, not an afterthought.
+
+---
+
+## 2. Key Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Render framework | React Three Fiber (R3F) | `frameloop="demand"`, automatic disposal, declarative scene graph, native picking |
+| Camera model | Shared across all panes | User requirement: rotate in any pane, all rotate together |
+| Per-pane config | Layer visibility + display mode only | Each pane shows different layers of the same scene |
+| FDM/FEM split | Geometry builder only | Single renderer, two adapters produce `CellGeometryResult` |
+| Picking | R3F `onPointerDown` + element markers | Object/face/cell identification from raycasting |
+| LOD | Backend budgets + client stride/subsampling | Respect `SamplingVisualizationState` from backend |
+
+---
+
+## 3. Detailed Sub-Plans
+
+| # | Document | Contents |
+|---|---|---|
+| 1 | [01-viewport-architecture.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/01-viewport-architecture.md) | Module structure, universe model, render model contract, state ownership, lifecycle, picking, multi-object |
+| 2 | [02-render-pipeline.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/02-render-pipeline.md) | R3F scene graph, cell geometry builders (cuboid/tet), per-object layers, scalar field, vector glyphs (density-aware), LOD strategy, display modes |
+| 3 | [03-multi-viewport-layout.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/03-multi-viewport-layout.md) | ViewportGrid, pane configs (layer-only), synced camera, CSS grid, toolbar per pane, maximise/restore |
+| 4 | [04-domain-adapters.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/04-domain-adapters.md) | SpatialDomainAdapter, FDM/FEM adapters, universe object mapping, face → object resolution, render model builder, resource hooks |
+| 5 | [05-testing-performance.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/05-testing-performance.md) | Unit tests (geometry builders, adapters, render model, sampling, store), integration tests, memory stress, idle audit, large-sim perf, budgets |
+
+---
+
+## 4. API Integration Audit
+
+### What already works
+
+| Component | Status |
+|---|---|
+| `ControlRoomApi` with retry, diagnostics, request-id | ✅ Built |
+| `useResource` hook (revision-gated fetch) | ✅ Built |
+| `useSessionStatus` → `LiveStatusResource` | ✅ Built |
+| `ResourceRevisionMap` with `topology_revision` + `field_revision` | ✅ In OpenAPI |
+| `topologyCodec.decode()` → `DecodedTopology` | ✅ Built + tested |
+| `fieldVectorCodec.decode()` → `DecodedFieldVector` | ✅ Built + tested |
+| `ResourceInvalidationController` (WS bridge) | ✅ Built |
+| `VisualizationStateResource` (layers, sampling, clip, scopes) | ✅ In OpenAPI |
+| `DomainMeta` (bounds, grid, discretization, generation_id) | ✅ In OpenAPI |
+| `SamplingVisualizationState` (max_glyphs, max_points, profile) | ✅ In OpenAPI |
+| `VectorLayerDomain` (auto/magnetic_only/full_domain/airbox_only/object/part) | ✅ In OpenAPI |
+| Per-object topology endpoint | ✅ `/meshing/meshes/objects/{object_id}/topology` |
+| Scene objects endpoint | ✅ `/model/objects` |
+| Universe endpoint | ✅ `/model/universe` |
+
+### What needs to be built
+
+| # | Gap | Type | Effort |
+|---|---|---|---|
+| 1 | `api.data.domain.meta()` facade method | API facade | Small |
+| 2 | `api.data.domain.topology()` binary fetch | API facade | Small |
+| 3 | `api.data.fields.vector(quantityId)` binary fetch | API facade | Small |
+| 4 | `api.visualization.state()` JSON fetch | API facade | Small |
+| 5 | `api.visualization.patch(body)` JSON PATCH | API facade | Small |
+| 6 | `api.model.objects()` JSON fetch | API facade | Small |
+| 7 | `useDomainMeta()` resource hook | Hook | Small |
+| 8 | `useMeshTopology()` resource hook | Hook | Small |
+| 9 | `useFieldData(quantityId)` resource hook | Hook | Small |
+| 10 | `useVisualizationState()` resource hook | Hook | Small |
+| 11 | `useSceneObjects()` resource hook | Hook | Small |
+| 12 | `three`, `@react-three/fiber`, `@react-three/drei` deps | Install | Trivial |
+| 13 | `SpatialDomainAdapter` + FDM + FEM adapters | Domain | Medium |
+| 14 | `buildCuboidGeometry()` + `buildTetBoundaryGeometry()` | Geometry | Medium |
+| 15 | `buildViewport3DRenderModel()` | Model | Medium |
+| 16 | Viewport module (manifest, store, components, layers) | Module | Large |
+| 17 | ViewportGrid + SyncedOrbitControls | Multi-pane | Medium |
+
+---
+
+## 5. Delivery Phases
+
+### Phase 5a — Dependencies + API Facade (1–2 days)
+- `pnpm add three @react-three/fiber @react-three/drei`
+- Add API facade methods (gaps 1–6)
+- Add resource hooks (gaps 7–11)
+- Tests for all facade methods and hooks
+- **Gate:** typecheck + lint + test pass
+
+### Phase 5b — Domain Adapters + Geometry Builders (2–3 days)
+- `SpatialDomainAdapter` interface
+- `FdmDomainAdapter` with `buildCuboidGeometry()`
+- `FemDomainAdapter` with `buildTetBoundaryGeometry()`
+- `createDomainAdapter()` factory
+- `buildViewport3DRenderModel()` pure function
+- Face → object mapping
+- Unit tests for all adapters and geometry builders
+- **Gate:** typecheck + lint + test pass
+
+### Phase 5c — Single-Pane Viewport (2–3 days)
+- Module manifest + `Viewport3DModule.tsx`
+- Viewport store (camera, layout, pane config)
+- `<ViewportPane>` with single `<Canvas frameloop="demand">`
+- `<ObjectMeshLayer>` — renders cuboids or tets from render model
+- `<SyncedOrbitControls>` (single pane → just orbit controls)
+- Basic shaded rendering
+- Verify: zero idle frames, data loads, camera works
+- **Gate:** typecheck + lint + test pass
+
+### Phase 5d — Field Visualization + LOD (2–3 days)
+- `<ScalarFieldLayer>` — vertex/instance color mapping
+- `<VectorGlyphLayer>` — instanced arrows, density-aware subsampling
+- `<WireframeLayer>` — edge overlay
+- `<AirboxLayer>` — separate layer, visibility toggle
+- `<AxesGridLayer>`, `<BoundsBoxLayer>`
+- Quantity switching without topology rebuild
+- `glyphSampling.ts` — stride-based subsampling
+- `lodStrategy.ts` — LOD thresholds
+- **Gate:** typecheck + lint + test pass, quantity switch test
+
+### Phase 5e — Multi-Viewport Grid (2–3 days)
+- `<ViewportGrid>` with CSS grid layouts
+- Multiple `<ViewportPane>` with per-pane layer config
+- Camera sync via shared store + `SyncedOrbitControls`
+- Per-pane toolbar (display mode, layer toggles)
+- Layout presets (single, split-h, split-v, quad, one-plus-two)
+- Maximise / restore
+- Keyboard shortcuts
+- **Gate:** typecheck + lint + test pass
+
+### Phase 5f — Picking, Probing, Selection (2 days)
+- `<SelectionHighlightLayer>` — outline/tint
+- `useProbeValue()` — raycasting → object ID + cell + field value
+- `<ProbeTooltip>` — hover/click value readout
+- Face → object resolution via element markers
+- `viewport:object-picked` event → kernel selection
+- **Gate:** typecheck + lint + test pass
+
+### Phase 5g — Polish + Verification (2 days)
+- `<ClipPlaneLayer>`
+- Memory stress test (3D↔2D switches, quantity cycles, layout changes)
+- Idle performance audit (zero frames)
+- Context loss recovery verification
+- Large simulation test (1M cells)
+- Diagnostics surface
+- **Gate:** all gates pass, visual review
+
+**Total estimated: 13–18 days**
+
+---
+
+## 6. Open Questions
+
+> [!IMPORTANT]
+> **Per-pane quantity override:**
+> Currently all panes show the same quantity (from `VisualizationStateResource`). Do you want per-pane quantity selection? E.g., pane 1 shows magnetization `m`, pane 2 shows effective field `h_eff`. This doubles field data in memory but is powerful for comparison.
+
+> [!IMPORTANT]
+> **Gizmo / transform tool timing:**
+> ADR-0007 defines camera vs manipulate modes. Should geometry transform gizmos (move/rotate/scale) be part of Phase 5 viewport or deferred to Phase 4 geometry-authoring module?

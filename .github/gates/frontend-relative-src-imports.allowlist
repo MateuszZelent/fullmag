@@ -1,5 +1,5 @@
 # Signature format:
 #   <path>:<matched_fragment>
 #
-# Relative imports into apps/web/src are not allowed.
+# Relative imports into apps/control-room/src are not allowed.
 # Use the configured @/ alias or a narrower public barrel.

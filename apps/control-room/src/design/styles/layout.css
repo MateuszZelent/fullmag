@@ -1,0 +1,106 @@
+.fm-workspace-shell {
+  display: grid;
+  position: relative;
+  grid-template-rows: var(--fm-menu-height) var(--fm-ribbon-height) 1fr var(--fm-status-height);
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--fm-bg-app);
+  color: var(--fm-text-primary);
+  isolation: isolate;
+}
+
+.fm-workspace-overlay-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.fm-workspace-overlay-host > .fm-slot {
+  width: 100%;
+  height: 100%;
+}
+
+.fm-workspace-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fm-workspace-body > [data-panel-group],
+.fm-resizable-group {
+  height: 100%;
+  min-height: 0;
+}
+
+.fm-resizable-panel {
+  min-height: 0;
+  min-width: 0;
+}
+
+.fm-dock-column {
+  display: grid;
+  grid-template-rows: var(--fm-panel-header-height) minmax(0, 1fr);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--fm-bg-panel);
+  transition:
+    opacity var(--fm-transition-fast),
+    transform var(--fm-transition-fast);
+}
+
+.fm-dock-column[data-dragging="true"] {
+  opacity: 0.76;
+  z-index: 3;
+}
+
+.fm-dock-column__handle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--fm-border-subtle);
+  border-bottom: 0;
+  background: var(--fm-bg-chrome);
+  color: var(--fm-text-secondary);
+  cursor: grab;
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding-inline: var(--fm-space-3);
+  text-transform: uppercase;
+  touch-action: none;
+  user-select: none;
+}
+
+.fm-dock-column > .fm-slot {
+  min-height: 0;
+}
+
+.fm-dock-column__handle:active {
+  cursor: grabbing;
+}
+
+.fm-resize-handle {
+  background: var(--fm-border-subtle);
+  transition:
+    background-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast);
+}
+
+.fm-resize-handle:hover,
+.fm-resize-handle[data-resize-handle-active] {
+  background: var(--fm-accent);
+  box-shadow: 0 0 0 1px var(--fm-accent-soft);
+}
+
+.fm-resize-handle--vertical {
+  width: 5px;
+  cursor: col-resize;
+}
+
+.fm-resize-handle--horizontal {
+  height: 5px;
+  cursor: row-resize;
+}

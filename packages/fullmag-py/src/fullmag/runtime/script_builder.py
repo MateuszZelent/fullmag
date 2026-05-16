@@ -2481,7 +2481,15 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "minimum_element_size": _text_number(_number_or_none(mesh_entry.get("hmin"))),
             "calibrate_for": str(mesh_entry.get("calibrate_for")) if isinstance(mesh_entry.get("calibrate_for"), str) else None,
             "size_preset": str(mesh_entry.get("size_preset")) if isinstance(mesh_entry.get("size_preset"), str) else None,
+            "mesh_strategy": str(mesh_entry["mesh_strategy"]) if isinstance(mesh_entry.get("mesh_strategy"), str) else None,
             "order": int(mesh_entry["order"]) if isinstance(mesh_entry.get("order"), (int, float)) else None,
+            "through_thickness_elements": int(mesh_entry["through_thickness_elements"]) if isinstance(mesh_entry.get("through_thickness_elements"), (int, float)) else None,
+            "through_thickness_distribution": str(mesh_entry["through_thickness_distribution"]) if isinstance(mesh_entry.get("through_thickness_distribution"), str) else None,
+            "through_thickness_element_ratio": _number_or_none(
+                mesh_entry.get("through_thickness_element_ratio")
+            ),
+            "through_thickness_symmetric": bool(mesh_entry["through_thickness_symmetric"]) if isinstance(mesh_entry.get("through_thickness_symmetric"), bool) else None,
+            "sweep_face_meshing": str(mesh_entry["sweep_face_meshing"]) if isinstance(mesh_entry.get("sweep_face_meshing"), str) else None,
             "source": str(mesh_entry["source"]) if isinstance(mesh_entry.get("source"), str) else None,
             "algorithm_2d": int(mesh_entry["algorithm_2d"]) if isinstance(mesh_entry.get("algorithm_2d"), (int, float)) else None,
             "algorithm_3d": int(mesh_entry["algorithm_3d"]) if isinstance(mesh_entry.get("algorithm_3d"), (int, float)) else None,
@@ -2561,7 +2569,13 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "minimum_element_size": "",
             "calibrate_for": None,
             "size_preset": None,
+            "mesh_strategy": None,
             "order": None,
+            "through_thickness_elements": None,
+            "through_thickness_distribution": None,
+            "through_thickness_element_ratio": None,
+            "through_thickness_symmetric": None,
+            "sweep_face_meshing": None,
             "source": None,
             "algorithm_2d": None,
             "algorithm_3d": None,
@@ -3545,11 +3559,6 @@ def _validate_energy_terms(problem: Problem) -> None:
             continue
         if isinstance(term, Demag):
             demag_count += 1
-            if term.realization == "transfer_grid":
-                raise ValueError(
-                    "FEM transfer_grid został usunięty. "
-                    "Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet."
-                )
             if term.realization not in {
                 None,
                 "auto",

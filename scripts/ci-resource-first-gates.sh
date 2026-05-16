@@ -22,6 +22,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FRONTEND_DIR="$REPO_ROOT/apps/control-room"
 ALLOWLIST_DIR="$REPO_ROOT/.github/gates"
 
 tmp_dir="$(mktemp -d)"
@@ -110,7 +111,7 @@ run_gate() {
 run_repo_hygiene_gate() {
   local findings="$tmp_dir/repo-hygiene.current"
 
-  find "$REPO_ROOT/apps/web" \
+  find "$FRONTEND_DIR" \
     \( -path '*/node_modules/*' -o -path '*/.next/*' -o -path '*/out/*' \) -prune \
     -o -type f \
     \( -name '*.rej' -o -name '*.orig' -o -name '*.bak' -o -name 'output.txt' \) \
@@ -139,37 +140,32 @@ run_gate \
   "Frontend Legacy Transport Gate" \
   'useCurrentLiveStream|fetchBootstrap|fetchPoll|currentLiveApiClient|/v1/live/current/bootstrap|/v1/live/current/poll|/v1/live/current/preview/' \
   "$ALLOWLIST_DIR/frontend-legacy-transport.allowlist" \
-  "$REPO_ROOT/apps/web"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 run_gate \
   "frontend-snapshot-state" \
   "Frontend Snapshot-State Gate" \
   'session\.current\(|/v1/live/current/state|useCurrentLiveSnapshot|lib/useSessionStream' \
   "$ALLOWLIST_DIR/frontend-snapshot-state.allowlist" \
-  "$REPO_ROOT/apps/web"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 run_gate \
   "frontend-direct-api-client" \
   "Frontend Removed LiveApiClient Name Gate" \
   'getLiveApiClient|initLiveApiClient|LiveApiClient|@/src/api/client/LiveApiClient|(?:\.\./)+src/api/client/LiveApiClient' \
   "$ALLOWLIST_DIR/frontend-direct-api-client.allowlist" \
-  "$REPO_ROOT/apps/web/components" \
-  "$REPO_ROOT/apps/web/app" \
-  "$REPO_ROOT/apps/web/features" \
-  "$REPO_ROOT/apps/web/src/features" \
-  "$REPO_ROOT/apps/web/hooks" \
-  "$REPO_ROOT/apps/web/lib"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 run_gate \
   "frontend-relative-src-imports" \
   "Frontend Relative src/ Import Gate" \
   'from[[:space:]]+["'\''](?:\.\./)+src/[^"'\'']+["'\'']' \
   "$ALLOWLIST_DIR/frontend-relative-src-imports.allowlist" \
-  "$REPO_ROOT/apps/web/components" \
-  "$REPO_ROOT/apps/web/app" \
-  "$REPO_ROOT/apps/web/features" \
-  "$REPO_ROOT/apps/web/hooks" \
-  "$REPO_ROOT/apps/web/lib"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 run_gate \
   "backend-main-public-legacy-routes" \
@@ -190,27 +186,25 @@ run_gate \
   "Frontend Public V1 Path Gate" \
   '/v1/live/current|/v1/health|/v1/capabilities' \
   "$ALLOWLIST_DIR/frontend-public-v1-paths.allowlist" \
-  "$REPO_ROOT/apps/web/app" \
-  "$REPO_ROOT/apps/web/components" \
-  "$REPO_ROOT/apps/web/features" \
-  "$REPO_ROOT/apps/web/lib" \
-  "$REPO_ROOT/apps/web/src"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 run_gate \
   "frontend-direct-fetch" \
   "Frontend Direct Fetch Gate" \
   'fetch\s*\(' \
   "$ALLOWLIST_DIR/frontend-direct-fetch.allowlist" \
-  "$REPO_ROOT/apps/web"
+  "$FRONTEND_DIR/app" \
+  "$FRONTEND_DIR/src"
 
 echo
 echo "=== Generated OpenAPI V2 Transport Gate ==="
-if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-types.ts" ]]; then
+if [[ ! -f "$FRONTEND_DIR/src/kernel/api/generated/openapi-v2-types.ts" ]]; then
   echo "Missing generated OpenAPI v2 types."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
   fi
-elif rg -n --color never 'export \* from "\.\./types"' "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-types.ts"; then
+elif rg -n --color never 'export \* from "\.\./types"' "$FRONTEND_DIR/src/kernel/api/generated/openapi-v2-types.ts"; then
   echo "Generated OpenAPI v2 types still re-export manual api/types.ts."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
@@ -219,7 +213,7 @@ else
   echo "openapi-v2-types.ts is generated directly from OpenAPI v2."
 fi
 
-if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-client.ts" ]]; then
+if [[ ! -f "$FRONTEND_DIR/src/kernel/api/generated/openapi-v2-client.ts" ]]; then
   echo "Missing generated OpenAPI v2 transport wrapper."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
@@ -228,7 +222,7 @@ else
   echo "openapi-v2-client.ts transport wrapper is present."
 fi
 
-if [[ ! -f "$REPO_ROOT/apps/web/src/api/generated/openapi-v2-paths.ts" ]]; then
+if [[ ! -f "$FRONTEND_DIR/src/kernel/api/generated/openapi-v2-paths.ts" ]]; then
   echo "Missing generated OpenAPI v2 path literals."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
@@ -237,7 +231,7 @@ else
   echo "openapi-v2-paths.ts path literal wrapper is present."
 fi
 
-if [[ -f "$REPO_ROOT/apps/web/src/api/generated/openapi.json" || -f "$REPO_ROOT/apps/web/src/api/generated/openapi-types.ts" ]]; then
+if [[ -f "$FRONTEND_DIR/src/kernel/api/generated/openapi.json" || -f "$FRONTEND_DIR/src/kernel/api/generated/openapi-types.ts" ]]; then
   echo "Legacy generated OpenAPI v1 files are present."
   if [[ "$MODE" == "strict" ]]; then
     GATE_FAILED=1
@@ -246,7 +240,7 @@ else
   echo "Legacy generated OpenAPI v1 files are absent."
 fi
 
-if node -e 'const spec=require(process.argv[1]); const bad=Object.keys(spec.paths||{}).filter((p)=>p.startsWith("/v1")); if (bad.length) { console.error(bad.join("\n")); process.exit(1); }' "$REPO_ROOT/apps/web/src/api/generated/openapi-v2.json"; then
+if node -e 'const spec=require(process.argv[1]); const bad=Object.keys(spec.paths||{}).filter((p)=>p.startsWith("/v1")); if (bad.length) { console.error(bad.join("\n")); process.exit(1); }' "$FRONTEND_DIR/src/kernel/api/generated/openapi-v2.json"; then
   echo "Generated OpenAPI v2 has no /v1 paths."
 else
   echo "Generated OpenAPI v2 contains /v1 paths."

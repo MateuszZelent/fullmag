@@ -26,12 +26,12 @@
   - składany jest pierwszy assembled exchange path `DiffusionIntegrator + MassIntegrator`
   - przy buildzie z MFEM `create(...)` próbuje policzyć początkowe `H_ex` i `H_eff`
   - obecne ograniczenie: tylko siatka jednorodnie magnetyczna; multi-region / selective magnetic mask w native MFEM nie są jeszcze podpięte
-- `S4.4 exchange-only native step` jest już rozpisany w kodzie:
+- `S4.4 native step` jest już rozpisany w kodzie:
   - przy buildzie z MFEM `fullmag_fem_backend_step(...)` wykonuje Heun dla `exchange`, `Demag` i `H_ext`
-  - `Demag` jest na dziś bootstrapowo realizowane przez **transfer-grid FDM demag backend**
-    (`FEM mesh -> voxelized transfer grid -> FDM demag -> sampled H_demag at FEM nodes`)
+  - `Demag` jest realizowane przez **mesh-native Poisson-airbox FEM demag**
+    (`FEM shared-domain mesh with air -> scalar potential solve -> sampled H_demag at FEM nodes`)
   - liczone są: `H_ex`, `H_demag`, `H_eff`, `E_ex`, `E_demag`, `E_ext`, `E_total`, `max|H_eff|`, `max|H_demag|`, `max|dm/dt|`
-  - nadal brak: mesh-native demag operator, libCEED partial assembly, hypre, multi-region magnetic mask
+  - nadal brak: pełne libCEED partial assembly, GPU parity gate i kompletne walidacje multi-region
 - `S4.5 guarded parity harness` jest już dopięty:
   - `crates/fullmag-runner/src/native_fem.rs` ma test porównujący `native FEM exchange-only` z `CPU reference FEM`
   - test uruchamia się tylko wtedy, gdy natywny backend został zbudowany z MFEM; na hostach bez MFEM kończy się uczciwym `skip`

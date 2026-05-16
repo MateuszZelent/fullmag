@@ -1,0 +1,461 @@
+"use client";
+
+import {
+  Activity,
+  Box,
+  Braces,
+  ChevronRight,
+  Circle,
+  Database,
+  File,
+  Folder,
+  Gauge,
+  Layers,
+  Magnet,
+  Play,
+  Settings,
+  Shield,
+  Sparkles,
+  Triangle,
+  Waves,
+} from "lucide-react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import type {
+  CommandActiveResource,
+  CommandContribution,
+} from "@/kernel/commands/commandTypes";
+import {
+  useCommandDetailResource,
+  useStudyRuntimeCommandResourceData,
+} from "@/kernel/resources/studyRuntimeResources";
+import type { KernelApi, ModuleId } from "@/kernel/types";
+import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/shared/ui/ContextMenu";
+
+import { selectExplorerNode } from "./explorerSelection";
+import {
+  setExplorerKeyboardRow,
+  toggleExplorerNode,
+} from "./explorerStore";
+import type {
+  ExplorerIconToken,
+  ExplorerNode,
+  ExplorerNodeStatus,
+  ExplorerTabId,
+} from "./explorerTypes";
+
+const ICONS: Record<ExplorerIconToken, ReactNode> = {
+  activity: <Activity size={14} />,
+  box: <Box size={14} />,
+  braces: <Braces size={14} />,
+  circle: <Circle size={14} />,
+  database: <Database size={14} />,
+  file: <File size={14} />,
+  folder: <Folder size={14} />,
+  gauge: <Gauge size={14} />,
+  layers: <Layers size={14} />,
+  magnet: <Magnet size={14} />,
+  mesh: <Triangle size={14} />,
+  play: <Play size={14} />,
+  settings: <Settings size={14} />,
+  shield: <Shield size={14} />,
+  sparkles: <Sparkles size={14} />,
+  triangle: <Triangle size={14} />,
+  wave: <Waves size={14} />,
+};
+
+const EXPLORER_ROW_HEIGHT = 28;
+const EXPLORER_ROW_OVERSCAN = 8;
+const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
+
+function statusLabel(status: ExplorerNodeStatus | undefined): string {
+  if (!status) return "ready";
+  return status;
+}
+
+function contextCommandsForNode(
+  kernel: KernelApi,
+  node: ExplorerNode,
+): CommandContribution[] {
+  const commands: CommandContribution[] = [];
+
+  for (const commandId of node.contextCommands ?? []) {
+    const command = kernel.commands.get(commandId);
+    if (command) {
+      commands.push(command);
+    }
+  }
+
+  return commands;
+}
+
+export interface ExplorerContextCommandItem {
+  active: boolean;
+  activeResource: CommandActiveResource | null;
+  command: CommandContribution;
+  disabled: boolean;
+  disabledReason: string | null;
+}
+
+export function contextCommandItemsForNode({
+  kernel,
+  node,
+  resourceData,
+}: {
+  kernel: KernelApi;
+  node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
+}): ExplorerContextCommandItem[] {
+  const context = createCommandContext("menu", kernel, { resourceData });
+  return contextCommandsForNode(kernel, node).map((command) => ({
+    active: kernel.commands.isActive(command.id, context),
+    activeResource:
+      kernel.commands.isActive(command.id, context)
+        ? command.activeResource?.(context) ?? null
+        : null,
+    command,
+    disabled: !kernel.commands.isEnabled(command.id, context),
+    disabledReason: kernel.commands.get(command.id)?.disabledReason?.(context) ?? null,
+  }));
+}
+
+interface ExplorerTreeRowModel {
+  depth: number;
+  expanded: boolean;
+  hasChildren: boolean;
+  node: ExplorerNode;
+}
+
+interface ExplorerVisibleRowSlice {
+  bottomPadding: number;
+  rows: ExplorerTreeRowModel[];
+  start: number;
+  topPadding: number;
+}
+
+export function sliceVisibleExplorerRows({
+  overscan,
+  rowHeight,
+  rows,
+  scrollTop,
+  viewportHeight,
+}: {
+  overscan: number;
+  rowHeight: number;
+  rows: readonly ExplorerTreeRowModel[];
+  scrollTop: number;
+  viewportHeight: number;
+}): ExplorerVisibleRowSlice {
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const end = Math.min(rows.length, start + visibleCount);
+
+  return {
+    bottomPadding: Math.max(0, (rows.length - end) * rowHeight),
+    rows: rows.slice(start, end),
+    start,
+    topPadding: start * rowHeight,
+  };
+}
+
+export function flattenVisibleExplorerRows(
+  nodes: readonly ExplorerNode[],
+  expandedIds: ReadonlySet<string>,
+  depth = 0,
+): ExplorerTreeRowModel[] {
+  const rows: ExplorerTreeRowModel[] = [];
+
+  for (const node of nodes) {
+    const hasChildren = Boolean(node.children?.length);
+    const expanded = hasChildren && expandedIds.has(node.id);
+    rows.push({ depth, expanded, hasChildren, node });
+    if (expanded && node.children) {
+      rows.push(
+        ...flattenVisibleExplorerRows(node.children, expandedIds, depth + 1),
+      );
+    }
+  }
+
+  return rows;
+}
+
+const ExplorerTreeRow = memo(function ExplorerTreeRow({
+  active,
+  depth,
+  expanded,
+  hasChildren,
+  kernel,
+  moduleId,
+  node,
+  resourceData,
+  tabId,
+}: {
+  active: boolean;
+  depth: number;
+  expanded: boolean;
+  hasChildren: boolean;
+  kernel: KernelApi;
+  moduleId: ModuleId;
+  node: ExplorerNode;
+  resourceData: Readonly<Record<string, unknown>>;
+  tabId: ExplorerTabId;
+}) {
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const commandDetail = useCommandDetailResource(selectedCommandId);
+  const commandItems = contextCommandItemsForNode({
+    kernel,
+    node,
+    resourceData,
+  });
+
+  function handleSelect(): void {
+    selectExplorerNode(kernel, node, moduleId);
+    setExplorerKeyboardRow(node.id);
+  }
+
+  function handleToggle(): void {
+    if (hasChildren) {
+      toggleExplorerNode(tabId, node.id);
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleSelect();
+      return;
+    }
+    if (event.key === "ArrowRight" && hasChildren && !expanded) {
+      event.preventDefault();
+      toggleExplorerNode(tabId, node.id);
+      return;
+    }
+    if (event.key === "ArrowLeft" && hasChildren && expanded) {
+      event.preventDefault();
+      toggleExplorerNode(tabId, node.id);
+    }
+  }
+
+  const row = (
+    <div
+      className="fm-explorer-tree-row"
+      data-active={active}
+      data-node-id={node.id}
+      data-status={statusLabel(node.status)}
+      role="treeitem"
+      tabIndex={0}
+      aria-expanded={hasChildren ? expanded : undefined}
+      aria-selected={active}
+      onClick={handleSelect}
+      onDoubleClick={handleToggle}
+      onKeyDown={handleKeyDown}
+      style={{ "--fm-tree-depth": depth } as CSSProperties}
+    >
+      <span className="fm-explorer-tree-row__branch" aria-hidden="true">
+        {hasChildren ? (
+          <ChevronRight
+            size={13}
+            data-expanded={expanded}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleToggle();
+            }}
+          />
+        ) : null}
+      </span>
+      <span className="fm-explorer-tree-row__icon" aria-hidden="true">
+        {node.icon ? ICONS[node.icon] : ICONS.file}
+      </span>
+      <span className="fm-explorer-tree-row__label">{node.label}</span>
+      {node.status && node.status !== "ready" ? (
+        <span className="fm-explorer-tree-row__status">{node.status}</span>
+      ) : null}
+      {node.badge ? (
+        <span className="fm-explorer-tree-row__badge">{node.badge}</span>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel>{node.label}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={handleSelect}>Select</ContextMenuItem>
+        {commandItems.map(({ active, command, disabled, disabledReason }) => (
+          <ContextMenuItem
+            key={command.id}
+            data-active={active}
+            disabled={disabled}
+            title={disabledReason ?? (active ? "Command active" : undefined)}
+            onSelect={() => {
+              void kernel.commands.execute(
+                command.id,
+                createCommandContext("menu", kernel, { resourceData }),
+              );
+            }}
+          >
+            <span>{command.title}</span>
+            {active ? (
+              <span className="fm-context-menu-item__meta">active</span>
+            ) : null}
+          </ContextMenuItem>
+        ))}
+        {commandItems.some((item) => item.activeResource?.kind === "command") ? (
+          <>
+            <ContextMenuSeparator />
+            {commandItems
+              .filter((item) => item.activeResource?.kind === "command")
+              .map((item) => (
+                <ContextMenuItem
+                  key={`${item.command.id}:detail`}
+                  onSelect={() => {
+                    const commandId = item.activeResource?.commandId;
+                    if (commandId) setSelectedCommandId(commandId);
+                  }}
+                >
+                  <span>{item.command.title} detail</span>
+                </ContextMenuItem>
+              ))}
+          </>
+        ) : null}
+      </ContextMenuContent>
+      <CommandDetailDialog
+        commandId={selectedCommandId}
+        detail={commandDetail}
+        onOpenChange={(open) => {
+          if (!open) setSelectedCommandId(null);
+        }}
+      />
+    </ContextMenu>
+  );
+});
+
+interface ExplorerTreeViewProps {
+  activeNodeId: string | null;
+  expandedIds: ReadonlySet<string>;
+  kernel: KernelApi;
+  moduleId: ModuleId;
+  nodes: readonly ExplorerNode[];
+  tabId: ExplorerTabId;
+}
+
+export function ExplorerTreeView({
+  activeNodeId,
+  expandedIds,
+  kernel,
+  moduleId,
+  nodes,
+  tabId,
+}: ExplorerTreeViewProps) {
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const [viewport, setViewport] = useState({ height: 420, scrollTop: 0 });
+  const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const rows = useMemo(
+    () => flattenVisibleExplorerRows(nodes, expandedIds),
+    [expandedIds, nodes],
+  );
+  const virtualized = rows.length > EXPLORER_VIRTUALIZATION_THRESHOLD;
+  const visibleRows = useMemo(
+    () =>
+      virtualized
+        ? sliceVisibleExplorerRows({
+            overscan: EXPLORER_ROW_OVERSCAN,
+            rowHeight: EXPLORER_ROW_HEIGHT,
+            rows,
+            scrollTop: viewport.scrollTop,
+            viewportHeight: viewport.height,
+          })
+        : {
+            bottomPadding: 0,
+            rows,
+            start: 0,
+            topPadding: 0,
+          },
+    [rows, viewport.height, viewport.scrollTop, virtualized],
+  );
+
+  useEffect(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+
+    const updateHeight = () => {
+      setViewport((current) => ({
+        ...current,
+        height: tree.clientHeight || current.height,
+      }));
+    };
+    updateHeight();
+
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(tree);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+    setViewport((current) =>
+      current.scrollTop === tree.scrollTop
+        ? current
+        : { ...current, scrollTop: tree.scrollTop },
+    );
+  }, []);
+
+  return (
+    <div
+      ref={treeRef}
+      className="fm-explorer-tree"
+      role="tree"
+      aria-label="Explorer tree"
+      onScroll={handleScroll}
+    >
+      {visibleRows.topPadding > 0 ? (
+        <div
+          aria-hidden="true"
+          style={{ height: visibleRows.topPadding }}
+        />
+      ) : null}
+      {visibleRows.rows.map(({ depth, expanded, hasChildren, node }) => (
+        <ExplorerTreeRow
+          key={node.id}
+          active={activeNodeId === node.id}
+          depth={depth}
+          expanded={expanded}
+          hasChildren={hasChildren}
+          kernel={kernel}
+          moduleId={moduleId}
+          node={node}
+          resourceData={runtimeResourceData}
+          tabId={tabId}
+        />
+      ))}
+      {visibleRows.bottomPadding > 0 ? (
+        <div
+          aria-hidden="true"
+          style={{ height: visibleRows.bottomPadding }}
+        />
+      ) : null}
+    </div>
+  );
+}

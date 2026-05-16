@@ -14,17 +14,19 @@ Fullmag should look like a serious scientific instrument: exact, calm, fast, and
 - **Operational density:** Users compare stages, quantities, meshes, logs, charts, and diagnostics repeatedly. Prioritize scanning and repeated action.
 - **Physical clarity:** Labels, units, coordinate frames, quantity names, revisions, and backend state must be visible where decisions are made.
 - **Quiet confidence:** Neutral surfaces, measured contrast, consistent icon stroke, small radius, and deliberate accent colors.
+- **Catppuccin discipline:** Dark mode uses Catppuccin Mocha and light mode uses Catppuccin Latte through `--fm-*` tokens. Do not add one-off colors in components.
 - **Stable geometry:** Toolbars, viewport controls, tiles, split panes, and tables need fixed or bounded dimensions so state changes do not shift the interface.
 - **Honest status:** Loading, stale, degraded, unsupported, failed, and resolved states must be visually distinct.
 
 ## Fullmag-Specific Patterns
 
-- Use a single ribbon for command groups. Prefer icon+label buttons for primary scientific actions and icon-only buttons with tooltips for tools.
+- Use a single ribbon for command groups. Ribbon buttons, tabs, dropdowns, context menus, command palette, dialogs, switches, segmented controls, and tooltips should come from shadcn/ui-style shared primitives.
 - Use docked panels for logs, jobs, problems, live state, charts, artifacts, and inspectors.
 - Use segmented controls for quantity/view modes, toggles for overlays, sliders/inputs for numeric thresholds, menus for backend/capability options, and tabs for resource families.
 - Keep viewport overlays modular and minimal. They should not cover critical geometry or field data.
 - Show units with values and use tabular figures for aligned numeric columns.
 - Use semantic status color consistently: selected, running, succeeded, warning, failed, degraded, stale.
+- Use `fm-*` classes for Fullmag geometry/state and `--fm-*` tokens for color. Raw Catppuccin hex values belong only in central theme/token CSS.
 
 ## Banned Defaults
 
@@ -56,4 +58,5 @@ Fullmag should look like a serious scientific instrument: exact, calm, fast, and
 - The UI reads as a Fullmag control room, not a generic SaaS dashboard.
 - Physical state, resource state, and execution state are distinguishable.
 - The unified viewport and one ribbon direction remain intact.
+- The UI remains Catppuccin Mocha/Latte and shadcn-based, not an ad-hoc component system.
 - The design improved clarity without adding architectural drift.

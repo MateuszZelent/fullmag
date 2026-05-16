@@ -10,6 +10,8 @@
 
 Field and energy observables are physical consequences of active interaction terms. A control-room command such as `compute_fields` must not try to materialize every catalog quantity just because the backend knows the name. If anisotropy, DMI, Zeeman, thermal, Oersted, or magnetoelastic terms are absent from the current plan, their separate fields and energies are unavailable for that problem.
 
+`compute_fields` is a static field-evaluation command for the current magnetization configuration. It computes materialized display fields for the current state only; it must not advance LLG time, run relaxation/minimization, or replace the magnetization with a solver step result.
+
 ## 2. Physical model
 
 ### 2.1 Governing equations
@@ -21,6 +23,8 @@ H_eff = H_ex + H_demag + H_ext + H_ani + H_dmi + H_mel + H_Oe + H_therm + ...
 ```
 
 Each addend exists only when its corresponding term is present in the canonical problem and executable in the resolved backend. A disabled term contributes neither a separate observable field nor an energy component.
+
+`H_eff` is evaluated from the active contribution set and is always requested for display. `H_demag` is materialized when demagnetizing field computation is enabled and supported by the resolved backend; if demag is disabled, no standalone demag field is advertised or computed.
 
 ### 2.2 Symbols and SI units
 
@@ -76,6 +80,8 @@ Compare FDM and FEM filtering against equivalent active terms. Backend-specific 
 
 Add unit tests that filter cached preview quantities by active FDM/FEM terms and tests that mark disabled scalar energy components unavailable.
 
+For `compute_fields`, regression coverage must assert that command submission goes through the resource-first simulation command endpoint, that active-term filtering controls the materialized field list, and that the evaluation path refreshes field snapshots without invoking a time-integration step.
+
 ## 6. Completeness checklist
 
 - [x] Python API
@@ -88,6 +94,7 @@ Add unit tests that filter cached preview quantities by active FDM/FEM terms and
 - [x] Outputs / observables
 - [x] Tests / benchmarks
 - [x] Documentation
+- [x] Control-room `compute_fields` command semantics
 
 ## 7. Known limits and deferred work
 

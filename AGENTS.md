@@ -17,6 +17,8 @@ ln -s AGENTS.md GEMINI.md
 
 Are you 100% confident in this strategy? If not, find all possible loopholes, suggest proper fixes and run this loop until you are factually 100% confident in the new startegy.
 
+Don’t fight errors! Whenever you encounter the same error twice, research the web and find 3-5 possible ways to fix it. Then choose the most efficient solution and implement it.
+
 These rules override everything else in this file when in conflict:
 
 1. **No flattery, no filler.** Skip openers like "Great question", "You're absolutely right", "Excellent idea", "I'd be happy to". Start with the answer or the action.
@@ -191,7 +193,19 @@ Prefer single-file or single-test runs during iteration. Full suites are for the
 
 When the user corrects your approach, append a one-line rule here before ending the session. Write it concretely ("Always use X for Y"), never abstractly ("be careful with Y"). If an existing line already covers the correction, tighten it instead of adding a new one. Remove lines when the underlying issue goes away (model upgrades, refactors, process changes).
 
-- (empty)
+- Always use `fm-` prefix for all CSS class names in `apps/control-room`, including shell-level layout classes. No unprefixed classes.
+- The CSS design system is token-first: `--fm-*` custom properties are the source of truth. Tailwind provides the utility layer. shadcn/ui provides accessible pre-built components. All three coexist — tokens define the visual language, Tailwind provides utilities, shadcn provides components.
+- Keep `apps/control-room` on Next.js 16 unless the user explicitly approves a version change.
+- Keep `apps/control-room/app/globals.css` import-only; put real CSS in `src/design/styles/*`.
+- Color palette is Catppuccin: Mocha for dark theme, Latte for light theme. Raw Catppuccin hex values belong only in central token/theme files; components consume `--fm-*` tokens.
+- Build menus, ribbons, tabs, dropdowns, dialogs, command palette, context menus, tooltips, switches, and segmented controls from shadcn/ui-style shared primitives. Bespoke widgets need a documented exception.
+- Client components in `apps/control-room` that read external stores, browser state, local storage, runtime resources, or cached API data must make their first client render match SSR; use `useSyncExternalStore` server snapshots or another explicit hydration gate instead of rendering live client-only values immediately.
+- Every `apps/control-room` R3F/WebGL viewport change must run a browser smoke or Playwright check that asserts the canvas is visible, the WebGL context is not lost, and the drawing buffer is non-zero after load; passing TypeScript/tests alone is not enough for viewport work.
+- Treat `THREE.WebGLRenderer: Context Lost` during `apps/control-room` startup as a failing viewport lifecycle signal until proven to be teardown-only; verify with `gl.isContextLost()` and drawing-buffer dimensions before calling it harmless.
+- Keep `apps/control-room` development StrictMode disabled while the installed R3F/Three stack force-loses WebGL during React development remounts; do not re-enable `reactStrictMode` without a real browser smoke showing stable 3D canvas after load.
+- Airbox wireframe is not the same contract as magnetic mesh wireframe: full airbox extent must always include an interior bounds/volume overlay with hidden-edge semantics even when mesh edge geometry exists; surface extent may render only boundary surface edges; airbox surface opacity must not attenuate airbox wireframe opacity.
+- FEM time-integration performance gates must cover every supported explicit RK integrator, not only Heun.
+- When FEM CPU and FEM GPU work are split between agents, keep this agent's changes to the FEM CPU path only and do not create GPU hot-loop or GPU-state artifacts.
 
 ---
 
@@ -475,6 +489,9 @@ The control room must use:
 - one domain-adapter layer,
 - one unified UI tree,
 - one workspace shell whose active module changes the interface context.
+- one Catppuccin token system: Mocha for dark mode, Latte for light mode.
+- one shadcn/ui-based primitive layer for interactive chrome such as menu, ribbon, tabs,
+  command palette, dialogs, dropdowns, context menus, switches, and tooltips.
 
 The control room must not:
 
@@ -483,6 +500,8 @@ The control room must not:
 - reintroduce stage-switched workspace shells such as `Build`, `Study`, and `Analyze`,
 - use legacy workspace stage state as the source of truth for ribbon, inspector, viewport, or docking behavior,
 - treat old `bootstrap` / `poll` / `preview/*` flows as canonical architecture.
+- hardcode one-off colors in components or module CSS outside `src/design/styles/*`.
+- hand-roll accessibility-sensitive primitives that shadcn/ui already covers unless the exception is documented in the module manifest or spec.
 
 Workspace UI doctrine:
 
@@ -506,8 +525,8 @@ The target browser frontend is documented in:
 During the frontend v2 migration:
 
 - `apps/control-room` is the clean v2 target app root,
-- `apps/web` is legacy reference unless the user explicitly asks to modify it,
-- v2 code must not import from `apps/web`,
+- `apps/legacy_web` is legacy reference unless the user explicitly asks to modify it,
+- v2 code must not import from `apps/legacy_web`,
 - legacy code may be read for behavior, math, fixtures, and visual comparison, but not copied wholesale,
 - every v2 module must have a manifest and must communicate through the kernel API, event bus, command registry, resource hooks, or shared primitives,
 - menu, ribbon, toolbar, shortcuts, context menus, and command palette must render one command registry,
@@ -516,6 +535,21 @@ During the frontend v2 migration:
 - no v2 change may reintroduce direct component `fetch()`, bootstrap/poll normalization, preview-control quantity switching for already-published data, mutable singleton diagnostics, or always-on viewport rendering.
 
 Agents touching frontend v2 must load the relevant `.agents/skills/frontend-v2-*` skill before editing.
+
+### 9.4 Zero-tolerance quality gate
+
+Every change to `apps/control-room` must leave the codebase in a shippable state. There is no "fix later" for:
+
+- TypeScript errors (`pnpm --dir apps/control-room typecheck` must pass),
+- ESLint warnings (`pnpm --dir apps/control-room lint` must pass with `--max-warnings=0`),
+- test failures (`pnpm --dir apps/control-room test` must pass),
+- CSS class/token naming inconsistencies with `docs/specs/frontend-v2/09-css-design-system.md`,
+- dead imports, unused variables, commented-out code created by the change,
+- spec drift (implementation must match the spec; if the spec is wrong, update the spec first).
+
+If a change introduces any of the above, the change is not done. Fix it before reporting completion.
+
+This rule applies equally to agents and human contributors.
 
 ---
 
@@ -921,7 +955,7 @@ When a file grows past that threshold, split it.
 | `crates/fullmag-engine` | trusted CPU/reference solvers |
 | `crates/fullmag-py-core` | private Python/Rust bridge |
 | `apps/control-room` | target modular frontend v2 control room |
-| `apps/web` | legacy frontend reference during v2 migration |
+| `apps/legacy_web` | legacy frontend reference during v2 migration |
 | `native/` | production native backends |
 | `docs/` | specs, ADRs, physics notes |
 | `.agents/` | agent workflows / skills |

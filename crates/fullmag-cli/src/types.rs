@@ -1,7 +1,7 @@
 use fullmag_ir::{GeometryAssetsIR, ProblemIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -11,6 +11,43 @@ pub(crate) enum MeshCommandTarget {
     AdaptiveFollowup,
     Airbox,
     ObjectMesh { object_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum RuntimeCommandTarget {
+    Study,
+    Run {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
+    },
+    CurrentStage {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stage_id: Option<String>,
+    },
+    StageIndex {
+        stage_index: u32,
+    },
+    StageId {
+        stage_id: String,
+    },
+    CommandId {
+        command_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct RuntimeCommandPrecondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_execution_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_revision: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -28,6 +65,8 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_ex: Option<f64>,
     pub final_e_demag: Option<f64>,
     pub final_e_ext: Option<f64>,
+    pub final_e_ani: Option<f64>,
+    pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     /// Number of eigenmode frequencies found (FEM eigen only).
     pub eigen_mode_count: Option<usize>,
@@ -143,6 +182,8 @@ pub(crate) struct LiveStepView {
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
@@ -355,6 +396,16 @@ pub(crate) struct SessionCommand {
     pub kind: String,
     pub created_at_unix_ms: u128,
     #[serde(default)]
+    pub target: Option<RuntimeCommandTarget>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub precondition: Option<RuntimeCommandPrecondition>,
+    #[serde(default)]
+    pub client_intent_id: Option<String>,
+    #[serde(default)]
+    pub requested_at_unix_ms: Option<u64>,
+    #[serde(default)]
     pub until_seconds: Option<f64>,
     #[serde(default)]
     pub max_steps: Option<u64>,
@@ -421,7 +472,23 @@ pub(crate) struct CurrentLiveScalarRow {
 pub(crate) struct CurrentLiveStageExecutionRecord {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_state_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from_checkpoint_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_transition: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

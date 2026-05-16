@@ -450,6 +450,10 @@ pub struct DeclaredUniverseIR {
     pub airbox_hmax: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airbox_hmin: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_growth_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airbox_grading: Option<String>,
 }
 
 impl Default for DeclaredUniverseIR {
@@ -461,6 +465,8 @@ impl Default for DeclaredUniverseIR {
             padding: None,
             airbox_hmax: None,
             airbox_hmin: None,
+            airbox_growth_rate: None,
+            airbox_grading: None,
         }
     }
 }
@@ -469,11 +475,15 @@ impl DeclaredUniverseIR {
     pub fn from_study_universe_value(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         Some(Self {
-            mode: object
+            mode: match object
                 .get("mode")
                 .and_then(|candidate| candidate.as_str())
                 .unwrap_or("auto")
-                .to_string(),
+            {
+                "box" => "manual",
+                other => other,
+            }
+            .to_string(),
             size: object.get("size").and_then(vec3_from_value),
             center: object.get("center").and_then(vec3_from_value),
             padding: object.get("padding").and_then(vec3_from_value),
@@ -483,6 +493,13 @@ impl DeclaredUniverseIR {
             airbox_hmin: object
                 .get("airbox_hmin")
                 .and_then(|candidate| candidate.as_f64()),
+            airbox_growth_rate: object
+                .get("airbox_growth_rate")
+                .and_then(|candidate| candidate.as_f64()),
+            airbox_grading: object
+                .get("airbox_grading")
+                .and_then(|candidate| candidate.as_str())
+                .map(str::to_string),
         })
     }
 }

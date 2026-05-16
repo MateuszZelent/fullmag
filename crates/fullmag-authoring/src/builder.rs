@@ -459,7 +459,19 @@ pub struct ScriptBuilderPerGeometryMeshState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_preset: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_thickness_elements: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_thickness_distribution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_thickness_element_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through_thickness_symmetric: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep_face_meshing: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -528,7 +540,13 @@ impl Default for ScriptBuilderPerGeometryMeshState {
             minimum_element_size: None,
             calibrate_for: None,
             size_preset: None,
+            mesh_strategy: None,
             order: None,
+            through_thickness_elements: None,
+            through_thickness_distribution: None,
+            through_thickness_element_ratio: None,
+            through_thickness_symmetric: None,
+            sweep_face_meshing: None,
             source: None,
             algorithm_2d: None,
             algorithm_3d: None,

@@ -36,10 +36,14 @@ use crate::native_fdm;
 use crate::native_fdm::NativeFdmBackend;
 use crate::native_fem;
 #[cfg(feature = "fem-gpu")]
-use crate::native_fem::NativeFemBackend;
+use crate::native_fem::{
+    NativeFemBackend, NativeFemDataResidency, NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+};
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::quantities::normalized_quantity_name;
 use crate::quantities::{active_fdm_preview_quantities, active_fem_preview_quantities};
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::apply_energy_minimizer_provenance;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
@@ -67,7 +71,9 @@ use crate::types::{
     StepUpdate,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::types::{ExecutionProvenance, FieldSnapshot, RunResult, RunStatus, StepStats};
+use crate::types::{
+    ExecutionProvenance, FemPoissonDemagProvenance, FieldSnapshot, RunResult, RunStatus, StepStats,
+};
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::fem::FemBackendId;
 
@@ -546,16 +552,46 @@ pub(crate) fn resolve_fem_engine_with_trail(
             }
             (env_val, true)
         }
+        Err(_) if all_in_gpu_fem_env_requested() => ("all_in_gpu".to_string(), true),
         Err(_) => (ir_policy.to_string(), false),
     };
 
+    let availability = native_fem::native_availability();
+    resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
+}
+
+fn native_fem_cpu_unavailable_error(
+    availability: &native_fem::GpuAvailability,
+    context: &str,
+) -> RunError {
+    RunError {
+        message: format!(
+            "native FEM CPU backend is not available for {}: {}",
+            context, availability.reason
+        ),
+    }
+}
+
+fn resolve_fem_engine_with_availability(
+    problem: &ProblemIR,
+    policy: &str,
+    env_override: bool,
+    fe_order: u32,
+    availability: &native_fem::GpuAvailability,
+) -> Result<EngineResolution<FemEngine>, RunError> {
     if has_antenna_field_source(problem) {
-        if policy == "gpu" {
+        if fem_policy_requires_gpu(&policy) {
             return Err(RunError {
                 message:
                     "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
                         .to_string(),
             });
+        }
+        if !availability.native_fem_cpu_available {
+            return Err(native_fem_cpu_unavailable_error(
+                availability,
+                "current_modules_force_cpu fallback",
+            ));
         }
         let message = "FEM engine falling back to MFEM/libCEED/hypre CPU FEM — native FEM GPU does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)".to_string();
         runtime_warn_once(&message);
@@ -570,15 +606,21 @@ pub(crate) fn resolve_fem_engine_with_trail(
         });
     }
 
-    let availability = native_fem::gpu_availability();
-
-    match policy.as_str() {
-        "cpu" => Ok(EngineResolution {
-            engine: FemEngine::CpuNative,
-            fallback: None,
-        }),
-        "gpu" => {
-            if !availability.available {
+    match policy {
+        "cpu" => {
+            if !availability.native_fem_cpu_available {
+                return Err(native_fem_cpu_unavailable_error(
+                    availability,
+                    "requested FEM CPU execution",
+                ));
+            }
+            Ok(EngineResolution {
+                engine: FemEngine::CpuNative,
+                fallback: None,
+            })
+        }
+        "gpu" | "all_in_gpu" => {
+            if !availability.native_fem_gpu_available {
                 if env_override {
                     Err(RunError {
                         message: format!(
@@ -587,6 +629,12 @@ pub(crate) fn resolve_fem_engine_with_trail(
                         ),
                     })
                 } else {
+                    if !availability.native_fem_cpu_available {
+                        return Err(native_fem_cpu_unavailable_error(
+                            availability,
+                            "non-forced FEM GPU fallback",
+                        ));
+                    }
                     let message = format!(
                         "script requested FEM GPU execution, but the native FEM GPU backend is not available: {} — falling back to MFEM/libCEED/hypre CPU FEM engine",
                         availability.reason
@@ -613,6 +661,12 @@ pub(crate) fn resolve_fem_engine_with_trail(
                         ),
                     })
                 } else {
+                    if !availability.native_fem_cpu_available {
+                        return Err(native_fem_cpu_unavailable_error(
+                            availability,
+                            "FEM GPU fe_order fallback",
+                        ));
+                    }
                     let message = format!(
                         "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
                         fe_order
@@ -636,52 +690,57 @@ pub(crate) fn resolve_fem_engine_with_trail(
             }
         }
         "auto" | _ => {
-            if availability.available && fe_order == 1 {
+            if availability.native_fem_gpu_available && fe_order == 1 {
                 Ok(EngineResolution {
                     engine: FemEngine::NativeGpu,
                     fallback: None,
                 })
-            } else {
-                if availability.available && fe_order != 1 {
-                    let message = format!(
-                        "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
-                        fe_order
-                    );
-                    runtime_warn_once(&message);
-                    Ok(EngineResolution {
-                        engine: FemEngine::CpuNative,
-                        fallback: Some(runtime_fallback(
-                            fem_engine_id(FemEngine::NativeGpu),
-                            fem_engine_id(FemEngine::CpuNative),
-                            "fem_gpu_fe_order_unsupported",
-                            message,
-                        )),
-                    })
-                } else if !availability.available {
-                    let message = format!(
-                        "native FEM GPU backend is not available — using MFEM/libCEED/hypre CPU FEM engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
-                        availability.reason
-                    );
-                    runtime_info_once(&message);
-                    Ok(EngineResolution {
-                        engine: FemEngine::CpuNative,
-                        fallback: runtime_device(problem)
-                            .filter(|device| matches!(*device, "gpu" | "cuda"))
-                            .map(|_| {
-                                runtime_fallback(
-                                    fem_engine_id(FemEngine::NativeGpu),
-                                    fem_engine_id(FemEngine::CpuNative),
-                                    "native_fem_gpu_unavailable",
-                                    message,
-                                )
-                            }),
-                    })
-                } else {
-                    Ok(EngineResolution {
-                        engine: FemEngine::CpuNative,
-                        fallback: None,
-                    })
+            } else if availability.native_fem_gpu_available && fe_order != 1 {
+                if !availability.native_fem_cpu_available {
+                    return Err(native_fem_cpu_unavailable_error(
+                        availability,
+                        "FEM auto fe_order fallback",
+                    ));
                 }
+                let message = format!(
+                    "native FEM GPU backend currently supports fe_order=1 only; falling back to MFEM/libCEED/hypre CPU FEM for requested fe_order={} (fallback_reason=fem_gpu_fe_order_unsupported)",
+                    fe_order
+                );
+                runtime_warn_once(&message);
+                Ok(EngineResolution {
+                    engine: FemEngine::CpuNative,
+                    fallback: Some(runtime_fallback(
+                        fem_engine_id(FemEngine::NativeGpu),
+                        fem_engine_id(FemEngine::CpuNative),
+                        "fem_gpu_fe_order_unsupported",
+                        message,
+                    )),
+                })
+            } else {
+                if !availability.native_fem_cpu_available {
+                    return Err(native_fem_cpu_unavailable_error(
+                        availability,
+                        "FEM auto execution",
+                    ));
+                }
+                let message = format!(
+                    "native FEM GPU backend is not available — using MFEM/libCEED/hypre CPU FEM engine (fallback_reason=native_fem_gpu_unavailable; reason={})",
+                    availability.reason
+                );
+                runtime_info_once(&message);
+                Ok(EngineResolution {
+                    engine: FemEngine::CpuNative,
+                    fallback: runtime_device(problem)
+                        .filter(|device| matches!(*device, "gpu" | "cuda"))
+                        .map(|_| {
+                            runtime_fallback(
+                                fem_engine_id(FemEngine::NativeGpu),
+                                fem_engine_id(FemEngine::CpuNative),
+                                "native_fem_gpu_unavailable",
+                                message,
+                            )
+                        }),
+                })
             }
         }
     }
@@ -922,12 +981,12 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     problem: &ProblemIR,
     plan: &FemPlanIR,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
-    if !cfg!(feature = "fem-gpu") {
+    if !native_fem::is_cpu_available() {
         return Err(RunError {
             message:
                 "time-domain FEM execution requires the MFEM/libCEED runtime stack, but this launcher \
-                 was built without the 'fem-gpu' feature. Use the managed FEM runtime or rebuild \
-                 the launcher with MFEM/libCEED/hypre CPU or MFEM/libCEED/CUDA support."
+                 does not report native FEM CPU availability. Use the managed FEM runtime or rebuild \
+                 the launcher with MFEM/libCEED/hypre CPU support."
                     .to_string(),
         });
     }
@@ -1404,9 +1463,12 @@ fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
 }
 
 fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
+    if all_in_gpu_fem_env_requested() {
+        return "gpu".to_string();
+    }
     match std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
-        Some("gpu") | Some("cuda") => "gpu".to_string(),
+        Some("gpu") | Some("cuda") | Some("all_in_gpu") => "gpu".to_string(),
         Some("auto") | None => runtime_device(problem)
             .unwrap_or("auto")
             .replace("cuda", "gpu"),
@@ -1501,8 +1563,35 @@ fn runtime_fem_order(problem: &ProblemIR) -> u32 {
 fn fem_gpu_execution_forced() -> bool {
     matches!(
         std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        Some("gpu")
+        Some("gpu") | Some("all_in_gpu")
     )
+}
+
+fn env_flag_enabled(value: Option<String>) -> bool {
+    matches!(
+        value
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("1" | "true" | "on" | "yes")
+    )
+}
+
+fn all_in_gpu_fem_env_requested() -> bool {
+    matches!(
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        Some("all_in_gpu")
+    ) || env_flag_enabled(std::env::var("FULLMAG_FEM_ALL_IN_GPU").ok())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn all_in_gpu_fem_required() -> bool {
+    all_in_gpu_fem_env_requested()
+}
+
+fn fem_policy_requires_gpu(policy: &str) -> bool {
+    matches!(policy, "gpu" | "all_in_gpu")
 }
 
 fn fem_gpu_min_nodes_threshold() -> Option<usize> {
@@ -2667,6 +2756,128 @@ fn native_fem_execution_engine(plan: &FemPlanIR) -> &'static str {
 }
 
 #[cfg(feature = "fem-gpu")]
+fn native_fem_execution_mode(plan: &FemPlanIR) -> &'static str {
+    if plan.mfem_device_string.as_deref() == Some("cpu") {
+        "cpu_native"
+    } else {
+        "hybrid_legacy_sparse"
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn validate_all_in_gpu_fem_runtime_contract(
+    execution_mode: &str,
+    gpu_rk_plan: &NativeFemGpuRkPlanInfo,
+) -> Result<(), RunError> {
+    if !all_in_gpu_fem_required() {
+        return Ok(());
+    }
+    if execution_mode != "all_in_gpu_legacy_sparse"
+        || !gpu_rk_plan.exchange_only_enabled
+        || !gpu_rk_plan.stage_exchange_device_resident
+        || !matches!(
+            gpu_rk_plan.exchange_operator_mode.as_str(),
+            "legacy_sparse_gpu" | "partial_assembly_gpu"
+        )
+    {
+        return Err(RunError {
+            message: format!(
+                "ALL_IN_GPU FEM was requested, but native FEM runtime is not all-in GPU \
+                 (execution_mode={}, gpu_rk_exchange_only_enabled={}, \
+                 stage_exchange_device_resident={}, fem_exchange_operator_mode={}, \
+                 gpu_rk_block_reason={}, fallback_reason=all_in_gpu_contract_unmet)",
+                execution_mode,
+                gpu_rk_plan.exchange_only_enabled,
+                gpu_rk_plan.stage_exchange_device_resident,
+                gpu_rk_plan.exchange_operator_mode,
+                if gpu_rk_plan.reason.is_empty() {
+                    "none"
+                } else {
+                    gpu_rk_plan.reason.as_str()
+                }
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_data_residency(
+    _plan: &FemPlanIR,
+    stats: Option<&StepStats>,
+    gpu_state: Option<&NativeFemGpuStateInfo>,
+) -> &'static str {
+    if stats
+        .map(|entry| entry.hot_loop_host_sync_count > 0)
+        .unwrap_or(false)
+    {
+        return NativeFemDataResidency::HostSourceOfTruth.as_str();
+    }
+    gpu_state
+        .map(|state| state.source_of_truth.as_str())
+        .unwrap_or(NativeFemDataResidency::HostSourceOfTruth.as_str())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_uses_cuda_kernels(_plan: &FemPlanIR) -> bool {
+    false
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_uses_gpu_poisson(_plan: &FemPlanIR) -> bool {
+    false
+}
+
+#[cfg(feature = "fem-gpu")]
+fn apply_native_fem_runtime_contract(
+    provenance: &mut ExecutionProvenance,
+    plan: &FemPlanIR,
+    stats: Option<&StepStats>,
+    gpu_state: Option<&NativeFemGpuStateInfo>,
+    gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
+) {
+    provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
+    provenance.fem_data_residency =
+        Some(native_fem_data_residency(plan, stats, gpu_state).to_string());
+    provenance.uses_cuda_kernels = Some(native_fem_uses_cuda_kernels(plan));
+    provenance.uses_gpu_poisson = Some(native_fem_uses_gpu_poisson(plan));
+    provenance.hot_loop_host_sync_count = stats.map(|entry| entry.hot_loop_host_sync_count);
+    if let Some(entry) = stats {
+        provenance.hot_loop_exchange_h2d_bytes = Some(entry.hot_loop_exchange_h2d_bytes);
+        provenance.hot_loop_exchange_d2h_bytes = Some(entry.hot_loop_exchange_d2h_bytes);
+        provenance.hot_loop_exchange_host_sync_count =
+            Some(entry.hot_loop_exchange_host_sync_count);
+        provenance.hot_loop_compute_h2d_bytes = Some(entry.hot_loop_compute_h2d_bytes);
+        provenance.hot_loop_compute_d2h_bytes = Some(entry.hot_loop_compute_d2h_bytes);
+        provenance.hot_loop_compute_host_sync_count = Some(entry.hot_loop_compute_host_sync_count);
+    }
+    if let Some(state) = gpu_state {
+        provenance.fem_gpu_state_allocated = Some(state.allocated);
+        provenance.fem_gpu_state_node_count = Some(state.node_count);
+        provenance.fem_gpu_state_dof_len = Some(state.dof_len);
+        provenance.fem_gpu_state_stage_count = Some(state.stage_count);
+        provenance.fem_gpu_state_device_bytes = Some(state.device_bytes);
+        provenance.fem_gpu_state_reduction_workspace_bytes = Some(state.reduction_workspace_bytes);
+    }
+    if let Some(rk_plan) = gpu_rk_plan {
+        provenance.fem_gpu_rk_exchange_only_enabled = Some(rk_plan.exchange_only_enabled);
+        provenance.fem_gpu_rk_stage_count = Some(rk_plan.stage_count);
+        provenance.fem_gpu_rk_uses_cuda_kernels = Some(rk_plan.uses_cuda_kernels);
+        provenance.fem_gpu_rk_allows_exchange_host_sync = Some(rk_plan.allows_exchange_host_sync);
+        provenance.fem_gpu_rk_stage_exchange_device_resident =
+            Some(rk_plan.stage_exchange_device_resident);
+        provenance.fem_exchange_operator_mode = Some(rk_plan.exchange_operator_mode.clone());
+        provenance.fem_gpu_rk_block_reason =
+            (!rk_plan.reason.is_empty()).then(|| rk_plan.reason.clone());
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_requires_initial_snapshot(live_present: bool, direct_minimization: bool) -> bool {
+    live_present || direct_minimization
+}
+
+#[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
     plan: &FemPlanIR,
     until_seconds: f64,
@@ -2680,12 +2891,30 @@ fn execute_native_fem(
         });
     }
 
-    let mut backend = NativeFemBackend::create(plan)?;
+    let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
+        matches!(
+            control.algorithm,
+            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
+                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
+        )
+    });
+    let needs_initial_snapshot = native_fem_requires_initial_snapshot(
+        live.as_ref()
+            .is_some_and(|consumer| consumer.initial_snapshot),
+        direct_minimization_relax.is_some(),
+    );
+
+    let mut backend =
+        NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
     let device_info = backend.device_info()?;
+    let mut gpu_state_info = backend.gpu_state_info()?;
+    let mut gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     let execution_engine = native_fem_execution_engine(plan);
+    let execution_mode = native_fem_execution_mode(plan);
+    validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
     let demag_policy = plan.demag_solver_policy.clone().unwrap_or_default();
     runtime_info_once(&format!(
-        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} demag_solver={} preconditioner={}",
+        "native FEM backend active: engine={} device='{}' cc={} driver={} runtime={} mfem_device={} assembly_mode=legacy_sparse demag_solver={} preconditioner={}",
         execution_engine,
         device_info.name,
         device_info.compute_capability,
@@ -2701,13 +2930,20 @@ fn execute_native_fem(
         crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
             .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
     let dt_is_fixed = plan.fixed_timestep.is_some();
-
     let mut steps = Vec::new();
+    let mut current_stats = if needs_initial_snapshot {
+        let mut stats = backend.snapshot_step_stats(node_count)?;
+        ensure_fem_object_scalars(&mut stats, plan);
+        stats
+    } else {
+        StepStats::default()
+    };
+    let initial_stats = needs_initial_snapshot.then_some(&current_stats);
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
     let resolved_demag = plan
         .demag_realization
         .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
-    let provenance = ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -2718,11 +2954,7 @@ fn execute_native_fem(
         } else {
             None
         },
-        fft_backend: if plan.enable_demag {
-            Some("cuFFT".to_string())
-        } else {
-            None
-        },
+        fft_backend: None,
         device_name: Some(device_info.name.clone()),
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
@@ -2749,12 +2981,26 @@ fn execute_native_fem(
             .field_refresh
             .as_ref()
             .and_then(|policy| policy.demag_interval_s),
+        fem_assembly_mode: Some("legacy_sparse".to_string()),
         requested_cpu_threads: None,
         resolved_cpu_threads: None,
-        requested_fem_omp_threads: None,
-        effective_fem_omp_threads: None,
+        requested_fem_omp_threads: initial_stats.and_then(|stats| {
+            (stats.requested_fem_omp_threads > 0).then_some(stats.requested_fem_omp_threads as u32)
+        }),
+        effective_fem_omp_threads: initial_stats.and_then(|stats| {
+            (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
+        }),
+        fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
         ..Default::default()
     };
+    apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    apply_native_fem_runtime_contract(
+        &mut provenance,
+        plan,
+        initial_stats,
+        Some(&gpu_state_info),
+        Some(&gpu_rk_plan_info),
+    );
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -2770,16 +3016,7 @@ fn execute_native_fem(
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
-    let mut current_stats = backend.snapshot_step_stats(node_count)?;
-    ensure_fem_object_scalars(&mut current_stats, plan);
-
-    let direct_minimization_relax = plan.relaxation.as_ref().filter(|control| {
-        matches!(
-            control.algorithm,
-            fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-        )
-    });
+    let mut paused = false;
 
     if let Some(control) = direct_minimization_relax {
         let mut m = backend.copy_m(node_count)?;
@@ -2798,33 +3035,37 @@ fn execute_native_fem(
         let mut direct_step: u64 = 0;
 
         while direct_step < control.stop.max_steps.unwrap_or(u64::MAX) {
-            if let Some(live) = live.as_mut() {
-                if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                    let preview_due = display_refresh_due(
-                        last_preview_revision,
-                        &display_selection,
-                        current_stats.step,
-                    );
-                    let preview_targets_global_scalar =
-                        display_is_global_scalar(&display_selection);
-                    let preview_field = if preview_due && !preview_targets_global_scalar {
-                        let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(&request, node_count)?)
-                    } else {
-                        None
-                    };
-                    let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
-                            &backend,
+            if live
+                .as_ref()
+                .is_some_and(|consumer| consumer.initial_snapshot)
+            {
+                if let Some(live) = live.as_mut() {
+                    if let Some(display_selection) = live.display_selection.map(|get| get()) {
+                        let preview_due = display_refresh_due(
+                            last_preview_revision,
                             &display_selection,
-                            plan,
-                            node_count,
-                        )
-                    } else {
-                        None
-                    };
-                    if current_stats.step <= 2 || preview_due {
-                        eprintln!(
+                            current_stats.step,
+                        );
+                        let preview_targets_global_scalar =
+                            display_is_global_scalar(&display_selection);
+                        let preview_field = if preview_due && !preview_targets_global_scalar {
+                            let request = display_selection.preview_request();
+                            Some(backend.copy_live_preview_field(&request, node_count)?)
+                        } else {
+                            None
+                        };
+                        let cached_preview_fields = if preview_due {
+                            build_fem_cached_preview_fields(
+                                &backend,
+                                &display_selection,
+                                plan,
+                                node_count,
+                            )
+                        } else {
+                            None
+                        };
+                        if current_stats.step <= 2 || preview_due {
+                            eprintln!(
                             "[fullmag-runner] native-fem bootstrap live update step={} every_n={} preview_due={} preview_quantity={} preview_field={} cached_preview_fields={} global_scalar={} mag_len={}",
                             current_stats.step,
                             u64::from(display_selection.selection.every_n.max(1)),
@@ -2838,25 +3079,37 @@ fn execute_native_fem(
                             preview_targets_global_scalar,
                             node_count.saturating_mul(3),
                         );
-                    }
-                    let action = (live.on_step)(StepUpdate {
-                        stats: current_stats.clone(),
-                        grid: live.grid,
-                        fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
-                        magnetization: Some(flatten_vectors(&m)),
-                        preview_field,
-                        cached_preview_fields,
-                        scalar_row_due: preview_due && preview_targets_global_scalar,
-                        finished: false,
-                    });
-                    if preview_due {
-                        last_preview_revision = Some(display_selection.revision);
-                    }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
+                        }
+                        let action = (live.on_step)(StepUpdate {
+                            stats: current_stats.clone(),
+                            grid: live.grid,
+                            fem_mesh: Some(crate::types::FemMeshPayload::from(plan)),
+                            magnetization: Some(flatten_vectors(&m)),
+                            preview_field,
+                            cached_preview_fields,
+                            scalar_row_due: preview_due && preview_targets_global_scalar,
+                            finished: false,
+                        });
+                        if preview_due {
+                            last_preview_revision = Some(display_selection.revision);
+                        }
+                        match action {
+                            StepAction::Continue => {}
+                            StepAction::Stop => {
+                                cancelled = true;
+                                break;
+                            }
+                            StepAction::Pause => {
+                                paused = true;
+                                break;
+                            }
+                        }
                     }
                 }
+            }
+
+            if paused {
+                break;
             }
 
             let max_torque = max_torque_from_field(&m, &h_eff);
@@ -3066,52 +3319,67 @@ fn execute_native_fem(
             !dt_is_fixed,
         );
         while current_time < until_seconds {
-            if let Some(live) = live.as_mut() {
-                if let Some(display_selection) = live.display_selection.map(|get| get()) {
-                    let preview_due = display_refresh_due(
-                        last_preview_revision,
-                        &display_selection,
-                        current_stats.step,
-                    );
-                    let preview_targets_global_scalar =
-                        display_is_global_scalar(&display_selection);
-                    let preview_field = if preview_due && !preview_targets_global_scalar {
-                        let request = display_selection.preview_request();
-                        Some(backend.copy_live_preview_field(&request, node_count)?)
-                    } else {
-                        None
-                    };
-                    let cached_preview_fields = if preview_due {
-                        build_fem_cached_preview_fields(
-                            &backend,
+            if live
+                .as_ref()
+                .is_some_and(|consumer| consumer.initial_snapshot)
+            {
+                if let Some(live) = live.as_mut() {
+                    if let Some(display_selection) = live.display_selection.map(|get| get()) {
+                        let preview_due = display_refresh_due(
+                            last_preview_revision,
                             &display_selection,
-                            plan,
-                            node_count,
-                        )
-                    } else {
-                        None
-                    };
-                    let action = (live.on_step)(StepUpdate {
-                        stats: current_stats.clone(),
-                        grid: live.grid,
-                        fem_mesh: (current_stats.step == 0)
-                            .then_some(crate::types::FemMeshPayload::from(plan)),
-                        magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
-                        preview_field,
-                        cached_preview_fields,
-                        scalar_row_due: preview_due && preview_targets_global_scalar,
-                        finished: false,
-                    });
-                    if preview_due {
-                        last_preview_revision = Some(display_selection.revision);
-                    }
-                    if action == StepAction::Stop {
-                        cancelled = true;
-                        break;
+                            current_stats.step,
+                        );
+                        let preview_targets_global_scalar =
+                            display_is_global_scalar(&display_selection);
+                        let preview_field = if preview_due && !preview_targets_global_scalar {
+                            let request = display_selection.preview_request();
+                            Some(backend.copy_live_preview_field(&request, node_count)?)
+                        } else {
+                            None
+                        };
+                        let cached_preview_fields = if preview_due {
+                            build_fem_cached_preview_fields(
+                                &backend,
+                                &display_selection,
+                                plan,
+                                node_count,
+                            )
+                        } else {
+                            None
+                        };
+                        let action = (live.on_step)(StepUpdate {
+                            stats: current_stats.clone(),
+                            grid: live.grid,
+                            fem_mesh: (current_stats.step == 0)
+                                .then_some(crate::types::FemMeshPayload::from(plan)),
+                            magnetization: Some(flatten_vectors(&backend.copy_m(node_count)?)),
+                            preview_field,
+                            cached_preview_fields,
+                            scalar_row_due: preview_due && preview_targets_global_scalar,
+                            finished: false,
+                        });
+                        if preview_due {
+                            last_preview_revision = Some(display_selection.revision);
+                        }
+                        match action {
+                            StepAction::Continue => {}
+                            StepAction::Stop => {
+                                cancelled = true;
+                                break;
+                            }
+                            StepAction::Pause => {
+                                paused = true;
+                                break;
+                            }
+                        }
                     }
                 }
             }
 
+            if paused {
+                break;
+            }
             let dt_step = dt.min(until_seconds - current_time);
             let interrupt_requested = live
                 .as_ref()
@@ -3206,11 +3474,17 @@ fn execute_native_fem(
                             .revision,
                     );
                 }
-                if action == StepAction::Stop {
-                    cancelled = true;
+                match action {
+                    StepAction::Continue => {}
+                    StepAction::Stop => {
+                        cancelled = true;
+                    }
+                    StepAction::Pause => {
+                        paused = true;
+                    }
                 }
             }
-            if cancelled {
+            if cancelled || paused {
                 break;
             }
             if default_scalar_trace || scalar_schedules.is_empty() {
@@ -3326,8 +3600,20 @@ fn execute_native_fem(
     }
 
     let final_magnetization = backend.copy_m(node_count)?;
-    let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
-    let status = if cancelled {
+    let (field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
+    gpu_state_info = backend.gpu_state_info()?;
+    gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
+    apply_native_fem_runtime_contract(
+        &mut provenance,
+        plan,
+        Some(&final_stats),
+        Some(&gpu_state_info),
+        Some(&gpu_rk_plan_info),
+    );
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
         RunStatus::Cancelled
     } else {
         RunStatus::Completed
@@ -3364,6 +3650,45 @@ fn execute_native_fem(
         field_snapshot_count,
         auxiliary_artifacts: Vec::new(),
         provenance,
+    })
+}
+
+#[cfg(feature = "fem-gpu")]
+fn fem_poisson_demag_provenance(
+    plan: &FemPlanIR,
+    stats: Option<&StepStats>,
+) -> Option<FemPoissonDemagProvenance> {
+    if !plan.enable_demag {
+        return None;
+    }
+
+    let resolved_demag = plan
+        .demag_realization
+        .unwrap_or(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+    let boundary_condition = match resolved_demag {
+        fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet => "dirichlet",
+        fullmag_ir::ResolvedFemDemagIR::PoissonRobin => "robin",
+        _ => return None,
+    };
+    let policy = plan.demag_solver_policy.clone().unwrap_or_default();
+
+    Some(FemPoissonDemagProvenance {
+        linear_solver: policy.solver,
+        preconditioner: policy.preconditioner,
+        rtol: policy.rtol,
+        max_iterations: policy.max_iterations,
+        actual_iterations: stats.map(|entry| entry.poisson_iterations),
+        final_residual: stats.and_then(|entry| {
+            entry
+                .poisson_final_residual
+                .is_finite()
+                .then_some(entry.poisson_final_residual)
+        }),
+        boundary_condition: boundary_condition.to_string(),
+        robin_beta: plan
+            .air_box_config
+            .as_ref()
+            .and_then(|config| config.robin_beta_factor),
     })
 }
 
@@ -3664,7 +3989,41 @@ mod tests {
     };
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new() -> Self {
+            let unique = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "fullmag-dispatch-tests-{}-{}-{}",
+                std::process::id(),
+                nanos,
+                unique
+            ));
+            fs::create_dir_all(&path).expect("create temp dispatch test dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -3838,6 +4197,330 @@ mod tests {
         assert_eq!(decision.lane, FemStaticPbcLane::NativeAnisotropy);
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn fem_poisson_demag_provenance_records_policy_and_solve_stats() {
+        let mut plan = tiny_fem_plan();
+        plan.enable_demag = true;
+        plan.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        plan.demag_solver_policy = Some(fullmag_ir::FemLinearSolverPolicy {
+            solver: "GMRES".to_string(),
+            preconditioner: "Jacobi".to_string(),
+            rtol: 1e-6,
+            max_iterations: 77,
+            ..Default::default()
+        });
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 4.0,
+            grading: 1.4,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("user".to_string()),
+            robin_beta_factor: Some(2.5),
+            shape: Some("bbox".to_string()),
+            factor_source: Some("user".to_string()),
+            boundary_marker_source: Some("mesh_marker_99".to_string()),
+        });
+        let stats = StepStats {
+            poisson_iterations: 13,
+            poisson_final_residual: 4.0e-9,
+            ..StepStats::default()
+        };
+
+        let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
+            .expect("poisson demag provenance should be present");
+
+        assert_eq!(provenance.linear_solver, "GMRES");
+        assert_eq!(provenance.preconditioner, "Jacobi");
+        assert_eq!(provenance.rtol, 1e-6);
+        assert_eq!(provenance.max_iterations, 77);
+        assert_eq!(provenance.actual_iterations, Some(13));
+        assert_eq!(provenance.final_residual, Some(4.0e-9));
+        assert_eq!(provenance.boundary_condition, "robin");
+        assert_eq!(provenance.robin_beta, Some(2.5));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_initial_snapshot_is_lazy_for_headless_time_domain() {
+        assert!(!native_fem_requires_initial_snapshot(false, false));
+        assert!(native_fem_requires_initial_snapshot(true, false));
+        assert!(native_fem_requires_initial_snapshot(false, true));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_uses_gpu_state_info() {
+        let plan = tiny_fem_plan();
+        let stats = StepStats {
+            hot_loop_host_sync_count: 0,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            None,
+        );
+
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("device_source_of_truth")
+        );
+        assert_eq!(provenance.fem_gpu_state_allocated, Some(true));
+        assert_eq!(provenance.fem_gpu_state_node_count, Some(8));
+        assert_eq!(provenance.fem_gpu_state_dof_len, Some(24));
+        assert_eq!(provenance.fem_gpu_state_stage_count, Some(4));
+        assert_eq!(provenance.fem_gpu_state_device_bytes, Some(32768));
+        assert_eq!(
+            provenance.fem_gpu_state_reduction_workspace_bytes,
+            Some(512)
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_does_not_publish_device_residency_with_hot_loop_sync() {
+        let plan = tiny_fem_plan();
+        let stats = StepStats {
+            hot_loop_host_sync_count: 3,
+            ..StepStats::default()
+        };
+        let gpu_state = NativeFemGpuStateInfo {
+            allocated: true,
+            node_count: 8,
+            dof_len: 24,
+            stage_count: 4,
+            device_bytes: 32768,
+            reduction_workspace_bytes: 512,
+            source_of_truth: NativeFemDataResidency::DeviceSourceOfTruth,
+        };
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(
+            &mut provenance,
+            &plan,
+            Some(&stats),
+            Some(&gpu_state),
+            None,
+        );
+
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("host_source_of_truth")
+        );
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(3));
+        assert_eq!(provenance.fem_gpu_state_allocated, Some(true));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn native_fem_runtime_contract_records_gpu_rk_plan_info() {
+        let plan = tiny_fem_plan();
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: false,
+            stage_count: 2,
+            uses_cuda_kernels: false,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: false,
+            exchange_operator_mode: "unsupported".to_string(),
+            reason: "GPU RK exchange-only path requires CUDA runtime support".to_string(),
+        };
+        let mut provenance = ExecutionProvenance::default();
+
+        apply_native_fem_runtime_contract(&mut provenance, &plan, None, None, Some(&rk_plan));
+
+        assert_eq!(provenance.fem_gpu_rk_exchange_only_enabled, Some(false));
+        assert_eq!(provenance.fem_gpu_rk_stage_count, Some(2));
+        assert_eq!(provenance.fem_gpu_rk_uses_cuda_kernels, Some(false));
+        assert_eq!(provenance.fem_gpu_rk_allows_exchange_host_sync, Some(false));
+        assert_eq!(
+            provenance.fem_gpu_rk_stage_exchange_device_resident,
+            Some(false)
+        );
+        assert_eq!(
+            provenance.fem_exchange_operator_mode.as_deref(),
+            Some("unsupported")
+        );
+        assert_eq!(
+            provenance.fem_gpu_rk_block_reason.as_deref(),
+            Some("GPU RK exchange-only path requires CUDA runtime support")
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn all_in_gpu_request_rejects_hybrid_native_fem_runtime_contract() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: false,
+            stage_count: 2,
+            uses_cuda_kernels: true,
+            allows_exchange_host_sync: true,
+            stage_exchange_device_resident: false,
+            exchange_operator_mode: "unsupported".to_string(),
+            reason: "stage H_ex is not device-resident".to_string(),
+        };
+
+        let err = validate_all_in_gpu_fem_runtime_contract("hybrid_legacy_sparse", &rk_plan)
+            .expect_err("ALL_IN_GPU must reject hybrid native FEM runtime");
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        assert!(err.message.contains("all_in_gpu_contract_unmet"));
+        assert!(err.message.contains("stage_exchange_device_resident=false"));
+        assert!(err
+            .message
+            .contains("gpu_rk_block_reason=stage H_ex is not device-resident"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn all_in_gpu_request_rejects_unsupported_exchange_operator_mode() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: true,
+            stage_count: 2,
+            uses_cuda_kernels: true,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: true,
+            exchange_operator_mode: "unsupported".to_string(),
+            reason: String::new(),
+        };
+
+        let err = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan)
+            .expect_err("ALL_IN_GPU must reject unsupported exchange operator mode");
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        assert!(err.message.contains("all_in_gpu_contract_unmet"));
+        assert!(err
+            .message
+            .contains("fem_exchange_operator_mode=unsupported"));
+        assert!(err.message.contains("gpu_rk_block_reason=none"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn all_in_gpu_execution_value_forces_gpu_policy() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let problem = fem_policy_problem();
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "all_in_gpu");
+            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
+            std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
+        }
+        let result = resolve_fem_engine(&problem);
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let err = result.expect_err("all_in_gpu should force native GPU availability");
+        assert!(err
+            .message
+            .contains("native FEM GPU backend is not available"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn all_in_gpu_env_flag_forces_gpu_policy_without_execution_override() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let problem = fem_policy_problem();
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
+            std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
+        }
+        let result = resolve_fem_engine(&problem);
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        let err = result.expect_err("FULLMAG_FEM_ALL_IN_GPU should force native GPU availability");
+        assert!(err
+            .message
+            .contains("native FEM GPU backend is not available"));
+    }
+
+    #[test]
+    fn all_in_gpu_env_flag_forces_gpu_registry_resolution_without_execution_override() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [
+                    ("device".to_string(), Value::String("cpu".to_string())),
+                    ("precision".to_string(), Value::String("double".to_string())),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+
+        let temp = TempDirGuard::new();
+        let cpu_pack = temp.path.join("runtimes").join("fem-cpu");
+        fs::create_dir_all(cpu_pack.join("bin")).expect("create fem cpu runtime");
+        fs::write(cpu_pack.join("bin").join("fullmag-fem-cpu-bin"), b"stub")
+            .expect("write fem cpu worker");
+        fs::write(
+            cpu_pack.join("manifest.json"),
+            r#"{
+                "family": "fem-cpu",
+                "version": "0.1.0",
+                "worker": "bin/fullmag-fem-cpu-bin",
+                "engines": [
+                    {
+                        "backend": "fem",
+                        "device": "cpu",
+                        "precision": "double"
+                    }
+                ]
+            }"#,
+        )
+        .expect("write fem cpu manifest");
+        let registry = RuntimeRegistry::discover(&temp.path.join("runtimes"));
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+        }
+        let fem_plan = tiny_fem_plan();
+        let result = resolve_fem_engine_with_registry(&problem, &registry, false, Some(&fem_plan));
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+
+        let err = result.expect_err("FULLMAG_FEM_ALL_IN_GPU must not resolve CPU via registry");
+        assert!(
+            err.message
+                .contains("no advertised FEM runtime matches device=gpu"),
+            "{}",
+            err.message
+        );
+    }
+
     #[test]
     fn forced_fem_gpu_without_backend_surfaces_reason() {
         let _guard = env_lock().lock().expect("env mutex");
@@ -3874,6 +4557,90 @@ mod tests {
         assert_eq!(fallback.original_engine, "fem_native_gpu");
         assert_eq!(fallback.fallback_engine, "fem_cpu_native");
         assert_eq!(fallback.reason, "native_fem_gpu_unavailable");
+    }
+
+    fn native_fem_availability_for_test(
+        cpu: bool,
+        gpu: bool,
+        reason: &str,
+    ) -> native_fem::GpuAvailability {
+        native_fem::GpuAvailability {
+            available: gpu,
+            built_with_mfem_stack: cpu || gpu,
+            built_with_cuda_runtime: gpu,
+            built_with_ceed: false,
+            native_fem_cpu_available: cpu,
+            native_fem_gpu_available: gpu,
+            mfem_cuda_available: gpu,
+            hypre_gpu_available: false,
+            libceed_used_hot_path: false,
+            visible_cuda_device_count: if gpu { 1 } else { 0 },
+            requested_gpu_index: -1,
+            resolved_gpu_index: if gpu { 0 } else { -1 },
+            reason: reason.to_string(),
+        }
+    }
+
+    #[test]
+    fn cpu_availability_policy_uses_cpu_probe_without_gpu() {
+        let problem = fem_policy_problem();
+        let resolution = resolve_fem_engine_with_availability(
+            &problem,
+            "cpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM CPU backend is available; GPU backend is unavailable",
+            ),
+        )
+        .expect("CPU FEM should resolve when CPU is available without GPU");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[test]
+    fn cpu_availability_gpu_fallback_requires_cpu_probe() {
+        let problem = fem_policy_problem();
+        let err = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                false,
+                false,
+                "native FEM runtime stack is unavailable",
+            ),
+        )
+        .expect_err("GPU fallback must not report CPU when CPU is unavailable");
+
+        assert!(err
+            .message
+            .contains("native FEM CPU backend is not available"));
+    }
+
+    #[test]
+    fn cpu_availability_auto_without_any_native_runtime_fails() {
+        let problem = fem_policy_problem();
+        let err = resolve_fem_engine_with_availability(
+            &problem,
+            "auto",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                false,
+                false,
+                "native FEM runtime stack is unavailable",
+            ),
+        )
+        .expect_err("auto must fail when neither native FEM lane is available");
+
+        assert!(err
+            .message
+            .contains("native FEM CPU backend is not available"));
     }
 
     #[cfg(not(feature = "fem-gpu"))]

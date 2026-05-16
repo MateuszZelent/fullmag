@@ -1,0 +1,101 @@
+.fm-slot {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+}
+
+.fm-slot[data-slot-id="app-menu"],
+.fm-slot[data-slot-id="ribbon"],
+.fm-slot[data-slot-id="status-bar"] {
+  background: var(--fm-bg-chrome);
+}
+
+.fm-slot[data-slot-id="viewport-main"] {
+  background: var(--fm-bg-viewport);
+}
+
+.fm-slot[data-slot-id="panel-bottom"] {
+  height: 100%;
+}
+
+.fm-slot[data-slot-id="overlay"] {
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.fm-slot[data-slot-id="overlay"] > * {
+  pointer-events: auto;
+}
+
+.fm-slot__empty,
+.fm-slot__module {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-sm);
+  letter-spacing: 0.01em;
+}
+
+/* Status bar — left-aligned, pill-separated status fields */
+.fm-status-bar {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 0;
+  padding-inline: var(--fm-space-3);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  letter-spacing: 0.01em;
+  user-select: none;
+  overflow: hidden;
+}
+
+.fm-status-bar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30ch;
+}
+
+.fm-status-bar__sep {
+  width: 1px;
+  height: 12px;
+  margin-inline: var(--fm-space-2);
+  background: var(--fm-border-subtle);
+  flex-shrink: 0;
+}
+
+.fm-status-bar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fm-text-muted);
+  flex-shrink: 0;
+  transition: background-color var(--fm-transition-normal);
+}
+
+.fm-status-bar__dot[data-status="ready"] {
+  background: var(--fm-success);
+}
+
+.fm-status-bar__dot[data-status="loading"],
+.fm-status-bar__dot[data-status="pending"] {
+  background: var(--fm-warning);
+}
+
+.fm-status-bar__dot[data-status="error"] {
+  background: var(--fm-danger);
+}
+
+.fm-status-bar__spacer {
+  flex: 1;
+}

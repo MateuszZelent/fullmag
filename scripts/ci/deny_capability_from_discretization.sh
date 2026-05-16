@@ -25,7 +25,7 @@ unexpected="$tmp_dir/unexpected"
 stale="$tmp_dir/stale"
 raw="$tmp_dir/raw"
 
-if rg -n --no-heading -o 'synthesizeCapabilitiesFromDiscretization' apps/web \
+if rg -n --no-heading -o 'synthesizeCapabilitiesFromDiscretization' apps/control-room \
   --glob '!**/*.test.*' \
   --glob '!**/*.spec.*' \
   --glob '!**/*.stories.*' \

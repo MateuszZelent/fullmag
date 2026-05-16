@@ -23,8 +23,12 @@ use crate::validate::{
     planned_study_controls, validate_eigen_outputs, validate_executable_outputs,
 };
 
-const FEM_TRANSFER_GRID_REMOVAL_MESSAGE: &str =
-    "FEM transfer_grid został usunięty. Zbuduj shared_domain_mesh_with_air i użyj Poisson Robin/Dirichlet.";
+const FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE: &str =
+    "FEM demag requires a conformal shared-domain mesh with air and a Poisson airbox realization (Robin or Dirichlet).";
+const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
+const CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM: f64 = 1e-6;
+const CUBIC_AXIS_VALIDATION_ERROR: &str =
+    "cubic anisotropy axes must be finite, normalized and mutually orthogonal";
 
 fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String {
     if requested_cuda {
@@ -259,6 +263,63 @@ fn values_differ(values: &[f64], reference: f64) -> bool {
         .any(|value| (*value - reference).abs() > 1e-18)
 }
 
+fn has_cubic_anisotropy(material: &fullmag_ir::MaterialIR) -> bool {
+    material.cubic_anisotropy_kc1.is_some()
+        || material.cubic_anisotropy_kc2.is_some()
+        || material.cubic_anisotropy_kc3.is_some()
+        || material.kc1_field.is_some()
+        || material.kc2_field.is_some()
+        || material.kc3_field.is_some()
+}
+
+fn validate_cubic_anisotropy_axes(material: &fullmag_ir::MaterialIR) -> Option<String> {
+    if !has_cubic_anisotropy(material) {
+        return None;
+    }
+
+    let axis1 = material.cubic_anisotropy_axis1.unwrap_or([1.0, 0.0, 0.0]);
+    let axis2 = material.cubic_anisotropy_axis2.unwrap_or([0.0, 1.0, 0.0]);
+    if !axis1.iter().all(|component| component.is_finite())
+        || !axis2.iter().all(|component| component.is_finite())
+    {
+        return Some(format!(
+            "material '{}' {CUBIC_AXIS_VALIDATION_ERROR}",
+            material.name
+        ));
+    }
+
+    let norm1 = (axis1[0] * axis1[0] + axis1[1] * axis1[1] + axis1[2] * axis1[2]).sqrt();
+    let norm2 = (axis2[0] * axis2[0] + axis2[1] * axis2[1] + axis2[2] * axis2[2]).sqrt();
+    if !(norm1 > 1e-30 && norm1.is_finite() && norm2 > 1e-30 && norm2.is_finite()) {
+        return Some(format!(
+            "material '{}' {CUBIC_AXIS_VALIDATION_ERROR}",
+            material.name
+        ));
+    }
+
+    let c1 = [axis1[0] / norm1, axis1[1] / norm1, axis1[2] / norm1];
+    let c2 = [axis2[0] / norm2, axis2[1] / norm2, axis2[2] / norm2];
+    let dot = c1[0] * c2[0] + c1[1] * c2[1] + c1[2] * c2[2];
+    let cross = [
+        c1[1] * c2[2] - c1[2] * c2[1],
+        c1[2] * c2[0] - c1[0] * c2[2],
+        c1[0] * c2[1] - c1[1] * c2[0],
+    ];
+    let cross_norm = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+    if !dot.is_finite()
+        || !cross_norm.is_finite()
+        || dot.abs() > CUBIC_AXIS_ORTHOGONALITY_DOT_TOL
+        || cross_norm < CUBIC_AXIS_ORTHOGONALITY_CROSS_MIN_NORM
+    {
+        return Some(format!(
+            "material '{}' {CUBIC_AXIS_VALIDATION_ERROR}",
+            material.name
+        ));
+    }
+
+    None
+}
+
 fn normalize_nonzero_vector3(value: [f64; 3], field_name: &str) -> Result<[f64; 3], String> {
     if value.iter().any(|component| !component.is_finite()) {
         return Err(format!("{field_name} must contain finite values"));
@@ -413,7 +474,7 @@ pub(crate) fn plan_fem(
             reasons: vec![format!(
                 "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
                      Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -426,7 +487,7 @@ pub(crate) fn plan_fem(
         return Err(PlanError {
             reasons: vec![format!(
                 "{} Missing shared-domain FEM mesh with air.",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -465,6 +526,9 @@ pub(crate) fn plan_fem(
             ));
             continue;
         };
+        if let Some(reason) = validate_cubic_anisotropy_axes(&material) {
+            errors.push(reason);
+        }
         if let Some(reference_material) = selected_material.as_ref() {
             if !compatible_fem_material(reference_material, &material) {
                 if !heterogeneous_fem_material_shape_supported(reference_material, &material) {
@@ -766,7 +830,7 @@ pub(crate) fn plan_fem(
         return Err(PlanError {
             reasons: vec![format!(
                 "{} Shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Materialize a conformal domain mesh with air via study.build_domain_mesh() / study.domain_mesh(...).",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -823,7 +887,7 @@ pub(crate) fn plan_fem(
             return Err(PlanError {
                 reasons: vec![format!(
                     "{} The resolved FEM mesh has no air elements.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                    FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
                 )],
             });
         }
@@ -1165,7 +1229,7 @@ pub(crate) fn plan_fem_eigen(
             reasons: vec![format!(
                 "{} Shared-domain FEM mesh (fem_domain_mesh_asset) was not provided. \
                      Call study.build_domain_mesh() or study.domain_mesh(...) before solving.",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -1178,7 +1242,7 @@ pub(crate) fn plan_fem_eigen(
         return Err(PlanError {
             reasons: vec![format!(
                 "{} Missing shared-domain FEM mesh with air.",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -1580,7 +1644,7 @@ pub(crate) fn plan_fem_eigen(
         return Err(PlanError {
             reasons: vec![format!(
                 "{} Shared-domain FEM was requested, but the resolved final FEM mesh has no air region. Attach a conformal shared-domain mesh asset.",
-                FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
             )],
         });
     }
@@ -1619,7 +1683,7 @@ pub(crate) fn plan_fem_eigen(
             return Err(PlanError {
                 reasons: vec![format!(
                     "{} The resolved FEM mesh has no air elements.",
-                    FEM_TRANSFER_GRID_REMOVAL_MESSAGE
+                    FEM_AIRBOX_DEMAG_REQUIRED_MESSAGE
                 )],
             });
         }

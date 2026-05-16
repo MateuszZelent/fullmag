@@ -159,7 +159,7 @@ study.universe(
 
 1. **Element count**: geometric should produce ~5-10× fewer elements for same accuracy
 2. **Quality metrics**: SICN distribution should not degrade
-3. **Solver convergence**: demag field should match reference (transfer-grid or FDM)
+3. **Solver convergence**: demag field should match a Poisson-airbox or analytical reference
 4. **Visual inspection**: no abrupt size jumps in mesh
 
 ## 7. Implementation checklist

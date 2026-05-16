@@ -186,8 +186,11 @@ pub async fn get_mesh_active_build(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let provenance = mesh_build_provenance(&snapshot);
     let body = MeshActiveBuildResource {
         revision: snapshot.mesh_build_revision,
+        source_scene_revision: provenance.source_scene_revision,
+        geometry_realization_revision: provenance.geometry_realization_revision,
         active_build: mesh_workspace.get("active_build").cloned(),
         mesh_pipeline_status: mesh_workspace.get("mesh_pipeline_status").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
@@ -268,8 +271,11 @@ pub async fn get_mesh_last_successful_build(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
+    let provenance = mesh_build_provenance(&snapshot);
     let body = MeshLastSuccessfulBuildResource {
         revision: snapshot.mesh_build_revision,
+        source_scene_revision: provenance.source_scene_revision,
+        geometry_realization_revision: provenance.geometry_realization_revision,
         last_success: mesh_workspace.get("last_build_summary").cloned(),
         effective_airbox_target: mesh_workspace.get("effective_airbox_target").cloned(),
         effective_per_object_targets: mesh_workspace.get("effective_per_object_targets").cloned(),
@@ -781,8 +787,16 @@ pub async fn get_mesh_shared_domain_manifest(
             };
             let generation_id = mesh.generation_id.as_deref().unwrap_or("no-generation");
             let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-                "mesh-shared-domain-manifest:{generation_id}:{}",
-                snapshot.mesh_revision
+                "mesh-shared-domain-manifest:{generation_id}:{}:{}:{}",
+                snapshot.mesh_revision,
+                provenance
+                    .source_scene_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                provenance
+                    .geometry_realization_revision
+                    .map(|revision| revision.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
             ));
             Ok(
                 crate::router_v2::handlers::shared::conditional_json_response(
@@ -797,6 +811,9 @@ pub async fn get_mesh_shared_domain_manifest(
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/meshing/meshes/shared-domain/topology",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous shared-domain topology response")
+    ),
     responses(
         (status = 200, description = "Binary shared-domain FEM topology (FMMT)", content_type = "application/octet-stream"),
         (status = 304, description = "Shared-domain topology not modified for the supplied ETag"),
@@ -1034,6 +1051,7 @@ pub async fn get_mesh_object_size_field(
     get,
     path = "/v2/sessions/current/meshing/meshes/objects/{object_id}/topology",
     params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous object-topology response"),
         ("object_id" = String, Path, description = "Canonical scene object id")
     ),
     responses(
@@ -1075,6 +1093,7 @@ pub async fn get_mesh_object_topology(
     get,
     path = "/v2/sessions/current/meshing/meshes/parts/{part_id}/topology",
     params(
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous part-topology response"),
         ("part_id" = String, Path, description = "Stable FEM mesh part id, for example an airbox part")
     ),
     responses(
@@ -1465,7 +1484,7 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
         .mesh_workspace
         .as_ref()
         .and_then(|workspace| workspace.get("last_build_summary"));
-    MeshBuildProvenance {
+    let provenance = MeshBuildProvenance {
         source_scene_revision: last_build
             .and_then(|summary| summary.get("source_scene_revision"))
             .and_then(Value::as_u64)
@@ -1479,7 +1498,54 @@ fn mesh_build_provenance(snapshot: &SessionStateResponse) -> MeshBuildProvenance
             .and_then(|summary| summary.get("geometry_realization"))
             .and_then(|realization| realization.get("realization_revision"))
             .and_then(Value::as_u64),
+    };
+
+    if provenance.source_scene_revision.is_some() {
+        return provenance;
     }
+
+    clean_scene_mesh_provenance(snapshot).unwrap_or(provenance)
+}
+
+fn clean_scene_mesh_provenance(snapshot: &SessionStateResponse) -> Option<MeshBuildProvenance> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let mesh = snapshot.fem_mesh.as_ref()?;
+    if scene
+        .objects
+        .iter()
+        .any(|object| object.tags.iter().any(|tag| tag == "mesh:dirty"))
+    {
+        return None;
+    }
+
+    let scene_object_ids = scene
+        .objects
+        .iter()
+        .filter(|object| object.visible)
+        .map(|object| object.id.clone())
+        .collect::<BTreeSet<_>>();
+    if scene_object_ids.is_empty() {
+        return None;
+    }
+
+    let mesh_object_ids = mesh
+        .object_segments
+        .iter()
+        .map(|segment| segment.object_id.clone())
+        .chain(
+            mesh.mesh_parts
+                .iter()
+                .filter_map(|part| part.object_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    if !scene_object_ids.is_subset(&mesh_object_ids) {
+        return None;
+    }
+
+    Some(MeshBuildProvenance {
+        source_scene_revision: Some(scene.revision),
+        geometry_realization_revision: Some(scene.revision),
+    })
 }
 
 fn build_periodic_pairs_resource(

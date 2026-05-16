@@ -17,7 +17,7 @@ HBAR = 1.054_571_817e-34
 
 LENGTH = 2.5e-6
 WIDTH = 1.0e-6
-HEIGHT = 2e-9
+HEIGHT = 20e-9
 ARCH_HEIGHT = 50e-9
 Z0 = -ARCH_HEIGHT / 2.0
 
@@ -68,7 +68,7 @@ waveguide.Aex = AEX
 waveguide.alpha = ALPHA
 waveguide.Ku1 = KU1
 waveguide.anisU = ANIS_U
-waveguide.m = fm.texture.uniform(0.0, 0.0, 1.0)
+waveguide.m = fm.texture.random(seed=1)
 waveguide.mesh(
     maximum_element_size=6e-9,
     minimum_element_size=1.8e-9,

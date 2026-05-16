@@ -1,10 +1,11 @@
 //! API request/response types and view models.
 
-use crate::schemas::commands::CommandResponse;
+use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
-    VectorStyleVisualizationState, VisualizationLayerState, VisualizationOverrideState,
+    VectorStyleVisualizationState, VisualizationCameraState, VisualizationClientAckEntry,
+    VisualizationLayerState, VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -16,7 +17,7 @@ use fullmag_runner::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -48,6 +49,8 @@ pub(crate) struct DisplayPresentationState {
     #[serde(default)]
     pub visualization_trim: Option<TrimVisualizationState>,
     #[serde(default)]
+    pub visualization_camera: Option<VisualizationCameraState>,
+    #[serde(default)]
     pub visualization_clip: Option<ClipVisualizationState>,
     #[serde(default)]
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
@@ -68,6 +71,7 @@ impl Default for DisplayPresentationState {
             visualization_fem: None,
             visualization_slice: None,
             visualization_trim: None,
+            visualization_camera: None,
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,
@@ -100,6 +104,11 @@ pub(crate) struct AppState {
     pub current_display_selection: Arc<RwLock<CurrentDisplaySelection>>,
     /// Presentation-only display options that are not part of runner semantics.
     pub current_display_presentation: Arc<RwLock<DisplayPresentationState>>,
+    /// Latest viewport client acknowledgements for visualization state revisions.
+    pub current_visualization_client_acks:
+        Arc<RwLock<BTreeMap<String, VisualizationClientAckEntry>>>,
+    /// Monotonic revision of the visualization client acknowledgement resource.
+    pub current_visualization_client_ack_revision: Arc<AtomicU64>,
     /// Workspace-only selection state for the local control room.
     pub current_workspace_selection: Arc<RwLock<CurrentWorkspaceSelection>>,
     /// Workspace-only ribbon state for the local control room.
@@ -346,6 +355,8 @@ pub(crate) struct StepUpdateView {
     /// Retained for backwards-compatible imports / load_state only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub magnetization: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
     /// **Deprecated (Q17):** Never serialized to the frontend
     /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
     /// rebuild; will be removed once preview pipeline is fully quantities-based.
@@ -388,6 +399,7 @@ impl StepUpdateView {
             max_h_demag: self.max_h_demag,
             max_torque_Apm: self.max_torque_Apm,
             max_torque_T: self.max_torque_T,
+            per_object_scalars: self.per_object_scalars.clone(),
             ..Default::default()
         };
 
@@ -791,7 +803,23 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
 pub(crate) struct StageExecutionRecord {
     pub status: StageLifecycleState,
     #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub completed_at_unix_ms: Option<u64>,
+    #[serde(default)]
     pub reason: Option<fullmag_ir::StageStopReason>,
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    #[serde(default)]
+    pub checkpoint_ref: Option<String>,
+    #[serde(default)]
+    pub loaded_state_ref: Option<String>,
+    #[serde(default)]
+    pub resume_from_checkpoint_ref: Option<String>,
+    #[serde(default)]
+    pub state_transition: Option<String>,
     #[serde(default)]
     pub metric_name: Option<String>,
     #[serde(default)]
@@ -848,6 +876,7 @@ pub(crate) enum StageLifecycleState {
     Pending,
     Running,
     Paused,
+    Skipped,
     Completed,
     Cancelled,
     Stopped,
@@ -862,6 +891,7 @@ impl StageLifecycleState {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Paused => "paused",
+            Self::Skipped => "skipped",
             Self::Completed => "completed",
             Self::Cancelled => "cancelled",
             Self::Stopped => "stopped",
@@ -893,6 +923,16 @@ pub(crate) struct SessionCommand {
     pub command_id: String,
     pub kind: String,
     pub created_at_unix_ms: u128,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<RuntimeCommandTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precondition: Option<RuntimeCommandPrecondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_intent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -987,6 +1027,8 @@ impl CommandCompletionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TrackedCommandRecord {
     pub command: SessionCommand,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub status: CommandLifecycleState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatched_at_unix_ms: Option<u128>,
@@ -1254,6 +1296,7 @@ mod tests {
             grid: [2, 1, 1],
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            per_object_scalars: Default::default(),
             preview_field: None,
             finished: false,
         };

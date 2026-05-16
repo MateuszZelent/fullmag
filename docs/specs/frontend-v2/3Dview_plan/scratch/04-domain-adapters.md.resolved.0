@@ -1,0 +1,200 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 04 — Domain Adapters
+
+## 1. The v1 Problem
+
+In v1, FDM and FEM rendering were forked **inside** the renderer:
+- `UnifiedViewport3D` had a `discretization` prop
+- Layer components checked `discretization` to decide rendering strategy
+- The `Viewport3DModel` in `view3d/contracts.ts` knew about both FDM and FEM fields
+
+This means every new rendering feature had to be implemented twice, and the "unified" viewport was unified in name only.
+
+## 2. v2 Strategy: Adapter Pattern
+
+```mermaid
+flowchart LR
+  FDM_API["FDM grid data"] --> FdmAdapter["FdmDomainAdapter"]
+  FEM_API["FEM topology binary"] --> FemAdapter["FemDomainAdapter"]
+  FdmAdapter --> RenderModel["TopologyRenderData"]
+  FemAdapter --> RenderModel
+  RenderModel --> Renderer["MeshLayerRenderer"]
+```
+
+The renderer sees only `TopologyRenderData`. It doesn't know if the data came from a structured grid or an unstructured mesh.
+
+## 3. Interface — lives in `src/domain/adapters/`
+
+```typescript
+export interface SpatialDomainAdapter {
+  readonly kind: "fdm" | "fem";
+  readonly generationId: number;
+  readonly pointCount: number;
+
+  getBounds(): Bounds3;
+  getPositions(): Float32Array;
+  getIndices(): Uint32Array | null;
+  getNormals(): Float32Array | null;
+  getRenderGeometry(): RenderGeometry;
+  getDomainInfo(): DomainInfo;
+}
+```
+
+This interface is reused from v1 (`apps/web/src/domain/adapters/SpatialDomainAdapter.ts`) but promoted to `src/domain/adapters/` in the control-room.
+
+## 4. FDM Adapter
+
+FDM domains have structured grids — no explicit topology.
+
+```typescript
+export class FdmDomainAdapter implements SpatialDomainAdapter {
+  readonly kind = "fdm";
+
+  constructor(private meta: DomainMeta) { ... }
+
+  getPositions(): Float32Array {
+    // Build cell-center positions from grid shape + origin + spacing
+    const [nx, ny, nz] = grid.shape;
+    const [ox, oy, oz] = grid.origin;
+    const [dx, dy, dz] = grid.spacing;
+    // ... interleaved xyz
+  }
+
+  getIndices(): Uint32Array | null {
+    return null; // FDM: no explicit topology
+  }
+
+  getRenderGeometry(): RenderGeometry {
+    return {
+      positions: this.getPositions(),
+      indices: null,  // renderer uses instanced cubes
+      normals: null,
+      cellCount: this.pointCount,
+      vertexCount: this.pointCount,
+    };
+  }
+}
+```
+
+**FDM rendering note:** MeshLayerRenderer detects `indices === null` and uses `THREE.InstancedMesh` with cube geometry at cell centers. The cube size comes from grid spacing.
+
+## 5. FEM Adapter
+
+FEM domains have unstructured meshes with explicit topology (boundary faces).
+
+```typescript
+export class FemDomainAdapter implements SpatialDomainAdapter {
+  readonly kind = "fem";
+
+  constructor(private meta: DomainMeta, private topology: DecodedTopology) { ... }
+
+  getPositions(): Float32Array { /* from topology.positions */ }
+  getIndices(): Uint32Array | null { return this.topology.boundaryFaces; }
+  getNormals(): Float32Array | null { return this.computeNormals(); }
+
+  getRenderGeometry(): RenderGeometry {
+    return {
+      positions: this.getPositions(),
+      indices: this.topology.boundaryFaces,
+      normals: this.computeNormals(),
+      cellCount: this.topology.elementCount,
+      vertexCount: this.pointCount,
+    };
+  }
+}
+```
+
+## 6. Render Model Builder
+
+Pure function: takes adapter output + resource data → `Viewport3DRenderModel`.
+
+```typescript
+export function buildViewport3DRenderModel(
+  adapter: SpatialDomainAdapter | null,
+  field: FieldResourceSnapshot | null,
+  visualization: VisualizationState,
+  selection: SelectionState,
+): Viewport3DRenderModel {
+  if (!adapter) {
+    return EMPTY_RENDER_MODEL;
+  }
+
+  const geometry = adapter.getRenderGeometry();
+
+  return {
+    topology: {
+      positions: geometry.positions,
+      indices: geometry.indices,
+      normals: geometry.normals,
+      cellCount: geometry.cellCount,
+      vertexCount: geometry.vertexCount,
+      topologyRevision: adapter.generationId,
+      domainKind: adapter.kind,
+    },
+    scalarField: field ? mapScalarField(field, visualization) : null,
+    vectorField: field ? mapVectorField(field, visualization) : null,
+    layers: visualization.layerVisibility,
+    selection: mapSelection(selection),
+    displayMode: visualization.displayMode,
+    // ...
+  };
+}
+```
+
+## 7. Resource Hooks
+
+These hooks live in `src/modules/viewport-3d/hooks/useViewport3DResources.ts` and aggregate multiple resource hooks into a single snapshot:
+
+```typescript
+export function useViewport3DResources(kernel: KernelApi) {
+  const sessionStatus = useSessionStatus(kernel);
+  const revisions = sessionStatus?.revisions;
+
+  const meshTopology = useMeshTopology(kernel, revisions?.topology);
+  const fieldData = useFieldData(kernel, revisions?.field, activeQuantity);
+  const vizState = useVisualizationState(kernel);
+
+  const adapter = useMemo(() => {
+    if (!sessionStatus?.domain) return null;
+    return createDomainAdapter(sessionStatus.domain, meshTopology?.decoded);
+  }, [sessionStatus?.domain, meshTopology]);
+
+  return { adapter, fieldData, vizState };
+}
+```
+
+## 8. Field Resource Hook
+
+```typescript
+export function useFieldData(
+  kernel: KernelApi,
+  fieldRevision: number | undefined,
+  quantityId: string | null,
+) {
+  // Only refetch when fieldRevision changes
+  // Decode binary field data via codec
+  // Return typed arrays for scalar and vector components
+}
+```
+
+**Critical:** field refetch does not trigger topology refetch. They are independent resources with independent revision pointers.
+
+## 9. File Locations
+
+```
+src/domain/
+  adapters/
+    SpatialDomainAdapter.ts        # interface (ported from v1)
+    FdmDomainAdapter.ts            # FDM: structured grid
+    FemDomainAdapter.ts            # FEM: unstructured mesh
+    createDomainAdapter.ts         # factory function
+  render-models/
+    meshRenderModel.ts             # TopologyRenderData type
+    fieldRenderModel.ts            # ScalarFieldRenderData, VectorFieldRenderData
+    sliceRenderModel.ts            # for 2D viewport (later)
+  units/
+    coordinates.ts                 # SI unit normalization
+    quantities.ts                  # quantity metadata
+```

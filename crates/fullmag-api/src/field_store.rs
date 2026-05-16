@@ -13,13 +13,35 @@ pub(crate) fn serialize_field_vector_binary_v2(
     n_comp: usize,
     grid: [u32; 3],
     values: &[f64],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
+    if n_comp == 0 {
+        return Err("FMVP n_comp must be greater than zero".to_string());
+    }
+    if n_comp > u8::MAX as usize {
+        return Err(format!("FMVP n_comp {n_comp} exceeds u8 header capacity"));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err("FMVP payload contains non-finite values".to_string());
+    }
+    let expected_value_count = grid
+        .iter()
+        .try_fold(1usize, |acc, value| acc.checked_mul(*value as usize))
+        .and_then(|point_count| point_count.checked_mul(n_comp))
+        .ok_or_else(|| "FMVP grid*n_comp overflows usize".to_string())?;
+    if values.len() != expected_value_count {
+        return Err(format!(
+            "FMVP value count mismatch: expected {expected_value_count}, got {}",
+            values.len()
+        ));
+    }
+
     let mut out = Vec::with_capacity(FIELD_VECTOR_BINARY_HEADER_LEN + values.len() * 8);
     out.extend_from_slice(b"FMVP");
     out.push(FIELD_VECTOR_BINARY_VERSION);
     out.push(FIELD_VECTOR_BINARY_KIND_F64);
-    out.push(n_comp.min(u8::MAX as usize) as u8);
+    out.push(n_comp as u8);
     out.push(0u8);
+    // Bytes 8..12 are reserved for future FMVP header flags.
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&(values.len() as u32).to_le_bytes());
     out.extend_from_slice(&grid[0].to_le_bytes());
@@ -32,13 +54,14 @@ pub(crate) fn serialize_field_vector_binary_v2(
     for _ in copy_len..FIELD_VECTOR_BINARY_QUANTITY_ID_LEN {
         out.push(0u8);
     }
+    // Bytes 44..48 are reserved padding after the fixed quantity id field.
     out.extend_from_slice(&[0u8; 4]);
 
     for value in values {
         out.extend_from_slice(&value.to_le_bytes());
     }
 
-    out
+    Ok(out)
 }
 
 pub(crate) fn serialize_fem_mesh_topology_binary_v1(
@@ -88,4 +111,25 @@ pub(crate) fn serialize_fem_mesh_topology_binary_v1(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serialize_field_vector_binary_v2;
+
+    #[test]
+    fn field_vector_serializer_rejects_zero_component_count() {
+        let error = serialize_field_vector_binary_v2("m", 0, [1, 1, 1], &[])
+            .expect_err("zero-component FMVP payloads must be rejected");
+
+        assert!(error.contains("n_comp"));
+    }
+
+    #[test]
+    fn field_vector_serializer_rejects_non_finite_values() {
+        let error = serialize_field_vector_binary_v2("m", 1, [1, 1, 1], &[f64::NAN])
+            .expect_err("non-finite FMVP payloads must be rejected");
+
+        assert!(error.contains("non-finite"));
+    }
 }

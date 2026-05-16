@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-03-23
+- Last updated: 2026-05-15
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -315,7 +315,47 @@ In practice:
 This decomposition is GPU-friendly because the expensive local operator applications are handled by
 partial assembly and device-resident quadrature kernels.
 
-#### 3.2.6 Multi-material interfaces and curved boundaries
+#### 3.2.6 Reusable Poisson RHS workspace
+
+The time-domain Poisson demag path evaluates the same right-hand side at every
+effective-field evaluation:
+
+$$
+b(v_h) = \int_{\Omega_m} \mathbf{M}_h\cdot\nabla v_h\,dV.
+$$
+
+Reusing the MFEM right-hand-side assembly object is a numerical implementation
+optimization only.  It must not change:
+
+- the magnetic source, $\mathbf{M}_h=M_s\mathbf{m}_h$,
+- the magnetic-domain restriction of the source term,
+- the air-domain zero source,
+- Dirichlet, Robin, or periodic demag boundary semantics,
+- the recovered observable $\mathbf{H}_{\mathrm{d},h}=-\nabla u_h$,
+- the demag energy observable.
+
+For a reusable `LinearForm`, the coefficient supplying $\mathbf{M}_h$ must have
+a lifetime at least as long as the integrator that stores it.  A coefficient may
+update its pointer to the current magnetization before each assembly, but it
+must not retain a reference to a temporary per-call vector after assembly
+returns.  This lifetime rule is part of the physical correctness contract,
+because a stale magnetization source would assemble the Poisson equation for
+the wrong state even if the weak form is unchanged.
+
+The first production optimization for this path is therefore:
+
+- allocate the Poisson RHS `LinearForm`, its `DomainLFGradIntegrator`, and the
+  true-DOF RHS vector during Poisson initialization,
+- update only the current magnetization source before each RHS assembly,
+- zero and reassemble the reusable form for each effective-field evaluation,
+- keep `demag_solve_count`, iterations, residuals, `H_demag`, and `E_demag`
+  reporting unchanged.
+
+This does not replace the later GPU target: a libCEED/MFEM device-side
+right-hand-side QFunction remains the intended follow-up once host/device
+transfer and field-recovery bottlenecks are addressed.
+
+#### 3.2.7 Multi-material interfaces and curved boundaries
 
 In FEM, curved boundaries and material interfaces are represented by the mesh itself rather than by
 staircasing.

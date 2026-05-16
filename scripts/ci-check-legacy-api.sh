@@ -2,7 +2,7 @@
 # CI gate: block legacy API usage in production frontend code.
 #
 # This script detects references to deprecated legacy API endpoints,
-# streaming hooks, and binary codecs in the apps/web source code.
+# streaming hooks, and binary codecs in the apps/control-room source code.
 # It excludes test files, the cleanup checklist, and this script itself.
 #
 # Exit codes:
@@ -22,10 +22,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WEB_DIR="$REPO_ROOT/apps/web"
+FRONTEND_DIR="$REPO_ROOT/apps/control-room"
+WEB_DIR="$FRONTEND_DIR"
 
 if [[ ! -d "$WEB_DIR" ]]; then
-  echo "ERROR: apps/web directory not found at $WEB_DIR"
+  echo "ERROR: apps/control-room directory not found at $WEB_DIR"
   exit 1
 fi
 

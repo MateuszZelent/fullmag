@@ -259,6 +259,30 @@ impl AbmHistory {
         self.last_dt = dt;
     }
 
+    /// Push a new RHS evaluation by copying into a reusable history slot.
+    ///
+    /// This preserves [`Self::push`] ordering and restart semantics, but after
+    /// all three slots exist it rotates and overwrites existing allocations.
+    pub(crate) fn push_copy_from_slice(&mut self, f: &[Vector3], dt: f64) {
+        // Check if dt has changed significantly — if so, restart.
+        if self.last_dt > 0.0 && (dt - self.last_dt).abs() / self.last_dt > 0.1 {
+            self.restart();
+        }
+
+        let mut newest = self
+            .f_n_minus_2
+            .take()
+            .unwrap_or_else(|| Vec::with_capacity(f.len()));
+        newest.clear();
+        newest.extend_from_slice(f);
+
+        self.f_n_minus_2 = self.f_n_minus_1.take();
+        self.f_n_minus_1 = self.f_n.take();
+        self.f_n = Some(newest);
+        self.startup_steps = (self.startup_steps + 1).min(3);
+        self.last_dt = dt;
+    }
+
     pub(crate) fn restart(&mut self) {
         *self = Self::new();
     }

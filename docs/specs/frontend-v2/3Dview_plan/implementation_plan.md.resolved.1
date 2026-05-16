@@ -1,0 +1,341 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 3D Visualization System — Revised Master Plan
+
+**Phase:** 5 of frontend-v2 implementation plan
+**Status:** Draft v2 — R3F decision + synchronized camera + API audit
+
+---
+
+## 1. Key Decision: React Three Fiber
+
+**Choice: Use `@react-three/fiber` (R3F) + `@react-three/drei`.**
+
+### Why R3F over raw Three.js
+
+| Concern | Raw Three.js | R3F |
+|---|---|---|
+| Dirty rendering | Manual `requestAnimationFrame` + dirty flag | `frameloop="demand"` + `invalidate()` built in |
+| Resource disposal | Manual `WebglResourceTracker` | Automatic — R3F disposes geometries/materials/textures on unmount |
+| React integration | Imperative bridge, ref gymnastics | Native — scene graph *is* the React tree |
+| Camera controls | Wire OrbitControls manually | `<OrbitControls>` from drei, 2 lines |
+| Testing | Mock canvas + WebGL stubs | `@react-three/test-renderer` |
+| Bundle | three.js (~600kB) | Same three.js + r3f (~40kB) + drei (~70kB selectively) |
+
+### Tension with existing spec
+
+The spec (14-viewport-3d-module.md) says "Layers are imperative renderer classes, not React components." R3F changes this — layers become R3F components (`<MeshLayer>`, `<VectorGlyphLayer>`, etc.) that manage their own Three.js objects declaratively.
+
+**Resolution:** The spec's intent was to avoid legacy v1 problems (React wrapper divs around imperative Three.js). R3F components *are* imperative under the hood — they directly manage Three.js objects without DOM. The anti-pattern was layers-as-React-DOM-wrappers, not layers-as-scene-graph-components. R3F solves the spec's actual concern.
+
+### What stays the same
+
+- Domain adapters remain plain TypeScript classes (no R3F dependency)
+- `buildViewport3DRenderModel()` remains a pure function
+- Resource hooks remain standard React hooks
+- `WebglResourceTracker` becomes simpler (R3F handles most disposal) but we keep it for non-R3F resources (workers, large typed arrays)
+- Module manifest, store, and event contracts unchanged
+
+---
+
+## 2. Camera Synchronization Model
+
+### User requirement
+> "Chcę aby w każdym oknie obrót był synchronizowany. W jednym oknie wektory, w drugim airbox, w trzecim wireframe — ale mogę obrócić kamerę w każdym jednocześnie."
+
+### Design: Shared Camera Store
+
+All panes share **one camera state**. Interacting with any pane updates the shared state → all panes re-render.
+
+```typescript
+// viewport-3d/store.ts
+interface CameraState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fov: number;
+  near: number;
+  far: number;
+}
+
+interface Viewport3DStore {
+  camera: CameraState;
+  setCamera: (patch: Partial<CameraState>) => void;
+
+  gridLayout: ViewportGridLayout;
+  panes: ViewportPaneConfig[];
+  activePaneId: string;
+  // ...
+}
+```
+
+### Per-Pane Config (layers only)
+
+Each pane controls **which layers are visible** and **display mode**, but NOT the camera:
+
+```typescript
+interface ViewportPaneConfig {
+  id: string;
+  label: string;
+  displayMode: DisplayMode;              // shaded, wireframe, etc.
+  layers: {
+    meshSurface: boolean;
+    vectorGlyphs: boolean;
+    scalarField: boolean;
+    wireframe: boolean;
+    airbox: boolean;
+    axesGrid: boolean;
+    selection: boolean;
+    clipPlane: boolean;
+  };
+}
+```
+
+### Example: 3-pane setup
+
+| Pane | layers.vectorGlyphs | layers.airbox | layers.wireframe | displayMode |
+|---|---|---|---|---|
+| Left (main) | ✓ | ✗ | ✗ | shaded |
+| Top-right | ✗ | ✓ | ✗ | shaded |
+| Bottom-right | ✗ | ✗ | ✓ | wireframe |
+
+Camera rotation in *any* pane → all three panes rotate together.
+
+### R3F Implementation
+
+```tsx
+function ViewportPane({ config, renderModel }: PanePropss) {
+  const camera = useViewport3DStore((s) => s.camera);
+  const setCamera = useViewport3DStore((s) => s.setCamera);
+
+  return (
+    <Canvas frameloop="demand" camera={camera}>
+      <SyncedOrbitControls camera={camera} onChange={setCamera} />
+
+      {config.layers.meshSurface && <MeshSurfaceLayer topology={renderModel.topology} />}
+      {config.layers.scalarField && <ScalarFieldLayer field={renderModel.scalarField} />}
+      {config.layers.vectorGlyphs && <VectorGlyphLayer vectors={renderModel.vectorField} />}
+      {config.layers.wireframe && <WireframeLayer topology={renderModel.topology} />}
+      {config.layers.airbox && <AirboxLayer bounds={renderModel.domain?.bounds} />}
+      {config.layers.axesGrid && <AxesGridLayer bounds={renderModel.domain?.bounds} />}
+      {config.layers.selection && <SelectionLayer selection={renderModel.selection} />}
+      {config.layers.clipPlane && <ClipPlaneLayer clip={renderModel.clip} />}
+    </Canvas>
+  );
+}
+```
+
+`SyncedOrbitControls` reads from the shared store and writes back on change. Each `<Canvas>` calls `invalidate()` when the camera store updates → dirty render.
+
+---
+
+## 3. API Audit — Data Flow Verification
+
+### Full chain: backend → frontend → canvas
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Backend (Rust)                                                         │
+│                                                                        │
+│  GET /v2/sessions/current/status                                       │
+│    → LiveStatus.resources.topology_revision                            │
+│    → LiveStatus.resources.field_revision                               │
+│    → LiveStatus.domain (DomainSummary: discretization, generation_id)  │
+│    → LiveStatus.capabilities.preview_3d (gates viewport module)        │
+│                                                                        │
+│  GET /v2/sessions/current/data/domain/meta                             │
+│    → DomainMeta (bounds, grid, counts, discretization)                 │
+│                                                                        │
+│  GET /v2/sessions/current/data/domain/topology (binary FMMT)           │
+│    → DecodedTopology (positions, boundaryFaces, indices, markers)       │
+│                                                                        │
+│  GET /v2/sessions/current/data/fields/{quantity_id}/samples/vector      │
+│    → DecodedFieldVector (values Float64Array, grid, nComp)             │
+│                                                                        │
+│  GET /v2/sessions/current/visualization/state                          │
+│    → VisualizationStateResource (layers, quantity, clip, overrides)     │
+│                                                                        │
+│  WS  /v2/sessions/current/events/ws                                    │
+│    → realtime revision ticks                                           │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Kernel API Layer (already built)                                       │
+│                                                                        │
+│  ControlRoomApi.sessions.current.status()   → LiveStatusResource       │
+│  useSessionStatus()                         → ResourceResult<LiveStatus>│
+│  useResource({ resourceKey, load })         → revision-gated fetch     │
+│  RealtimeInvalidationBridge                 → WS → resource invalidation│
+│  fieldVectorCodec.decode()                  → DecodedFieldVector        │
+│  topologyCodec.decode()                     → DecodedTopology           │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Domain Adapters (to be built in src/domain/)                           │
+│                                                                        │
+│  createDomainAdapter(domainMeta, decodedTopology?)                      │
+│    → FdmDomainAdapter | FemDomainAdapter                               │
+│    → SpatialDomainAdapter interface                                    │
+│    → getRenderGeometry() → positions, indices, normals                 │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Render Model Builder (to be built in viewport-3d/model/)               │
+│                                                                        │
+│  buildViewport3DRenderModel(adapter, field, vizState, selection)        │
+│    → Viewport3DRenderModel                                             │
+│    → topology: { positions, indices, normals, topologyRevision }       │
+│    → scalarField: { values, min, max, quantityId, fieldRevision }      │
+│    → vectorField: { positions, directions, magnitudes }                │
+│    → layers, selection, clip, displayMode, cameraHint                  │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ R3F Scene (to be built in viewport-3d/components/)                     │
+│                                                                        │
+│  <ViewportGrid>                                                        │
+│    <ViewportPane config={pane1}>                                       │
+│      <Canvas frameloop="demand">                                       │
+│        <SyncedOrbitControls />                                         │
+│        <MeshSurfaceLayer topology={...} />                             │
+│        <ScalarFieldLayer field={...} />                                │
+│        <VectorGlyphLayer vectors={...} />                              │
+│        ...                                                             │
+│      </Canvas>                                                         │
+│    </ViewportPane>                                                      │
+│    ...more panes                                                       │
+│  </ViewportGrid>                                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Gaps identified
+
+| # | Gap | Status | Fix |
+|---|---|---|---|
+| 1 | `ControlRoomApi` has no method for `GET /data/domain/meta` | Missing | Add `api.data.domain.meta()` to facade |
+| 2 | `ControlRoomApi` has no method for `GET /data/domain/topology` (binary) | Missing | Add `api.data.domain.topology()` → binary → `topologyCodec.decode()` |
+| 3 | `ControlRoomApi` has no method for `GET /data/fields/{id}/samples/vector` (binary) | Missing | Add `api.data.fields.vector(quantityId)` → binary → `fieldVectorCodec.decode()` |
+| 4 | `ControlRoomApi` has no method for `GET /visualization/state` | Missing | Add `api.visualization.state()` |
+| 5 | `ControlRoomApi` has no method for `PATCH /visualization/state` | Missing | Add `api.visualization.patch(body)` |
+| 6 | No `useMeshTopology()` hook | Missing | Build on `useResource` pattern |
+| 7 | No `useFieldData()` hook | Missing | Build on `useResource` pattern |
+| 8 | No `useVisualizationState()` hook | Missing | Build on `useResource` pattern |
+| 9 | `three`, `@react-three/fiber`, `@react-three/drei` not in dependencies | Missing | `pnpm add` |
+
+Gaps 1–5 are API facade methods — straightforward additions following the existing `ControlRoomApi` pattern. Gaps 6–8 are resource hooks following the `useSessionStatus` pattern. Gap 9 is a package install.
+
+**Everything else is already wired:** the generated OpenAPI types have `DomainMeta`, `DecodedTopology` codec, `DecodedFieldVector` codec, `VisualizationStateResource`, `ResourceRevisionMap` with independent `topology_revision` and `field_revision`, and the realtime WS invalidation bridge.
+
+---
+
+## 4. Revised File Tree
+
+```
+src/modules/viewport-3d/
+  manifest.ts
+  Viewport3DModule.tsx              # Module root
+  store.ts                          # Zustand: camera, grid layout, pane configs
+  components/
+    ViewportGrid.tsx                # CSS grid layout for panes
+    ViewportPane.tsx                # <Canvas> host with R3F scene
+    ViewportToolbar.tsx             # Pane controls (display mode, layer toggles)
+    ViewportOverlayStack.tsx        # Legend, status chips, labels
+    SyncedOrbitControls.tsx         # Camera sync between panes
+  layers/                           # R3F components — each renders one visual layer
+    MeshSurfaceLayer.tsx
+    ScalarFieldLayer.tsx
+    VectorGlyphLayer.tsx
+    WireframeLayer.tsx
+    SelectionLayer.tsx
+    AxesGridLayer.tsx
+    AirboxLayer.tsx
+    ClipPlaneLayer.tsx
+  hooks/
+    useViewport3DResources.ts       # Aggregates topology + field + viz hooks
+    useDomainMeta.ts                # GET /data/domain/meta
+    useMeshTopology.ts              # GET /data/domain/topology (binary)
+    useFieldData.ts                 # GET /data/fields/{id}/samples/vector (binary)
+    useVisualizationState.ts        # GET /visualization/state
+  model/
+    viewport3DTypes.ts              # All TypeScript interfaces
+    buildViewport3DRenderModel.ts   # adapter + field + viz → RenderModel
+  __tests__/
+    store.test.ts
+    buildViewport3DRenderModel.test.ts
+    ViewportGrid.test.tsx
+
+src/domain/
+  adapters/
+    SpatialDomainAdapter.ts         # Interface
+    FdmDomainAdapter.ts
+    FemDomainAdapter.ts
+    createDomainAdapter.ts
+  render-models/
+    topologyRenderModel.ts
+    fieldRenderModel.ts
+```
+
+---
+
+## 5. Delivery Phases (revised)
+
+### Phase 5a — Dependencies + API Facade Extensions
+- Add `three`, `@react-three/fiber`, `@react-three/drei` to package.json
+- Add API facade methods: `domain.meta()`, `domain.topology()`, `fields.vector()`, `visualization.state()`, `visualization.patch()`
+- Add resource hooks: `useDomainMeta`, `useMeshTopology`, `useFieldData`, `useVisualizationState`
+- Tests for all new hooks and facade methods
+
+### Phase 5b — Domain Adapters
+- Port `SpatialDomainAdapter`, `FdmDomainAdapter`, `FemDomainAdapter` to `src/domain/`
+- `buildViewport3DRenderModel()` pure function
+- Unit tests for adapters and render model builder
+
+### Phase 5c — Single-Pane Viewport
+- Module manifest + module root
+- Single `<Canvas>` with `<MeshSurfaceLayer>`
+- `SyncedOrbitControls` with camera store
+- Basic shaded rendering of topology
+- `frameloop="demand"` — verify zero idle frames
+
+### Phase 5d — Field Visualization Layers
+- `<ScalarFieldLayer>` — vertex color mapping
+- `<VectorGlyphLayer>` — instanced arrows
+- `<WireframeLayer>` — edge overlay
+- `<AirboxLayer>`, `<AxesGridLayer>`
+- Quantity switching without topology rebuild
+
+### Phase 5e — Multi-Viewport Grid
+- `<ViewportGrid>` with CSS grid
+- `<ViewportPane>` per-pane layer configuration
+- Shared camera sync across all panes
+- Layout presets (single, split-h, split-v, quad, one-plus-two)
+- Toolbar per pane for layer toggles and display mode
+
+### Phase 5f — Selection, Picking, Polish
+- `<SelectionLayer>` outline/highlight
+- Raycasting pick → `viewport:object-picked` event
+- `<ClipPlaneLayer>`
+- Context loss recovery
+- Memory stress test, idle audit
+- Diagnostics surface
+
+---
+
+## 6. Open Questions
+
+> [!IMPORTANT]
+> **Camera interaction library:**
+> drei's `<OrbitControls>` gives orbit/pan/zoom for free. But it might conflict with the camera sync model (it owns its own camera internally). Alternative: build `SyncedOrbitControls` from scratch using drei's `useGesture` or raw pointer events. I lean toward wrapping `OrbitControls` with a sync adapter — less code, proven interaction. Thoughts?
+
+> [!IMPORTANT]
+> **Per-pane quantity override:**
+> Currently the plan has all panes showing the same quantity (from `VisualizationStateResource`). Do you want per-pane quantity selection too? E.g., pane 1 shows `m` (magnetization), pane 2 shows `h_eff` (effective field), pane 3 shows airbox only. This would mean per-pane field resource hooks — more memory but very useful for comparison.
+
+> [!IMPORTANT]
+> **Gizmo / transform tool timing:**
+> ADR-0007 defines camera vs manipulate modes. Should transform gizmos (move/rotate/scale geometry) be part of Phase 5 or deferred to Phase 4 (geometry-authoring module)?

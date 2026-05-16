@@ -14,7 +14,7 @@ use fullmag_authoring::{
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
 use fullmag_plan::{sample_preset_texture, TextureSamplePoint};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -74,6 +74,8 @@ pub(crate) struct CurrentLiveRealtimeState {
     pub session_id: String,
     pub run_id: Option<String>,
     pub revisions: RealtimeResourceRevisionMap,
+    pub field_vector_fetches: Vec<String>,
+    pub mesh_resource_fetches: Vec<String>,
 }
 
 fn realtime_timestamp_now() -> String {
@@ -101,10 +103,14 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
 ) -> CurrentLiveRealtimeState {
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
-        (
-            ledger.len() as u64,
-            ledger.back().map(|record| record.command.seq).unwrap_or(0),
-        )
+        let commands_revision = ledger.len() as u64;
+        let command_completion_revision = ledger
+            .iter()
+            .filter_map(|record| record.completed_at_unix_ms)
+            .filter_map(|value| u64::try_from(value).ok())
+            .max()
+            .unwrap_or_else(|| ledger.back().map(|record| record.command.seq).unwrap_or(0));
+        (commands_revision, command_completion_revision)
     };
     let workspace_revision = current_live_workspace_revision(state).await;
     let domain_generation_id = snapshot
@@ -122,6 +128,8 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
     CurrentLiveRealtimeState {
         session_id: snapshot.session.session_id.clone(),
         run_id: snapshot.run.as_ref().map(|run| run.run_id.clone()),
+        field_vector_fetches: current_live_field_vector_fetches(snapshot),
+        mesh_resource_fetches: current_live_mesh_resource_fetches(snapshot),
         revisions: RealtimeResourceRevisionMap {
             topology_revision: router_v2::handlers::sessions::status::topology_revision(
                 snapshot,
@@ -151,6 +159,54 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         },
     }
+}
+
+fn current_live_field_vector_fetches(snapshot: &SessionStateResponse) -> Vec<String> {
+    let mut quantity_ids = BTreeSet::new();
+    for quantity in snapshot
+        .quantities
+        .iter()
+        .filter(|quantity| quantity.available && quantity.supports_preview_3d)
+    {
+        quantity_ids.insert(quantity.id.clone());
+    }
+
+    if quantity_ids.is_empty() && snapshot.live_state.is_some() {
+        quantity_ids.insert("m".to_string());
+    }
+
+    quantity_ids
+        .into_iter()
+        .map(|quantity_id| {
+            format!(
+                "/v2/sessions/current/data/fields/{quantity_id}/samples/vector?component=full&scope_kind=full"
+            )
+        })
+        .collect()
+}
+
+fn current_live_mesh_resource_fetches(snapshot: &SessionStateResponse) -> Vec<String> {
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut fetches = vec![
+        "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
+        "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+    ];
+    fetches.extend(mesh.object_segments.iter().map(|segment| {
+        format!(
+            "/v2/sessions/current/meshing/meshes/objects/{}/topology",
+            segment.object_id
+        )
+    }));
+    fetches.extend(mesh.mesh_parts.iter().map(|part| {
+        format!(
+            "/v2/sessions/current/meshing/meshes/parts/{}/topology",
+            part.id
+        )
+    }));
+    fetches
 }
 
 async fn current_live_workspace_revision(state: &AppState) -> u64 {
@@ -207,6 +263,13 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/data/domain/meta".to_string()),
         },
         RealtimeResourceChange {
+            resource: RealtimeResourceName::Domain,
+            revision: realtime_state.revisions.topology_revision,
+            resource_id: Some("topology".to_string()),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some("/v2/sessions/current/data/domain/topology".to_string()),
+        },
+        RealtimeResourceChange {
             resource: RealtimeResourceName::Artifacts,
             revision: realtime_state.revisions.artifacts_revision,
             resource_id: None,
@@ -221,6 +284,19 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/diagnostics/engine-log".to_string()),
         },
     ];
+    for recommended_fetch in &realtime_state.field_vector_fetches {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Fields,
+            revision: realtime_state.revisions.field_revision,
+            resource_id: recommended_fetch
+                .split("/data/fields/")
+                .nth(1)
+                .and_then(|tail| tail.split('/').next())
+                .map(ToOwned::to_owned),
+            domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+            recommended_fetch: Some(recommended_fetch.clone()),
+        });
+    }
     if realtime_state.revisions.mesh_revision > 0 {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Mesh,
@@ -229,6 +305,15 @@ fn current_live_realtime_changes(
             domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
             recommended_fetch: Some("/v2/sessions/current/meshing/summary".to_string()),
         });
+        for recommended_fetch in &realtime_state.mesh_resource_fetches {
+            changes.push(RealtimeResourceChange {
+                resource: RealtimeResourceName::Mesh,
+                revision: realtime_state.revisions.mesh_revision,
+                resource_id: None,
+                domain_generation_id: Some(realtime_state.revisions.domain_generation_id),
+                recommended_fetch: Some(recommended_fetch.clone()),
+            });
+        }
     }
     if realtime_state.revisions.mesh_build_revision > 0 {
         changes.push(RealtimeResourceChange {
@@ -269,6 +354,65 @@ fn current_live_realtime_changes(
     changes
 }
 
+#[cfg(test)]
+mod realtime_change_tests {
+    use super::*;
+
+    fn revisions() -> RealtimeResourceRevisionMap {
+        RealtimeResourceRevisionMap {
+            topology_revision: 11,
+            field_catalog_revision: 12,
+            field_revision: 13,
+            slice_revision: 14,
+            artifact_revision: 15,
+            command_completion_revision: 16,
+            fields_revision: 17,
+            scalars_revision: 18,
+            domain_generation_id: 19,
+            artifacts_revision: 20,
+            engine_log_revision: 21,
+            display_revision: 22,
+            workspace_revision: 23,
+            mesh_revision: 24,
+            mesh_build_revision: 25,
+            commands_revision: 26,
+            stages_revision: 27,
+            scene_revision: Some(28),
+            visualization_state_revision: 29,
+        }
+    }
+
+    #[test]
+    fn realtime_changes_include_exact_viewport_resource_fetches() {
+        let state = CurrentLiveRealtimeState {
+            session_id: "session-1".to_string(),
+            run_id: Some("run-1".to_string()),
+            revisions: revisions(),
+            field_vector_fetches: vec![
+                "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+                    .to_string(),
+            ],
+            mesh_resource_fetches: vec![
+                "/v2/sessions/current/meshing/meshes/shared-domain/manifest".to_string(),
+                "/v2/sessions/current/meshing/meshes/shared-domain/topology".to_string(),
+            ],
+        };
+
+        let fetches = current_live_realtime_changes(&state)
+            .into_iter()
+            .filter_map(|change| change.recommended_fetch)
+            .collect::<BTreeSet<_>>();
+
+        assert!(fetches.contains("/v2/sessions/current/data/domain/topology"));
+        assert!(fetches.contains(
+            "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full"
+        ));
+        assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/manifest"));
+        assert!(fetches.contains("/v2/sessions/current/meshing/meshes/shared-domain/topology"));
+        assert!(fetches.contains("/v2/sessions/current/model/scene"));
+    }
+}
+
 async fn publish_current_live_realtime_event(
     state: &AppState,
     event: LiveRealtimeServerEvent,
@@ -297,6 +441,25 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
     coalesced: bool,
     window_ms: u32,
 ) -> Result<(), ApiError> {
+    publish_current_live_realtime_resource_changes(
+        state,
+        realtime_state.session_id.clone(),
+        realtime_state.run_id.clone(),
+        current_live_realtime_changes(realtime_state),
+        coalesced,
+        window_ms,
+    )
+    .await
+}
+
+pub(crate) async fn publish_current_live_realtime_resource_changes(
+    state: &AppState,
+    session_id: String,
+    run_id: Option<String>,
+    changes: Vec<RealtimeResourceChange>,
+    coalesced: bool,
+    window_ms: u32,
+) -> Result<(), ApiError> {
     let seq = state
         .current_live_realtime_next_seq
         .fetch_add(1, Ordering::Relaxed)
@@ -306,11 +469,11 @@ pub(crate) async fn publish_current_live_realtime_batch_changed(
         LiveRealtimeServerEvent::ResourceBatchChanged {
             seq,
             ts: realtime_timestamp_now(),
-            session_id: realtime_state.session_id.clone(),
-            run_id: realtime_state.run_id.clone(),
+            session_id,
+            run_id,
             contract_version: current_live_realtime_contract_version().to_string(),
             payload: ResourceBatchChangedPayload {
-                changes: current_live_realtime_changes(realtime_state),
+                changes,
                 coalesced,
                 window_ms,
             },
@@ -372,6 +535,8 @@ async fn main() {
         current_live_realtime_next_seq: Arc::new(AtomicU64::new(0)),
         current_display_selection: Arc::new(RwLock::new(CurrentDisplaySelection::default())),
         current_display_presentation: Arc::new(RwLock::new(DisplayPresentationState::default())),
+        current_visualization_client_acks: Arc::new(RwLock::new(BTreeMap::new())),
+        current_visualization_client_ack_revision: Arc::new(AtomicU64::new(0)),
         current_workspace_selection: Arc::new(RwLock::new(CurrentWorkspaceSelection::default())),
         current_workspace_ribbon: Arc::new(RwLock::new(CurrentWorkspaceRibbon::default())),
         current_workspace_layout: Arc::new(RwLock::new(CurrentWorkspaceLayout::default())),
@@ -855,6 +1020,23 @@ where
     let preview_ms = preview_start.elapsed().as_micros();
     next.state_version = next.state_version.wrapping_add(1);
     let current_state_version = next.state_version;
+    let command_completed_at_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        reconcile_command_ledger_from_stage_execution(
+            &mut ledger,
+            &next,
+            command_completed_at_unix_ms,
+        );
+        reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &next,
+            command_completed_at_unix_ms,
+        );
+    }
     let (preview_source_step, preview_vector_len, preview_vector_avg) =
         preview_debug_metrics(next.preview.as_ref());
     let live_mag_len = next

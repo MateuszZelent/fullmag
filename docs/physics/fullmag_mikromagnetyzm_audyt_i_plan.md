@@ -342,9 +342,10 @@ E_d = -\frac{\mu_0}{2}\int_\Omega M\cdot H_d\, dV
 Fullmag bardzo słusznie rozdziela:
 
 - FDM: tensor demag / FFT / Newell,
-- FEM: bootstrap transfer-grid lub airbox, z ambicją dojścia do lepszego open-boundary solve.
+- FEM: Poisson-airbox, z ambicją dojścia do lepszego open-boundary solve.
 
-To jest dobry kierunek, ale trzeba bardzo uważać, by **bootstrap nie stał się „produkcyjną prawdą”**.
+To jest dobry kierunek, ale trzeba bardzo uważać, by **wariant airbox był jawnie walidowany
+pod kątem rozmiaru domeny, warunków brzegowych i zbieżności**.
 
 ## 6.3. FDM — co jest poprawne
 

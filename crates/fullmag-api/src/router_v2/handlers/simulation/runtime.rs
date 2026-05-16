@@ -1,19 +1,24 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use fullmag_authoring::{MagnetizationAsset, SceneDocument, SceneObject};
+use fullmag_runner::RuntimeStatus;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::ApiError;
 use crate::schemas::runtime::{
-    CommandDetailResource, CommandQueueStatusResource, CommandStatusResource, CurrentRunResource,
-    SolverEnergyCurrentResource, SolverEnergyHistoryResource, SolverEnergyRow,
-    SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
+    CommandDetailResource, CommandDiagnosticReferenceResource, CommandExecutionReadbackResource,
+    CommandQueueStatusResource, CommandResourceInvalidationResource, CommandStatusResource,
+    CurrentRunResource, ObjectEnergySummary, ObjectMagnetizationAverage, ObjectMetricsResource,
+    RuntimeCommandReadinessResource, SolverEnergyCurrentResource, SolverEnergyHistoryResource,
+    SolverEnergyRow, SolverStatusResource, StageExecutionRecordResource, StageExecutionResource,
 };
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, ScalarRow, SessionStateResponse,
-    TrackedCommandRecord,
+    StageExecutionRecord, StageExecutionState, TrackedCommandRecord,
 };
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -143,9 +148,23 @@ pub async fn get_stage_execution(
         stages: stage
             .stages
             .iter()
-            .map(|record| StageExecutionRecordResource {
+            .enumerate()
+            .map(|(index, record)| StageExecutionRecordResource {
+                stage_id: stage_id_for_index(index),
+                index: index as u32,
+                label: Some(format!("Stage {}", index + 1)),
+                kind: stage_kind_for_index(stage, index),
+                action: None,
                 status: record.status.as_str().to_string(),
+                command_id: record.command_id.clone(),
+                started_at_unix_ms: record.started_at_unix_ms,
+                completed_at_unix_ms: record.completed_at_unix_ms,
                 reason: record.reason.as_ref().map(stage_stop_reason_string),
+                artifact_refs: record.artifact_refs.clone(),
+                checkpoint_ref: record.checkpoint_ref.clone(),
+                loaded_state_ref: record.loaded_state_ref.clone(),
+                resume_from_checkpoint_ref: record.resume_from_checkpoint_ref.clone(),
+                state_transition: record.state_transition.clone(),
                 metric_name: record.metric_name.clone(),
                 metric_value: record.metric_value,
                 threshold: record.threshold,
@@ -304,6 +323,119 @@ pub async fn get_solver_energies_history(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/simulation/objects/{object_id}/metrics",
+    params(
+        ("object_id" = String, Path, description = "Scene object id or name"),
+    ),
+    responses(
+        (status = 200, description = "Selected object magnetization and energy read-model", body = ObjectMetricsResource),
+        (status = 404, description = "Object or workspace not found"),
+    ),
+    tag = "simulation"
+)]
+pub async fn get_object_metrics(
+    State(state): State<Arc<AppState>>,
+    Path(object_id): Path<String>,
+) -> Result<Json<ObjectMetricsResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let scene = snapshot
+        .scene_document
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no authoring scene"))?;
+    let object = scene
+        .objects
+        .iter()
+        .find(|object| object.id == object_id || object.name == object_id)
+        .ok_or_else(|| ApiError::not_found(format!("object not found: {object_id}")))?;
+    let canonical_object_id = object.id.clone();
+    let initial_m = initial_magnetization_for_object(scene, object);
+    let object_scalars = latest_object_scalars(snapshot, &canonical_object_id, &object.name);
+    let latest_row = latest_solver_sample(snapshot);
+    let has_solver_sample = object_scalars.is_some() || latest_row.is_some();
+    let source = if object_scalars.is_some() {
+        "solver_per_object"
+    } else if latest_row.is_some() {
+        "solver_global"
+    } else {
+        "initial_state"
+    };
+    let step = object_scalars
+        .and_then(|values| number_from_metric(values, "step").map(|value| value as u64))
+        .or_else(|| latest_row.as_ref().map(|row| row.step))
+        .unwrap_or(0);
+    let time_seconds = object_scalars
+        .and_then(|values| number_from_metric(values, "time"))
+        .or_else(|| latest_row.as_ref().map(|row| row.time))
+        .unwrap_or(0.0);
+
+    let magnetization_average = if let Some(values) = object_scalars {
+        [
+            number_from_metric(values, "mx").unwrap_or(initial_m[0]),
+            number_from_metric(values, "my").unwrap_or(initial_m[1]),
+            number_from_metric(values, "mz").unwrap_or(initial_m[2]),
+        ]
+    } else if has_solver_sample {
+        latest_magnetization_average(snapshot, &canonical_object_id, initial_m)
+            .or_else(|| latest_row.as_ref().map(|row| [row.mx, row.my, row.mz]))
+            .unwrap_or(initial_m)
+    } else {
+        initial_m
+    };
+
+    let zero_energies = ObjectEnergySummary {
+        exchange: 0.0,
+        demag: 0.0,
+        zeeman: 0.0,
+        anisotropy: 0.0,
+        dmi: 0.0,
+        total: 0.0,
+    };
+    let energies = object_scalars
+        .map(|values| ObjectEnergySummary {
+            exchange: number_from_metric(values, "e_ex").unwrap_or(0.0),
+            demag: number_from_metric(values, "e_demag").unwrap_or(0.0),
+            zeeman: number_from_metric(values, "e_ext").unwrap_or(0.0),
+            anisotropy: number_from_metric(values, "e_ani").unwrap_or(0.0),
+            dmi: number_from_metric(values, "e_dmi").unwrap_or(0.0),
+            total: number_from_metric(values, "e_total").unwrap_or(0.0),
+        })
+        .or_else(|| {
+            latest_row.as_ref().map(|row| ObjectEnergySummary {
+                exchange: row.e_ex,
+                demag: row.e_demag,
+                zeeman: row.e_ext,
+                anisotropy: row.e_ani,
+                dmi: row.e_dmi,
+                total: row.e_total,
+            })
+        })
+        .unwrap_or(zero_energies);
+
+    Ok(Json(ObjectMetricsResource {
+        object_id: canonical_object_id,
+        revision: if has_solver_sample {
+            snapshot.scalar_revision
+        } else {
+            snapshot.state_version
+        },
+        source: source.to_string(),
+        has_solver_sample,
+        step,
+        time_seconds,
+        magnetization_average: ObjectMagnetizationAverage {
+            mx: magnetization_average[0],
+            my: magnetization_average[1],
+            mz: magnetization_average[2],
+        },
+        energies,
+    }))
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/simulation/commands",
     responses(
         (status = 200, description = "Current command queue and dispatch ledger", body = CommandQueueStatusResource),
@@ -345,12 +477,15 @@ pub async fn get_command_status(
         .filter(|record| record.status == CommandLifecycleState::Failed)
         .count() as u64;
     let revision = ledger.back().map(|record| record.command.seq).unwrap_or(0);
-    let can_accept_commands = {
+    let (can_accept_commands, runtime_controls) = {
         let guard = state.current_live_state.read().await;
-        guard
-            .as_ref()
-            .map(|snapshot| snapshot.runtime_status.can_accept_commands)
-            .unwrap_or(false)
+        let snapshot = guard.as_ref();
+        (
+            snapshot
+                .map(|value| value.runtime_status.can_accept_commands)
+                .unwrap_or(false),
+            runtime_command_readiness_resources(snapshot, &ledger),
+        )
     };
 
     Ok(Json(CommandQueueStatusResource {
@@ -363,8 +498,109 @@ pub async fn get_command_status(
         rejected_count,
         failed_count,
         can_accept_commands,
+        runtime_controls,
         commands: ledger.iter().map(command_status_resource).collect(),
     }))
+}
+
+fn runtime_command_readiness_resources(
+    snapshot: Option<&SessionStateResponse>,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
+) -> Vec<RuntimeCommandReadinessResource> {
+    [
+        "solve",
+        "compute_fields",
+        "compute_energies",
+        "pause",
+        "resume",
+        "stop",
+        "skip",
+    ]
+    .into_iter()
+    .map(|kind| {
+        let reason = runtime_command_disabled_reason(snapshot, ledger, kind);
+        RuntimeCommandReadinessResource {
+            kind: kind.to_string(),
+            enabled: reason.is_none(),
+            reason,
+        }
+    })
+    .collect()
+}
+
+fn runtime_command_disabled_reason(
+    snapshot: Option<&SessionStateResponse>,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
+    kind: &str,
+) -> Option<String> {
+    let Some(snapshot) = snapshot else {
+        return Some("Runtime state is unavailable.".into());
+    };
+    let state = snapshot.runtime_status.kind;
+    match kind {
+        "pause" => (state != RuntimeStatus::Running).then(|| "Runtime is not running.".into()),
+        "resume" => (state != RuntimeStatus::Paused).then(|| "Runtime is not paused.".into()),
+        "stop" => (!matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused))
+            .then(|| "Runtime is not active.".into()),
+        "skip" => runtime_skip_disabled_reason(snapshot, state),
+        "solve" | "compute_fields" | "compute_energies" => {
+            runtime_compute_disabled_reason(snapshot, ledger, state)
+        }
+        _ => Some("Unsupported runtime command.".into()),
+    }
+}
+
+fn runtime_compute_disabled_reason(
+    snapshot: &SessionStateResponse,
+    ledger: &std::collections::VecDeque<TrackedCommandRecord>,
+    state: RuntimeStatus,
+) -> Option<String> {
+    if has_active_compute_command(ledger) {
+        return Some("A runtime command is already active.".into());
+    }
+    if matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused) {
+        return Some("Runtime is already active.".into());
+    }
+    if !snapshot.runtime_status.can_accept_commands {
+        return Some("Runtime is not accepting compute commands.".into());
+    }
+    if matches!(
+        state,
+        RuntimeStatus::AwaitingCommand | RuntimeStatus::WaitingForCompute
+    ) {
+        return None;
+    }
+    Some("Runtime is not ready for compute commands.".into())
+}
+
+fn runtime_skip_disabled_reason(
+    snapshot: &SessionStateResponse,
+    state: RuntimeStatus,
+) -> Option<String> {
+    let active_stage_index = snapshot
+        .stage_execution
+        .as_ref()
+        .and_then(|stage| stage.active_stage_index);
+    if active_stage_index.is_none() {
+        return Some("No active stage is available to skip.".into());
+    }
+    (!matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused))
+        .then(|| "Runtime is not in an active stage.".into())
+}
+
+fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommandRecord>) -> bool {
+    ledger.iter().any(|record| {
+        matches!(
+            record.command.kind.as_str(),
+            "solve" | "compute_fields" | "compute_energies"
+        ) && matches!(
+            record.status,
+            CommandLifecycleState::Queued
+                | CommandLifecycleState::Accepted
+                | CommandLifecycleState::Dispatched
+                | CommandLifecycleState::Running
+        )
+    })
 }
 
 #[utoipa::path(
@@ -384,20 +620,94 @@ pub async fn get_command_detail(
     Path(command_id): Path<String>,
 ) -> Result<Json<CommandDetailResource>, ApiError> {
     ensure_workspace(&state).await?;
-    let ledger = state.current_command_ledger.lock().await;
-    let record = ledger
-        .iter()
-        .find(|record| record.command.command_id == command_id)
-        .ok_or_else(|| ApiError::not_found("command not found"))?;
+    let record = {
+        let ledger = state.current_command_ledger.lock().await;
+        ledger
+            .iter()
+            .find(|record| record.command.command_id == command_id)
+            .cloned()
+            .ok_or_else(|| ApiError::not_found("command not found"))?
+    };
+    let (
+        stage_linkage,
+        run_id,
+        requested_execution,
+        resolved_execution,
+        resource_invalidations,
+        diagnostics,
+    ) = {
+        let guard = state.current_live_state.read().await;
+        let stage_linkage = guard.as_ref().and_then(|snapshot| {
+            command_stage_linkage(
+                snapshot.stage_execution.as_ref(),
+                record.command.command_id.as_str(),
+                &record.command.target,
+            )
+        });
+        let run_id = guard.as_ref().map(|snapshot| {
+            snapshot
+                .run
+                .as_ref()
+                .map(|run| run.run_id.clone())
+                .unwrap_or_else(|| snapshot.session.run_id.clone())
+        });
+        let requested_execution = guard.as_ref().map(requested_execution_readback);
+        let resolved_execution = guard.as_ref().and_then(resolved_execution_readback);
+        let resource_invalidations =
+            command_resource_invalidations(&record, guard.as_ref(), stage_linkage.as_ref());
+        let diagnostics =
+            command_diagnostic_references(&record, guard.as_ref(), stage_linkage.as_ref());
+        (
+            stage_linkage,
+            run_id,
+            requested_execution,
+            resolved_execution,
+            resource_invalidations,
+            diagnostics,
+        )
+    };
+    let accepted_at_unix_ms = Some(record.command.created_at_unix_ms);
+    let started_at_unix_ms = record.dispatched_at_unix_ms.or_else(|| {
+        stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.started_at_unix_ms)
+    });
+    let terminal_at_unix_ms = record.completed_at_unix_ms.or_else(|| {
+        stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.completed_at_unix_ms)
+    });
 
     Ok(Json(CommandDetailResource {
         command_id: record.command.command_id.clone(),
+        request_id: record.request_id.clone(),
         seq: record.command.seq,
         kind: record.command.kind.clone(),
+        target: record.command.target.clone(),
+        reason: record.command.reason.clone(),
+        precondition: record.command.precondition.clone(),
+        client_intent_id: record.command.client_intent_id.clone(),
+        requested_at_unix_ms: record.command.requested_at_unix_ms,
+        stage_id: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.stage_id.clone())
+            .or_else(|| command_stage_id(&record.command.target)),
+        stage_index: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.stage_index)
+            .or_else(|| command_stage_index(&record.command.target)),
+        run_id,
+        requested_execution,
+        resolved_execution,
+        resource_invalidations,
+        diagnostics,
         status: record.status.as_str().to_string(),
         created_at_unix_ms: record.command.created_at_unix_ms,
+        accepted_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
+        started_at_unix_ms,
         completed_at_unix_ms: record.completed_at_unix_ms,
+        terminal_at_unix_ms,
         completion_status: record
             .completion_status
             .map(command_completion_state_string),
@@ -413,6 +723,22 @@ pub async fn get_command_detail(
         relax_alpha: record.command.relax_alpha,
         mesh_target: record.command.mesh_target.clone(),
         mesh_reason: record.command.mesh_reason.clone(),
+        artifact_refs: stage_linkage
+            .as_ref()
+            .map(|linkage| linkage.artifact_refs.clone())
+            .unwrap_or_default(),
+        checkpoint_ref: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.checkpoint_ref.clone()),
+        loaded_state_ref: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.loaded_state_ref.clone()),
+        resume_from_checkpoint_ref: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.resume_from_checkpoint_ref.clone()),
+        state_transition: stage_linkage
+            .as_ref()
+            .and_then(|linkage| linkage.state_transition.clone()),
     }))
 }
 
@@ -438,6 +764,158 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
             max_torque_T: live_state.latest_step.max_torque_T,
         })
     })
+}
+
+fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
+    snapshot.scalar_rows.last().cloned().or_else(|| {
+        let live_state = snapshot.live_state.as_ref()?;
+        if snapshot.scalar_revision == 0 && live_state.latest_step.step == 0 {
+            return None;
+        }
+        Some(ScalarRow {
+            step: live_state.latest_step.step,
+            time: live_state.latest_step.time,
+            solver_dt: live_state.latest_step.dt,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
+            e_ex: live_state.latest_step.e_ex,
+            e_demag: live_state.latest_step.e_demag,
+            e_ext: live_state.latest_step.e_ext,
+            e_ani: live_state.latest_step.e_ani,
+            e_dmi: live_state.latest_step.e_dmi,
+            e_total: live_state.latest_step.e_total,
+            max_dm_dt: live_state.latest_step.max_dm_dt,
+            max_h_eff: live_state.latest_step.max_h_eff,
+            max_h_demag: live_state.latest_step.max_h_demag,
+            max_torque_Apm: live_state.latest_step.max_torque_Apm,
+            max_torque_T: live_state.latest_step.max_torque_T,
+        })
+    })
+}
+
+fn latest_object_scalars<'a>(
+    snapshot: &'a SessionStateResponse,
+    object_id: &str,
+    object_name: &str,
+) -> Option<&'a HashMap<String, f64>> {
+    let per_object = &snapshot.live_state.as_ref()?.latest_step.per_object_scalars;
+    per_object
+        .get(object_id)
+        .or_else(|| per_object.get(object_name))
+        .or_else(|| {
+            if per_object.len() == 1 {
+                per_object.values().next()
+            } else {
+                None
+            }
+        })
+}
+
+fn number_from_metric(values: &HashMap<String, f64>, key: &str) -> Option<f64> {
+    values.get(key).copied().filter(|value| value.is_finite())
+}
+
+fn initial_magnetization_for_object(scene: &SceneDocument, object: &SceneObject) -> [f64; 3] {
+    object
+        .magnetization_ref
+        .as_ref()
+        .and_then(|asset_id| {
+            scene
+                .magnetization_assets
+                .iter()
+                .find(|asset| asset.id == *asset_id)
+        })
+        .and_then(magnetization_asset_direction)
+        .unwrap_or([0.0, 0.0, 1.0])
+}
+
+fn magnetization_asset_direction(asset: &MagnetizationAsset) -> Option<[f64; 3]> {
+    if let Some(values) = asset
+        .value
+        .as_ref()
+        .and_then(|values| number_slice3(values))
+    {
+        return Some(values);
+    }
+    asset
+        .preset_params
+        .as_ref()
+        .and_then(|params| params.get("direction"))
+        .and_then(value_array3)
+}
+
+fn number_slice3(values: &[f64]) -> Option<[f64; 3]> {
+    if values.len() < 3 || !values[..3].iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    Some([values[0], values[1], values[2]])
+}
+
+fn value_array3(value: &Value) -> Option<[f64; 3]> {
+    let values = value.as_array()?;
+    if values.len() < 3 {
+        return None;
+    }
+    let out = [
+        values[0].as_f64()?,
+        values[1].as_f64()?,
+        values[2].as_f64()?,
+    ];
+    out.iter().all(|value| value.is_finite()).then_some(out)
+}
+
+fn latest_magnetization_average(
+    snapshot: &SessionStateResponse,
+    object_id: &str,
+    fallback: [f64; 3],
+) -> Option<[f64; 3]> {
+    let live_state = snapshot.live_state.as_ref()?;
+    let values = live_state.latest_step.magnetization.as_ref()?;
+    if values.len() < 3 || values.len() % 3 != 0 {
+        return None;
+    }
+    if let Some(segment) = live_state.latest_step.fem_mesh.as_ref().and_then(|mesh| {
+        mesh.object_segments
+            .iter()
+            .find(|segment| segment.object_id == object_id)
+    }) {
+        return average_flat_magnetization(
+            values,
+            segment.node_start as usize,
+            segment.node_count as usize,
+        )
+        .or(Some(fallback));
+    }
+    average_flat_magnetization(values, 0, values.len() / 3).or(Some(fallback))
+}
+
+fn average_flat_magnetization(values: &[f64], start: usize, count: usize) -> Option<[f64; 3]> {
+    if count == 0 {
+        return None;
+    }
+    let end = start.saturating_add(count).min(values.len() / 3);
+    if end <= start {
+        return None;
+    }
+    let mut sum = [0.0; 3];
+    let mut used = 0usize;
+    for index in start..end {
+        let offset = index * 3;
+        let vector = [values[offset], values[offset + 1], values[offset + 2]];
+        if !vector.iter().all(|value| value.is_finite()) {
+            continue;
+        }
+        sum[0] += vector[0];
+        sum[1] += vector[1];
+        sum[2] += vector[2];
+        used += 1;
+    }
+    if used == 0 {
+        return None;
+    }
+    let scale = 1.0 / used as f64;
+    Some([sum[0] * scale, sum[1] * scale, sum[2] * scale])
 }
 
 fn metadata_string(metadata: Option<&Value>, path: &[&str]) -> Option<String> {
@@ -469,8 +947,11 @@ fn runtime_status_kind(snapshot: &SessionStateResponse) -> String {
 fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResource {
     CommandStatusResource {
         command_id: record.command.command_id.clone(),
+        request_id: record.request_id.clone(),
         seq: record.command.seq,
         kind: record.command.kind.clone(),
+        target: record.command.target.clone(),
+        reason: record.command.reason.clone(),
         status: record.status.as_str().to_string(),
         created_at_unix_ms: record.command.created_at_unix_ms,
         dispatched_at_unix_ms: record.dispatched_at_unix_ms,
@@ -480,6 +961,392 @@ fn command_status_resource(record: &TrackedCommandRecord) -> CommandStatusResour
             .map(command_completion_state_string),
         error: record.error.clone(),
     }
+}
+
+fn stage_id_for_index(index: usize) -> String {
+    format!("stage-{index:03}")
+}
+
+fn stage_kind_for_index(stage: &crate::types::StageExecutionState, index: usize) -> Option<String> {
+    if stage.active_stage_index == Some(index) {
+        return stage.active_stage_kind.clone();
+    }
+    None
+}
+
+fn command_stage_id(
+    target: &Option<crate::schemas::commands::RuntimeCommandTarget>,
+) -> Option<String> {
+    match target {
+        Some(crate::schemas::commands::RuntimeCommandTarget::CurrentStage {
+            stage_id: Some(stage_id),
+        })
+        | Some(crate::schemas::commands::RuntimeCommandTarget::StageId { stage_id }) => {
+            Some(stage_id.clone())
+        }
+        Some(crate::schemas::commands::RuntimeCommandTarget::StageIndex { stage_index }) => {
+            Some(stage_id_for_index(*stage_index as usize))
+        }
+        _ => None,
+    }
+}
+
+fn command_stage_index(
+    target: &Option<crate::schemas::commands::RuntimeCommandTarget>,
+) -> Option<u32> {
+    match target {
+        Some(crate::schemas::commands::RuntimeCommandTarget::StageIndex { stage_index }) => {
+            Some(*stage_index)
+        }
+        Some(crate::schemas::commands::RuntimeCommandTarget::CurrentStage {
+            stage_id: Some(stage_id),
+        })
+        | Some(crate::schemas::commands::RuntimeCommandTarget::StageId { stage_id }) => {
+            parse_stage_index(stage_id)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CommandStageLinkage {
+    stage_id: Option<String>,
+    stage_index: Option<u32>,
+    started_at_unix_ms: Option<u128>,
+    completed_at_unix_ms: Option<u128>,
+    artifact_refs: Vec<String>,
+    checkpoint_ref: Option<String>,
+    loaded_state_ref: Option<String>,
+    resume_from_checkpoint_ref: Option<String>,
+    state_transition: Option<String>,
+}
+
+fn command_stage_linkage(
+    stage: Option<&StageExecutionState>,
+    command_id: &str,
+    target: &Option<crate::schemas::commands::RuntimeCommandTarget>,
+) -> Option<CommandStageLinkage> {
+    let stage = stage?;
+    if let Some((index, record)) = stage
+        .stages
+        .iter()
+        .enumerate()
+        .find(|(_, record)| record.command_id.as_deref() == Some(command_id))
+    {
+        return Some(command_stage_linkage_from_record(index, record));
+    }
+
+    let stage_index = command_stage_index(target)? as usize;
+    stage
+        .stages
+        .get(stage_index)
+        .map(|record| command_stage_linkage_from_record(stage_index, record))
+}
+
+fn command_stage_linkage_from_record(
+    index: usize,
+    record: &StageExecutionRecord,
+) -> CommandStageLinkage {
+    CommandStageLinkage {
+        stage_id: Some(stage_id_for_index(index)),
+        stage_index: Some(index as u32),
+        started_at_unix_ms: record.started_at_unix_ms.map(u128::from),
+        completed_at_unix_ms: record.completed_at_unix_ms.map(u128::from),
+        artifact_refs: record.artifact_refs.clone(),
+        checkpoint_ref: record.checkpoint_ref.clone(),
+        loaded_state_ref: record.loaded_state_ref.clone(),
+        resume_from_checkpoint_ref: record.resume_from_checkpoint_ref.clone(),
+        state_transition: record.state_transition.clone(),
+    }
+}
+
+fn command_resource_invalidations(
+    record: &TrackedCommandRecord,
+    snapshot: Option<&SessionStateResponse>,
+    stage_linkage: Option<&CommandStageLinkage>,
+) -> Vec<CommandResourceInvalidationResource> {
+    let mut resources = Vec::new();
+    push_command_invalidation(
+        &mut resources,
+        "simulation/commands",
+        record.command.seq,
+        "command lifecycle",
+        "observed",
+    );
+
+    let Some(snapshot) = snapshot else {
+        return resources;
+    };
+
+    let state = command_downstream_invalidation_state(record.status);
+    match record.command.kind.as_str() {
+        "run" | "relax" | "solve" | "pause" | "resume" | "stop" | "skip" => {
+            push_command_invalidation(
+                &mut resources,
+                "simulation/stages/execution",
+                snapshot.state_version,
+                "stage lifecycle",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/runs/current",
+                snapshot.state_version,
+                "run lifecycle",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/solver/status",
+                snapshot.state_version,
+                "runtime state",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "data/scalars",
+                snapshot.scalar_revision,
+                "solver scalar history",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/solver/energies/current",
+                snapshot.scalar_revision,
+                "energy readback",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/solver/energies/history",
+                snapshot.scalar_revision,
+                "energy history",
+                state,
+            );
+        }
+        "compute_fields" => {
+            push_command_invalidation(
+                &mut resources,
+                "data/fields",
+                snapshot.state_version,
+                "field buffers",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "visualization/display",
+                snapshot.state_version,
+                "field display freshness",
+                state,
+            );
+        }
+        "compute_energies" => {
+            push_command_invalidation(
+                &mut resources,
+                "data/scalars",
+                snapshot.scalar_revision,
+                "scalar history",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/solver/energies/current",
+                snapshot.scalar_revision,
+                "energy readback",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/solver/energies/history",
+                snapshot.scalar_revision,
+                "energy history",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "simulation/objects/*/metrics",
+                snapshot.scalar_revision,
+                "object metric readback",
+                state,
+            );
+        }
+        "remesh" => {
+            push_command_invalidation(
+                &mut resources,
+                "meshing/builds/current",
+                snapshot.mesh_build_revision,
+                "mesh build lifecycle",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "meshing/shared-domain/manifest",
+                snapshot.mesh_revision,
+                "shared-domain mesh manifest",
+                state,
+            );
+            push_command_invalidation(
+                &mut resources,
+                "data/domain/topology",
+                snapshot.mesh_revision,
+                "topology buffers",
+                state,
+            );
+        }
+        "save_vtk" => {
+            push_command_invalidation(
+                &mut resources,
+                "data/artifacts",
+                snapshot.artifacts.len() as u64,
+                "artifact export",
+                state,
+            );
+        }
+        _ => {}
+    }
+
+    if stage_linkage.is_some_and(|linkage| !linkage.artifact_refs.is_empty()) {
+        push_command_invalidation(
+            &mut resources,
+            "data/artifacts",
+            snapshot.artifacts.len() as u64,
+            "stage artifact linkage",
+            state,
+        );
+    }
+    if stage_linkage.is_some_and(|linkage| {
+        linkage.checkpoint_ref.is_some()
+            || linkage.loaded_state_ref.is_some()
+            || linkage.resume_from_checkpoint_ref.is_some()
+    }) {
+        push_command_invalidation(
+            &mut resources,
+            "persistence/checkpoints",
+            snapshot.state_version,
+            "checkpoint state linkage",
+            state,
+        );
+    }
+    push_command_invalidation(
+        &mut resources,
+        "diagnostics/engine-log",
+        snapshot.engine_log.len() as u64,
+        "engine diagnostics",
+        state,
+    );
+
+    resources
+}
+
+fn push_command_invalidation(
+    resources: &mut Vec<CommandResourceInvalidationResource>,
+    resource_key: &str,
+    revision: u64,
+    reason: &str,
+    state: &str,
+) {
+    if resources
+        .iter()
+        .any(|resource| resource.resource_key == resource_key)
+    {
+        return;
+    }
+    resources.push(CommandResourceInvalidationResource {
+        resource_key: resource_key.to_string(),
+        revision,
+        reason: reason.to_string(),
+        state: state.to_string(),
+    });
+}
+
+fn command_downstream_invalidation_state(status: CommandLifecycleState) -> &'static str {
+    match status {
+        CommandLifecycleState::Queued | CommandLifecycleState::Accepted => "expected",
+        CommandLifecycleState::Dispatched
+        | CommandLifecycleState::Running
+        | CommandLifecycleState::Completed
+        | CommandLifecycleState::Rejected
+        | CommandLifecycleState::Failed => "observed",
+    }
+}
+
+fn command_diagnostic_references(
+    record: &TrackedCommandRecord,
+    snapshot: Option<&SessionStateResponse>,
+    stage_linkage: Option<&CommandStageLinkage>,
+) -> Vec<CommandDiagnosticReferenceResource> {
+    let mut diagnostics = Vec::new();
+    if let Some(error) = record.error.as_ref() {
+        diagnostics.push(CommandDiagnosticReferenceResource {
+            resource_key: "simulation/commands".into(),
+            revision: record.command.seq,
+            severity: "error".into(),
+            message: error.clone(),
+        });
+    }
+
+    if let Some(snapshot) = snapshot {
+        diagnostics.push(CommandDiagnosticReferenceResource {
+            resource_key: "diagnostics/engine-log".into(),
+            revision: snapshot.engine_log.len() as u64,
+            severity: "info".into(),
+            message: "Engine log may contain runtime entries for this command.".into(),
+        });
+        if stage_linkage.is_some_and(|linkage| !linkage.artifact_refs.is_empty()) {
+            diagnostics.push(CommandDiagnosticReferenceResource {
+                resource_key: "data/artifacts".into(),
+                revision: snapshot.artifacts.len() as u64,
+                severity: "info".into(),
+                message: "Command produced stage artifacts; inspect artifact resources for payload detail."
+                    .into(),
+            });
+        }
+    }
+
+    diagnostics
+}
+
+fn parse_stage_index(stage_id: &str) -> Option<u32> {
+    stage_id.strip_prefix("stage-")?.parse::<u32>().ok()
+}
+
+fn requested_execution_readback(
+    snapshot: &SessionStateResponse,
+) -> CommandExecutionReadbackResource {
+    CommandExecutionReadbackResource {
+        backend: Some(snapshot.session.requested_backend.clone()),
+        device: Some(snapshot.session.requested_device.clone()),
+        precision: Some(snapshot.session.requested_precision.clone()),
+        mode: Some(snapshot.session.requested_mode.clone()),
+        runtime_family: None,
+        engine_id: None,
+        worker: None,
+    }
+}
+
+fn resolved_execution_readback(
+    snapshot: &SessionStateResponse,
+) -> Option<CommandExecutionReadbackResource> {
+    if snapshot.session.resolved_backend.is_none()
+        && snapshot.session.resolved_device.is_none()
+        && snapshot.session.resolved_precision.is_none()
+        && snapshot.session.resolved_mode.is_none()
+        && snapshot.session.resolved_runtime_family.is_none()
+        && snapshot.session.resolved_engine_id.is_none()
+        && snapshot.session.resolved_worker.is_none()
+    {
+        return None;
+    }
+
+    Some(CommandExecutionReadbackResource {
+        backend: snapshot.session.resolved_backend.clone(),
+        device: snapshot.session.resolved_device.clone(),
+        precision: snapshot.session.resolved_precision.clone(),
+        mode: snapshot.session.resolved_mode.clone(),
+        runtime_family: snapshot.session.resolved_runtime_family.clone(),
+        engine_id: snapshot.session.resolved_engine_id.clone(),
+        worker: snapshot.session.resolved_worker.clone(),
+    })
 }
 
 fn command_completion_state_string(state: CommandCompletionState) -> String {

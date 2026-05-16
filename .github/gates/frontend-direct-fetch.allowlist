@@ -1,8 +1,5 @@
 # Signature format:
 #   <path>:<matched_fragment>
 #
-# Keep only intentional canonical fetch boundaries here.
-# LiveSessionClient is the single OpenAPI transport boundary; React code must
-# continue to use resource hooks/client modules instead of direct fetch().
-
-apps/web/src/api/client/LiveSessionClient.ts:fetch(
+# Keep only intentional canonical fetch boundaries here. The active
+# control-room frontend should normally keep this file empty.

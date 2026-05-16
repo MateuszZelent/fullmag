@@ -1,0 +1,136 @@
+# Frontend v2 - Ribbon, Toolbars, and Command System
+
+**Status:** Proposed architecture
+**Date:** 2026-05-11
+
+## 1. Principle
+
+Menu items, ribbon buttons, viewport toolbar controls, context menus, shortcuts, and command palette entries are renderers of one command registry. A command exists once.
+
+Ribbon, toolbar, menu, context-menu, tab, tooltip, and command-palette renderers are built from shared shadcn/ui-style primitives. Module contributions describe commands and groups; they do not define bespoke button systems.
+
+## 2. Command Contract
+
+```typescript
+export interface CommandContribution {
+  id: CommandId;
+  title: string;
+  description?: string;
+  group: CommandGroupId;
+  icon?: IconToken;
+  scope: "global" | "workspace" | "selection" | "viewport" | "runtime" | "debug";
+  capabilityGate?: CapabilityGate;
+  selectionGate?: SelectionGate;
+  runtimeGate?: RuntimeGate;
+  confirmation?: ConfirmationSpec;
+  run: (ctx: CommandContext) => Promise<CommandResult> | CommandResult;
+}
+```
+
+Command ids use domain names: `mesh.build-selected`, `study.run-active`, `viewport.set-quantity`, `results.export-artifact`.
+
+## 3. Ribbon Contexts
+
+| Context | Groups |
+|---|---|
+| `Home` | session, open/recent, export, diagnostics |
+| `Definitions` | parameters, materials, named quantities, Python sync |
+| `Geometry` | primitives, transforms, booleans, validation, view tools |
+| `Materials` | material library, assignment, tensor/scalar edits |
+| `Physics` | interactions, boundary conditions, external fields, validation |
+| `Mesh` | universe mesh, object mesh, shared-domain build, quality, reports |
+| `Study` | stages, execution selection, run controls, provenance |
+| `Results` | datasets, charts, artifacts, export |
+| `Automation` | scripts, batch, managed runtimes, schedules |
+
+Modules contribute groups declaratively. The ribbon chooses visible groups from active context, selection, and capability state.
+
+The ribbon visual layer consumes Catppuccin-backed `--fm-*` tokens only. Raw colors, module-local button styles, and duplicate command widgets are not allowed.
+
+## 4. Button States
+
+Ribbon buttons must distinguish:
+
+- enabled;
+- disabled by selection;
+- disabled by missing capability;
+- degraded;
+- running;
+- pending command acceptance;
+- failed last command;
+- stale resource dependency.
+
+Disabled controls need an explanation. Hidden controls are allowed only when a module is disabled or a command is irrelevant to the active context.
+
+## 5. Toolbars
+
+Viewport toolbars are command renderers with compact placement. They may hold transient viewport preferences, but any canonical visualization state goes through `visualization` resources.
+
+Common toolbar groups:
+
+- view mode: 3D, 2D, split, chart;
+- quantity: active field/scalar quantity;
+- layers: mesh, vectors, scalar surface, airbox, axes, selection;
+- selected target display: shader, vectors, wireframe, points, opacity, and clear overrides for the selected object or airbox;
+- camera: fit all, fit selected, orthographic/perspective, saved views;
+- selection tools: pick, box select, isolate, clear;
+- diagnostics: render stats, resource counts, capture snapshot.
+
+## 6. Shortcuts
+
+Shortcut ownership belongs to command registry. A shortcut cannot call a module function directly.
+
+Shortcut conflicts are resolved by scope:
+
+1. focused input/editor;
+2. modal/dialog;
+3. active viewport;
+4. active workspace context;
+5. global.
+
+The command palette must show the currently effective shortcut.
+
+## 7. Command Execution
+
+Command execution must preserve user intent and resolved reality:
+
+- requested discretization/device/precision remain visible;
+- resolved backend/device/precision come from runtime resources;
+- unsupported execution fails clearly or degrades explicitly;
+- stage stop reason is shown when a command completes a stage.
+
+Commands that mutate server state must return or lead to command completion resources. Local-only commands such as panel toggles may return immediately.
+
+## 8. Per Selected Object Controls
+
+The View tab includes a `Per selected object` group. Those controls are enabled when the kernel selection resolves to a visualization target:
+
+- `object:<object_id>` for a scene object or its `Visualization` child;
+- `airbox` for the airbox visualization node or airbox mesh part selection.
+
+Changing a selected-target control updates the same visualization registry used by the inspector and viewport. The ribbon is therefore not a second display-state store. When selection changes, the ribbon re-reads the active target and updates checked states, render mode, opacity, and badges from the registry.
+
+## 8.1 Geometry Object Commands
+
+Geometry commands are command-registry entries, not callbacks inside the Geometry module:
+
+- `geometry.add-box`, `geometry.add-cylinder`, `geometry.add-sphere`, and other supported primitives open an inspector draft without mutating the server;
+- `geometry.commit-object-draft` submits a model transaction and keeps the draft visible on rejection;
+- `geometry.delete-object` submits a delete transaction and clears object selection after the scene revision refreshes;
+- `geometry.focus-primitive` switches the selected object to primitive display in the viewport without requesting a mesh build;
+- `mesh.build-selected` submits a backend mesh build command for the selected object when object-targeted build is supported;
+- `mesh.build-shared-domain` submits the shared-domain build required by conforming FEM solver meshes.
+
+Buttons must distinguish draft pending, transaction rejected, primitive-only, mesh-stale, mesh-building, mesh-ready, and validation-blocked states.
+
+## 9. Tests
+
+Required tests:
+
+- command registry rejects duplicate ids;
+- ribbon renders only commands matching context and gates;
+- same command can run from menu, ribbon, shortcut, and palette;
+- disabled command exposes a reason;
+- runtime command path handles accepted, rejected, completed, failed.
+- selected-target ribbon controls reflect the same object/airbox visualization target as the inspector.
+- geometry add/edit/build commands expose the correct disabled reason for draft state, capability, selection, validation, mesh staleness, and running command state.

@@ -1,0 +1,62 @@
+import {
+  isVisualizationTopologyCurrent,
+  resolveTopologyConstrainedVisualizationSettings,
+  resolveVisualizationTopologyFreshness,
+  type VisualizationTopologyFreshness,
+} from "@/kernel/visualization/visualizationDisplayResolution";
+
+import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+
+export function resolveViewport3DTopologyFreshness(
+  scene: unknown,
+  manifest: unknown,
+): Viewport3DTopologyFreshness {
+  return resolveVisualizationTopologyFreshness(scene, manifest);
+}
+
+export function isViewport3DTopologyCurrent(
+  freshness: Viewport3DTopologyFreshness,
+): boolean {
+  return isVisualizationTopologyCurrent(freshness);
+}
+
+export function resolveStaleTopologyVisualizationSettings(
+  settings: VisualizationTargetSettings,
+): VisualizationTargetSettings {
+  return resolveTopologyConstrainedVisualizationSettings(settings);
+}
+
+export function resolveUnknownTopologyProvenanceRefreshKey(
+  scene: unknown,
+  manifest: unknown,
+): string | null {
+  const sceneRevision = asFiniteNumber(asRecord(scene)?.revision);
+  const manifestRecord = asRecord(manifest);
+  const manifestRevision = asFiniteNumber(manifestRecord?.revision);
+  const sourceSceneRevision = asFiniteNumber(
+    manifestRecord?.source_scene_revision,
+  );
+  if (
+    sceneRevision === null ||
+    manifestRevision === null ||
+    sourceSceneRevision !== null
+  ) {
+    return null;
+  }
+
+  return `${sceneRevision}:${manifestRevision}`;
+}
+
+export type Viewport3DTopologyFreshness = VisualizationTopologyFreshness;
+
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | null {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonRecord)
+    : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}

@@ -23,16 +23,11 @@ use crate::types::{
     tag = "sessions"
 )]
 pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveStatus>, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-
-    let display_sel = state.current_display_selection.read().await;
-    let display_presentation = state.current_display_presentation.read().await;
-    let workspace_selection = state.current_workspace_selection.read().await;
-    let workspace_ribbon = state.current_workspace_ribbon.read().await;
-    let workspace_layout = state.current_workspace_layout.read().await;
+    let display_sel = state.current_display_selection.read().await.clone();
+    let display_presentation = state.current_display_presentation.read().await.clone();
+    let workspace_selection = state.current_workspace_selection.read().await.clone();
+    let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
+    let workspace_layout = state.current_workspace_layout.read().await.clone();
     let (commands_revision, command_completion_revision) = {
         let ledger = state.current_command_ledger.lock().await;
         (
@@ -40,6 +35,10 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> Result<Json<LiveS
             ledger.back().map(|record| record.command.seq).unwrap_or(0),
         )
     };
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
     Ok(Json(build_live_status(
         state.current_workspace_root.as_path(),
@@ -191,11 +190,10 @@ pub(crate) fn build_live_status(
     let metrics = MetricsSummary {
         uptime_seconds: uptime,
         total_steps,
-        steps_per_second: if uptime > 0 {
-            Some(total_steps as f64 / uptime as f64)
-        } else {
-            None
-        },
+        steps_per_second: latest
+            .and_then(|step| (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9))
+            .filter(|elapsed| *elapsed > 0.0)
+            .map(|elapsed| total_steps as f64 / elapsed),
     };
 
     LiveStatus {
@@ -256,7 +254,11 @@ pub(crate) fn field_catalog_revision(snapshot: &SessionStateResponse) -> u64 {
             .live_state
             .as_ref()
             .and_then(|state| state.latest_step.magnetization.as_deref())
-            .is_some_and(|values| !values.is_empty() && values.len() % 3 == 0)
+            .is_some_and(|values| {
+                !values.is_empty()
+                    && values.len() % 3 == 0
+                    && values.iter().all(|value| value.is_finite())
+            })
     {
         revision = revision
             .wrapping_mul(16777619)

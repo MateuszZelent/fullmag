@@ -1,0 +1,109 @@
+<!-- SUPERSEDED_FRONTEND_V2_3D_PLAN -->
+This imported working artifact is not implementation authority. Use docs/specs/frontend-v2/3Dview_plan/README.md and the canonical non-resolved markdown files instead.
+
+# 3D Visualization System — Master Plan
+
+**Phase:** 5 of frontend-v2 implementation plan
+**Scope:** `apps/control-room/src/modules/viewport-3d/` and related kernel/domain infrastructure
+**Status:** Draft — awaiting review
+
+---
+
+## 1. What Went Wrong in v1
+
+The legacy viewport (`apps/web/src/features/viewport-unified/`, `features/view3d/`, `features/meshWorkspace/`) accumulated these architectural debts:
+
+| Problem | Root cause | v2 fix |
+|---|---|---|
+| FDM and FEM rendered by separate code paths that were later merged | Two renderer implementations → frankensteined into one component tree with `discretization` prop forks | **One renderer, two adapters.** Renderer sees `Viewport3DRenderModel`, never `fdm`/`fem` strings. |
+| Topology rebuild on quantity switch | No separation between topology geometry and field-value buffers | **Topology and field are separate layers** with independent revision tracking. |
+| Continuous rendering even when idle | `requestAnimationFrame` loop without dirty gating | **Dirty-driven render loop.** Frame only on camera, resize, data, or explicit animation. |
+| WebGL resource leaks on 3D↔2D switch | No resource tracker; disposal scattered across components | **`WebglResourceTracker`** — single registry with explicit `releaseAll()` on unmount. |
+| Layer components as React wrappers (`ArrowLayer`, `MeshLayer`, etc.) | Mixing React component tree with imperative 3D rendering | **Layers are imperative renderer classes**, not React components. React owns toolbar/overlay only. |
+| State coupling between viewport, inspector, and explorer | All shared one giant `ControlRoomContext` | **Kernel event bus + selection store.** Viewport emits `viewport:object-picked`, never imports inspector. |
+| No multi-view support | Single fullscreen viewport; no split-screen capability | **`ViewportGrid`** — 1×1, 1×2, 2×2, 1+2 layouts like 3ds Max. |
+
+## 2. Non-Negotiables (from specs and AGENTS.md)
+
+1. One viewport tree for FDM and FEM — FDM/FEM differences live in domain adapters only.
+2. Topology rebuilds separate from field-buffer swaps.
+3. Dirty-driven rendering — zero frames when idle.
+4. Every GPU resource has explicit ownership and disposal via `WebglResourceTracker`.
+5. 2D viewports don't keep WebGL objects alive.
+6. Renderer inputs are domain-neutral `Viewport3DRenderModel`, not API payloads.
+7. Viewport modules can be disabled without breaking explorer, inspector, charts, or runtime commands.
+8. No React state holding WebGL resources (geometries, materials, textures, typed arrays).
+
+## 3. Detailed Sub-Plans
+
+This master document is a navigation index. The architecture is decomposed into five focused documents:
+
+| # | Document | Contents |
+|---|---|---|
+| 1 | [01-viewport-architecture.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/01-viewport-architecture.md) | Module structure, file tree, manifest, data flow, state ownership, lifecycle |
+| 2 | [02-render-pipeline.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/02-render-pipeline.md) | SceneController, layer renderers, dirty loop, WebGL resource tracker, render model contracts |
+| 3 | [03-multi-viewport-layout.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/03-multi-viewport-layout.md) | ViewportGrid, pane configurations (1×1, 1×2, 2×2, 1+2), per-pane camera/display mode, linked vs independent cameras |
+| 4 | [04-domain-adapters.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/04-domain-adapters.md) | `DomainAdapter` interface, FDM adapter, FEM adapter, render model builders, field/topology resource hooks |
+| 5 | [05-testing-performance.md](file:///home/kkingstoun/.gemini/antigravity/brain/43d319f2-6b94-4a44-8e14-7c9c49807d6a/scratch/05-testing-performance.md) | Resource leak tests, idle audit, memory stress, dirty-reason diagnostics, performance budgets |
+
+## 4. Delivery Phases
+
+### Phase 5a — Viewport Shell and Render Foundation
+- Module manifest, store, `Viewport3DModule.tsx`
+- `SceneController` with Three.js scene/camera/renderer init
+- `DirtyRenderLoop` hook
+- `WebglResourceTracker`
+- Empty canvas with camera orbit and resize
+
+### Phase 5b — Domain Adapters and Topology
+- Port `SpatialDomainAdapter` interface to `src/domain/`
+- Implement FDM and FEM adapters
+- `MeshLayerRenderer` — renders topology geometry from `MeshRenderModel`
+- Wire resource hooks for mesh topology and coordinates
+
+### Phase 5c — Field Visualization
+- `FieldSurfaceRenderer` — scalar color mapping on topology
+- `VectorGlyphRenderer` — sampled arrow/cone glyphs
+- Field resource hooks and buffer management
+- Quantity switching without topology rebuild
+
+### Phase 5d — Multi-Viewport Grid
+- `ViewportGrid` component and layout store
+- Per-pane `ViewportPane` with independent camera
+- Display mode per pane (shaded, wireframe, wireframe+shaded, flat)
+- Camera linking / unlinking
+- Keyboard shortcuts for layout switching
+
+### Phase 5e — Selection, Picking, Overlays
+- `SelectionLayerRenderer` — highlight selected objects
+- `useViewportPicking` — GPU or raycasting pick
+- `AxesGridRenderer`, `AirboxRenderer`
+- `ViewportToolbar` and `ViewportOverlayStack`
+- Integration with kernel `SelectionController`
+
+### Phase 5f — Polish and Verification
+- Idle performance audit
+- Memory stress test (3D↔2D, quantity switch cycles)
+- Context loss recovery
+- Diagnostics surface for resource counts and dirty reasons
+
+## 5. Open Questions
+
+> [!IMPORTANT]
+> **Multi-viewport camera linking behavior:**
+> In 3ds Max, the 4 viewports are typically Front/Top/Right/Perspective and are independent.
+> Do you want independent cameras by default with optional linking?
+> Or should one "master" perspective control the others?
+
+> [!IMPORTANT]
+> **Gizmo/transform tool:**
+> ADR-0007 defines camera vs manipulate modes. For the initial v2 viewport, do you want transform gizmos (move/rotate/scale) in Phase 5, or defer to Phase 4 geometry-authoring?
+
+> [!IMPORTANT]
+> **Render backend preference:**
+> The spec says Three.js. Are you happy with Three.js, or would you prefer a lower-level approach (raw WebGL2/WebGPU)? Three.js gives faster iteration; raw WebGL gives more control and smaller bundle.
+
+> [!IMPORTANT]
+> **Display modes per viewport pane:**
+> Proposed set: `shaded`, `wireframe`, `shaded+wireframe`, `flat-shaded`, `points`.
+> Want anything else? (e.g., `xray`, `normals-debug`, `quality-heatmap`)

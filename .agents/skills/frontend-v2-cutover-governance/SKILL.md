@@ -14,7 +14,8 @@ Use this to prevent permanent dual frontend drift.
 3. Identify whether `apps/web` is being read as reference, modified, frozen, or removed.
 4. Ensure every compatibility bridge, feature flag, or legacy reference has an owner and removal condition.
 5. Update AGENTS/specs/ADR/scripts when active frontend defaults change.
-6. Do not remove legacy until the acceptance checklist passes.
+6. Preserve the frontend v2 visual defaults: Catppuccin Mocha/Latte tokens and shadcn/ui-style shared primitives for menu/ribbon/tabs/dialog chrome.
+7. Do not remove legacy until the acceptance checklist passes.
 
 ## Banned Patterns
 

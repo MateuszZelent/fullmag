@@ -3,8 +3,8 @@
 //! Current stage:
 //! - stable C ABI and Rust wrapper
 //! - availability probing
-//! - native MFEM step with bootstrap transfer-grid demag on MFEM builds
-//! - mesh-native/libCEED/hypre demag still pending
+//! - native MFEM/libCEED/hypre time-domain FEM execution
+//! - mesh-native Poisson demag on shared-domain meshes with air
 
 #[cfg(feature = "fem-gpu")]
 use fullmag_fem_sys as ffi;
@@ -17,8 +17,6 @@ use crate::derived_fields::{
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
 use crate::quantities::{normalize_quantity_id, QuantityId};
-#[cfg(feature = "fem-gpu")]
-use crate::relaxation::approximate_max_torque;
 #[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
@@ -53,14 +51,11 @@ fn has_zhang_li_stt(plan: &fullmag_ir::FemPlanIR) -> bool {
 }
 
 pub(crate) fn is_gpu_available() -> bool {
-    #[cfg(feature = "fem-gpu")]
-    {
-        gpu_availability().available
-    }
-    #[cfg(not(feature = "fem-gpu"))]
-    {
-        false
-    }
+    native_availability().native_fem_gpu_available
+}
+
+pub(crate) fn is_cpu_available() -> bool {
+    native_availability().native_fem_cpu_available
 }
 
 #[allow(dead_code)]
@@ -70,13 +65,18 @@ pub(crate) struct GpuAvailability {
     pub built_with_mfem_stack: bool,
     pub built_with_cuda_runtime: bool,
     pub built_with_ceed: bool,
+    pub native_fem_cpu_available: bool,
+    pub native_fem_gpu_available: bool,
+    pub mfem_cuda_available: bool,
+    pub hypre_gpu_available: bool,
+    pub libceed_used_hot_path: bool,
     pub visible_cuda_device_count: i32,
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
     pub reason: String,
 }
 
-pub(crate) fn gpu_availability() -> GpuAvailability {
+pub(crate) fn native_availability() -> GpuAvailability {
     #[cfg(feature = "fem-gpu")]
     {
         let mut info = ffi::fullmag_fem_availability_info {
@@ -84,6 +84,11 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
             built_with_mfem_stack: 0,
             built_with_cuda_runtime: 0,
             built_with_ceed: 0,
+            native_fem_cpu_available: 0,
+            native_fem_gpu_available: 0,
+            mfem_cuda_available: 0,
+            hypre_gpu_available: 0,
+            libceed_used_hot_path: 0,
             visible_cuda_device_count: 0,
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
@@ -96,6 +101,11 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
                 built_with_mfem_stack: false,
                 built_with_cuda_runtime: false,
                 built_with_ceed: false,
+                native_fem_cpu_available: false,
+                native_fem_gpu_available: false,
+                mfem_cuda_available: false,
+                hypre_gpu_available: false,
+                libceed_used_hot_path: false,
                 visible_cuda_device_count: 0,
                 requested_gpu_index: -1,
                 resolved_gpu_index: -1,
@@ -114,6 +124,11 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
             built_with_mfem_stack: info.built_with_mfem_stack == 1,
             built_with_cuda_runtime: info.built_with_cuda_runtime == 1,
             built_with_ceed: info.built_with_ceed == 1,
+            native_fem_cpu_available: info.native_fem_cpu_available == 1,
+            native_fem_gpu_available: info.native_fem_gpu_available == 1,
+            mfem_cuda_available: info.mfem_cuda_available == 1,
+            hypre_gpu_available: info.hypre_gpu_available == 1,
+            libceed_used_hot_path: info.libceed_used_hot_path == 1,
             visible_cuda_device_count: info.visible_cuda_device_count,
             requested_gpu_index: info.requested_gpu_index,
             resolved_gpu_index: info.resolved_gpu_index,
@@ -127,10 +142,107 @@ pub(crate) fn gpu_availability() -> GpuAvailability {
             built_with_mfem_stack: false,
             built_with_cuda_runtime: false,
             built_with_ceed: false,
+            native_fem_cpu_available: false,
+            native_fem_gpu_available: false,
+            mfem_cuda_available: false,
+            hypre_gpu_available: false,
+            libceed_used_hot_path: false,
             visible_cuda_device_count: 0,
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
             reason: "fullmag-runner was built without the fem-gpu feature".to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeFemDataResidency {
+    HostSourceOfTruth,
+    Mixed,
+    DeviceSourceOfTruth,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemDataResidency {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::HostSourceOfTruth => "host_source_of_truth",
+            Self::Mixed => "mixed",
+            Self::DeviceSourceOfTruth => "device_source_of_truth",
+        }
+    }
+
+    fn from_ffi(value: ffi::fullmag_fem_data_residency) -> Self {
+        match value {
+            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_MIXED => Self::Mixed,
+            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH => {
+                Self::DeviceSourceOfTruth
+            }
+            ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH => {
+                Self::HostSourceOfTruth
+            }
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuStateInfo {
+    pub(crate) allocated: bool,
+    pub(crate) node_count: u64,
+    pub(crate) dof_len: u64,
+    pub(crate) stage_count: u32,
+    pub(crate) device_bytes: u64,
+    pub(crate) reduction_workspace_bytes: u64,
+    pub(crate) source_of_truth: NativeFemDataResidency,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemGpuStateInfo {
+    pub(crate) fn from_ffi(info: ffi::fullmag_fem_gpu_state_info) -> Self {
+        Self {
+            allocated: info.allocated != 0,
+            node_count: info.node_count,
+            dof_len: info.dof_len,
+            stage_count: info.stage_count,
+            device_bytes: info.device_bytes,
+            reduction_workspace_bytes: info.reduction_workspace_bytes,
+            source_of_truth: NativeFemDataResidency::from_ffi(info.source_of_truth),
+        }
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuRkPlanInfo {
+    pub(crate) exchange_only_enabled: bool,
+    pub(crate) stage_count: u32,
+    pub(crate) uses_cuda_kernels: bool,
+    pub(crate) allows_exchange_host_sync: bool,
+    pub(crate) stage_exchange_device_resident: bool,
+    pub(crate) exchange_operator_mode: String,
+    pub(crate) reason: String,
+}
+
+#[cfg(feature = "fem-gpu")]
+impl NativeFemGpuRkPlanInfo {
+    pub(crate) fn from_ffi(info: ffi::fullmag_fem_gpu_rk_plan_info) -> Self {
+        let exchange_operator_mode =
+            unsafe { CStr::from_ptr(info.exchange_operator_mode.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+        let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        Self {
+            exchange_only_enabled: info.exchange_only_enabled != 0,
+            stage_count: info.stage_count,
+            uses_cuda_kernels: info.uses_cuda_kernels != 0,
+            allows_exchange_host_sync: info.allows_exchange_host_sync != 0,
+            stage_exchange_device_resident: info.stage_exchange_device_resident != 0,
+            exchange_operator_mode,
+            reason,
         }
     }
 }
@@ -150,7 +262,6 @@ pub(crate) struct NativeFemBackend {
     magnetic_node_mask: Vec<bool>,
     object_weights: Vec<(String, f64)>,
     damping: f64,
-    gyromagnetic_ratio: f64,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -168,6 +279,13 @@ impl NativeFemBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FemPlanIR) -> Result<Self, RunError> {
+        Self::create_with_initial_effective_field(plan, true)
+    }
+
+    pub fn create_with_initial_effective_field(
+        plan: &fullmag_ir::FemPlanIR,
+        eager_initial_effective_field: bool,
+    ) -> Result<Self, RunError> {
         if matches!(
             plan.domain_mesh_mode,
             fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh
@@ -332,7 +450,10 @@ impl NativeFemBackend {
                     solver,
                     preconditioner,
                     relative_tolerance: policy.rtol,
+                    has_absolute_tolerance: if policy.atol.is_some() { 1 } else { 0 },
+                    absolute_tolerance: policy.atol.unwrap_or(0.0),
                     max_iterations: policy.max_iterations,
+                    print_level: policy.print_level,
                 }
             },
             air_box_factor: plan.air_box_config.as_ref().map_or(0.0, |c| c.factor),
@@ -654,6 +775,7 @@ impl NativeFemBackend {
             } else {
                 0
             },
+            eager_initial_effective_field: if eager_initial_effective_field { 1 } else { 0 },
         };
 
         // Build adaptive config if present
@@ -719,7 +841,7 @@ impl NativeFemBackend {
 
         let handle = unsafe { ffi::fullmag_fem_backend_create(&plan_desc) };
         if handle.is_null() {
-            let availability = gpu_availability();
+            let availability = native_availability();
             return Err(RunError {
                 message: last_global_error_or(&format!(
                     "FEM GPU backend_create returned null without an error message ({})",
@@ -756,7 +878,6 @@ impl NativeFemBackend {
                 }
             },
             damping: plan.material.damping,
-            gyromagnetic_ratio: plan.gyromagnetic_ratio,
         })
     }
 
@@ -775,6 +896,84 @@ impl NativeFemBackend {
         Ok(())
     }
 
+    fn transfer_audit(&self) -> Result<ffi::fullmag_fem_transfer_audit, RunError> {
+        let mut audit = ffi::fullmag_fem_transfer_audit {
+            h2d_bytes: 0,
+            d2h_bytes: 0,
+            host_read_count: 0,
+            host_write_count: 0,
+            host_read_write_count: 0,
+            hot_loop_h2d_bytes: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_read_count: 0,
+            hot_loop_host_write_count: 0,
+            hot_loop_host_read_write_count: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_exchange_h2d_bytes: 0,
+            hot_loop_exchange_d2h_bytes: 0,
+            hot_loop_exchange_host_sync_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_transfer_audit(self.handle, &mut audit) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU transfer audit read failed"));
+        }
+        Ok(audit)
+    }
+
+    pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {
+        let mut info = ffi::fullmag_fem_gpu_state_info {
+            allocated: 0,
+            node_count: 0,
+            dof_len: 0,
+            stage_count: 0,
+            device_bytes: 0,
+            reduction_workspace_bytes: 0,
+            source_of_truth:
+                ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH,
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_state_info(self.handle, &mut info) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU state info read failed"));
+        }
+        Ok(NativeFemGpuStateInfo::from_ffi(info))
+    }
+
+    pub(crate) fn gpu_rk_plan_info(&self) -> Result<NativeFemGpuRkPlanInfo, RunError> {
+        let mut info = ffi::fullmag_fem_gpu_rk_plan_info {
+            exchange_only_enabled: 0,
+            stage_count: 0,
+            uses_cuda_kernels: 0,
+            allows_exchange_host_sync: 0,
+            stage_exchange_device_resident: 0,
+            exchange_operator_mode: [0; 64],
+            reason: [0; 256],
+        };
+        let rc = unsafe { ffi::fullmag_fem_backend_get_gpu_rk_plan_info(self.handle, &mut info) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU RK plan info read failed"));
+        }
+        Ok(NativeFemGpuRkPlanInfo::from_ffi(info))
+    }
+
+    fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let audit = self.transfer_audit()?;
+        stats.hot_loop_h2d_bytes = audit.hot_loop_h2d_bytes;
+        stats.hot_loop_d2h_bytes = audit.hot_loop_d2h_bytes;
+        stats.hot_loop_host_read_count = audit.hot_loop_host_read_count;
+        stats.hot_loop_host_write_count = audit.hot_loop_host_write_count;
+        stats.hot_loop_host_sync_count = audit.hot_loop_host_sync_count;
+        stats.hot_loop_exchange_h2d_bytes = audit.hot_loop_exchange_h2d_bytes;
+        stats.hot_loop_exchange_d2h_bytes = audit.hot_loop_exchange_d2h_bytes;
+        stats.hot_loop_exchange_host_sync_count = audit.hot_loop_exchange_host_sync_count;
+        stats.hot_loop_compute_h2d_bytes = audit.hot_loop_compute_h2d_bytes;
+        stats.hot_loop_compute_d2h_bytes = audit.hot_loop_compute_d2h_bytes;
+        stats.hot_loop_compute_host_sync_count = audit.hot_loop_compute_host_sync_count;
+        Ok(())
+    }
+
     pub fn step_interruptible(
         &mut self,
         dt: f64,
@@ -785,6 +984,9 @@ impl NativeFemBackend {
             step: 0,
             time_seconds: 0.0,
             dt_seconds: 0.0,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
@@ -796,11 +998,19 @@ impl NativeFemBackend {
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
             max_torque_Apm: 0.0,
+            demag_solve_count: 0,
             demag_linear_iterations: 0,
             demag_linear_residual: 0.0,
             wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
+            demag_assemble_wall_time_ns: 0,
+            demag_solve_wall_time_ns: 0,
+            demag_solver_setup_wall_time_ns: 0,
+            demag_solver_apply_wall_time_ns: 0,
+            demag_solver_setup_reused: 0,
+            demag_recover_wall_time_ns: 0,
+            demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
@@ -821,16 +1031,18 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
-        let torque_apm = approximate_max_torque(
-            stats.max_rhs_amplitude,
-            self.gyromagnetic_ratio,
-            self.damping,
-            false,
-        );
+        let torque_apm = if stats.max_torque_Apm.is_finite() && stats.max_torque_Apm >= 0.0 {
+            stats.max_torque_Apm
+        } else {
+            0.0
+        };
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
             dt: stats.dt_seconds,
+            mx: stats.mx,
+            my: stats.my,
+            mz: stats.mz,
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
@@ -845,6 +1057,13 @@ impl NativeFemBackend {
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
+            demag_assemble_wall_time_ns: stats.demag_assemble_wall_time_ns,
+            demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
+            demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
+            demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
+            demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
+            demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
@@ -861,18 +1080,15 @@ impl NativeFemBackend {
             },
             rhs_evals: stats.rhs_evaluations,
             fsal_reused: stats.fsal_reused != 0,
-            demag_solves: if stats.demag_linear_iterations > 0 {
-                1
-            } else {
-                0
-            },
+            demag_solves: stats.demag_solve_count,
             poisson_iterations: stats.demag_linear_iterations,
             poisson_final_residual: stats.demag_linear_residual,
-            demag_refreshed: stats.demag_linear_iterations > 0,
+            demag_refreshed: stats.demag_solve_count > 0,
             requested_fem_omp_threads: stats.requested_omp_threads,
             effective_fem_omp_threads: stats.effective_omp_threads,
             ..StepStats::default()
         };
+        self.attach_transfer_audit(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -939,6 +1155,9 @@ impl NativeFemBackend {
             step: 0,
             time_seconds: 0.0,
             dt_seconds: 0.0,
+            mx: 0.0,
+            my: 0.0,
+            mz: 0.0,
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
@@ -950,11 +1169,19 @@ impl NativeFemBackend {
             max_demag_field_amplitude: 0.0,
             max_rhs_amplitude: 0.0,
             max_torque_Apm: 0.0,
+            demag_solve_count: 0,
             demag_linear_iterations: 0,
             demag_linear_residual: 0.0,
             wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
+            demag_assemble_wall_time_ns: 0,
+            demag_solve_wall_time_ns: 0,
+            demag_solver_setup_wall_time_ns: 0,
+            demag_solver_apply_wall_time_ns: 0,
+            demag_solver_setup_reused: 0,
+            demag_recover_wall_time_ns: 0,
+            demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
@@ -981,6 +1208,9 @@ impl NativeFemBackend {
             step: stats.step,
             time: stats.time_seconds,
             dt: stats.dt_seconds,
+            mx: stats.mx,
+            my: stats.my,
+            mz: stats.mz,
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
@@ -995,21 +1225,25 @@ impl NativeFemBackend {
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,
+            demag_assemble_wall_time_ns: stats.demag_assemble_wall_time_ns,
+            demag_solve_wall_time_ns: stats.demag_solve_wall_time_ns,
+            demag_solver_setup_wall_time_ns: stats.demag_solver_setup_wall_time_ns,
+            demag_solver_apply_wall_time_ns: stats.demag_solver_apply_wall_time_ns,
+            demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
+            demag_recover_wall_time_ns: stats.demag_recover_wall_time_ns,
+            demag_energy_wall_time_ns: stats.demag_energy_wall_time_ns,
             rhs_wall_time_ns: stats.rhs_wall_time_ns,
             extra_energy_wall_time_ns: stats.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: stats.snapshot_wall_time_ns,
-            demag_solves: if stats.demag_linear_iterations > 0 {
-                1
-            } else {
-                0
-            },
+            demag_solves: stats.demag_solve_count,
             poisson_iterations: stats.demag_linear_iterations,
             poisson_final_residual: stats.demag_linear_residual,
-            demag_refreshed: stats.demag_linear_iterations > 0,
+            demag_refreshed: stats.demag_solve_count > 0,
             requested_fem_omp_threads: stats.requested_omp_threads,
             effective_fem_omp_threads: stats.effective_omp_threads,
             ..StepStats::default()
         };
+        self.attach_transfer_audit(&mut step_stats)?;
         crate::scalar_metrics::apply_average_m_to_step_stats(&mut step_stats, &magnetization);
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -1487,7 +1721,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_rejects_periodic_pairs_in_native_context() {
+    fn native_fem_accepts_periodic_dmi_pairs_in_native_context() {
         let mut plan = make_test_plan();
         plan.interfacial_dmi = Some(1.0e-3);
         plan.mesh.periodic_boundary_pairs = vec![MeshPeriodicBoundaryPairIR {
@@ -1508,18 +1742,17 @@ mod tests {
             node_b: 1,
         }];
 
-        let err = match NativeFemBackend::create(&plan) {
-            Ok(_) => panic!("native FEM time-domain must reject unenforced periodic pairs"),
-            Err(err) => err,
-        };
-        assert!(
-            err.message.contains("periodic_node_pairs")
-                && err
-                    .message
-                    .contains("exchange with optional uniform external field"),
-            "unexpected periodic rejection message: {}",
-            err.message
-        );
+        if let Err(err) = NativeFemBackend::create(&plan) {
+            if !is_gpu_available()
+                && (err.message.contains("MFEM") || err.message.contains("scaffold"))
+            {
+                return;
+            }
+            panic!(
+                "native FEM time-domain should accept periodic DMI pairs with class projection: {}",
+                err.message
+            );
+        }
     }
 
     #[test]
@@ -1553,6 +1786,63 @@ mod tests {
             "unexpected material-class rejection message: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn gpu_state_info_maps_residency_and_allocation_from_ffi() {
+        let info = NativeFemGpuStateInfo::from_ffi(ffi::fullmag_fem_gpu_state_info {
+            allocated: 1,
+            node_count: 4,
+            dof_len: 12,
+            stage_count: 2,
+            device_bytes: 8192,
+            reduction_workspace_bytes: 64,
+            source_of_truth:
+                ffi::fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
+        });
+
+        assert!(info.allocated);
+        assert_eq!(info.node_count, 4);
+        assert_eq!(info.dof_len, 12);
+        assert_eq!(info.stage_count, 2);
+        assert_eq!(info.device_bytes, 8192);
+        assert_eq!(info.reduction_workspace_bytes, 64);
+        assert_eq!(info.source_of_truth.as_str(), "device_source_of_truth");
+    }
+
+    #[test]
+    fn gpu_rk_plan_info_maps_exchange_only_gate_from_ffi() {
+        let mut reason = [0; 256];
+        let raw = b"requires CUDA\0";
+        for (dst, src) in reason.iter_mut().zip(raw.iter().copied()) {
+            *dst = src as std::os::raw::c_char;
+        }
+        let mut exchange_operator_mode = [0; 64];
+        let raw_mode = b"unsupported\0";
+        for (dst, src) in exchange_operator_mode
+            .iter_mut()
+            .zip(raw_mode.iter().copied())
+        {
+            *dst = src as std::os::raw::c_char;
+        }
+
+        let info = NativeFemGpuRkPlanInfo::from_ffi(ffi::fullmag_fem_gpu_rk_plan_info {
+            exchange_only_enabled: 1,
+            stage_count: 4,
+            uses_cuda_kernels: 1,
+            allows_exchange_host_sync: 1,
+            stage_exchange_device_resident: 0,
+            exchange_operator_mode,
+            reason,
+        });
+
+        assert!(info.exchange_only_enabled);
+        assert_eq!(info.stage_count, 4);
+        assert!(info.uses_cuda_kernels);
+        assert!(info.allows_exchange_host_sync);
+        assert!(!info.stage_exchange_device_resident);
+        assert_eq!(info.exchange_operator_mode, "unsupported");
+        assert_eq!(info.reason, "requires CUDA");
     }
 
     fn make_exchange_only_plan() -> FemPlanIR {
@@ -1920,7 +2210,7 @@ mod tests {
             Ok(_) => panic!("CPU single precision should fail"),
             Err(err) => err,
         };
-        assert!(err.message.contains("CPU backend"));
+        assert!(err.message.contains("CPU FEM backend"));
         assert!(err.message.contains("double precision"));
     }
 
@@ -2006,6 +2296,607 @@ mod tests {
             expected_report.max_rhs_amplitude,
             5e-8,
             1e-9,
+        );
+        assert_eq!(stats.rhs_evals, 3);
+        assert_eq!(stats.demag_solves, 0);
+        assert!(!stats.demag_refreshed);
+    }
+
+    #[test]
+    fn native_fem_explicit_rk_reports_real_rhs_cost_when_mfem_stack_is_available() {
+        if !is_gpu_available() {
+            eprintln!(
+                "skipping native FEM RK cost test: backend was built without MFEM; rebuild with FULLMAG_USE_MFEM_STACK=ON on an MFEM host"
+            );
+            return;
+        }
+
+        let cases = [
+            (IntegratorChoice::Heun, 3, 3, false),
+            (IntegratorChoice::Rk4, 5, 5, false),
+            (IntegratorChoice::Rk23, 4, 3, true),
+            (IntegratorChoice::Rk45, 7, 6, true),
+        ];
+
+        for (integrator, expected_first_rhs, expected_second_rhs, expected_second_fsal) in cases {
+            let mut plan = make_exchange_only_plan();
+            plan.integrator = integrator;
+            let mut backend = NativeFemBackend::create(&plan).expect("native fem create");
+
+            let first = backend
+                .step(plan.fixed_timestep.expect("fixed dt"))
+                .expect("first native FEM RK step");
+            assert_eq!(
+                first.rhs_evals, expected_first_rhs,
+                "unexpected first-step RHS count for {:?}",
+                integrator
+            );
+            assert_eq!(
+                first.demag_solves, 0,
+                "exchange-only should not solve demag"
+            );
+            assert!(
+                !first.demag_refreshed,
+                "exchange-only should not refresh demag"
+            );
+
+            let second = backend
+                .step(plan.fixed_timestep.expect("fixed dt"))
+                .expect("second native FEM RK step");
+            assert_eq!(
+                second.rhs_evals, expected_second_rhs,
+                "unexpected second-step RHS count for {:?}",
+                integrator
+            );
+            assert_eq!(
+                second.fsal_reused, expected_second_fsal,
+                "unexpected FSAL reuse for {:?}",
+                integrator
+            );
+            assert_eq!(
+                second.demag_solves, 0,
+                "exchange-only should not solve demag"
+            );
+            assert!(
+                !second.demag_refreshed,
+                "exchange-only should not refresh demag"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_poisson_rhs_hot_path_reuses_workspace() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let coeff_start = source
+            .find("class MagnetizationCoefficient")
+            .expect("MagnetizationCoefficient definition");
+        let coeff_rest = &source[coeff_start..];
+        let coeff_end = coeff_rest
+            .find("\nstruct PoissonRhsWorkspace")
+            .expect("MagnetizationCoefficient end marker");
+        let coeff_body = &coeff_rest[..coeff_end];
+        let start = source
+            .find("bool assemble_poisson_rhs(")
+            .expect("assemble_poisson_rhs definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\nvoid zero_poisson_essential_values")
+            .expect("assemble_poisson_rhs end marker");
+        let body = &rest[..end];
+
+        assert!(
+            !body.contains("mfem::LinearForm b(fes)"),
+            "assemble_poisson_rhs must reuse the context-owned LinearForm workspace"
+        );
+        assert!(
+            !body.contains("AddDomainIntegrator("),
+            "assemble_poisson_rhs must not allocate/add RHS integrators in the hot path"
+        );
+        let eval_start = coeff_body
+            .find("void Eval(")
+            .expect("MagnetizationCoefficient::Eval definition");
+        let eval_rest = &coeff_body[eval_start..];
+        let eval_end = eval_rest
+            .find("\nprivate:")
+            .expect("MagnetizationCoefficient::Eval end marker");
+        let eval_body = &eval_rest[..eval_end];
+
+        assert!(
+            eval_body.contains("thread_local EvalScratch scratch"),
+            "MagnetizationCoefficient::Eval must reuse thread-local element scratch"
+        );
+        assert!(
+            !eval_body.contains("mfem::Array<int> dofs;"),
+            "MagnetizationCoefficient::Eval must not allocate DOF scratch per coefficient evaluation"
+        );
+        assert!(
+            !eval_body.contains("mfem::Vector shape(ndof)"),
+            "MagnetizationCoefficient::Eval must not allocate shape scratch per coefficient evaluation"
+        );
+    }
+
+    #[test]
+    fn native_fem_poisson_essential_zeroing_uses_context_tdof_list_directly() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("void zero_poisson_essential_values(")
+            .expect("zero_poisson_essential_values definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#ifdef MFEM_USE_MPI")
+            .expect("zero_poisson_essential_values end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("for (const int tdof : ctx.poisson_ess_tdof_list)"),
+            "essential value zeroing must iterate the context-owned tdof list directly"
+        );
+        assert!(
+            !source.contains("poisson_essential_tdofs("),
+            "hot path must not construct a temporary mfem::Array wrapper for essential tdofs"
+        );
+    }
+
+    #[test]
+    fn native_fem_demag_recovery_reuses_context_workspace() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool recover_demag_field(")
+            .expect("recover_demag_field definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n} // namespace")
+            .expect("recover_demag_field end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("demag_recovery_workspace"),
+            "recover_demag_field must use context-owned demag recovery workspace"
+        );
+        assert!(
+            !body.contains("std::vector<std::vector<double>> field_partials("),
+            "recover_demag_field must not allocate per-call full-size field partials"
+        );
+        assert!(
+            !body.contains("std::vector<std::vector<double>> weight_partials("),
+            "recover_demag_field must not allocate per-call full-size weight partials"
+        );
+        assert!(
+            body.contains("serial_scratch"),
+            "recover_demag_field must reuse context-owned serial element scratch"
+        );
+        assert!(
+            body.contains("thread_scratch"),
+            "recover_demag_field must reuse context-owned per-thread element scratch"
+        );
+        assert!(
+            !body.contains("mfem::DenseMatrix dshape;"),
+            "recover_demag_field must not allocate element DenseMatrix scratch per call/thread"
+        );
+        assert!(
+            body.contains("robin_boundary_tmp"),
+            "recover_demag_field must reuse context-owned Robin boundary scratch"
+        );
+        assert!(
+            !body.contains("mfem::Vector Bu("),
+            "recover_demag_field must not allocate Robin boundary scratch per recovery"
+        );
+    }
+
+    #[test]
+    fn native_fem_hypre_solve_reuses_transfer_vectors() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool solve_poisson_hypre(")
+            .expect("solve_poisson_hypre definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#endif // MFEM_USE_MPI")
+            .expect("solve_poisson_hypre end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("poisson_hypre_workspace"),
+            "solve_poisson_hypre must use context-owned Hypre transfer workspace"
+        );
+        assert!(
+            !body.contains("mfem::HypreParVector b_par("),
+            "solve_poisson_hypre must not allocate a fresh RHS HypreParVector per solve"
+        );
+        assert!(
+            !body.contains("mfem::HypreParVector x_par("),
+            "solve_poisson_hypre must not allocate a fresh solution HypreParVector per solve"
+        );
+    }
+
+    #[test]
+    fn native_fem_hypre_solve_reuses_persistent_warm_start_vector() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool solve_poisson_hypre(")
+            .expect("solve_poisson_hypre definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#endif // MFEM_USE_MPI")
+            .expect("solve_poisson_hypre end marker");
+        let body = &rest[..end];
+
+        let guard = body
+            .find("if (!poisson_hypre_workspace->x_par_contains_solution)")
+            .expect("Hypre warm-start copy must be guarded by workspace validity");
+        let solution_read = body
+            .find("const double *sol_host = audited_host_read(solution)")
+            .expect("first Hypre solve still needs to seed x_par from solution");
+        let solved_copy = body
+            .find("const double *x_solved = audited_host_read(x_par)")
+            .expect("solved Hypre vector must still be copied back to MFEM solution");
+
+        assert!(
+            guard < solution_read && solution_read < solved_copy,
+            "solution-to-Hypre warm-start copy must happen only inside the guarded seed block"
+        );
+        assert!(
+            body.contains("poisson_hypre_workspace->x_par_contains_solution = true"),
+            "solve_poisson_hypre must mark the persistent Hypre solution vector valid after solve"
+        );
+    }
+
+    #[test]
+    fn native_fem_non_pbc_demag_reuses_solution_workspace() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool context_compute_demag_poisson(")
+            .expect("context_compute_demag_poisson definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\nbool context_refresh_exchange_field_mfem")
+            .expect("context_compute_demag_poisson end marker");
+        let body = &rest[..end];
+
+        assert!(
+            source.contains("ctx.mfem_poisson_solution_vec ="),
+            "Poisson initialization must allocate a context-owned solution workspace"
+        );
+        assert!(
+            source.contains("delete static_cast<mfem::Vector *>(ctx.mfem_poisson_solution_vec)"),
+            "Poisson destruction must release the context-owned solution workspace"
+        );
+        assert!(
+            body.contains("ctx.mfem_poisson_solution_vec"),
+            "non-PBC demag solve must use the context-owned solution workspace"
+        );
+        assert!(
+            !body.contains("mfem::Vector solution(fes->GetTrueVSize())"),
+            "non-PBC demag solve must not allocate a fresh true-DOF solution vector per solve"
+        );
+        assert!(
+            body.contains("if (!poisson_hypre_has_warm_start(ctx))"),
+            "non-PBC demag solve should skip GridFunction warm-start extraction when Hypre already has a persistent solution"
+        );
+    }
+
+    #[test]
+    fn native_fem_hypre_solve_enables_iterative_mode_for_warm_start() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool solve_poisson_hypre(")
+            .expect("solve_poisson_hypre definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#endif // MFEM_USE_MPI")
+            .expect("solve_poisson_hypre end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("pcg->iterative_mode = true"),
+            "HyprePCG must use the persistent x_par vector as a nonzero initial guess"
+        );
+        assert!(
+            body.contains("gmres->iterative_mode = true"),
+            "HypreGMRES must use the persistent x_par vector as a nonzero initial guess"
+        );
+    }
+
+    #[test]
+    fn native_fem_hypre_solve_honors_configured_print_level() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool solve_poisson_hypre(")
+            .expect("solve_poisson_hypre definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n#endif // MFEM_USE_MPI")
+            .expect("solve_poisson_hypre end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("ctx.demag_solver.print_level"),
+            "native Hypre solver setup must use the configured demag print level"
+        );
+        assert!(
+            body.contains("SetAbsTol(ctx.demag_solver.absolute_tolerance)"),
+            "native Hypre solver setup must apply configured absolute tolerance"
+        );
+        assert!(
+            !body.contains("SetPrintLevel(0)"),
+            "native Hypre solver setup must not force print level to zero"
+        );
+    }
+
+    #[test]
+    fn native_fem_periodic_demag_reduced_solve_reuses_workspace_and_warm_start() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("Periodic demag: solve in reduced class space")
+            .expect("periodic demag solve block");
+        let rest = &source[start..];
+        let end = rest
+            .find("End periodic demag path")
+            .expect("periodic demag solve end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("mfem_periodic_poisson_workspace"),
+            "periodic reduced demag solve must use a context-owned solver workspace"
+        );
+        assert!(
+            !body.contains("*x_p = 0.0;"),
+            "periodic reduced demag solve must retain x_p as the warm-start vector"
+        );
+        assert!(
+            !body.contains("mfem::CGSolver solver;"),
+            "periodic reduced demag solve must not allocate a fresh CGSolver per solve"
+        );
+        assert!(
+            !body.contains("mfem::GSSmoother prec("),
+            "periodic reduced demag solve must not allocate a fresh GSSmoother per solve"
+        );
+    }
+
+    #[test]
+    fn native_fem_dmi_element_loops_reuse_context_workspace() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+
+        for function_name in ["compute_interfacial_dmi_field(", "compute_bulk_dmi_field("] {
+            let start = source.find(function_name).expect("DMI function definition");
+            let rest = &source[start..];
+            let end = rest
+                .find("\ndouble external_energy_from_field")
+                .expect("DMI function end marker");
+            let body = &rest[..end];
+
+            assert!(
+                body.contains("dmi_element_workspace(ctx)"),
+                "{function_name} must use context-owned DMI element workspace"
+            );
+            assert!(
+                !body.contains("mfem::Vector mx_elem("),
+                "{function_name} must not allocate mx_elem in the element loop"
+            );
+            assert!(
+                !body.contains("mfem::Vector my_elem("),
+                "{function_name} must not allocate my_elem in the element loop"
+            );
+            assert!(
+                !body.contains("mfem::Vector mz_elem("),
+                "{function_name} must not allocate mz_elem in the element loop"
+            );
+            assert!(
+                !body.contains("mfem::DenseMatrix dshape("),
+                "{function_name} must not allocate dshape in the quadrature loop"
+            );
+            assert!(
+                !body.contains("mfem::Vector shape("),
+                "{function_name} must not allocate shape in the quadrature loop"
+            );
+        }
+    }
+
+    #[test]
+    fn native_fem_fsal_cached_fields_move_without_copying() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("if (final_stage_cache_valid) {")
+            .expect("FSAL final-stage cache block");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    } else {")
+            .expect("FSAL final-stage cache block end");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("std::swap(ctx.h_ex_xyz, ws.h_ex_tmp)"),
+            "FSAL accepted step should publish cached exchange field by swapping buffers"
+        );
+        assert!(
+            body.contains("std::swap(ctx.h_demag_xyz, ws.h_demag_tmp)"),
+            "FSAL accepted step should publish cached demag field by swapping buffers"
+        );
+        assert!(
+            body.contains("std::swap(ctx.h_eff_xyz, ws.h_eff_tmp)"),
+            "FSAL accepted step should publish cached effective field by swapping buffers"
+        );
+        assert!(
+            !body.contains("ctx.h_ex_xyz = ws.h_ex_tmp")
+                && !body.contains("ctx.h_demag_xyz = ws.h_demag_tmp")
+                && !body.contains("ctx.h_eff_xyz = ws.h_eff_tmp"),
+            "FSAL accepted step must not copy full field buffers out of the stepper workspace"
+        );
+    }
+
+    #[test]
+    fn native_fem_non_fsal_final_refresh_reuses_stepper_workspace() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("if (final_stage_cache_valid) {")
+            .expect("final field publish block");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    ctx.current_time += dt;")
+            .expect("final field publish block end");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("ws.h_ex_tmp")
+                && body.contains("ws.h_demag_tmp")
+                && body.contains("ws.h_eff_tmp"),
+            "non-FSAL final refresh should reuse stepper field workspace"
+        );
+        assert!(
+            !body.contains("std::vector<double> h_ex_final")
+                && !body.contains("std::vector<double> h_demag_final")
+                && !body.contains("std::vector<double> h_eff_final"),
+            "non-FSAL final refresh must not allocate local full-size field buffers"
+        );
+
+        let rhs_start = source
+            .find("// Post-step RHS for max_dm_dt metric")
+            .expect("post-step RHS block");
+        let rhs_rest = &source[rhs_start..];
+        let rhs_end = rhs_rest
+            .find("\n\n    stats.step = ctx.step_count;")
+            .expect("post-step RHS block end");
+        let rhs_body = &rhs_rest[..rhs_end];
+        assert!(
+            rhs_body.contains("ws.k[0], max_rhs_final"),
+            "non-FSAL post-step RHS should reuse an existing stepper derivative buffer"
+        );
+        assert!(
+            !rhs_body.contains("std::vector<double> rhs_final"),
+            "non-FSAL post-step RHS must not allocate a local full-size RHS buffer"
+        );
+    }
+
+    #[test]
+    fn native_fem_disabled_local_terms_are_not_zeroed_each_effective_field_eval() {
+        let bridge_source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = bridge_source
+            .find("bool compute_effective_fields_for_magnetization_impl(")
+            .expect("effective field implementation");
+        let rest = &bridge_source[start..];
+        let end = rest
+            .find("\nvoid fill_demag_solver_stats")
+            .expect("effective field implementation end");
+        let body = &rest[..end];
+
+        assert!(
+            !body.contains("ctx.h_dmi_xyz.assign(m_xyz.size(), 0.0)")
+                && !body.contains("ctx.h_cubic_ani_xyz.assign(m_xyz.size(), 0.0)")
+                && !body.contains("ctx.h_bulk_dmi_xyz.assign(m_xyz.size(), 0.0)"),
+            "disabled DMI/cubic/bulk-DMI buffers should not be cleared on every effective-field evaluation"
+        );
+        assert!(
+            body.contains("if (ctx.enable_exchange) {\n        h_ex_xyz.resize(m_xyz.size());")
+                && body
+                    .contains("if (ctx.enable_demag) {\n        h_demag_xyz.resize(m_xyz.size());")
+                && body.contains("h_eff_xyz.resize(m_xyz.size());"),
+            "active exchange/demag/H_eff buffers should avoid pre-zeroing before being overwritten"
+        );
+        assert!(
+            !body.contains("h_eff_xyz.assign(m_xyz.size(), 0.0)"),
+            "H_eff is fully overwritten later and must not be pre-zeroed every evaluation"
+        );
+
+        let context_source = include_str!("../../../native/backends/fem/src/context.cpp");
+        assert!(
+            context_source.contains("fill_zero_vector_field(ctx.h_dmi_xyz, ctx.n_nodes)")
+                && context_source
+                    .contains("fill_zero_vector_field(ctx.h_cubic_ani_xyz, ctx.n_nodes)")
+                && context_source
+                    .contains("fill_zero_vector_field(ctx.h_bulk_dmi_xyz, ctx.n_nodes)"),
+            "disabled local-term observable buffers must be initialized once in context_from_plan"
+        );
+    }
+
+    #[test]
+    fn native_fem_demag_cache_copy_is_guarded_by_field_refresh_policy() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("bool compute_effective_fields_for_magnetization_impl(")
+            .expect("effective field implementation");
+        let rest = &source[start..];
+        let end = rest
+            .find("\nvoid fill_demag_solver_stats")
+            .expect("effective field implementation end");
+        let body = &rest[..end];
+        let cache_copy = body
+            .find("ctx.h_demag_cached_xyz = h_demag_xyz")
+            .expect("demag cache copy");
+        let policy_guard = body
+            .find("if (ctx.field_refresh.has_demag_interval_s != 0) {")
+            .expect("field-refresh cache guard");
+
+        assert!(
+            policy_guard < cache_copy,
+            "fresh Poisson demag should copy full fields into frozen-field cache only when field_refresh is active"
+        );
+    }
+
+    #[test]
+    fn native_fem_dmi_formula_smoke_has_directional_derivative_oracle() {
+        let source = include_str!("../../../native/backends/fem/tests/dmi_weak_residual.cpp");
+
+        assert!(
+            source.contains("interfacial_energy_directional_derivative"),
+            "native DMI formula smoke must compare interfacial dE/deps against field action"
+        );
+        assert!(
+            source.contains("bulk_energy_directional_derivative"),
+            "native DMI formula smoke must compare bulk dE/deps against field action"
+        );
+        assert!(
+            source.contains("run_interfacial_directional_derivative_fixture"),
+            "native DMI formula smoke must execute the interfacial directional-derivative fixture"
+        );
+        assert!(
+            source.contains("run_bulk_directional_derivative_fixture"),
+            "native DMI formula smoke must execute the bulk directional-derivative fixture"
+        );
+    }
+
+    #[test]
+    fn native_fem_step_metrics_reuse_effective_field_local_energies() {
+        let source = include_str!("../../../native/backends/fem/src/mfem_bridge.cpp");
+        let start = source
+            .find("void fill_common_step_metrics(")
+            .expect("fill_common_step_metrics definition");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n// ─────────────────────────────────────────────────────────────────────────────")
+            .expect("fill_common_step_metrics end marker");
+        let body = &rest[..end];
+
+        assert!(
+            body.contains("last_anisotropy_energy_joules"),
+            "step metrics must reuse the anisotropy energy from the final effective-field evaluation"
+        );
+        assert!(
+            body.contains("last_dmi_energy_joules"),
+            "step metrics must reuse the DMI energy from the final effective-field evaluation"
+        );
+        assert!(
+            body.contains("last_magnetoelastic_energy_joules"),
+            "step metrics must reuse the magnetoelastic energy from the final effective-field evaluation"
+        );
+        assert!(
+            !body.contains("compute_uniaxial_anisotropy_field("),
+            "step metrics must not recompute uniaxial anisotropy fields"
+        );
+        assert!(
+            !body.contains("compute_cubic_anisotropy_field("),
+            "step metrics must not recompute cubic anisotropy fields"
+        );
+        assert!(
+            !body.contains("compute_interfacial_dmi_field("),
+            "step metrics must not recompute interfacial DMI fields"
+        );
+        assert!(
+            !body.contains("compute_bulk_dmi_field("),
+            "step metrics must not recompute bulk DMI fields"
+        );
+        assert!(
+            !body.contains("compute_magnetoelastic_field("),
+            "step metrics must not recompute magnetoelastic fields"
         );
     }
 

@@ -1119,6 +1119,7 @@ dependencies = [
 name = "fullmag-api"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-stream",
  "axum",
  "base64 0.22.1",
@@ -1150,6 +1151,7 @@ dependencies = [
  "fullmag-ir",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]
@@ -1278,6 +1280,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
  "uuid",
 ]
 

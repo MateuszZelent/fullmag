@@ -62,6 +62,88 @@ pub struct RunResult {
     pub completion: Option<StageCompletionIR>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemCpuRelaxationQualificationMetadata {
+    pub schema_version: String,
+    pub benchmark_gate_version: String,
+    pub physics_terms: Vec<String>,
+    pub solver_mesh_signature: String,
+    pub demag_policy: FemCpuRelaxationDemagPolicyMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation_algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_metric_value: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_threshold: Option<f64>,
+    pub final_energy_terms_j: FemCpuRelaxationEnergyTerms,
+    pub final_torque_apm: f64,
+    pub final_torque_t: f64,
+    pub norm_defect: f64,
+    pub executed_steps: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemCpuRelaxationDemagPolicyMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundary_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear_solver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preconditioner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absolute_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_level: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_residual_norm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_setup_reused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings_ns: Option<FemCpuRelaxationDemagTimingsNs>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemCpuRelaxationDemagTimingsNs {
+    pub assemble: u64,
+    pub solve: u64,
+    pub solver_setup: u64,
+    pub solver_apply: u64,
+    pub recover: u64,
+    pub energy: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(non_snake_case)]
+pub struct FemCpuRelaxationEnergyTerms {
+    #[serde(rename = "E_ex")]
+    pub e_ex: f64,
+    #[serde(rename = "E_demag")]
+    pub e_demag: f64,
+    #[serde(rename = "E_ext")]
+    pub e_ext: f64,
+    #[serde(rename = "E_ani")]
+    pub e_ani: f64,
+    #[serde(rename = "E_dmi")]
+    pub e_dmi: f64,
+    #[serde(rename = "E_total")]
+    pub e_total: f64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
@@ -115,6 +197,20 @@ pub struct StepStats {
     #[serde(default)]
     pub demag_wall_time_ns: u64,
     #[serde(default)]
+    pub demag_assemble_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solve_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_setup_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_apply_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_solver_setup_reused: bool,
+    #[serde(default)]
+    pub demag_recover_wall_time_ns: u64,
+    #[serde(default)]
+    pub demag_energy_wall_time_ns: u64,
+    #[serde(default)]
     pub rhs_wall_time_ns: u64,
     #[serde(default)]
     pub extra_energy_wall_time_ns: u64,
@@ -154,6 +250,39 @@ pub struct StepStats {
     /// FEM effective OMP thread count (after auto-capping, constant per run).
     #[serde(default)]
     pub effective_fem_omp_threads: i32,
+    /// Cumulative H2D bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_h2d_bytes: u64,
+    /// Cumulative D2H bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_d2h_bytes: u64,
+    /// Cumulative MFEM HostRead calls observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_host_read_count: u64,
+    /// Cumulative MFEM HostWrite calls observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_host_write_count: u64,
+    /// Cumulative MFEM host-access calls observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_host_sync_count: u64,
+    /// Cumulative exchange-interop H2D bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_exchange_h2d_bytes: u64,
+    /// Cumulative exchange-interop D2H bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_exchange_d2h_bytes: u64,
+    /// Cumulative exchange-interop host sync calls observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_exchange_host_sync_count: u64,
+    /// Cumulative non-exchange/RK H2D bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_compute_h2d_bytes: u64,
+    /// Cumulative non-exchange/RK D2H bytes observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_compute_d2h_bytes: u64,
+    /// Cumulative non-exchange/RK host sync calls observed inside the native FEM hot loop.
+    #[serde(default)]
+    pub hot_loop_compute_host_sync_count: u64,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
 }
@@ -181,6 +310,13 @@ impl Default for StepStats {
             wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
+            demag_assemble_wall_time_ns: 0,
+            demag_solve_wall_time_ns: 0,
+            demag_solver_setup_wall_time_ns: 0,
+            demag_solver_apply_wall_time_ns: 0,
+            demag_solver_setup_reused: false,
+            demag_recover_wall_time_ns: 0,
+            demag_energy_wall_time_ns: 0,
             rhs_wall_time_ns: 0,
             extra_energy_wall_time_ns: 0,
             snapshot_wall_time_ns: 0,
@@ -197,8 +333,101 @@ impl Default for StepStats {
             demag_refreshed: false,
             requested_fem_omp_threads: 0,
             effective_fem_omp_threads: 0,
+            hot_loop_h2d_bytes: 0,
+            hot_loop_d2h_bytes: 0,
+            hot_loop_host_read_count: 0,
+            hot_loop_host_write_count: 0,
+            hot_loop_host_sync_count: 0,
+            hot_loop_exchange_h2d_bytes: 0,
+            hot_loop_exchange_d2h_bytes: 0,
+            hot_loop_exchange_host_sync_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
             per_object_scalars: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod all_in_gpu_fem_transfer_audit_tests {
+    use super::{ExecutionProvenance, StepStats};
+
+    #[test]
+    fn step_stats_carry_hot_loop_transfer_audit() {
+        let stats = StepStats {
+            hot_loop_h2d_bytes: 11,
+            hot_loop_d2h_bytes: 17,
+            hot_loop_host_read_count: 3,
+            hot_loop_host_write_count: 5,
+            hot_loop_host_sync_count: 8,
+            hot_loop_exchange_host_sync_count: 2,
+            hot_loop_compute_host_sync_count: 6,
+            ..StepStats::default()
+        };
+
+        assert_eq!(stats.hot_loop_h2d_bytes, 11);
+        assert_eq!(stats.hot_loop_d2h_bytes, 17);
+        assert_eq!(stats.hot_loop_host_read_count, 3);
+        assert_eq!(stats.hot_loop_host_write_count, 5);
+        assert_eq!(stats.hot_loop_host_sync_count, 8);
+        assert_eq!(stats.hot_loop_exchange_host_sync_count, 2);
+        assert_eq!(stats.hot_loop_compute_host_sync_count, 6);
+    }
+
+    #[test]
+    fn demag_profile_step_stats_flow_into_diagnostics() {
+        let stats = StepStats {
+            demag_wall_time_ns: 17,
+            demag_assemble_wall_time_ns: 3,
+            demag_solve_wall_time_ns: 5,
+            demag_solver_setup_wall_time_ns: 13,
+            demag_solver_apply_wall_time_ns: 19,
+            demag_solver_setup_reused: true,
+            demag_recover_wall_time_ns: 7,
+            demag_energy_wall_time_ns: 11,
+            extra_energy_wall_time_ns: 29,
+            ..StepStats::default()
+        };
+
+        let diagnostics = stats.to_diagnostics();
+        assert_eq!(diagnostics.demag_wall_time_ns, 17);
+        assert_eq!(diagnostics.demag_assemble_wall_time_ns, 3);
+        assert_eq!(diagnostics.demag_solve_wall_time_ns, 5);
+        assert_eq!(diagnostics.demag_solver_setup_wall_time_ns, 13);
+        assert_eq!(diagnostics.demag_solver_apply_wall_time_ns, 19);
+        assert!(diagnostics.demag_solver_setup_reused);
+        assert_eq!(diagnostics.demag_recover_wall_time_ns, 7);
+        assert_eq!(diagnostics.demag_energy_wall_time_ns, 11);
+        assert_eq!(diagnostics.extra_energy_wall_time_ns, 29);
+    }
+
+    #[test]
+    fn execution_provenance_carries_truthful_fem_gpu_runtime_contract() {
+        let provenance = ExecutionProvenance {
+            fem_execution_mode: Some("hybrid_legacy_sparse".to_string()),
+            fem_data_residency: Some("host_source_of_truth".to_string()),
+            uses_cuda_kernels: Some(false),
+            uses_gpu_poisson: Some(false),
+            hot_loop_host_sync_count: Some(9),
+            hot_loop_exchange_host_sync_count: Some(4),
+            hot_loop_compute_host_sync_count: Some(5),
+            ..ExecutionProvenance::default()
+        };
+
+        assert_eq!(
+            provenance.fem_execution_mode.as_deref(),
+            Some("hybrid_legacy_sparse")
+        );
+        assert_eq!(
+            provenance.fem_data_residency.as_deref(),
+            Some("host_source_of_truth")
+        );
+        assert_eq!(provenance.uses_cuda_kernels, Some(false));
+        assert_eq!(provenance.uses_gpu_poisson, Some(false));
+        assert_eq!(provenance.hot_loop_host_sync_count, Some(9));
+        assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(4));
+        assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(5));
     }
 }
 
@@ -212,6 +441,13 @@ impl StepStats {
             wall_time_ns: self.wall_time_ns,
             exchange_wall_time_ns: self.exchange_wall_time_ns,
             demag_wall_time_ns: self.demag_wall_time_ns,
+            demag_assemble_wall_time_ns: self.demag_assemble_wall_time_ns,
+            demag_solve_wall_time_ns: self.demag_solve_wall_time_ns,
+            demag_solver_setup_wall_time_ns: self.demag_solver_setup_wall_time_ns,
+            demag_solver_apply_wall_time_ns: self.demag_solver_apply_wall_time_ns,
+            demag_solver_setup_reused: self.demag_solver_setup_reused,
+            demag_recover_wall_time_ns: self.demag_recover_wall_time_ns,
+            demag_energy_wall_time_ns: self.demag_energy_wall_time_ns,
             rhs_wall_time_ns: self.rhs_wall_time_ns,
             extra_energy_wall_time_ns: self.extra_energy_wall_time_ns,
             snapshot_wall_time_ns: self.snapshot_wall_time_ns,
@@ -758,6 +994,22 @@ pub struct ResolvedFallback {
     pub message: String,
 }
 
+/// FEM Poisson demag solver provenance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct FemPoissonDemagProvenance {
+    pub linear_solver: String,
+    pub preconditioner: String,
+    pub rtol: f64,
+    pub max_iterations: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_iterations: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_residual: Option<f64>,
+    pub boundary_condition: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub robin_beta: Option<f64>,
+}
+
 /// Records which engine and device produced a run.
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -805,6 +1057,15 @@ pub struct ExecutionProvenance {
     /// Integrator actually used for execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_integrator: Option<String>,
+    /// Energy minimizer requested by the user/plan for direct relaxation stages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_energy_minimizer: Option<String>,
+    /// Energy minimizer actually used for direct relaxation stages.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_energy_minimizer: Option<String>,
+    /// Runtime realization of the energy minimizer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_minimizer_realization: Option<String>,
     /// Demag realization requested by the user/plan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_demag_realization: Option<String>,
@@ -820,6 +1081,84 @@ pub struct ExecutionProvenance {
     /// Canonical demag refresh cadence in seconds, if explicitly configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_refresh_interval_s: Option<f64>,
+    /// FEM operator assembly mode used by the executing backend.
+    ///
+    /// Native FEM currently reports "legacy_sparse" until exchange/mass/DMI
+    /// move to partial assembly or matrix-free libCEED operators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_assembly_mode: Option<String>,
+    /// FEM GPU execution contract: hybrid_legacy_sparse, all_in_gpu_legacy_sparse, etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_execution_mode: Option<String>,
+    /// FEM exchange operator mode selected by the native GPU exchange planner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_exchange_operator_mode: Option<String>,
+    /// FEM data residency contract for the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_data_residency: Option<String>,
+    /// Whether Fullmag CUDA kernels were used in the native FEM hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uses_cuda_kernels: Option<bool>,
+    /// Whether Poisson demag solve/recovery stayed on GPU in the native FEM hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uses_gpu_poisson: Option<bool>,
+    /// Cumulative native FEM hot-loop host synchronization count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_host_sync_count: Option<u64>,
+    /// Cumulative native FEM exchange-interop H2D bytes in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_exchange_h2d_bytes: Option<u64>,
+    /// Cumulative native FEM exchange-interop D2H bytes in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_exchange_d2h_bytes: Option<u64>,
+    /// Cumulative native FEM exchange-interop host synchronization count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_exchange_host_sync_count: Option<u64>,
+    /// Cumulative native FEM non-exchange/RK H2D bytes in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_compute_h2d_bytes: Option<u64>,
+    /// Cumulative native FEM non-exchange/RK D2H bytes in the hot loop.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_compute_d2h_bytes: Option<u64>,
+    /// Cumulative native FEM non-exchange/RK host synchronization count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hot_loop_compute_host_sync_count: Option<u64>,
+    /// Whether the native FEM runtime allocated the Phase-1 GPU state object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_allocated: Option<bool>,
+    /// Node count mirrored by the native FEM GPU state object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_node_count: Option<u64>,
+    /// Vector DOF length mirrored by the native FEM GPU state object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_dof_len: Option<u64>,
+    /// RK stage count allocated by the native FEM GPU state object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_stage_count: Option<u32>,
+    /// Total native FEM GPU state device bytes allocated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_device_bytes: Option<u64>,
+    /// Native FEM GPU reduction workspace bytes allocated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_state_reduction_workspace_bytes: Option<u64>,
+    /// Whether the native FEM exchange-only GPU RK path is eligible for this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_exchange_only_enabled: Option<bool>,
+    /// RK stage count selected by the native FEM GPU RK planner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_stage_count: Option<u32>,
+    /// Whether the native FEM GPU RK planner expects Fullmag CUDA kernels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_uses_cuda_kernels: Option<bool>,
+    /// Whether temporary exchange interop host sync is allowed by the selected GPU RK phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_allows_exchange_host_sync: Option<bool>,
+    /// Whether stage exchange fields are recomputed without host roundtrip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_stage_exchange_device_resident: Option<bool>,
+    /// Reason the native FEM GPU RK path is not enabled, if blocked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_rk_block_reason: Option<String>,
     /// Requested CPU thread count from authoring/runtime selection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_cpu_threads: Option<u32>,
@@ -832,6 +1171,9 @@ pub struct ExecutionProvenance {
     /// Effective FEM OpenMP thread count when the native runtime reports it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effective_fem_omp_threads: Option<u32>,
+    /// FEM Poisson demag solver policy and observed solve result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -876,6 +1218,9 @@ pub(crate) struct LiveStepConsumer<'a> {
     pub grid: [u32; 3],
     /// Cadence for heavier live payloads such as full magnetization snapshots.
     pub field_every_n: u64,
+    /// Whether this consumer needs a full step-0 physics snapshot before
+    /// the first accepted step.
+    pub initial_snapshot: bool,
     pub display_selection: Option<&'a (dyn Fn() -> crate::DisplaySelectionState + Send + Sync)>,
     #[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
     pub interrupt_requested: Option<&'a AtomicBool>,

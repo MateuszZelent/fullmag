@@ -48,9 +48,9 @@ At the time of writing, the public product path now has a **narrow executable FE
 
 The current executable `Demag` path is still **bootstrap-only**:
 
-- it is not yet the final MFEM/libCEED/hypre realization,
-- in the public executable FEM CPU/GPU path it currently uses a transfer-grid exact tensor demag
-  path to improve FDM↔FEM parity,
+- it is not yet the final partial-assembly/matrix-free MFEM/libCEED/hypre realization,
+- the public executable FEM path is Poisson-airbox only (`poisson_robin` / `poisson_dirichlet`)
+  and requires a conformal shared-domain mesh with air,
 - the older Rust reference FEM helper remains in `fullmag-engine` / `fem_reference` for tests,
   preview helpers, and bootstrap validation, not as the public production CPU runtime,
 - the long-term target remains a true FEM magnetostatic operator on MFEM/hypre.

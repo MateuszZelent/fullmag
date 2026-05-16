@@ -6,9 +6,9 @@
 
 ## Context
 
-The current `apps/web` frontend has accumulated enough architectural coupling that local repairs repeatedly pull new work back into old patterns: god contexts, bootstrap-era normalization, preview vocabulary, direct or semi-direct transport coupling, monolithic viewport lifecycle, and mixed ownership across `components`, `features`, `src/features`, `src/hooks`, and `lib`.
+The current `apps/legacy_web` frontend has accumulated enough architectural coupling that local repairs repeatedly pull new work back into old patterns: god contexts, bootstrap-era normalization, preview vocabulary, direct or semi-direct transport coupling, monolithic viewport lifecycle, and mixed ownership across `components`, `features`, `src/features`, `src/hooks`, and `lib`.
 
-Measured locally on 2026-05-11, excluding build artifacts and dependencies, `apps/web` contains 992 files and about 212,214 lines. Several load-bearing files exceed safe review size:
+Measured locally on 2026-05-11, excluding build artifacts and dependencies, `apps/legacy_web` contains 992 files and about 212,214 lines. Several load-bearing files exceed safe review size:
 
 - `ControlRoomContext.tsx`: 1,930 lines;
 - `RunControlRoom.tsx`: 912 lines;
@@ -24,7 +24,7 @@ Create a new frontend app root at `apps/control-room` using a module-kernel arch
 
 The kernel owns routing, immutable providers, module registry, layout slots, typed event bus, command registry, API facade, resource invalidation, diagnostics, and module lifecycle. Product areas such as explorer, inspector, 3D viewport, 2D viewport, charts, ribbon, console, results, and diagnostics are modules mounted into slots.
 
-Keep `apps/web` as a legacy reference during migration. Do not import it from `apps/control-room`. After v2 passes cutover acceptance, freeze `apps/web`, remove it from default dev/deploy paths, and later remove or archive it outside the active product tree.
+Keep `apps/legacy_web` as a legacy reference during migration. Do not import it from `apps/control-room`. After v2 passes cutover acceptance, freeze `apps/legacy_web`, remove it from default dev/deploy paths, and later remove or archive it outside the active product tree.
 
 ## Consequences
 
@@ -46,7 +46,7 @@ Trade-offs:
 
 - Add and maintain `docs/specs/frontend-v2/`.
 - Add frontend-v2 skills under `.agents/skills/`.
-- Update `AGENTS.md` so agents treat `apps/control-room` as the v2 target and `apps/web` as legacy reference during migration.
+- Update `AGENTS.md` so agents treat `apps/control-room` as the v2 target and `apps/legacy_web` as legacy reference during migration.
 - Keep OpenAPI v2 and generated frontend transport as the only browser JSON contract.
 - Keep WebSocket as invalidation/lifecycle transport, not full state.
 - Keep FDM/FEM differences behind capability gates, domain adapters, render models, and resource hooks.
@@ -58,7 +58,7 @@ The phased plan lives in `docs/specs/frontend-v2/22-implementation-plan.md`. Cut
 
 ## Rollback
 
-Before cutover, rollback is to continue using `apps/web` as the active frontend while v2 remains undeployed. After cutover, rollback requires an explicit release decision and must not reintroduce legacy code into `apps/control-room`.
+Before cutover, rollback is to continue using `apps/legacy_web` as the active frontend while v2 remains undeployed. After cutover, rollback requires an explicit release decision and must not reintroduce legacy code into `apps/control-room`.
 
 ## Validation
 

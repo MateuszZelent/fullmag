@@ -1,0 +1,170 @@
+.fm-explorer {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  background: var(--fm-bg-panel);
+}
+
+.fm-explorer__header {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-explorer__header h2 {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-md);
+}
+
+.fm-explorer__header span {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-explorer-tabs {
+  overflow-x: auto;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-explorer-filter {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  color: var(--fm-text-muted);
+  padding-inline: var(--fm-space-2);
+  transition: border-color var(--fm-transition-fast);
+}
+
+.fm-explorer-filter:focus-within {
+  border-bottom-color: var(--fm-accent);
+  color: var(--fm-text-secondary);
+}
+
+.fm-explorer-filter input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  outline: none;
+}
+
+.fm-explorer-tree {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--fm-space-1);
+}
+
+.fm-explorer-tree-row {
+  --fm-tree-depth: 0;
+
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr) auto auto;
+  min-height: 28px;
+  align-items: center;
+  gap: var(--fm-space-1);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-sm);
+  color: var(--fm-text-secondary);
+  cursor: default;
+  font-size: var(--fm-font-size-sm);
+  padding-left: calc(var(--fm-space-1) + var(--fm-tree-depth) * 15px);
+  padding-right: var(--fm-space-1);
+  transition:
+    background-color var(--fm-transition-fast),
+    border-color var(--fm-transition-fast),
+    color var(--fm-transition-fast);
+  user-select: none;
+}
+
+.fm-explorer-tree-row:hover,
+.fm-explorer-tree-row:focus-visible {
+  border-color: var(--fm-border-subtle);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-explorer-tree-row[data-active="true"] {
+  border-color: var(--fm-border-default);
+  background: var(--fm-bg-selected);
+  color: var(--fm-text-primary);
+}
+
+.fm-explorer-tree-row[data-status="stale"] {
+  color: var(--fm-stale);
+}
+
+.fm-explorer-tree-row[data-status="failed"],
+.fm-explorer-tree-row[data-status="unsupported"] {
+  color: var(--fm-danger);
+}
+
+.fm-explorer-tree-row[data-status="running"] {
+  color: var(--fm-accent);
+}
+
+.fm-explorer-tree-row[data-status="degraded"] {
+  color: var(--fm-degraded);
+}
+
+.fm-explorer-tree-row[data-status="mesh-ready"] {
+  color: var(--fm-success);
+}
+
+.fm-explorer-tree-row[data-status="mesh-building"] {
+  color: var(--fm-accent);
+}
+
+.fm-explorer-tree-row[data-status="mesh-stale"],
+.fm-explorer-tree-row[data-status="primitive-only"],
+.fm-explorer-tree-row[data-status="warning"] {
+  color: var(--fm-warning);
+}
+
+.fm-explorer-tree-row[data-status="mesh-failed"],
+.fm-explorer-tree-row[data-status="validation-blocked"] {
+  color: var(--fm-danger);
+}
+
+.fm-explorer-tree-row__branch,
+.fm-explorer-tree-row__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fm-explorer-tree-row__branch svg {
+  transition: transform var(--fm-transition-fast);
+}
+
+.fm-explorer-tree-row__branch svg[data-expanded="true"] {
+  transform: rotate(90deg);
+}
+
+.fm-explorer-tree-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-explorer-tree-row__badge,
+.fm-explorer-tree-row__status {
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: 10px;
+  padding: 1px var(--fm-space-1);
+  white-space: nowrap;
+}

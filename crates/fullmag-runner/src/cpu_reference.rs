@@ -1115,14 +1115,6 @@ fn select_base_field(
 }
 
 #[cfg(test)]
-fn max_vector_norm(values: &[[f64; 3]]) -> f64 {
-    values
-        .iter()
-        .map(|value| (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt())
-        .fold(0.0, f64::max)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use fullmag_ir::{

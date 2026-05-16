@@ -131,7 +131,10 @@ pub struct fullmag_fem_solver_config {
     pub solver: fullmag_fem_linear_solver,
     pub preconditioner: fullmag_fem_preconditioner,
     pub relative_tolerance: f64,
+    pub has_absolute_tolerance: i32,
+    pub absolute_tolerance: f64,
     pub max_iterations: u32,
+    pub print_level: u32,
 }
 
 #[repr(C)]
@@ -271,6 +274,8 @@ pub struct fullmag_fem_plan_desc {
     pub mfem_device_string: *const std::ffi::c_char,
     /// FND-013: use consistent (full) mass matrix for exchange. 0 = lumped, 1 = consistent.
     pub use_consistent_mass: i32,
+    /// Compute initial effective field during backend creation. 0 = lazy, 1 = eager.
+    pub eager_initial_effective_field: i32,
 }
 
 #[repr(C)]
@@ -280,6 +285,9 @@ pub struct fullmag_fem_step_stats {
     pub step: u64,
     pub time_seconds: f64,
     pub dt_seconds: f64,
+    pub mx: f64,
+    pub my: f64,
+    pub mz: f64,
     pub exchange_energy_joules: f64,
     pub demag_energy_joules: f64,
     pub external_energy_joules: f64,
@@ -291,11 +299,19 @@ pub struct fullmag_fem_step_stats {
     pub max_demag_field_amplitude: f64,
     pub max_rhs_amplitude: f64,
     pub max_torque_Apm: f64,
+    pub demag_solve_count: u32,
     pub demag_linear_iterations: u32,
     pub demag_linear_residual: f64,
     pub wall_time_ns: u64,
     pub exchange_wall_time_ns: u64,
     pub demag_wall_time_ns: u64,
+    pub demag_assemble_wall_time_ns: u64,
+    pub demag_solve_wall_time_ns: u64,
+    pub demag_solver_setup_wall_time_ns: u64,
+    pub demag_solver_apply_wall_time_ns: u64,
+    pub demag_solver_setup_reused: i32,
+    pub demag_recover_wall_time_ns: u64,
+    pub demag_energy_wall_time_ns: u64,
     pub rhs_wall_time_ns: u64,
     pub extra_energy_wall_time_ns: u64,
     pub snapshot_wall_time_ns: u64,
@@ -328,9 +344,68 @@ pub struct fullmag_fem_availability_info {
     pub built_with_mfem_stack: i32,
     pub built_with_cuda_runtime: i32,
     pub built_with_ceed: i32,
+    pub native_fem_cpu_available: i32,
+    pub native_fem_gpu_available: i32,
+    pub mfem_cuda_available: i32,
+    pub hypre_gpu_available: i32,
+    pub libceed_used_hot_path: i32,
     pub visible_cuda_device_count: i32,
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
+    pub reason: [c_char; 256],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_transfer_audit {
+    pub h2d_bytes: u64,
+    pub d2h_bytes: u64,
+    pub host_read_count: u64,
+    pub host_write_count: u64,
+    pub host_read_write_count: u64,
+    pub hot_loop_h2d_bytes: u64,
+    pub hot_loop_d2h_bytes: u64,
+    pub hot_loop_host_read_count: u64,
+    pub hot_loop_host_write_count: u64,
+    pub hot_loop_host_read_write_count: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub hot_loop_exchange_h2d_bytes: u64,
+    pub hot_loop_exchange_d2h_bytes: u64,
+    pub hot_loop_exchange_host_sync_count: u64,
+    pub hot_loop_compute_h2d_bytes: u64,
+    pub hot_loop_compute_d2h_bytes: u64,
+    pub hot_loop_compute_host_sync_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_data_residency {
+    FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH = 0,
+    FULLMAG_FEM_RESIDENCY_MIXED = 1,
+    FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct fullmag_fem_gpu_state_info {
+    pub allocated: i32,
+    pub node_count: u64,
+    pub dof_len: u64,
+    pub stage_count: u32,
+    pub device_bytes: u64,
+    pub reduction_workspace_bytes: u64,
+    pub source_of_truth: fullmag_fem_data_residency,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_gpu_rk_plan_info {
+    pub exchange_only_enabled: i32,
+    pub stage_count: u32,
+    pub uses_cuda_kernels: i32,
+    pub allows_exchange_host_sync: i32,
+    pub stage_exchange_device_resident: i32,
+    pub exchange_operator_mode: [c_char; 64],
     pub reason: [c_char; 256],
 }
 
@@ -385,6 +460,21 @@ extern "C" {
     pub fn fullmag_fem_backend_get_device_info(
         handle: *mut fullmag_fem_backend,
         out_info: *mut fullmag_fem_device_info,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_transfer_audit(
+        handle: *mut fullmag_fem_backend,
+        out_audit: *mut fullmag_fem_transfer_audit,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_state_info(
+        handle: *mut fullmag_fem_backend,
+        out_info: *mut fullmag_fem_gpu_state_info,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_rk_plan_info(
+        handle: *mut fullmag_fem_backend,
+        out_info: *mut fullmag_fem_gpu_rk_plan_info,
     ) -> i32;
 
     pub fn fullmag_fem_backend_last_error(handle: *mut fullmag_fem_backend) -> *const c_char;
@@ -473,6 +563,17 @@ mod tests {
         let plan = std::mem::MaybeUninit::<fullmag_fem_plan_desc>::zeroed();
         let plan = unsafe { plan.assume_init() };
         assert_eq!(plan.use_consistent_mass, 0);
+        assert_eq!(plan.eager_initial_effective_field, 0);
+    }
+
+    /// Verify native solver policy ABI carries the Hypre print level knob.
+    #[test]
+    fn solver_config_abi_has_print_level_field() {
+        let config = std::mem::MaybeUninit::<fullmag_fem_solver_config>::zeroed();
+        let config = unsafe { config.assume_init() };
+        assert_eq!(config.has_absolute_tolerance, 0);
+        assert_eq!(config.absolute_tolerance, 0.0);
+        assert_eq!(config.print_level, 0);
     }
 
     /// Verify mesh desc carries periodic node-pair metadata for native FEM PBC gates.
@@ -491,5 +592,82 @@ mod tests {
         let mesh = unsafe { mesh.assume_init() };
         assert!(mesh.periodic_boundary_pair_markers.is_null());
         assert_eq!(mesh.periodic_boundary_pair_count, 0);
+    }
+
+    /// Verify transfer-audit ABI fields required by the ALL IN GPU FEM rollout.
+    #[test]
+    fn transfer_audit_abi_has_hot_loop_fields() {
+        let audit = std::mem::MaybeUninit::<fullmag_fem_transfer_audit>::zeroed();
+        let audit = unsafe { audit.assume_init() };
+        assert_eq!(audit.hot_loop_h2d_bytes, 0);
+        assert_eq!(audit.hot_loop_d2h_bytes, 0);
+        assert_eq!(audit.hot_loop_host_read_count, 0);
+        assert_eq!(audit.hot_loop_host_write_count, 0);
+        assert_eq!(audit.hot_loop_host_sync_count, 0);
+        assert_eq!(audit.hot_loop_exchange_h2d_bytes, 0);
+        assert_eq!(audit.hot_loop_exchange_d2h_bytes, 0);
+        assert_eq!(audit.hot_loop_exchange_host_sync_count, 0);
+        assert_eq!(audit.hot_loop_compute_h2d_bytes, 0);
+        assert_eq!(audit.hot_loop_compute_d2h_bytes, 0);
+        assert_eq!(audit.hot_loop_compute_host_sync_count, 0);
+    }
+
+    /// Verify availability ABI separates build-time and hot-path GPU capabilities.
+    #[test]
+    fn availability_abi_has_split_fem_gpu_capability_fields() {
+        let info = std::mem::MaybeUninit::<fullmag_fem_availability_info>::zeroed();
+        let info = unsafe { info.assume_init() };
+        assert_eq!(info.native_fem_cpu_available, 0);
+        assert_eq!(info.native_fem_gpu_available, 0);
+        assert_eq!(info.mfem_cuda_available, 0);
+        assert_eq!(info.hypre_gpu_available, 0);
+        assert_eq!(info.libceed_used_hot_path, 0);
+    }
+
+    /// Verify native FEM demag timing totals are ABI-visible.
+    #[test]
+    fn demag_profile_abi_has_timing_fields() {
+        let stats = std::mem::MaybeUninit::<fullmag_fem_step_stats>::zeroed();
+        let stats = unsafe { stats.assume_init() };
+        assert_eq!(stats.demag_wall_time_ns, 0);
+        assert_eq!(stats.demag_assemble_wall_time_ns, 0);
+        assert_eq!(stats.demag_solve_wall_time_ns, 0);
+        assert_eq!(stats.demag_solver_setup_wall_time_ns, 0);
+        assert_eq!(stats.demag_solver_apply_wall_time_ns, 0);
+        assert_eq!(stats.demag_solver_setup_reused, 0);
+        assert_eq!(stats.demag_recover_wall_time_ns, 0);
+        assert_eq!(stats.demag_energy_wall_time_ns, 0);
+        assert_eq!(stats.extra_energy_wall_time_ns, 0);
+    }
+
+    /// Verify Phase 1 exposes GPU state residency metadata through C ABI.
+    #[test]
+    fn gpu_state_info_abi_has_residency_and_allocation_fields() {
+        let info = std::mem::MaybeUninit::<fullmag_fem_gpu_state_info>::zeroed();
+        let info = unsafe { info.assume_init() };
+        assert_eq!(info.allocated, 0);
+        assert_eq!(info.node_count, 0);
+        assert_eq!(info.dof_len, 0);
+        assert_eq!(info.stage_count, 0);
+        assert_eq!(info.device_bytes, 0);
+        assert_eq!(info.reduction_workspace_bytes, 0);
+        assert_eq!(
+            info.source_of_truth,
+            fullmag_fem_data_residency::FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH
+        );
+    }
+
+    /// Verify Phase 2 exposes the exchange-only GPU RK decision through C ABI.
+    #[test]
+    fn gpu_rk_plan_info_abi_has_exchange_only_gate_fields() {
+        let info = std::mem::MaybeUninit::<fullmag_fem_gpu_rk_plan_info>::zeroed();
+        let info = unsafe { info.assume_init() };
+        assert_eq!(info.exchange_only_enabled, 0);
+        assert_eq!(info.stage_count, 0);
+        assert_eq!(info.uses_cuda_kernels, 0);
+        assert_eq!(info.allows_exchange_host_sync, 0);
+        assert_eq!(info.stage_exchange_device_resident, 0);
+        assert_eq!(info.exchange_operator_mode[0], 0);
+        assert_eq!(info.reason[0], 0);
     }
 }

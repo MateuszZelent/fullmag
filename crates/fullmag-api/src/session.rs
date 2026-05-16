@@ -6,6 +6,7 @@ use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 pub(crate) async fn current_live_session_id(state: &AppState) -> Result<String, ApiError> {
@@ -36,6 +37,280 @@ pub(crate) fn effective_runtime_status_code(snapshot: &SessionStateResponse) -> 
 
 pub(crate) fn refresh_runtime_status(snapshot: &mut SessionStateResponse) {
     snapshot.runtime_status = build_runtime_status_view(&effective_runtime_status_code(snapshot));
+}
+
+pub(crate) fn reconcile_command_ledger_from_stage_execution(
+    ledger: &mut VecDeque<TrackedCommandRecord>,
+    snapshot: &SessionStateResponse,
+    completed_at_unix_ms: u128,
+) -> bool {
+    let Some(stage_execution) = snapshot.stage_execution.as_ref() else {
+        return false;
+    };
+
+    let mut changed = false;
+    for stage in &stage_execution.stages {
+        let Some(command_id) = stage.command_id.as_deref() else {
+            continue;
+        };
+        let Some(record) = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+        else {
+            continue;
+        };
+        changed |= reconcile_command_record_from_stage(record, stage, completed_at_unix_ms);
+    }
+    changed
+}
+
+pub(crate) fn reconcile_dispatched_command_ledger_from_snapshot(
+    ledger: &mut VecDeque<TrackedCommandRecord>,
+    snapshot: &SessionStateResponse,
+    completed_at_unix_ms: u128,
+) -> bool {
+    let mut changed = false;
+    for record in ledger.iter_mut() {
+        if record.status != CommandLifecycleState::Dispatched || record.completion_status.is_some()
+        {
+            continue;
+        }
+
+        let Some(completion_status) = infer_dispatched_command_completion(record, snapshot) else {
+            continue;
+        };
+
+        changed |= set_command_lifecycle(
+            record,
+            CommandLifecycleState::Completed,
+            Some(completion_status),
+            Some(completed_at_unix_ms),
+        );
+    }
+    changed
+}
+
+fn infer_dispatched_command_completion(
+    record: &TrackedCommandRecord,
+    snapshot: &SessionStateResponse,
+) -> Option<CommandCompletionState> {
+    match record.command.kind.as_str() {
+        "compute_fields" if snapshot.latest_fields.len() > 0 => {
+            Some(CommandCompletionState::Completed)
+        }
+        "compute_energies" if !snapshot.scalar_rows.is_empty() => {
+            Some(CommandCompletionState::Completed)
+        }
+        "pause" if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Paused) => {
+            Some(CommandCompletionState::Completed)
+        }
+        "resume" if snapshot_runtime_resumed(snapshot) => Some(CommandCompletionState::Completed),
+        "skip" if snapshot_has_skipped_stage(snapshot) || snapshot_runtime_is_idle(snapshot) => {
+            Some(CommandCompletionState::Completed)
+        }
+        "stop" if snapshot_runtime_is_terminal_or_idle(snapshot) => {
+            Some(CommandCompletionState::Completed)
+        }
+        _ => None,
+    }
+}
+
+fn snapshot_runtime_is(snapshot: &SessionStateResponse, expected: RuntimeLifecycleState) -> bool {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .is_some_and(|stage_execution| stage_execution.runtime_state == expected)
+        || effective_runtime_status_code(snapshot) == expected.as_str()
+}
+
+fn snapshot_runtime_resumed(snapshot: &SessionStateResponse) -> bool {
+    if snapshot_runtime_is(snapshot, RuntimeLifecycleState::Paused) {
+        return false;
+    }
+
+    snapshot
+        .stage_execution
+        .as_ref()
+        .is_some_and(|stage_execution| {
+            matches!(
+                stage_execution.runtime_state,
+                RuntimeLifecycleState::Running
+                    | RuntimeLifecycleState::AwaitingCommand
+                    | RuntimeLifecycleState::Completed
+            )
+        })
+        || matches!(
+            effective_runtime_status_code(snapshot).as_str(),
+            "running" | "awaiting_command" | "completed"
+        )
+}
+
+fn snapshot_has_skipped_stage(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .is_some_and(|stage_execution| {
+            stage_execution
+                .stages
+                .iter()
+                .any(|stage| stage.status == StageLifecycleState::Skipped)
+        })
+}
+
+fn snapshot_runtime_is_idle(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .is_some_and(|stage_execution| {
+            stage_execution.runtime_state == RuntimeLifecycleState::AwaitingCommand
+                && stage_execution.active_stage_index.is_none()
+        })
+        || effective_runtime_status_code(snapshot)
+            == RuntimeLifecycleState::AwaitingCommand.as_str()
+}
+
+fn snapshot_runtime_is_terminal_or_idle(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .stage_execution
+        .as_ref()
+        .is_some_and(|stage_execution| {
+            matches!(
+                stage_execution.runtime_state,
+                RuntimeLifecycleState::AwaitingCommand
+                    | RuntimeLifecycleState::Completed
+                    | RuntimeLifecycleState::Cancelled
+                    | RuntimeLifecycleState::Failed
+            ) && stage_execution.active_stage_index.is_none()
+        })
+        || matches!(
+            effective_runtime_status_code(snapshot).as_str(),
+            "awaiting_command" | "completed" | "cancelled" | "failed"
+        )
+}
+
+fn reconcile_command_record_from_stage(
+    record: &mut TrackedCommandRecord,
+    stage: &StageExecutionRecord,
+    completed_at_unix_ms: u128,
+) -> bool {
+    if matches!(
+        record.status,
+        CommandLifecycleState::Completed
+            | CommandLifecycleState::Rejected
+            | CommandLifecycleState::Failed
+    ) {
+        return false;
+    }
+
+    match stage.status {
+        StageLifecycleState::Running | StageLifecycleState::Paused => {
+            set_command_lifecycle(record, CommandLifecycleState::Running, None, None)
+        }
+        StageLifecycleState::Completed | StageLifecycleState::Skipped => set_command_lifecycle(
+            record,
+            CommandLifecycleState::Completed,
+            Some(CommandCompletionState::Completed),
+            Some(
+                stage
+                    .completed_at_unix_ms
+                    .map(u128::from)
+                    .unwrap_or(completed_at_unix_ms),
+            ),
+        ),
+        StageLifecycleState::Cancelled | StageLifecycleState::Stopped => set_command_lifecycle(
+            record,
+            CommandLifecycleState::Completed,
+            Some(CommandCompletionState::Cancelled),
+            Some(
+                stage
+                    .completed_at_unix_ms
+                    .map(u128::from)
+                    .unwrap_or(completed_at_unix_ms),
+            ),
+        ),
+        StageLifecycleState::Failed => set_command_lifecycle(
+            record,
+            CommandLifecycleState::Failed,
+            Some(CommandCompletionState::Failed),
+            Some(
+                stage
+                    .completed_at_unix_ms
+                    .map(u128::from)
+                    .unwrap_or(completed_at_unix_ms),
+            ),
+        ),
+        StageLifecycleState::Pending | StageLifecycleState::Unknown => false,
+    }
+}
+
+fn set_command_lifecycle(
+    record: &mut TrackedCommandRecord,
+    status: CommandLifecycleState,
+    completion_status: Option<CommandCompletionState>,
+    completed_at_unix_ms: Option<u128>,
+) -> bool {
+    let mut changed = false;
+    if record.status != status {
+        record.status = status;
+        changed = true;
+    }
+    if record.completion_status != completion_status {
+        record.completion_status = completion_status;
+        changed = true;
+    }
+    if completed_at_unix_ms.is_some() && record.completed_at_unix_ms != completed_at_unix_ms {
+        record.completed_at_unix_ms = completed_at_unix_ms;
+        changed = true;
+    }
+    changed
+}
+
+fn merge_stage_execution_linkage(
+    existing: Option<&StageExecutionState>,
+    incoming: &mut StageExecutionState,
+) {
+    let Some(existing) = existing else {
+        return;
+    };
+
+    for (index, incoming_record) in incoming.stages.iter_mut().enumerate() {
+        let Some(existing_record) = existing.stages.get(index) else {
+            continue;
+        };
+        let same_command = incoming_record.command_id.is_some()
+            && incoming_record.command_id == existing_record.command_id;
+        if !same_command {
+            continue;
+        }
+        merge_stage_record_linkage(existing_record, incoming_record);
+    }
+}
+
+fn merge_stage_record_linkage(
+    existing: &StageExecutionRecord,
+    incoming: &mut StageExecutionRecord,
+) {
+    for artifact_ref in &existing.artifact_refs {
+        if !incoming
+            .artifact_refs
+            .iter()
+            .any(|incoming_ref| incoming_ref == artifact_ref)
+        {
+            incoming.artifact_refs.push(artifact_ref.clone());
+        }
+    }
+    if incoming.checkpoint_ref.is_none() {
+        incoming.checkpoint_ref = existing.checkpoint_ref.clone();
+    }
+    if incoming.loaded_state_ref.is_none() {
+        incoming.loaded_state_ref = existing.loaded_state_ref.clone();
+    }
+    if incoming.resume_from_checkpoint_ref.is_none() {
+        incoming.resume_from_checkpoint_ref = existing.resume_from_checkpoint_ref.clone();
+    }
+    if incoming.state_transition.is_none() {
+        incoming.state_transition = existing.state_transition.clone();
+    }
 }
 
 fn next_revision(current: u64) -> u64 {
@@ -376,7 +651,8 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(mesh_workspace) = req.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
     }
-    if let Some(stage_execution) = req.stage_execution {
+    if let Some(mut stage_execution) = req.stage_execution {
+        merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
     }
     if let Some(run) = req.run {
@@ -441,7 +717,8 @@ pub(crate) fn apply_current_live_session_frame(
     if let Some(mesh_workspace) = frame.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
     }
-    if let Some(stage_execution) = frame.stage_execution {
+    if let Some(mut stage_execution) = frame.stage_execution {
+        merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
     }
     if let Some(run) = frame.run {
@@ -683,5 +960,372 @@ mod tests {
         assert_eq!(current.scalar_revision, 2);
         assert_eq!(current.scalar_rows.len(), 1);
         assert_eq!(current.scalar_rows[0].step, 2);
+    }
+
+    #[test]
+    fn stage_execution_reconciliation_marks_matching_command_terminal() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        });
+        current.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: vec![0],
+            stages: vec![StageExecutionRecord {
+                status: StageLifecycleState::Completed,
+                command_id: Some("cmd-stage-0".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: Some(1_700_000_001_000),
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Completed],
+            active_stage_index: None,
+            active_stage_kind: None,
+            runtime_state: RuntimeLifecycleState::Completed,
+        });
+
+        let mut ledger = VecDeque::from([TrackedCommandRecord {
+            command: session_command("cmd-stage-0", "run"),
+            request_id: None,
+            status: CommandLifecycleState::Dispatched,
+            dispatched_at_unix_ms: Some(1_700_000_000_500),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        }]);
+
+        assert!(reconcile_command_ledger_from_stage_execution(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        let record = ledger.front().expect("ledger record should remain");
+        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            record.completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_001_000));
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_compute_commands_terminal() {
+        let mut current = test_current_snapshot();
+        current.latest_fields =
+            serde_json::from_value(json!({"m": {"generation": 1}})).expect("valid fields fixture");
+        current.scalar_rows.push(scalar_row(1, 2.0));
+
+        let mut ledger = VecDeque::from([
+            tracked_command("cmd-fields", "compute_fields"),
+            tracked_command("cmd-energies", "compute_energies"),
+        ]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        for record in ledger {
+            assert_eq!(record.status, CommandLifecycleState::Completed);
+            assert_eq!(
+                record.completion_status,
+                Some(CommandCompletionState::Completed)
+            );
+            assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+        }
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_runtime_control_commands_terminal() {
+        let mut paused = test_current_snapshot();
+        paused.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::Paused,
+            Some(0),
+            StageLifecycleState::Paused,
+        ));
+        let mut pause_ledger = VecDeque::from([tracked_command("cmd-pause", "pause")]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut pause_ledger,
+            &paused,
+            1_700_000_002_000
+        ));
+        assert_eq!(
+            pause_ledger
+                .front()
+                .and_then(|record| record.completion_status),
+            Some(CommandCompletionState::Completed)
+        );
+
+        let mut resumed = test_current_snapshot();
+        resumed.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::Running,
+            Some(0),
+            StageLifecycleState::Running,
+        ));
+        let mut resume_ledger = VecDeque::from([tracked_command("cmd-resume", "resume")]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut resume_ledger,
+            &resumed,
+            1_700_000_003_000
+        ));
+        assert_eq!(
+            resume_ledger
+                .front()
+                .and_then(|record| record.completion_status),
+            Some(CommandCompletionState::Completed)
+        );
+    }
+
+    #[test]
+    fn snapshot_reconciliation_marks_skip_and_stop_terminal() {
+        let mut skipped = test_current_snapshot();
+        skipped.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::AwaitingCommand,
+            None,
+            StageLifecycleState::Skipped,
+        ));
+        let mut skip_ledger = VecDeque::from([tracked_command("cmd-skip", "skip")]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut skip_ledger,
+            &skipped,
+            1_700_000_002_000
+        ));
+        assert_eq!(
+            skip_ledger
+                .front()
+                .and_then(|record| record.completion_status),
+            Some(CommandCompletionState::Completed)
+        );
+
+        let mut stopped = test_current_snapshot();
+        stopped.stage_execution = Some(test_stage_execution(
+            RuntimeLifecycleState::AwaitingCommand,
+            None,
+            StageLifecycleState::Stopped,
+        ));
+        let mut stop_ledger = VecDeque::from([tracked_command("cmd-stop", "stop")]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut stop_ledger,
+            &stopped,
+            1_700_000_003_000
+        ));
+        assert_eq!(
+            stop_ledger
+                .front()
+                .and_then(|record| record.completion_status),
+            Some(CommandCompletionState::Completed)
+        );
+    }
+
+    #[test]
+    fn session_frame_preserves_stage_checkpoint_linkage_for_same_command() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        });
+        current.stage_execution = Some(StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                status: StageLifecycleState::Paused,
+                command_id: Some("cmd-stage-0".into()),
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: vec!["artifacts/stage-000".into(), "cp-common-state".into()],
+                checkpoint_ref: Some("cp-000042".into()),
+                loaded_state_ref: Some("cp-common-state".into()),
+                resume_from_checkpoint_ref: Some("cp-000041".into()),
+                state_transition: Some("restored".into()),
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![StageLifecycleState::Paused],
+            active_stage_index: Some(0),
+            active_stage_kind: Some("relax".into()),
+            runtime_state: RuntimeLifecycleState::Paused,
+        });
+
+        apply_current_live_session_frame(
+            &mut current,
+            CurrentLiveSessionFrameRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: Some(StageExecutionState {
+                    total_stages: 1,
+                    completed_stage_indexes: vec![0],
+                    stages: vec![StageExecutionRecord {
+                        status: StageLifecycleState::Completed,
+                        command_id: Some("cmd-stage-0".into()),
+                        started_at_unix_ms: Some(1_700_000_000_000),
+                        completed_at_unix_ms: Some(1_700_000_001_000),
+                        reason: None,
+                        artifact_refs: vec!["artifacts/stage-000".into()],
+                        checkpoint_ref: None,
+                        loaded_state_ref: None,
+                        resume_from_checkpoint_ref: None,
+                        state_transition: None,
+                        metric_name: None,
+                        metric_value: None,
+                        threshold: None,
+                    }],
+                    stage_statuses: vec![StageLifecycleState::Completed],
+                    active_stage_index: None,
+                    active_stage_kind: None,
+                    runtime_state: RuntimeLifecycleState::Completed,
+                }),
+                run: None,
+            },
+        )
+        .expect("session frame should apply");
+
+        let record = current
+            .stage_execution
+            .as_ref()
+            .and_then(|state| state.stages.first())
+            .expect("stage execution record should be present");
+        assert_eq!(record.checkpoint_ref.as_deref(), Some("cp-000042"));
+        assert_eq!(record.loaded_state_ref.as_deref(), Some("cp-common-state"));
+        assert_eq!(
+            record.resume_from_checkpoint_ref.as_deref(),
+            Some("cp-000041")
+        );
+        assert_eq!(record.state_transition.as_deref(), Some("restored"));
+        assert!(record
+            .artifact_refs
+            .iter()
+            .any(|artifact_ref| artifact_ref == "cp-common-state"));
+    }
+
+    fn session_command(command_id: &str, kind: &str) -> SessionCommand {
+        SessionCommand {
+            seq: 1,
+            command_id: command_id.to_string(),
+            kind: kind.to_string(),
+            created_at_unix_ms: 1_700_000_000_000,
+            target: None,
+            reason: None,
+            precondition: None,
+            client_intent_id: None,
+            requested_at_unix_ms: None,
+            until_seconds: None,
+            max_steps: None,
+            torque_tolerance: None,
+            energy_tolerance: None,
+            integrator: None,
+            fixed_timestep: None,
+            max_error: None,
+            relax_algorithm: None,
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+        }
+    }
+
+    fn tracked_command(command_id: &str, kind: &str) -> TrackedCommandRecord {
+        TrackedCommandRecord {
+            command: session_command(command_id, kind),
+            request_id: None,
+            status: CommandLifecycleState::Dispatched,
+            dispatched_at_unix_ms: Some(1_700_000_000_500),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        }
+    }
+
+    fn test_current_snapshot() -> SessionStateResponse {
+        default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            fem_mesh: None,
+        })
+    }
+
+    fn test_stage_execution(
+        runtime_state: RuntimeLifecycleState,
+        active_stage_index: Option<usize>,
+        stage_status: StageLifecycleState,
+    ) -> StageExecutionState {
+        StageExecutionState {
+            total_stages: 1,
+            completed_stage_indexes: Vec::new(),
+            stages: vec![StageExecutionRecord {
+                status: stage_status,
+                command_id: None,
+                started_at_unix_ms: Some(1_700_000_000_000),
+                completed_at_unix_ms: None,
+                reason: None,
+                artifact_refs: Vec::new(),
+                checkpoint_ref: None,
+                loaded_state_ref: None,
+                resume_from_checkpoint_ref: None,
+                state_transition: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            }],
+            stage_statuses: vec![stage_status],
+            active_stage_index,
+            active_stage_kind: Some("relax".into()),
+            runtime_state,
+        }
     }
 }

@@ -2,8 +2,12 @@
 
 use crate::artifact_pipeline::ArtifactPipelineSummary;
 use fullmag_ir::BackendPlanIR;
+use sha2::{Digest, Sha256};
 
-use crate::types::{ExecutedRun, StepStats};
+use crate::types::{
+    ExecutedRun, FemCpuRelaxationDemagPolicyMetadata, FemCpuRelaxationDemagTimingsNs,
+    FemCpuRelaxationEnergyTerms, FemCpuRelaxationQualificationMetadata, StepStats,
+};
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -64,6 +68,17 @@ fn demag_runtime_metadata(
                 fullmag_ir::ResolvedFemDemagIR::PoissonRobin => Some("robin"),
                 _ => None,
             };
+            let timings_ns = last.map(|entry| {
+                serde_json::json!({
+                    "assemble": entry.demag_assemble_wall_time_ns,
+                    "solve": entry.demag_solve_wall_time_ns,
+                    "solver_setup": entry.demag_solver_setup_wall_time_ns,
+                    "solver_apply": entry.demag_solver_apply_wall_time_ns,
+                    "recover": entry.demag_recover_wall_time_ns,
+                    "energy": entry.demag_energy_wall_time_ns,
+                    "total": entry.demag_wall_time_ns,
+                })
+            });
 
             serde_json::json!({
                 "model": resolved_demag.model_name(),
@@ -71,10 +86,15 @@ fn demag_runtime_metadata(
                 "linear_solver": policy.solver,
                 "preconditioner": policy.preconditioner,
                 "relative_tolerance": policy.rtol,
+                "absolute_tolerance": policy.atol,
                 "max_iterations": policy.max_iterations,
+                "print_level": policy.print_level,
                 "actual_iterations": last.map(|entry| entry.poisson_iterations),
                 "final_residual_norm": last.map(|entry| entry.poisson_final_residual),
+                "solver_setup_reused": last.map(|entry| entry.demag_solver_setup_reused),
+                "timings_ns": timings_ns,
                 "mfem_device": provenance.mfem_device,
+                "fem_assembly_mode": provenance.fem_assembly_mode,
                 "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
                 "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
                 "airbox_factor": fem.air_box_config.as_ref().map(|cfg| cfg.factor),
@@ -90,6 +110,170 @@ fn demag_runtime_metadata(
         }
         _ => serde_json::Value::Null,
     }
+}
+
+fn fem_cpu_relaxation_qualification_metadata(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    provenance: &crate::types::ExecutionProvenance,
+    demag_runtime: &serde_json::Value,
+    executed: &ExecutedRun,
+) -> serde_json::Value {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return serde_json::Value::Null;
+    };
+    if provenance.execution_engine != "fem_cpu_native" {
+        return serde_json::Value::Null;
+    }
+
+    let Some(last) = executed.result.steps.last() else {
+        return serde_json::Value::Null;
+    };
+    let completion = executed.result.completion.as_ref();
+
+    let metadata = FemCpuRelaxationQualificationMetadata {
+        schema_version: "fem_cpu_relaxation_qualification.v1".to_string(),
+        benchmark_gate_version: "fem_cpu_no_pbc_adaptive.v1".to_string(),
+        physics_terms: fem_physics_terms(fem),
+        solver_mesh_signature: solver_mesh_signature(&fem.mesh),
+        demag_policy: FemCpuRelaxationDemagPolicyMetadata {
+            model: json_string(demag_runtime, "model"),
+            boundary_variant: json_string(demag_runtime, "boundary_variant"),
+            linear_solver: json_string(demag_runtime, "linear_solver"),
+            preconditioner: json_string(demag_runtime, "preconditioner"),
+            relative_tolerance: json_f64(demag_runtime, "relative_tolerance"),
+            absolute_tolerance: json_f64(demag_runtime, "absolute_tolerance"),
+            max_iterations: json_u32(demag_runtime, "max_iterations"),
+            print_level: json_i32(demag_runtime, "print_level"),
+            actual_iterations: json_u32(demag_runtime, "actual_iterations"),
+            final_residual_norm: json_f64(demag_runtime, "final_residual_norm"),
+            solver_setup_reused: json_bool(demag_runtime, "solver_setup_reused"),
+            timings_ns: demag_timings_ns(demag_runtime),
+        },
+        assembly_mode: provenance.fem_assembly_mode.clone(),
+        relaxation_algorithm: fem
+            .relaxation
+            .as_ref()
+            .map(|control| control.algorithm.as_str().to_string()),
+        stop_reason: completion
+            .and_then(|entry| entry.reason.as_ref())
+            .map(stage_stop_reason_as_str)
+            .map(str::to_string),
+        stop_metric_name: completion.and_then(|entry| entry.metric_name.clone()),
+        stop_metric_value: completion.and_then(|entry| entry.metric_value),
+        stop_threshold: completion.and_then(|entry| entry.threshold),
+        final_energy_terms_j: FemCpuRelaxationEnergyTerms {
+            e_ex: last.e_ex,
+            e_demag: last.e_demag,
+            e_ext: last.e_ext,
+            e_ani: last.e_ani,
+            e_dmi: last.e_dmi,
+            e_total: last.e_total,
+        },
+        final_torque_apm: last.max_torque_Apm,
+        final_torque_t: last.max_torque_T,
+        norm_defect: magnetization_norm_defect(&executed.result.final_magnetization),
+        executed_steps: last.step,
+    };
+    serde_json::to_value(metadata).unwrap_or(serde_json::Value::Null)
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn json_f64(value: &serde_json::Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(serde_json::Value::as_f64)
+}
+
+fn json_u32(value: &serde_json::Value, key: &str) -> Option<u32> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|raw| u32::try_from(raw).ok())
+}
+
+fn json_i32(value: &serde_json::Value, key: &str) -> Option<i32> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|raw| i32::try_from(raw).ok())
+}
+
+fn json_bool(value: &serde_json::Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(serde_json::Value::as_bool)
+}
+
+fn demag_timings_ns(value: &serde_json::Value) -> Option<FemCpuRelaxationDemagTimingsNs> {
+    let timings = value.get("timings_ns")?;
+    Some(FemCpuRelaxationDemagTimingsNs {
+        assemble: timings.get("assemble")?.as_u64()?,
+        solve: timings.get("solve")?.as_u64()?,
+        solver_setup: timings.get("solver_setup")?.as_u64()?,
+        solver_apply: timings.get("solver_apply")?.as_u64()?,
+        recover: timings.get("recover")?.as_u64()?,
+        energy: timings.get("energy")?.as_u64()?,
+        total: timings.get("total")?.as_u64()?,
+    })
+}
+
+fn stage_stop_reason_as_str(reason: &fullmag_ir::StageStopReason) -> &'static str {
+    match reason {
+        fullmag_ir::StageStopReason::Torque => "torque",
+        fullmag_ir::StageStopReason::Energy => "energy",
+        fullmag_ir::StageStopReason::MaxSteps => "max_steps",
+        fullmag_ir::StageStopReason::MaxPseudotime => "max_pseudotime",
+        fullmag_ir::StageStopReason::MaxPhysicalTime => "max_physical_time",
+        fullmag_ir::StageStopReason::UserCancelled => "user_cancelled",
+        fullmag_ir::StageStopReason::BackendError => "backend_error",
+    }
+}
+
+fn fem_physics_terms(fem: &fullmag_ir::FemPlanIR) -> Vec<String> {
+    let mut terms = Vec::new();
+    if fem.enable_exchange {
+        terms.push("exchange".to_string());
+    }
+    if fem.enable_demag {
+        terms.push("demag".to_string());
+    }
+    if fem.material.uniaxial_anisotropy.is_some() {
+        terms.push("anisotropy_uniaxial".to_string());
+    }
+    if fem.material.cubic_anisotropy_kc1.is_some()
+        || fem.material.cubic_anisotropy_kc2.is_some()
+        || fem.material.cubic_anisotropy_kc3.is_some()
+    {
+        terms.push("anisotropy_cubic".to_string());
+    }
+    terms
+}
+
+fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
+    let payload = serde_json::json!({
+        "nodes": mesh.nodes,
+        "elements": mesh.elements,
+        "element_markers": mesh.element_markers,
+        "boundary_faces": mesh.boundary_faces,
+        "boundary_markers": mesh.boundary_markers,
+        "periodic_boundary_pairs": mesh.periodic_boundary_pairs,
+        "periodic_node_pairs": mesh.periodic_node_pairs,
+    });
+    let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+    let digest = Sha256::digest(encoded);
+    digest.iter().map(|byte| format!("{:02x}", byte)).collect()
+}
+
+fn magnetization_norm_defect(values: &[[f64; 3]]) -> f64 {
+    values
+        .iter()
+        .map(|m| {
+            let norm = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            (norm - 1.0).abs()
+        })
+        .fold(0.0, f64::max)
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +311,12 @@ pub(crate) fn write_artifacts(
     let execution_provenance =
         provenance_with_runtime_threading(problem, &executed.provenance, &executed.result.steps);
     let demag_runtime = demag_runtime_metadata(plan, &execution_provenance, &executed.result.steps);
+    let fem_cpu_relaxation_qualification = fem_cpu_relaxation_qualification_metadata(
+        plan,
+        &execution_provenance,
+        &demag_runtime,
+        executed,
+    );
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -138,6 +328,7 @@ pub(crate) fn write_artifacts(
         "execution_provenance": execution_provenance,
         "runtime_threading": runtime_threading,
         "demag_runtime": demag_runtime,
+        "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
@@ -892,6 +1083,209 @@ mod tests {
     }
 
     #[test]
+    fn demag_profile_metadata_includes_timing_breakdown() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        }
+
+        let metadata = demag_runtime_metadata(
+            &plan,
+            &ExecutionProvenance::default(),
+            &[StepStats {
+                demag_wall_time_ns: 29,
+                demag_assemble_wall_time_ns: 3,
+                demag_solve_wall_time_ns: 5,
+                demag_solver_setup_wall_time_ns: 17,
+                demag_solver_apply_wall_time_ns: 19,
+                demag_solver_setup_reused: true,
+                demag_recover_wall_time_ns: 7,
+                demag_energy_wall_time_ns: 11,
+                poisson_iterations: 13,
+                poisson_final_residual: 1.0e-8,
+                ..StepStats::default()
+            }],
+        );
+
+        assert_eq!(metadata["timings_ns"]["assemble"], 3);
+        assert_eq!(metadata["timings_ns"]["solve"], 5);
+        assert_eq!(metadata["timings_ns"]["solver_setup"], 17);
+        assert_eq!(metadata["timings_ns"]["solver_apply"], 19);
+        assert_eq!(metadata["timings_ns"]["recover"], 7);
+        assert_eq!(metadata["timings_ns"]["energy"], 11);
+        assert_eq!(metadata["timings_ns"]["total"], 29);
+        assert_eq!(metadata["solver_setup_reused"], true);
+        assert_eq!(metadata["actual_iterations"], 13);
+        assert_eq!(metadata["final_residual_norm"], 1.0e-8);
+        assert_eq!(metadata["relative_tolerance"], 1.0e-8);
+        assert_eq!(metadata["absolute_tolerance"], serde_json::Value::Null);
+        assert_eq!(metadata["max_iterations"], 500);
+        assert_eq!(metadata["print_level"], 0);
+    }
+
+    #[test]
+    fn fem_cpu_relaxation_qualification_metadata_carries_reproducibility_contract() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+            fem.material.uniaxial_anisotropy = Some(0.5e6);
+            fem.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+            fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1.0e-3),
+                    energy_tolerance_j: None,
+                    max_steps: Some(100),
+                    max_pseudotime_s: None,
+                    max_physical_time_s: None,
+                },
+            });
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            mfem_device: Some("cpu".to_string()),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            fem_execution_mode: Some("cpu_native".to_string()),
+            fem_data_residency: Some("host_source_of_truth".to_string()),
+            uses_cuda_kernels: Some(false),
+            uses_gpu_poisson: Some(false),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 100,
+                    e_ex: 1.0,
+                    e_demag: 2.0,
+                    e_ani: 3.0,
+                    e_total: 6.0,
+                    max_torque_Apm: 4.0e-4,
+                    demag_solver_setup_reused: true,
+                    poisson_iterations: 13,
+                    poisson_final_residual: 1.0e-8,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: Some(fullmag_ir::StageCompletionIR {
+                    status: "completed".to_string(),
+                    reason: Some(fullmag_ir::StageStopReason::Torque),
+                    metric_name: Some("max_torque_apm".to_string()),
+                    metric_value: Some(4.0e-4),
+                    threshold: Some(1.0e-3),
+                }),
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+
+        assert_eq!(
+            metadata["schema_version"],
+            "fem_cpu_relaxation_qualification.v1"
+        );
+        assert_eq!(
+            metadata["benchmark_gate_version"],
+            "fem_cpu_no_pbc_adaptive.v1"
+        );
+        assert_eq!(
+            metadata["physics_terms"],
+            serde_json::json!(["exchange", "demag", "anisotropy_uniaxial"])
+        );
+        assert_eq!(
+            metadata["solver_mesh_signature"].as_str().unwrap().len(),
+            64
+        );
+        assert_eq!(metadata["demag_policy"]["linear_solver"], "CG");
+        assert_eq!(metadata["assembly_mode"], "legacy_sparse");
+        assert_eq!(metadata["relaxation_algorithm"], "llg_overdamped");
+        assert_eq!(metadata["stop_reason"], "torque");
+        assert_eq!(metadata["final_energy_terms_j"]["E_ex"], 1.0);
+        assert_eq!(metadata["final_energy_terms_j"]["E_demag"], 2.0);
+        assert_eq!(metadata["final_energy_terms_j"]["E_ani"], 3.0);
+        assert_eq!(metadata["final_torque_apm"], 4.0e-4);
+        assert_eq!(metadata["norm_defect"], 0.0);
+
+        let typed: crate::types::FemCpuRelaxationQualificationMetadata =
+            serde_json::from_value(metadata).expect("qualification metadata should be typed");
+        assert_eq!(typed.schema_version, "fem_cpu_relaxation_qualification.v1");
+        assert_eq!(typed.demag_policy.linear_solver.as_deref(), Some("CG"));
+        assert_eq!(typed.final_energy_terms_j.e_total, 6.0);
+    }
+
+    #[test]
+    fn fem_cpu_relaxation_qualification_metadata_reports_cubic_anisotropy_term() {
+        let mut plan = test_fem_execution_plan();
+        if let BackendPlanIR::Fem(fem) = &mut plan.backend_plan {
+            fem.enable_demag = true;
+            fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+            fem.material.cubic_anisotropy_kc1 = Some(4.8e4);
+            fem.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+            fem.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        }
+        let provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".to_string(),
+            precision: "double".to_string(),
+            mfem_device: Some("cpu".to_string()),
+            fem_assembly_mode: Some("legacy_sparse".to_string()),
+            fem_execution_mode: Some("cpu_native".to_string()),
+            fem_data_residency: Some("host_source_of_truth".to_string()),
+            uses_cuda_kernels: Some(false),
+            uses_gpu_poisson: Some(false),
+            ..ExecutionProvenance::default()
+        };
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats {
+                    step: 2,
+                    e_ex: 1.0,
+                    e_demag: 2.0,
+                    e_ani: 3.0,
+                    e_total: 6.0,
+                    demag_solver_setup_reused: true,
+                    poisson_iterations: 8,
+                    poisson_final_residual: 5.0e-9,
+                    ..StepStats::default()
+                }],
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: provenance.clone(),
+        };
+        let demag_runtime = demag_runtime_metadata(&plan, &provenance, &executed.result.steps);
+
+        let metadata = fem_cpu_relaxation_qualification_metadata(
+            &plan,
+            &provenance,
+            &demag_runtime,
+            &executed,
+        );
+
+        assert_eq!(
+            metadata["physics_terms"],
+            serde_json::json!(["exchange", "demag", "anisotropy_cubic"])
+        );
+    }
+
+    #[test]
     fn fdm_field_layout_reports_active_mask_counts() {
         let layout = field_layout(&test_execution_plan(Some(vec![
             true, true, false, false, true, false, true, false,
@@ -946,15 +1340,44 @@ mod tests {
             resolved_fallback: None,
             requested_integrator: None,
             resolved_integrator: None,
+            requested_energy_minimizer: None,
+            resolved_energy_minimizer: None,
+            energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
             dt_policy: None,
             mfem_device: None,
             demag_refresh_interval_s: None,
+            fem_assembly_mode: None,
+            fem_execution_mode: None,
+            fem_exchange_operator_mode: None,
+            fem_data_residency: None,
+            uses_cuda_kernels: None,
+            uses_gpu_poisson: None,
+            hot_loop_host_sync_count: None,
+            hot_loop_exchange_h2d_bytes: None,
+            hot_loop_exchange_d2h_bytes: None,
+            hot_loop_exchange_host_sync_count: None,
+            hot_loop_compute_h2d_bytes: None,
+            hot_loop_compute_d2h_bytes: None,
+            hot_loop_compute_host_sync_count: None,
+            fem_gpu_state_allocated: None,
+            fem_gpu_state_node_count: None,
+            fem_gpu_state_dof_len: None,
+            fem_gpu_state_stage_count: None,
+            fem_gpu_state_device_bytes: None,
+            fem_gpu_state_reduction_workspace_bytes: None,
+            fem_gpu_rk_exchange_only_enabled: None,
+            fem_gpu_rk_stage_count: None,
+            fem_gpu_rk_uses_cuda_kernels: None,
+            fem_gpu_rk_allows_exchange_host_sync: None,
+            fem_gpu_rk_stage_exchange_device_resident: None,
+            fem_gpu_rk_block_reason: None,
             requested_cpu_threads: None,
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            fem_poisson_demag: None,
         };
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1085,15 +1508,44 @@ mod tests {
             resolved_fallback: None,
             requested_integrator: None,
             resolved_integrator: None,
+            requested_energy_minimizer: None,
+            resolved_energy_minimizer: None,
+            energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
             dt_policy: None,
             mfem_device: None,
             demag_refresh_interval_s: None,
+            fem_assembly_mode: None,
+            fem_execution_mode: None,
+            fem_exchange_operator_mode: None,
+            fem_data_residency: None,
+            uses_cuda_kernels: None,
+            uses_gpu_poisson: None,
+            hot_loop_host_sync_count: None,
+            hot_loop_exchange_h2d_bytes: None,
+            hot_loop_exchange_d2h_bytes: None,
+            hot_loop_exchange_host_sync_count: None,
+            hot_loop_compute_h2d_bytes: None,
+            hot_loop_compute_d2h_bytes: None,
+            hot_loop_compute_host_sync_count: None,
+            fem_gpu_state_allocated: None,
+            fem_gpu_state_node_count: None,
+            fem_gpu_state_dof_len: None,
+            fem_gpu_state_stage_count: None,
+            fem_gpu_state_device_bytes: None,
+            fem_gpu_state_reduction_workspace_bytes: None,
+            fem_gpu_rk_exchange_only_enabled: None,
+            fem_gpu_rk_stage_count: None,
+            fem_gpu_rk_uses_cuda_kernels: None,
+            fem_gpu_rk_allows_exchange_host_sync: None,
+            fem_gpu_rk_stage_exchange_device_resident: None,
+            fem_gpu_rk_block_reason: None,
             requested_cpu_threads: None,
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            fem_poisson_demag: None,
         };
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

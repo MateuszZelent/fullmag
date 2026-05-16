@@ -3676,15 +3676,44 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> ExecutionProvenance {
         random_seed: None,
         requested_integrator: None,
         resolved_integrator: None,
+        requested_energy_minimizer: None,
+        resolved_energy_minimizer: None,
+        energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         dt_policy: None,
         mfem_device: None,
         demag_refresh_interval_s: None,
+        fem_assembly_mode: None,
+        fem_execution_mode: None,
+        fem_exchange_operator_mode: None,
+        fem_data_residency: None,
+        uses_cuda_kernels: None,
+        uses_gpu_poisson: None,
+        hot_loop_host_sync_count: None,
+        hot_loop_exchange_h2d_bytes: None,
+        hot_loop_exchange_d2h_bytes: None,
+        hot_loop_exchange_host_sync_count: None,
+        hot_loop_compute_h2d_bytes: None,
+        hot_loop_compute_d2h_bytes: None,
+        hot_loop_compute_host_sync_count: None,
+        fem_gpu_state_allocated: None,
+        fem_gpu_state_node_count: None,
+        fem_gpu_state_dof_len: None,
+        fem_gpu_state_stage_count: None,
+        fem_gpu_state_device_bytes: None,
+        fem_gpu_state_reduction_workspace_bytes: None,
+        fem_gpu_rk_exchange_only_enabled: None,
+        fem_gpu_rk_stage_count: None,
+        fem_gpu_rk_uses_cuda_kernels: None,
+        fem_gpu_rk_allows_exchange_host_sync: None,
+        fem_gpu_rk_stage_exchange_device_resident: None,
+        fem_gpu_rk_block_reason: None,
         requested_cpu_threads: None,
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        fem_poisson_demag: None,
     }
 }
 
@@ -3726,15 +3755,44 @@ fn cuda_execution_provenance(
         random_seed: None,
         requested_integrator: Some(format!("{:?}", plan.integrator)),
         resolved_integrator: Some(format!("{:?}", plan.integrator)),
+        requested_energy_minimizer: None,
+        resolved_energy_minimizer: None,
+        energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         dt_policy,
         mfem_device: None,
         demag_refresh_interval_s: None,
+        fem_assembly_mode: None,
+        fem_execution_mode: None,
+        fem_exchange_operator_mode: None,
+        fem_data_residency: None,
+        uses_cuda_kernels: None,
+        uses_gpu_poisson: None,
+        hot_loop_host_sync_count: None,
+        hot_loop_exchange_h2d_bytes: None,
+        hot_loop_exchange_d2h_bytes: None,
+        hot_loop_exchange_host_sync_count: None,
+        hot_loop_compute_h2d_bytes: None,
+        hot_loop_compute_d2h_bytes: None,
+        hot_loop_compute_host_sync_count: None,
+        fem_gpu_state_allocated: None,
+        fem_gpu_state_node_count: None,
+        fem_gpu_state_dof_len: None,
+        fem_gpu_state_stage_count: None,
+        fem_gpu_state_device_bytes: None,
+        fem_gpu_state_reduction_workspace_bytes: None,
+        fem_gpu_rk_exchange_only_enabled: None,
+        fem_gpu_rk_stage_count: None,
+        fem_gpu_rk_uses_cuda_kernels: None,
+        fem_gpu_rk_allows_exchange_host_sync: None,
+        fem_gpu_rk_stage_exchange_device_resident: None,
+        fem_gpu_rk_block_reason: None,
         requested_cpu_threads: None,
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        fem_poisson_demag: None,
     }
 }
 
@@ -3752,7 +3810,7 @@ fn fem_gpu_execution_provenance(
     };
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
-    ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -3771,6 +3829,9 @@ fn fem_gpu_execution_provenance(
         random_seed: None,
         requested_integrator: Some(format!("{:?}", plan.integrator)),
         resolved_integrator: Some(format!("{:?}", plan.integrator)),
+        requested_energy_minimizer: None,
+        resolved_energy_minimizer: None,
+        energy_minimizer_realization: None,
         requested_demag_realization: plan
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
@@ -3782,11 +3843,46 @@ fn fem_gpu_execution_provenance(
             .field_refresh
             .as_ref()
             .and_then(|policy| policy.demag_interval_s),
+        fem_assembly_mode: Some("legacy_sparse".to_string()),
+        fem_execution_mode: Some(
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                "cpu_native"
+            } else {
+                "hybrid_legacy_sparse"
+            }
+            .to_string(),
+        ),
+        fem_exchange_operator_mode: Some("unsupported".to_string()),
+        fem_data_residency: Some("host_source_of_truth".to_string()),
+        uses_cuda_kernels: Some(false),
+        uses_gpu_poisson: Some(false),
+        hot_loop_host_sync_count: None,
+        hot_loop_exchange_h2d_bytes: None,
+        hot_loop_exchange_d2h_bytes: None,
+        hot_loop_exchange_host_sync_count: None,
+        hot_loop_compute_h2d_bytes: None,
+        hot_loop_compute_d2h_bytes: None,
+        hot_loop_compute_host_sync_count: None,
+        fem_gpu_state_allocated: None,
+        fem_gpu_state_node_count: None,
+        fem_gpu_state_dof_len: None,
+        fem_gpu_state_stage_count: None,
+        fem_gpu_state_device_bytes: None,
+        fem_gpu_state_reduction_workspace_bytes: None,
+        fem_gpu_rk_exchange_only_enabled: None,
+        fem_gpu_rk_stage_count: None,
+        fem_gpu_rk_uses_cuda_kernels: None,
+        fem_gpu_rk_allows_exchange_host_sync: None,
+        fem_gpu_rk_stage_exchange_device_resident: None,
+        fem_gpu_rk_block_reason: None,
         requested_cpu_threads: None,
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
-    }
+        fem_poisson_demag: None,
+    };
+    crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    provenance
 }
 
 #[cfg(feature = "fem-gpu")]

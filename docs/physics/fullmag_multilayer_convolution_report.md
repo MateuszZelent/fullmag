@@ -318,7 +318,7 @@ Przed uruchomieniem lub po zbudowaniu planu można łatwo zobaczyć:
 
 ### Poziom 3 — debug / developer views
 Dla chętnych:
-- pokazanie transfer grids,
+- pokazanie pomocniczych siatek roboczych,
 - kernel reuse groups,
 - estimated memory,
 - pair schedule.
@@ -2155,4 +2155,3 @@ W praktyce:
 ## 26. Jednozdaniowe podsumowanie dla Ciebie
 
 **Rób to jako jawny, explainable, layer-aware tryb FDM demag z osobnym planem multilayer i wspólnym exact kernel builderem CPU/CUDA — nie jako ukrytą mutację obecnego single-grid demag.**
-

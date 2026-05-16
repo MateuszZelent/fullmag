@@ -9,17 +9,20 @@ use serde_json::Value;
 use crate::error::ApiError;
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, GeometryRealizationRequest,
-    MaterialPatchRequest, MaterialPropertiesResource, MaterialResource, NullableF64PatchValue,
+    MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialPatchRequest,
+    MaterialPropertiesResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
     NullableU32PatchValue, ObjectCreateRequest, ObjectGeometryPatchRequest,
     ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
-    RegionListResource, RegionPatchRequest, RegionResource, ScenePatchRequest,
+    RegionListResource, RegionPatchRequest, RegionResource, ScenePatchRequest, SceneResource,
     StudyRuntimePatchRequest, StudyRuntimeResource, UniverseFitRequest, UniversePatchRequest,
     UniverseResource,
 };
 use crate::types::{AppState, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse};
 use fullmag_authoring::{
     geometry_capabilities, realize_geometry_scene, validate_geometry_scene, GeometryBackendTarget,
-    MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneObject,
+    GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
+    GeometryRealizationSnapshot, GeometryValidationResource, MagnetizationAsset, SceneDocument,
+    SceneGeometry, SceneMaterialAsset, SceneObject, SceneRegionOverride,
     ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
     ScriptBuilderUniverseState, Transform3D,
 };
@@ -28,16 +31,16 @@ use fullmag_authoring::{
     get,
     path = "/v2/sessions/current/model/scene",
     responses(
-        (status = 200, description = "Current canonical authoring scene document", body = Value),
+        (status = 200, description = "Current canonical authoring scene document", body = SceneResource),
         (status = 404, description = "No active workspace or scene document"),
     ),
     tag = "model"
 )]
 pub async fn get_authoring_scene(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SceneResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    serde_json::to_value(scene)
+    SceneResource::from_scene_document(scene)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
 }
@@ -47,7 +50,7 @@ pub async fn get_authoring_scene(
     path = "/v2/sessions/current/model/scene",
     request_body = Value,
     responses(
-        (status = 200, description = "Committed canonical authoring scene document", body = Value),
+        (status = 200, description = "Committed canonical authoring scene document", body = SceneResource),
         (status = 400, description = "Invalid scene document payload"),
         (status = 404, description = "No active workspace"),
     ),
@@ -56,12 +59,12 @@ pub async fn get_authoring_scene(
 pub async fn replace_authoring_scene(
     State(state): State<Arc<AppState>>,
     Json(scene_value): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SceneResource>, ApiError> {
     let scene_document: SceneDocument = serde_json::from_value(scene_value).map_err(|error| {
         ApiError::bad_request(format!("invalid scene document payload: {error}"))
     })?;
     let committed = crate::commit_current_live_scene_document(&state, scene_document).await?;
-    serde_json::to_value(committed)
+    SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
 }
@@ -71,7 +74,7 @@ pub async fn replace_authoring_scene(
     path = "/v2/sessions/current/model/scene",
     request_body = ScenePatchRequest,
     responses(
-        (status = 200, description = "Committed canonical authoring scene after merge patch", body = Value),
+        (status = 200, description = "Committed canonical authoring scene after merge patch", body = SceneResource),
         (status = 400, description = "Invalid scene patch payload"),
         (status = 404, description = "No active workspace"),
     ),
@@ -80,11 +83,11 @@ pub async fn replace_authoring_scene(
 pub async fn patch_authoring_scene(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScenePatchRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<SceneResource>, ApiError> {
     let current_scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let patched_scene = apply_scene_merge_patch(&current_scene, &req.merge_patch)?;
     let committed = crate::commit_current_live_scene_document(&state, patched_scene).await?;
-    serde_json::to_value(committed)
+    SceneResource::from_scene_document(committed)
         .map(Json)
         .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
 }
@@ -93,43 +96,33 @@ pub async fn patch_authoring_scene(
     get,
     path = "/v2/sessions/current/model/geometry/capabilities",
     responses(
-        (status = 200, description = "Backend-owned geometry primitive and CSG capability matrix", body = Value),
+        (status = 200, description = "Backend-owned geometry primitive and CSG capability matrix", body = GeometryCapabilitiesResource),
         (status = 404, description = "No active workspace or scene document"),
     ),
     tag = "model"
 )]
 pub async fn get_authoring_geometry_capabilities(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryCapabilitiesResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    serde_json::to_value(geometry_capabilities(scene.revision))
-        .map(Json)
-        .map_err(|error| {
-            ApiError::internal(format!(
-                "failed to serialize geometry capabilities: {error}"
-            ))
-        })
+    Ok(Json(geometry_capabilities(scene.revision)))
 }
 
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/model/geometry/validation",
     responses(
-        (status = 200, description = "Backend geometry validation diagnostics for the current scene", body = Value),
+        (status = 200, description = "Backend geometry validation diagnostics for the current scene", body = GeometryValidationResource),
         (status = 404, description = "No active workspace or scene document"),
     ),
     tag = "model"
 )]
 pub async fn get_authoring_geometry_validation(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryValidationResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let backend_target = GeometryBackendTarget::from_scene(&scene);
-    serde_json::to_value(validate_geometry_scene(&scene, backend_target))
-        .map(Json)
-        .map_err(|error| {
-            ApiError::internal(format!("failed to serialize geometry validation: {error}"))
-        })
+    Ok(Json(validate_geometry_scene(&scene, backend_target)))
 }
 
 #[utoipa::path(
@@ -137,7 +130,7 @@ pub async fn get_authoring_geometry_validation(
     path = "/v2/sessions/current/model/geometry/realizations",
     request_body = GeometryRealizationRequest,
     responses(
-        (status = 200, description = "Derived geometry realization snapshot for the current scene", body = Value),
+        (status = 200, description = "Derived geometry realization snapshot for the current scene", body = GeometryRealizationSnapshot),
         (status = 400, description = "Invalid backend target"),
         (status = 404, description = "No active workspace or scene document"),
     ),
@@ -146,7 +139,7 @@ pub async fn get_authoring_geometry_validation(
 pub async fn create_authoring_geometry_realization(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GeometryRealizationRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryRealizationSnapshot>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let backend_target = req
         .backend_target
@@ -154,54 +147,46 @@ pub async fn create_authoring_geometry_realization(
         .map(parse_geometry_backend_target)
         .transpose()?
         .unwrap_or_else(|| GeometryBackendTarget::from_scene(&scene));
-    serde_json::to_value(realize_geometry_scene(&scene, backend_target))
-        .map(Json)
-        .map_err(|error| {
-            ApiError::internal(format!("failed to serialize geometry realization: {error}"))
-        })
+    Ok(Json(realize_geometry_scene(&scene, backend_target)))
 }
 
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/model/geometry/realizations/current",
     responses(
-        (status = 200, description = "Current derived geometry realization snapshot", body = Value),
+        (status = 200, description = "Current derived geometry realization snapshot", body = GeometryRealizationSnapshot),
         (status = 404, description = "No active workspace or scene document"),
     ),
     tag = "model"
 )]
 pub async fn get_current_authoring_geometry_realization(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryRealizationSnapshot>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let backend_target = GeometryBackendTarget::from_scene(&scene);
-    serde_json::to_value(realize_geometry_scene(&scene, backend_target))
-        .map(Json)
-        .map_err(|error| {
-            ApiError::internal(format!("failed to serialize geometry realization: {error}"))
-        })
+    Ok(Json(realize_geometry_scene(&scene, backend_target)))
 }
 
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/model/geometry/diagnostics",
     responses(
-        (status = 200, description = "Current geometry diagnostics", body = Value),
+        (status = 200, description = "Current geometry diagnostics", body = GeometryDiagnosticsResource),
         (status = 404, description = "No active workspace or scene document"),
     ),
     tag = "model"
 )]
 pub async fn get_authoring_geometry_diagnostics(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryDiagnosticsResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
-    Ok(Json(serde_json::json!({
-        "scene_revision": validation.scene_revision,
-        "backend_target": validation.backend_target,
-        "status": validation.status,
-        "diagnostics": validation.diagnostics,
-    })))
+    Ok(Json(GeometryDiagnosticsResource {
+        scene_revision: validation.scene_revision,
+        backend_target: validation.backend_target,
+        status: validation.status,
+        diagnostics: validation.diagnostics,
+    }))
 }
 
 #[utoipa::path(
@@ -211,7 +196,7 @@ pub async fn get_authoring_geometry_diagnostics(
         ("diagnostic_id" = String, Path, description = "Geometry diagnostic id")
     ),
     responses(
-        (status = 200, description = "Current geometry diagnostic", body = Value),
+        (status = 200, description = "Current geometry diagnostic", body = GeometryDiagnostic),
         (status = 404, description = "No active workspace, scene document, or diagnostic"),
     ),
     tag = "model"
@@ -219,7 +204,7 @@ pub async fn get_authoring_geometry_diagnostics(
 pub async fn get_authoring_geometry_diagnostic(
     State(state): State<Arc<AppState>>,
     Path(diagnostic_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<GeometryDiagnostic>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let validation = validate_geometry_scene(&scene, GeometryBackendTarget::from_scene(&scene));
     let diagnostic = validation
@@ -227,9 +212,7 @@ pub async fn get_authoring_geometry_diagnostic(
         .into_iter()
         .find(|diagnostic| diagnostic.id == diagnostic_id || diagnostic.code == diagnostic_id)
         .ok_or_else(|| ApiError::not_found(format!("diagnostic not found: {diagnostic_id}")))?;
-    serde_json::to_value(diagnostic).map(Json).map_err(|error| {
-        ApiError::internal(format!("failed to serialize geometry diagnostic: {error}"))
-    })
+    Ok(Json(diagnostic))
 }
 
 #[utoipa::path(
@@ -402,6 +385,7 @@ pub async fn patch_authoring_region(
 ) -> Result<Json<Value>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     let object = find_scene_object_for_region_mut(&mut scene, &region_id)?;
+    let mut mesh_dirty = false;
     if let Some(name) = req.name {
         let name = name.trim();
         object.region_name = if name.is_empty() {
@@ -409,11 +393,35 @@ pub async fn patch_authoring_region(
         } else {
             Some(name.to_string())
         };
+        mesh_dirty = true;
     }
     if let Some(enabled) = req.enabled {
         object.visible = enabled;
+        mesh_dirty = true;
     }
-    mark_object_mesh_dirty(object);
+    if let Some(magnetization_ref) = req.magnetization_ref {
+        let region_override_id = canonical_region_id_for_object(object, &region_id);
+        match magnetization_ref {
+            NullableStringPatchValue::Value(value) => {
+                let value = value.trim();
+                if value.is_empty() {
+                    object.region_overrides.remove(&region_override_id);
+                } else {
+                    object
+                        .region_overrides
+                        .entry(region_override_id)
+                        .or_insert_with(SceneRegionOverride::default)
+                        .magnetization_ref = Some(value.to_string());
+                }
+            }
+            NullableStringPatchValue::Null => {
+                object.region_overrides.remove(&region_override_id);
+            }
+        }
+    }
+    if mesh_dirty {
+        mark_object_mesh_dirty(object);
+    }
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     serde_json::to_value(committed)
         .map(Json)
@@ -665,6 +673,75 @@ pub async fn patch_authoring_material(
         .find(|entry| entry.id == material_id)
         .ok_or_else(|| ApiError::internal(format!("committed material missing: {material_id}")))?;
     Ok(Json(build_material_resource(material)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/magnetization-assets/{asset_id}",
+    params(
+        ("asset_id" = String, Path, description = "Canonical magnetization asset id")
+    ),
+    responses(
+        (status = 200, description = "Canonical magnetization asset", body = MagnetizationAssetResource),
+        (status = 404, description = "No active workspace or magnetization asset not found"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_magnetization_asset(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+) -> Result<Json<MagnetizationAssetResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let asset = scene
+        .magnetization_assets
+        .iter()
+        .find(|entry| entry.id == asset_id)
+        .ok_or_else(|| ApiError::not_found(format!("magnetization asset not found: {asset_id}")))?;
+    build_magnetization_asset_resource(&scene, asset).map(Json)
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v2/sessions/current/model/magnetization-assets/{asset_id}",
+    params(
+        ("asset_id" = String, Path, description = "Canonical magnetization asset id")
+    ),
+    request_body = MagnetizationAssetPatchRequest,
+    responses(
+        (status = 200, description = "Committed canonical magnetization asset", body = MagnetizationAssetResource),
+        (status = 400, description = "Invalid magnetization asset payload"),
+        (status = 404, description = "No active workspace or magnetization asset not found"),
+        (status = 409, description = "Base scene revision does not match current scene revision"),
+    ),
+    tag = "model"
+)]
+pub async fn patch_authoring_magnetization_asset(
+    State(state): State<Arc<AppState>>,
+    Path(asset_id): Path<String>,
+    Json(req): Json<MagnetizationAssetPatchRequest>,
+) -> Result<Json<MagnetizationAssetResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    check_base_scene_revision(&scene, req.base_revision)?;
+    let asset: MagnetizationAsset =
+        serde_json::from_value(Value::Object(req.asset.into_iter().collect())).map_err(
+            |error| ApiError::bad_request(format!("invalid magnetization asset payload: {error}")),
+        )?;
+    if asset.id != asset_id {
+        return Err(ApiError::bad_request(format!(
+            "magnetization asset id mismatch: path '{asset_id}' payload '{}'",
+            asset.id
+        )));
+    }
+    upsert_magnetization_asset(&mut scene, asset);
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    let asset = committed
+        .magnetization_assets
+        .iter()
+        .find(|entry| entry.id == asset_id)
+        .ok_or_else(|| {
+            ApiError::internal(format!("committed magnetization asset missing: {asset_id}"))
+        })?;
+    build_magnetization_asset_resource(&committed, asset).map(Json)
 }
 
 #[utoipa::path(
@@ -1228,9 +1305,11 @@ fn apply_create_object_transaction(
         material_ref,
         region_name: region_name.filter(|value| !value.trim().is_empty()),
         magnetization_ref: magnetization_ref.filter(|value| !value.trim().is_empty()),
+        region_overrides: Default::default(),
         physics_stack: Vec::new(),
         object_mesh: None,
         mesh_override: None,
+        notes: None,
         visible: true,
         locked: false,
         tags: Vec::new(),
@@ -1347,6 +1426,14 @@ fn apply_object_patch(
         }
         object.name = name.to_string();
     }
+    if let Some(notes) = req.notes {
+        let notes = notes.trim();
+        object.notes = if notes.is_empty() {
+            None
+        } else {
+            Some(notes.to_string())
+        };
+    }
     if let Some(visible) = req.visible {
         object.visible = visible;
     }
@@ -1430,6 +1517,23 @@ fn find_scene_object_for_region_mut<'a>(
         .ok_or_else(|| ApiError::not_found(format!("region not found: {region_id}")))
 }
 
+fn canonical_region_id_for_object(object: &SceneObject, requested_region_id: &str) -> String {
+    let object_default_region_id = format!("region:{}", object.id);
+    if object.region_name.as_deref() == Some(requested_region_id) {
+        return requested_region_id.to_string();
+    }
+    if requested_region_id == object.id
+        || requested_region_id == object.name
+        || requested_region_id == object_default_region_id
+    {
+        return object
+            .region_name
+            .clone()
+            .unwrap_or(object_default_region_id);
+    }
+    requested_region_id.to_string()
+}
+
 fn mark_object_mesh_dirty(object: &mut SceneObject) {
     if !object.tags.iter().any(|tag| tag == "mesh:dirty") {
         object.tags.push("mesh:dirty".to_string());
@@ -1462,6 +1566,22 @@ fn build_material_resource(material: &fullmag_authoring::SceneMaterialAsset) -> 
             dind: material.properties.dind,
         },
     }
+}
+
+fn build_magnetization_asset_resource(
+    scene: &SceneDocument,
+    asset: &MagnetizationAsset,
+) -> Result<MagnetizationAssetResource, ApiError> {
+    let asset = serde_json::to_value(asset).map_err(|error| {
+        ApiError::internal(format!("failed to serialize magnetization asset: {error}"))
+    })?;
+    let asset = asset.as_object().cloned().ok_or_else(|| {
+        ApiError::internal("serialized magnetization asset was not a JSON object")
+    })?;
+    Ok(MagnetizationAssetResource {
+        scene_revision: scene.revision,
+        asset: asset.into_iter().collect(),
+    })
 }
 
 fn sync_interfacial_dmi_for_material(scene: &mut SceneDocument, material_id: &str) {

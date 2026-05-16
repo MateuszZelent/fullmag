@@ -135,10 +135,8 @@ impl CurrentLiveDisplaySelectionHandle {
     ) -> Option<SessionCommand> {
         let (lock, _) = &*self.shared;
         let mut state = lock.lock().ok()?;
-        if !state.queue.front().is_some_and(&predicate) {
-            return None;
-        }
-        state.queue.pop_front()
+        let index = state.queue.iter().position(predicate)?;
+        state.queue.remove(index)
     }
 
     pub(super) fn wait_next_command(&self, timeout: Duration) -> Option<SessionCommand> {
@@ -325,6 +323,11 @@ fn synthetic_display_sync_command(selection: CurrentDisplaySelection) -> Session
         command_id: format!("display-sync-{}", selection.revision),
         kind: "display_sync".to_string(),
         created_at_unix_ms,
+        target: None,
+        reason: None,
+        precondition: None,
+        client_intent_id: None,
+        requested_at_unix_ms: None,
         until_seconds: None,
         max_steps: None,
         torque_tolerance: None,
@@ -578,6 +581,23 @@ impl InteractiveRuntimeHost {
         Ok(())
     }
 
+    pub(super) fn compute_current_energies(
+        &mut self,
+        continuation_magnetization: Option<&[[f64; 3]]>,
+        live_workspace: &LocalLiveWorkspace,
+    ) -> Result<()> {
+        self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
+
+        if let Some(runtime) = self.runtime.as_mut() {
+            let step_stats = runtime.snapshot_step_stats()?;
+            live_workspace.update(|state| {
+                apply_step_stats_to_idle_live_state(state, &step_stats);
+            });
+        }
+
+        Ok(())
+    }
+
     pub(super) fn ensure_runtime_for_problem(
         &mut self,
         problem: &ProblemIR,
@@ -823,26 +843,208 @@ fn refresh_interactive_preview_runtime_display(
         fullmag_runner::DisplayPayload::GlobalScalar { .. } => None,
     };
     live_workspace.update(|state| {
-        state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
-        state.live_state.latest_step.step = step_stats.step;
-        state.live_state.latest_step.time = step_stats.time;
-        state.live_state.latest_step.dt = step_stats.dt;
-        state.live_state.latest_step.e_ex = step_stats.e_ex;
-        state.live_state.latest_step.e_demag = step_stats.e_demag;
-        state.live_state.latest_step.e_ext = step_stats.e_ext;
-        state.live_state.latest_step.e_total = step_stats.e_total;
-        state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
-        state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
-        state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
-        state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
-        state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
-        state.latest_scalar_row = Some(scalar_row_from_stats(&step_stats));
+        apply_step_stats_to_idle_live_state(state, &step_stats);
         state.live_state.latest_step.preview_field = preview_field.clone();
         if let Some(preview_field) = preview_field.as_ref() {
             upsert_cached_preview_field(state, preview_field);
         }
     });
     Ok(())
+}
+
+fn apply_step_stats_to_idle_live_state(
+    state: &mut LocalLiveWorkspaceState,
+    step_stats: &fullmag_runner::StepStats,
+) {
+    state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+    state.live_state.latest_step.step = step_stats.step;
+    state.live_state.latest_step.time = step_stats.time;
+    state.live_state.latest_step.dt = step_stats.dt;
+    state.live_state.latest_step.e_ex = step_stats.e_ex;
+    state.live_state.latest_step.e_demag = step_stats.e_demag;
+    state.live_state.latest_step.e_ext = step_stats.e_ext;
+    state.live_state.latest_step.e_ani = step_stats.e_ani;
+    state.live_state.latest_step.e_dmi = step_stats.e_dmi;
+    state.live_state.latest_step.e_total = step_stats.e_total;
+    state.live_state.latest_step.max_dm_dt = step_stats.max_dm_dt;
+    state.live_state.latest_step.max_h_eff = step_stats.max_h_eff;
+    state.live_state.latest_step.max_h_demag = step_stats.max_h_demag;
+    state.live_state.latest_step.max_torque_Apm = step_stats.max_torque_Apm;
+    state.live_state.latest_step.max_torque_T = step_stats.max_torque_T;
+    state.live_state.latest_step.per_object_scalars = step_stats.per_object_scalars.clone();
+    state.latest_scalar_row = Some(scalar_row_from_stats(step_stats));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_step_stats_to_idle_live_state, CurrentLiveControlState,
+        CurrentLiveDisplaySelectionHandle,
+    };
+    use crate::live_workspace::{bootstrap_live_state, LocalLiveWorkspaceState};
+    use crate::types::{
+        CurrentLiveLatestFields, CurrentLivePreviewFieldCache, RunManifest, SessionCommand,
+        SessionManifest,
+    };
+    use fullmag_runner::StepStats;
+    use std::collections::VecDeque;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Condvar, Mutex};
+
+    fn workspace_state_for_energy_refresh() -> LocalLiveWorkspaceState {
+        let mut live_state = bootstrap_live_state("awaiting_command");
+        live_state.latest_step.step = 7;
+        live_state.latest_step.time = 2.5e-12;
+        live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
+
+        LocalLiveWorkspaceState {
+            session: SessionManifest {
+                session_id: "session-test".to_string(),
+                run_id: "run-test".to_string(),
+                status: "awaiting_command".to_string(),
+                interactive_session_requested: true,
+                script_path: "examples/test.py".to_string(),
+                problem_name: "test".to_string(),
+                requested_backend: "fdm".to_string(),
+                explicit_selection: true,
+                requested_device: "cpu".to_string(),
+                requested_precision: "double".to_string(),
+                requested_mode: "strict".to_string(),
+                requested_cpu_threads: None,
+                execution_mode: "strict".to_string(),
+                precision: "double".to_string(),
+                resolved_backend: Some("fdm".to_string()),
+                resolved_device: Some("cpu".to_string()),
+                resolved_precision: Some("double".to_string()),
+                resolved_mode: Some("strict".to_string()),
+                resolved_runtime_family: None,
+                resolved_engine_id: None,
+                resolved_worker: None,
+                resolved_cpu_threads: None,
+                resolved_fallback: None,
+                artifact_dir: "/tmp/artifacts".to_string(),
+                started_at_unix_ms: 0,
+                finished_at_unix_ms: 0,
+                plan_summary: serde_json::json!({}),
+            },
+            run: RunManifest {
+                run_id: "run-test".to_string(),
+                session_id: "session-test".to_string(),
+                status: "awaiting_command".to_string(),
+                total_steps: 7,
+                final_time: None,
+                final_e_ex: None,
+                final_e_demag: None,
+                final_e_ext: None,
+                final_e_ani: None,
+                final_e_dmi: None,
+                final_e_total: None,
+                artifact_dir: "/tmp/artifacts".to_string(),
+            },
+            live_state,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            latest_scalar_row: None,
+            latest_fields: CurrentLiveLatestFields::default(),
+            preview_fields: CurrentLivePreviewFieldCache::default(),
+            pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            clear_preview_cache: false,
+            engine_log: Vec::new(),
+        }
+    }
+
+    fn queued_command(seq: u64, kind: &str) -> SessionCommand {
+        SessionCommand {
+            seq,
+            command_id: format!("cmd-{seq}-{kind}"),
+            kind: kind.to_string(),
+            created_at_unix_ms: seq as u128,
+            target: None,
+            reason: None,
+            precondition: None,
+            client_intent_id: None,
+            requested_at_unix_ms: None,
+            until_seconds: None,
+            max_steps: None,
+            torque_tolerance: None,
+            energy_tolerance: None,
+            integrator: None,
+            fixed_timestep: None,
+            max_error: None,
+            relax_algorithm: None,
+            relax_alpha: None,
+            mesh_options: None,
+            mesh_target: None,
+            mesh_reason: None,
+            state_path: None,
+            state_format: None,
+            state_dataset: None,
+            state_sample_index: None,
+            display_selection: None,
+            preview_config: None,
+            stages: None,
+        }
+    }
+
+    #[test]
+    fn running_control_consumes_interrupt_behind_non_control_commands() {
+        let handle = CurrentLiveDisplaySelectionHandle {
+            shared: Arc::new((
+                Mutex::new(CurrentLiveControlState {
+                    display_selection: Default::default(),
+                    queue: VecDeque::from([
+                        queued_command(1, "compute_fields"),
+                        queued_command(2, "compute_energies"),
+                        queued_command(3, "pause"),
+                    ]),
+                }),
+                Condvar::new(),
+            )),
+            stop: Arc::new(AtomicBool::new(false)),
+            running_interrupt: Arc::new(Mutex::new(None)),
+            running_interrupt_requested: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert_eq!(
+            handle.process_running_control(),
+            Some(fullmag_runner::StepAction::Pause)
+        );
+        assert_eq!(
+            handle.take_running_interrupt(),
+            Some(super::InteractiveStageInterrupt::Pause)
+        );
+    }
+
+    #[test]
+    fn compute_current_energies_state_refresh_preserves_step_time_and_magnetization() {
+        let mut state = workspace_state_for_energy_refresh();
+        let magnetization_before = state.live_state.latest_step.magnetization.clone();
+
+        apply_step_stats_to_idle_live_state(
+            &mut state,
+            &StepStats {
+                step: 7,
+                time: 2.5e-12,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_total: 3.0,
+                ..StepStats::default()
+            },
+        );
+
+        assert_eq!(state.live_state.latest_step.step, 7);
+        assert_eq!(state.live_state.latest_step.time, 2.5e-12);
+        assert_eq!(
+            state.live_state.latest_step.magnetization,
+            magnetization_before
+        );
+        assert_eq!(state.live_state.latest_step.e_total, 3.0);
+        assert_eq!(
+            state.latest_scalar_row.as_ref().map(|row| row.step),
+            Some(7)
+        );
+    }
 }
 
 fn refresh_interactive_preview_fields(

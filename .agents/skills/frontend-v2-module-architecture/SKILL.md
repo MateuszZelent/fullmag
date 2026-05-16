@@ -16,7 +16,8 @@ Use this to protect the `apps/control-room` module-kernel boundary.
 5. Use kernel events, command registry, resource hooks, or `src/shared` instead of cross-module imports.
 6. Keep module stores private to their module.
 7. Keep manifest contributions declarative and side-effect free.
-8. Keep module root files small; split before the hard review thresholds in the spec.
+8. Render menu, ribbon, toolbar, tabs, context menus, command palette, dialogs, switches, and tooltips through shared shadcn/ui-style primitives, not module-local widget systems.
+9. Keep module root files small; split before the hard review thresholds in the spec.
 
 ## Banned Patterns
 
@@ -25,6 +26,8 @@ Use this to protect the `apps/control-room` module-kernel boundary.
 - commented-out module registrations as a feature toggle;
 - module-local command systems that bypass the kernel command registry;
 - module code importing from `apps/web`.
+- bespoke module-local menu/ribbon/tab/dropdown/dialog/tooltip primitives when a shared shadcn/ui-style primitive exists.
+- raw colors in module CSS; modules must consume `--fm-*` Catppuccin tokens.
 
 ## Verification
 

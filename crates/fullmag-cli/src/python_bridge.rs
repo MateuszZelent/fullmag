@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{anyhow, bail, Context, Result};
+use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::args::ScriptCli;
@@ -514,13 +515,7 @@ pub(crate) fn run_python_helper_with_progress(
 }
 
 pub(crate) fn check_script_syntax_via_python(script_path: &Path) -> Result<()> {
-    let helper_args = vec![
-        "-m".to_string(),
-        "fullmag.runtime.helper".to_string(),
-        "check-syntax".to_string(),
-        "--script".to_string(),
-        script_path.display().to_string(),
-    ];
+    let helper_args = syntax_check_python_args(script_path);
 
     let output = run_python_helper(&helper_args)
         .with_context(|| format!("failed to syntax-check {}", script_path.display()))?;
@@ -529,6 +524,19 @@ pub(crate) fn check_script_syntax_via_python(script_path: &Path) -> Result<()> {
         bail!("python syntax check failed: {}", stderr.trim());
     }
     Ok(())
+}
+
+fn syntax_check_python_args(script_path: &Path) -> Vec<String> {
+    vec![
+        "-c".to_string(),
+        "import json, pathlib, sys; \
+         path = pathlib.Path(sys.argv[1]); \
+         source = path.read_text(encoding='utf-8'); \
+         compile(source, str(path), 'exec'); \
+         print(json.dumps({'status': 'ok', 'script': str(path.resolve())}))"
+            .to_string(),
+        script_path.display().to_string(),
+    ]
 }
 
 pub(crate) fn export_script_execution_config_via_python(
@@ -599,6 +607,10 @@ pub(crate) fn read_magnetization_state(
     dataset: Option<&str>,
     sample_index: Option<i64>,
 ) -> Result<LoadedMagnetizationState> {
+    if should_read_magnetization_state_json_in_rust(path, format) {
+        return read_json_magnetization_state(path, sample_index);
+    }
+
     let mut helper_args = vec![
         "-m".to_string(),
         "fullmag.runtime.helper".to_string(),
@@ -626,6 +638,124 @@ pub(crate) fn read_magnetization_state(
     }
     serde_json::from_slice::<LoadedMagnetizationState>(&output.stdout)
         .context("failed to parse magnetization state payload")
+}
+
+fn should_read_magnetization_state_json_in_rust(path: &Path, format: Option<&str>) -> bool {
+    match format.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(format) if format == "json" => true,
+        Some(format) if format == "auto" => path_looks_like_json_state(path),
+        None => path_looks_like_json_state(path),
+        _ => false,
+    }
+}
+
+fn path_looks_like_json_state(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    !(lower.ends_with(".h5")
+        || lower.ends_with(".hdf5")
+        || lower.ends_with(".zarr")
+        || lower.ends_with(".zarr.zip"))
+}
+
+fn read_json_magnetization_state(
+    path: &Path,
+    sample_index: Option<i64>,
+) -> Result<LoadedMagnetizationState> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read magnetization state {}", path.display()))?;
+    let payload: Value = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "failed to parse magnetization state JSON {}",
+            path.display()
+        )
+    })?;
+    let values = json_magnetization_values(&payload)
+        .with_context(|| format!("{} does not contain magnetization values", path.display()))?;
+    let rows = select_json_magnetization_rows(values, sample_index.unwrap_or(-1))?;
+    Ok(LoadedMagnetizationState {
+        vector_count: rows.len(),
+        values: rows,
+    })
+}
+
+fn json_magnetization_values(payload: &Value) -> Option<&Value> {
+    if let Value::Object(map) = payload {
+        if let Some(observable) = map.get("observable").and_then(Value::as_str) {
+            if observable != "m" {
+                return None;
+            }
+        }
+        map.get("values").or_else(|| map.get("magnetization"))
+    } else {
+        Some(payload)
+    }
+}
+
+fn select_json_magnetization_rows(value: &Value, sample_index: i64) -> Result<Vec<[f64; 3]>> {
+    let array = value
+        .as_array()
+        .ok_or_else(|| anyhow!("magnetization state must be an array"))?;
+    if array.is_empty() {
+        bail!("magnetization state must contain at least one vector");
+    }
+    if array[0].is_number() {
+        if array.len() % 3 != 0 {
+            bail!(
+                "expected a flat magnetization buffer divisible by 3, got length {}",
+                array.len()
+            );
+        }
+        return array
+            .chunks_exact(3)
+            .map(json_vector_from_slice)
+            .collect::<Result<Vec<_>>>();
+    }
+
+    let first_array = array[0]
+        .as_array()
+        .ok_or_else(|| anyhow!("expected magnetization rows or samples"))?;
+    if first_array.len() == 3 && first_array.iter().all(Value::is_number) {
+        return array
+            .iter()
+            .map(|row| {
+                let row = row
+                    .as_array()
+                    .ok_or_else(|| anyhow!("expected magnetization vector row"))?;
+                json_vector_from_slice(row)
+            })
+            .collect::<Result<Vec<_>>>();
+    }
+
+    let index = if sample_index >= 0 {
+        sample_index as usize
+    } else {
+        array.len() - 1
+    };
+    let sample = array.get(index).ok_or_else(|| {
+        anyhow!(
+            "sample index {} is out of range for {} samples",
+            sample_index,
+            array.len()
+        )
+    })?;
+    select_json_magnetization_rows(sample, -1)
+}
+
+fn json_vector_from_slice(values: &[Value]) -> Result<[f64; 3]> {
+    if values.len() != 3 {
+        bail!("expected magnetization vector with three components");
+    }
+    Ok([
+        values[0]
+            .as_f64()
+            .ok_or_else(|| anyhow!("magnetization component must be numeric"))?,
+        values[1]
+            .as_f64()
+            .ok_or_else(|| anyhow!("magnetization component must be numeric"))?,
+        values[2]
+            .as_f64()
+            .ok_or_else(|| anyhow!("magnetization component must be numeric"))?,
+    ])
 }
 
 pub(crate) fn convert_magnetization_state(
@@ -820,6 +950,17 @@ pub(crate) fn invoke_adaptive_remesh_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syntax_check_python_args_do_not_import_fullmag_runtime_helper() {
+        let args = syntax_check_python_args(Path::new("example.py"));
+
+        assert_eq!(args.first().map(String::as_str), Some("-c"));
+        assert!(args.iter().any(|arg| arg == "example.py"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains("fullmag.runtime.helper")));
+    }
 
     #[test]
     fn parse_python_progress_event_extracts_fem_surface_preview() {

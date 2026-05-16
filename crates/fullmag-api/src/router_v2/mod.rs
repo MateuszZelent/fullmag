@@ -88,6 +88,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_material),
         )
         .route(
+            "/v2/sessions/current/model/magnetization-assets/:asset_id",
+            get(handlers::model::get_authoring_magnetization_asset)
+                .patch(handlers::model::patch_authoring_magnetization_asset),
+        )
+        .route(
             "/v2/sessions/current/model/objects",
             post(handlers::model::create_authoring_object),
         )
@@ -282,6 +287,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_solver_energies_history),
         )
         .route(
+            "/v2/sessions/current/simulation/objects/:object_id/metrics",
+            get(handlers::simulation::get_object_metrics),
+        )
+        .route(
             "/v2/sessions/current/data/quantities",
             get(handlers::data::get_quantities_catalog),
         )
@@ -378,6 +387,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::visualization::patch_visualization_state),
         )
         .route(
+            "/v2/sessions/current/visualization/client-acks",
+            get(handlers::visualization::get_visualization_client_acks)
+                .post(handlers::visualization::post_visualization_client_ack),
+        )
+        .route(
             "/v2/sessions/current/workspace/layout",
             get(handlers::workspace::get_workspace_layout)
                 .put(handlers::workspace::replace_workspace_layout),
@@ -431,7 +445,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/v2/sessions/current/persistence/checkpoints",
-            get(handlers::persistence::list_checkpoints),
+            get(handlers::persistence::list_checkpoints)
+                .post(handlers::persistence::create_checkpoint),
+        )
+        .route(
+            "/v2/sessions/current/persistence/checkpoints/:checkpoint_id",
+            get(handlers::persistence::get_checkpoint),
+        )
+        .route(
+            "/v2/sessions/current/persistence/checkpoints/:checkpoint_id/restore",
+            post(handlers::persistence::restore_checkpoint),
         )
         .route(
             "/v2/sessions/current/persistence/exports",

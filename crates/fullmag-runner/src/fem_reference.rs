@@ -327,7 +327,7 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         // if neither fixed nor adaptive timestep is configured.
         None
     };
-    ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         execution_engine: FemBackendId::CpuBaseline.provenance_name().to_string(),
         precision: "double".to_string(),
         demag_operator_kind: resolved_demag_realization.clone(),
@@ -344,7 +344,9 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
         resolved_demag_realization,
         dt_policy,
         ..Default::default()
-    }
+    };
+    crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
+    provenance
 }
 
 fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
@@ -1784,6 +1786,7 @@ mod tests {
             Some(LiveStepConsumer {
                 grid: [0, 0, 0],
                 field_every_n: 2,
+                initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
                 on_step: &mut on_step,

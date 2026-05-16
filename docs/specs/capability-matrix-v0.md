@@ -69,7 +69,13 @@ The following status statements are intentionally explicit because older docs an
 - `BackendPlanIR::Fem` on CPU resolves to `fem_cpu_native`.
 - `fem_cpu_native` is the sole maintained CPU FEM engine and denotes the MFEM/libCEED/hypre
   runtime stack, not a generic "some CPU-native FEM" bucket.
+- `fem_cpu_native` availability is `native_fem_cpu_available`: an MFEM/hypre CPU-capable
+  native FEM stack is present. CUDA runtime support, visible CUDA devices, and MFEM CUDA device
+  support are not prerequisites for this CPU lane.
 - `BackendPlanIR::Fem` on GPU resolves to `fem_native_gpu`.
+- `fem_native_gpu` availability is `native_fem_gpu_available` and remains separate from the
+  CPU probe. Non-forced GPU fallback may resolve to `fem_cpu_native` only when
+  `native_fem_cpu_available=true`.
 - Time-domain FEM has no CPU-reference fallback lane: if the local launcher lacks native MFEM
   support, it must hand off to the managed `fem-gpu-host` runtime or fail early with an explicit
   diagnostic.
@@ -91,7 +97,8 @@ The following status statements are intentionally explicit because older docs an
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
 | Imported geometry ref | planned | planned | planned | semantic-only | FDM planner accepts it when a precomputed grid asset is attached; public execution still depends on voxelization extras |
 | Material constants (`Ms`, `A`, `alpha`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Used by the CPU reference FDM runner and the MFEM/libCEED/hypre CPU plus MFEM/libCEED/CUDA GPU FEM runners |
-| Material constants (`Ku1`, `anisU`) | planned | planned | planned | semantic-only | Anisotropy not in exchange-only scope |
+| Material constants (`Ku1`, `anisU`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local uniaxial anisotropy is executable on the current FDM and FEM lanes. Native FEM CPU qualification now includes `exchange_anis_uniaxial` and `exchange_demag_anis_uniaxial` readiness gates for the no-PBC adaptive slice; this does not promote the broader FEM relaxation solver to `validated` or cover surface anisotropy. |
+| Material constants (`Kc1`, `anisC1`, `anisC2`) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Local cubic anisotropy is executable on the current FDM and FEM lanes. Native FEM CPU qualification now includes `exchange_anis_cubic` and `exchange_demag_anis_cubic` readiness gates for the no-PBC adaptive slice; this does not cover nonlocal or surface anisotropy. |
 | Ferromagnet + uniform `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Lowered to per-cell vectors for FDM and per-node vectors for FEM |
 | Ferromagnet + random `m0` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Deterministic xorshift64 RNG in planner |
 | Multiple `Ferromagnet` bodies + global demag | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | FDM uses multilayer-convolution for eligible z-stacks, with CPU reference, a native CUDA single-grid fast path for compatible stacks, and `cuda-assisted` fallback for the remaining current public scope; the CUDA multilayer paths honor `execution_precision` (`double` and calibrated `single`) across the native fast path and the assisted multilayer demag/Heun runtime; FEM merges disjoint mesh assets into one bootstrap plan with body-local exchange and global demag |
