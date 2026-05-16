@@ -4267,6 +4267,70 @@ async fn mesh_shared_domain_topology_returns_304_when_etag_matches() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_quality_data_returns_binary_artifact() {
+    let artifact_path = std::env::temp_dir().join(format!(
+        "fullmag-quality-data-{}-{}.fmmq",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut artifact = Vec::new();
+    artifact.extend_from_slice(b"FMMQ");
+    artifact.push(1);
+    artifact.push(1);
+    artifact.extend_from_slice(&0u16.to_le_bytes());
+    artifact.extend_from_slice(&1u32.to_le_bytes());
+    artifact.extend_from_slice(&0b111u32.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0u64.to_le_bytes());
+    artifact.extend_from_slice(&0.5f64.to_le_bytes());
+    artifact.extend_from_slice(&0.25f64.to_le_bytes());
+    artifact.extend_from_slice(&(1.0f64 / 6.0).to_le_bytes());
+    fs::write(&artifact_path, &artifact).unwrap();
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "quality_data_artifact": {
+                "kind": "fmmq.v1",
+                "schema_version": 1,
+                "path": artifact_path,
+                "byte_size": artifact.len(),
+                "element_count": 1,
+                "metrics": ["sicn", "gamma", "volume"]
+            }
+        }));
+        snapshot.mesh_revision = 42;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/octet-stream"),
+    );
+    let body = body_bytes(response).await;
+    assert_eq!(&body[..4], b"FMMQ");
+    assert_eq!(body.len(), artifact.len());
+    let _ = fs::remove_file(artifact_path);
+}
+
+#[tokio::test]
 async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {

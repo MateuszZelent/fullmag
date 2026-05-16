@@ -4,6 +4,7 @@
 #include "gpu_rk.hpp"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
+#include "../cpu/mfem/interactions/magnetoelastic.hpp"
 
 #include <cctype>
 #include <cstdio>

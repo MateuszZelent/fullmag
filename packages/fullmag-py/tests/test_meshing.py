@@ -658,6 +658,60 @@ class MeshScaffoldTests(unittest.TestCase):
             "free_tetrahedral",
         )
 
+    def test_remesh_cli_payload_writes_per_element_quality_artifact(self) -> None:
+        unit = self._unit_tet_mesh()
+        mesh = MeshData(
+            nodes=unit.nodes,
+            elements=unit.elements,
+            element_markers=unit.element_markers,
+            boundary_faces=unit.boundary_faces,
+            boundary_markers=unit.boundary_markers,
+            quality=MeshQualityReport(
+                n_elements=1,
+                sicn_min=0.5,
+                sicn_max=0.5,
+                sicn_mean=0.5,
+                sicn_p5=0.5,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.25,
+                gamma_mean=0.25,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0 / 6.0,
+                volume_max=1.0 / 6.0,
+                volume_mean=1.0 / 6.0,
+                volume_std=0.0,
+                avg_quality=0.5,
+                element_sicn=[0.5],
+                element_gamma=[0.25],
+                element_volume=[1.0 / 6.0],
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            payload = _mesh_result_payload(
+                mesh,
+                mesh_name="shared-domain",
+                generation_mode="shared_domain_manual_remesh",
+                mesh_provenance={},
+                topology_artifact_dir=tmp_dir,
+            )
+
+            artifact = payload["quality_data_artifact"]
+            artifact_path = Path(artifact["path"])
+            data = artifact_path.read_bytes()
+
+        self.assertEqual(artifact["kind"], "fmmq.v1")
+        self.assertEqual(artifact["element_count"], 1)
+        self.assertEqual(artifact["metrics"], ["sicn", "gamma", "volume"])
+        self.assertEqual(data[:4], b"FMMQ")
+        self.assertEqual(data[4], 1)
+        self.assertEqual(data[5], 1)
+        self.assertEqual(struct.unpack_from("<I", data, 8)[0], 1)
+        self.assertEqual(struct.unpack_from("<I", data, 12)[0], 0b111)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 32)[0], 0.5)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 40)[0], 0.25)
+        self.assertAlmostEqual(struct.unpack_from("<d", data, 48)[0], 1.0 / 6.0)
+
     def test_shared_domain_report_includes_truth_first_operation_statuses(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=9e-9, name="free_layer")
         mesh_options = MeshOptions(

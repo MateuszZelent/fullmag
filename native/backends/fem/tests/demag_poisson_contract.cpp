@@ -262,6 +262,27 @@ void demag_telemetry_is_owned_by_poisson_telemetry_module() {
     }
 }
 
+void demag_field_visual_postprocessing_is_owned_by_poisson_field_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_field.cpp");
+
+    const char *symbols[] = {
+        "void finalize_demag_poisson_recovered_field(",
+        "void update_demag_poisson_visual_effective_field(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag field/visual postprocessing must not be defined in demag_poisson.cpp");
+        check(
+            field.find(symbol) != std::string::npos,
+            "Poisson demag field/visual postprocessing must be defined in demag_poisson_field.cpp");
+    }
+}
+
 void demag_solver_stats_are_filled_by_poisson_module() {
     fullmag::fem::Context ctx;
     fullmag_fem_step_stats stats{};
@@ -513,6 +534,7 @@ int main() {
     cached_demag_energy_includes_frozen_robin_boundary_term();
     demag_cache_store_and_reuse_are_owned_by_poisson_module();
     demag_telemetry_is_owned_by_poisson_telemetry_module();
+    demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();
     demag_solver_telemetry_names_are_owned_by_poisson_module();

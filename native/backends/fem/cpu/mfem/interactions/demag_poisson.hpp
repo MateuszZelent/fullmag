@@ -2,9 +2,9 @@
 
 #include "fullmag_fem.h"
 #include "cpu/mfem/interactions/demag_poisson_cache.hpp"
+#include "cpu/mfem/interactions/demag_poisson_telemetry.hpp"
 
 #include <string>
-#include <cstdint>
 #include <vector>
 
 namespace mfem {
@@ -17,29 +17,6 @@ class Vector;
 namespace fullmag::fem {
 
 struct Context;
-
-struct DemagPoissonPhaseTimings {
-    uint64_t wall_time_ns = 0;
-    uint64_t assemble_wall_time_ns = 0;
-    uint64_t solve_wall_time_ns = 0;
-    uint64_t solver_setup_wall_time_ns = 0;
-    uint64_t solver_apply_wall_time_ns = 0;
-    bool solver_setup_reused = false;
-    uint64_t recover_wall_time_ns = 0;
-    uint64_t energy_wall_time_ns = 0;
-};
-
-struct DemagPoissonCallProfile {
-    uint64_t step = 0;
-    uint64_t call = 0;
-    double dt_seconds = 0.0;
-    uint64_t assemble_wall_time_ns = 0;
-    uint64_t solve_wall_time_ns = 0;
-    uint64_t recover_wall_time_ns = 0;
-    uint64_t energy_wall_time_ns = 0;
-    int linear_iterations = 0;
-    double linear_residual = 0.0;
-};
 
 /*
  * Compute the native FEM Poisson-demag energy from an already recovered field.
@@ -80,63 +57,6 @@ bool demag_poisson_operator_ready_for_fresh_solve(
     int demag_realization,
     bool poisson_ready,
     std::string &error);
-
-/*
- * Fill demag-specific solver statistics for the current step snapshot.
- *
- * Builds without the MFEM demag stack always report zero demag solve stats.
- * MFEM builds report the current demag solve counter, non-negative linear
- * iteration count, and latest residual for airbox Poisson and FEM/BEM demag.
- */
-void fill_demag_poisson_solver_stats(
-    const Context &ctx,
-    fullmag_fem_step_stats &stats);
-
-/*
- * Return stable labels for Poisson-demag solver telemetry.
- *
- * These names are used in runtime logs and reports. Keeping them in the demag
- * module prevents `mfem_bridge.cpp` from owning demag-specific vocabulary.
- */
-const char *demag_poisson_linear_solver_name(fullmag_fem_linear_solver solver);
-const char *demag_poisson_preconditioner_name(fullmag_fem_preconditioner preconditioner);
-
-/*
- * Accumulate Poisson-demag phase timings for the current step.
- *
- * The bridge owns the surrounding step timeline, but demag-specific timing
- * fields and stat names stay in this module.
- */
-void accumulate_demag_poisson_phase_timings(
-    DemagPoissonPhaseTimings *timings,
-    uint64_t assemble_wall_time_ns,
-    uint64_t solve_wall_time_ns,
-    uint64_t solver_setup_wall_time_ns,
-    uint64_t solver_apply_wall_time_ns,
-    bool solver_setup_reused,
-    uint64_t recover_wall_time_ns,
-    uint64_t energy_wall_time_ns);
-
-void fill_demag_poisson_phase_stats(
-    const DemagPoissonPhaseTimings &timings,
-    fullmag_fem_step_stats &stats);
-
-/*
- * Format and emit one Poisson-demag call profile line.
- *
- * The log format is a runtime contract used during demag hot-path profiling.
- * `log_demag_poisson_call_profile(...)` emits only when
- * FULLMAG_FEM_STEP_PROFILE is enabled.
- */
-std::string demag_poisson_call_profile_line(const DemagPoissonCallProfile &profile);
-
-void log_demag_poisson_call_profile(
-    const Context &ctx,
-    uint64_t demag_call_index,
-    uint64_t assemble_wall_time_ns,
-    uint64_t solve_wall_time_ns,
-    uint64_t recover_wall_time_ns,
-    uint64_t energy_wall_time_ns);
 
 /*
  * Finalize a recovered Poisson-demag field before it leaves the demag module.

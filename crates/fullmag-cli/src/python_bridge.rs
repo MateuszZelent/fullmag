@@ -1144,4 +1144,35 @@ mod tests {
         assert_eq!(parsed.boundary_markers, vec![11]);
         let _ = std::fs::remove_file(artifact_path);
     }
+
+    #[test]
+    fn parse_remesh_cli_response_preserves_quality_data_artifact() {
+        let stdout = serde_json::json!({
+            "mesh_name": "quality_mesh",
+            "nodes": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            "elements": [[0, 1, 2, 3]],
+            "element_markers": [1],
+            "boundary_faces": [[0, 1, 2]],
+            "boundary_markers": [7],
+            "quality": null,
+            "quality_data_artifact": {
+                "kind": "fmmq.v1",
+                "schema_version": 1,
+                "path": "/tmp/fullmag-quality.fmmq",
+                "byte_size": 56,
+                "element_count": 1,
+                "metrics": ["sicn", "gamma", "volume"]
+            }
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+        let artifact = parsed
+            .quality_data_artifact
+            .expect("quality data artifact metadata should survive parsing");
+
+        assert_eq!(artifact.kind, "fmmq.v1");
+        assert_eq!(artifact.element_count, 1);
+        assert_eq!(artifact.metrics, vec!["sicn", "gamma", "volume"]);
+    }
 }
