@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fullmag_fem.h"
+#include "cpu/mfem/interactions/demag_poisson_cache.hpp"
 
 #include <string>
 #include <cstdint>
@@ -56,38 +57,6 @@ double demag_poisson_energy_from_field(
     const std::vector<double> &m_xyz,
     const std::vector<double> &h_demag_xyz,
     int energy_threads = 1);
-
-/*
- * Decide whether the Poisson-demag field must be recomputed for the current
- * time state.
- *
- * Without an explicit refresh interval, with an invalid cache, or with a
- * non-positive interval, the safe answer is a fresh solve. Otherwise the cached
- * field is reusable until the configured interval has elapsed.
- */
-bool demag_poisson_should_refresh_field(const Context &ctx);
-
-/*
- * Store a freshly solved Poisson-demag field in the frozen-field cache.
- *
- * The cache is populated only when an explicit demag refresh interval is active.
- * Both the solver field and full-domain visualization field are captured at the
- * same time so subsequent frozen steps reuse a consistent potential snapshot.
- */
-void demag_poisson_store_refreshed_field_cache(
-    Context &ctx,
-    const std::vector<double> &h_demag_xyz);
-
-/*
- * Try to load the frozen Poisson-demag field into the caller's output buffer.
- *
- * A load succeeds only for a valid cache whose field shape matches the existing
- * output buffer. When the cached full-domain visualization field has a matching
- * shape it is restored as well; otherwise the visualization field is cleared.
- */
-bool demag_poisson_try_load_cached_field(
-    Context &ctx,
-    std::vector<double> &h_demag_xyz);
 
 /*
  * Compute demag energy for a cached Poisson-demag field.

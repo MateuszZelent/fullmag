@@ -608,6 +608,17 @@
   padding: var(--fm-space-2);
 }
 
+button.fm-mesh-detail-list__item {
+  cursor: pointer;
+  text-align: left;
+}
+
+button.fm-mesh-detail-list__item:hover,
+button.fm-mesh-detail-list__item:focus-visible {
+  border-color: var(--fm-border-strong);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 88%, transparent);
+}
+
 .fm-mesh-detail-list__item[data-status="pass"],
 .fm-mesh-detail-list__item[data-status="ready"],
 .fm-mesh-detail-list__item[data-status="applied"] {

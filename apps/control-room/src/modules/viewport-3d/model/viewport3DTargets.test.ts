@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import {
   resolveAirboxVisualizationSettingsFromState,
   resolveGlobalObjectVisualizationSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { resolveViewport3DSelectionBounds } from "./viewport3DTargets";
 
 describe("viewport3DTargets", () => {
   it("maps canonical global mesh/vector layers into object render defaults", () => {
@@ -72,6 +74,36 @@ describe("viewport3DTargets", () => {
       vectorsVisible: true,
       visible: true,
       wireframeVisible: true,
+    });
+  });
+
+  it("resolves mesh quality element selections to centroid bounds", () => {
+    const selection: Selection = {
+      kind: "mesh.quality",
+      label: "Worst mesh element 7",
+      moduleSource: "mesh",
+      nodeId: "model:mesh:quality:element:7",
+      objectId: null,
+      ref: {
+        centroid: [1, 2, 3],
+        elementIndex: 7,
+        kind: "mesh.quality.element",
+        nodeId: "model:mesh:quality:element:7",
+        type: "mesh-quality-element",
+        visualizationTargetId: "mesh:quality:element:7",
+      },
+    };
+
+    const bounds = resolveViewport3DSelectionBounds(
+      selection,
+      { airboxParts: [], magneticParts: [], objectPartIds: new Map(), partsById: new Map() },
+      { center: [0, 0, 0], radius: 10, size: [20, 20, 20] },
+    );
+
+    expect(bounds).toMatchObject({
+      center: [1, 2, 3],
+      radius: 0.3,
+      size: [0.6, 0.6, 0.6],
     });
   });
 });

@@ -26,6 +26,14 @@ export type SelectionRef =
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox";
+    }
+  | {
+      centroid: [number, number, number] | null;
+      elementIndex: number;
+      kind: "mesh.quality.element";
+      nodeId: string;
+      type: "mesh-quality-element";
+      visualizationTargetId: `mesh:quality:element:${number}`;
     };
 
 export interface Selection {

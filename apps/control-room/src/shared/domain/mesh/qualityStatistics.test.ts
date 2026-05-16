@@ -35,6 +35,7 @@ describe("mesh quality statistics model", () => {
         {
           element_index: 7,
           gamma: 0.12,
+          centroid: [1, 2, 3],
           scope_label: "Domain 1",
           sicn: 0.18,
           volume: 2.4e-27,
@@ -53,7 +54,7 @@ describe("mesh quality statistics model", () => {
       qualitySource: "gmsh",
       volumeRatio: 42,
       warnings: ["worst 5% SICN below quality target"],
-      worstElements: [{ elementIndex: 7, gamma: 0.12, sicn: 0.18 }],
+      worstElements: [{ centroid: [1, 2, 3], elementIndex: 7, gamma: 0.12, sicn: 0.18 }],
     });
     expect(statistics?.metrics[0]?.histogram[1]).toMatchObject({
       count: 8,

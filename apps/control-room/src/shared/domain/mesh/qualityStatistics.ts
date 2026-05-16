@@ -17,6 +17,7 @@ export interface MeshQualityMetric {
 }
 
 export interface MeshWorstElement {
+  centroid: [number, number, number] | null;
   elementIndex: number;
   gamma: number | null;
   scopeLabel: string;
@@ -52,6 +53,14 @@ function asNumber(value: unknown): number | null {
 
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function asVector3(value: unknown): [number, number, number] | null {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const x = asNumber(value[0]);
+  const y = asNumber(value[1]);
+  const z = asNumber(value[2]);
+  return x === null || y === null || z === null ? null : [x, y, z];
 }
 
 function metricLabel(id: "gamma" | "sicn"): string {
@@ -141,6 +150,7 @@ function normalizeWorstElements(value: unknown): MeshWorstElement[] {
     if (record === null || elementIndex === null) return [];
     return [
       {
+        centroid: asVector3(record.centroid),
         elementIndex,
         gamma: asNumber(record.gamma),
         scopeLabel: asString(record.scope_label) ?? "unknown scope",

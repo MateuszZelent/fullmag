@@ -438,6 +438,18 @@ fn filter_non_progress_stderr(stderr_text: &str) -> String {
         .to_string()
 }
 
+fn parse_remesh_cli_response(stdout: &[u8], output_label: &str) -> Result<RemeshCliResponse> {
+    let stdout_text = String::from_utf8_lossy(stdout);
+    let mesh: RemeshCliResponse = serde_json::from_slice(stdout).with_context(|| {
+        format!(
+            "failed to parse {output_label} ({} bytes):\n{}",
+            stdout.len(),
+            &stdout_text[..stdout_text.len().min(2000)]
+        )
+    })?;
+    mesh.hydrate_topology_artifact()
+}
+
 pub(crate) fn run_python_helper(args: &[String]) -> Result<std::process::Output> {
     run_python_helper_with_progress(args, None)
 }
@@ -886,15 +898,7 @@ pub(crate) fn invoke_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let mesh: RemeshCliResponse = serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })?;
-    Ok(mesh)
+    parse_remesh_cli_response(&output.stdout, "remesh output")
 }
 
 pub(crate) fn invoke_shared_domain_remesh_full(
@@ -937,15 +941,7 @@ pub(crate) fn invoke_shared_domain_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let mesh: RemeshCliResponse = serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse shared-domain remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })?;
-    Ok(mesh)
+    parse_remesh_cli_response(&output.stdout, "shared-domain remesh output")
 }
 
 pub(crate) fn invoke_adaptive_remesh_full(
@@ -984,14 +980,7 @@ pub(crate) fn invoke_adaptive_remesh_full(
             stderr_text.trim()
         );
     }
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_slice(&output.stdout).with_context(|| {
-        format!(
-            "failed to parse adaptive remesh output ({} bytes):\n{}",
-            output.stdout.len(),
-            &stdout_text[..stdout_text.len().min(2000)]
-        )
-    })
+    parse_remesh_cli_response(&output.stdout, "adaptive remesh output")
 }
 
 #[cfg(test)]

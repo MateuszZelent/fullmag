@@ -166,6 +166,26 @@ void cached_demag_energy_includes_frozen_robin_boundary_term() {
 }
 
 void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string cache =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_cache.cpp");
+
+    const char *symbols[] = {
+        "bool demag_poisson_should_refresh_field(",
+        "void demag_poisson_store_refreshed_field_cache(",
+        "bool demag_poisson_try_load_cached_field(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag cache policy must not be defined in demag_poisson.cpp");
+        check(
+            cache.find(symbol) != std::string::npos,
+            "Poisson demag cache policy must be defined in demag_poisson_cache.cpp");
+    }
+
     fullmag::fem::Context ctx;
     const std::vector<double> field = {
         1.0, 2.0, 3.0,
@@ -214,6 +234,32 @@ void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
     check(
         !fullmag::fem::demag_poisson_try_load_cached_field(ctx, loaded),
         "invalid demag cache does not load");
+}
+
+void demag_telemetry_is_owned_by_poisson_telemetry_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string telemetry =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_telemetry.cpp");
+
+    const char *symbols[] = {
+        "void fill_demag_poisson_solver_stats(",
+        "const char *demag_poisson_linear_solver_name(",
+        "const char *demag_poisson_preconditioner_name(",
+        "void accumulate_demag_poisson_phase_timings(",
+        "void fill_demag_poisson_phase_stats(",
+        "std::string demag_poisson_call_profile_line(",
+        "void log_demag_poisson_call_profile(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag telemetry must not be defined in demag_poisson.cpp");
+        check(
+            telemetry.find(symbol) != std::string::npos,
+            "Poisson demag telemetry must be defined in demag_poisson_telemetry.cpp");
+    }
 }
 
 void demag_solver_stats_are_filled_by_poisson_module() {
@@ -466,6 +512,7 @@ int main() {
     demag_cache_refresh_policy_matches_bridge_contract();
     cached_demag_energy_includes_frozen_robin_boundary_term();
     demag_cache_store_and_reuse_are_owned_by_poisson_module();
+    demag_telemetry_is_owned_by_poisson_telemetry_module();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();
     demag_solver_telemetry_names_are_owned_by_poisson_module();

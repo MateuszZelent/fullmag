@@ -36,4 +36,23 @@ describe("MeshQualityStatisticsView", () => {
     expect(html).toContain("Domain 1");
     expect(html).not.toContain("worst_elements");
   });
+
+  it("renders worst elements as selection actions when a handler is provided", () => {
+    const statistics = normalizeMeshQualityStatistics({
+      global: {
+        element_count: 24,
+      },
+      worst_elements: [{ element_index: 7, gamma: 0.12, scope_label: "Domain 1", sicn: 0.18 }],
+    });
+
+    const html = renderToStaticMarkup(
+      <MeshQualityStatisticsView
+        statistics={statistics}
+        onSelectWorstElement={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("button");
+    expect(html).toContain('data-element-index="7"');
+  });
 });

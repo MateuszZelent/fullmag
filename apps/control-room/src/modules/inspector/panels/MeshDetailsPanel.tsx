@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -23,7 +23,10 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
-import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
+import {
+  normalizeMeshQualityStatistics,
+  type MeshWorstElement,
+} from "@/shared/domain/mesh/qualityStatistics";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -390,8 +393,10 @@ function MeshQualityGatesSection({
 }
 
 function MeshQualityStatisticsSection({
+  onSelectWorstElement,
   statistics,
 }: {
+  onSelectWorstElement: (element: MeshWorstElement) => void;
   statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
 }) {
   return (
@@ -402,7 +407,10 @@ function MeshQualityStatisticsSection({
       collapsible
       defaultCollapsed={false}
     >
-      <MeshQualityStatisticsView statistics={statistics} />
+      <MeshQualityStatisticsView
+        statistics={statistics}
+        onSelectWorstElement={onSelectWorstElement}
+      />
     </InspectorSection>
   );
 }
@@ -587,6 +595,30 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
     () => createCommandContext("ribbon", kernel),
     [kernel],
   );
+  const selectWorstElement = useCallback(
+    (element: MeshWorstElement) => {
+      const nodeId = `model:mesh:quality:element:${element.elementIndex}`;
+      kernel.selection.set(
+        {
+          kind: "mesh.quality",
+          label: `Worst mesh element ${element.elementIndex}`,
+          nodeId,
+          objectId: null,
+          ref: {
+            centroid: element.centroid,
+            elementIndex: element.elementIndex,
+            kind: "mesh.quality.element",
+            nodeId,
+            type: "mesh-quality-element",
+            visualizationTargetId: `mesh:quality:element:${element.elementIndex}`,
+          },
+        },
+        "mesh",
+      );
+      kernel.layout.setActiveTab("mesh");
+    },
+    [kernel],
+  );
 
   return (
     <Accordion
@@ -655,7 +687,10 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         }
       />
       <MeshQualityGatesSection badge={sharedQuality.status} gateRows={gateRows} />
-      <MeshQualityStatisticsSection statistics={qualityStatistics} />
+      <MeshQualityStatisticsSection
+        statistics={qualityStatistics}
+        onSelectWorstElement={selectWorstElement}
+      />
       <RealizedSizeFieldsSection sizeFields={sizeFields} />
       <OperationStatusesSection operationStatuses={operationStatuses} />
       <ThinFilmDiagnosticsSection thinFilmDiagnostics={thinFilmDiagnostics} />

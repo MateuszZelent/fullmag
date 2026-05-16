@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import type {
   MeshQualityMetric,
   MeshQualityStatistics,
+  MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
 
 import {
@@ -21,8 +22,10 @@ function metricSummary(metric: MeshQualityMetric): string {
 }
 
 export function MeshQualityStatisticsView({
+  onSelectWorstElement,
   statistics,
 }: {
+  onSelectWorstElement?: (element: MeshWorstElement) => void;
   statistics: MeshQualityStatistics | null;
 }) {
   if (!statistics) {
@@ -94,20 +97,39 @@ export function MeshQualityStatisticsView({
         <h4>Worst elements</h4>
         {statistics.worstElements.length > 0 ? (
           <div className="fm-mesh-detail-list">
-            {statistics.worstElements.map((element) => (
-              <div
-                className="fm-mesh-detail-list__item"
-                data-status="warning"
-                key={`${element.elementIndex}:${element.scopeLabel}`}
-              >
-                <strong>Element {element.elementIndex}</strong>
-                <span>{element.scopeLabel}</span>
-                <small>
-                  gamma {formatValue(element.gamma)} / SICN {formatValue(element.sicn)} / volume{" "}
-                  {formatValue(element.volume)}
-                </small>
-              </div>
-            ))}
+            {statistics.worstElements.map((element) => {
+              const content = (
+                <>
+                  <strong>Element {element.elementIndex}</strong>
+                  <span>{element.scopeLabel}</span>
+                  <small>
+                    gamma {formatValue(element.gamma)} / SICN {formatValue(element.sicn)} / volume{" "}
+                    {formatValue(element.volume)}
+                  </small>
+                </>
+              );
+              const key = `${element.elementIndex}:${element.scopeLabel}`;
+              return onSelectWorstElement ? (
+                <button
+                  className="fm-mesh-detail-list__item"
+                  data-element-index={element.elementIndex}
+                  data-status="warning"
+                  key={key}
+                  onClick={() => onSelectWorstElement(element)}
+                  type="button"
+                >
+                  {content}
+                </button>
+              ) : (
+                <div
+                  className="fm-mesh-detail-list__item"
+                  data-status="warning"
+                  key={key}
+                >
+                  {content}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <MeshResourceEmpty label="No per-element worst list is available." />

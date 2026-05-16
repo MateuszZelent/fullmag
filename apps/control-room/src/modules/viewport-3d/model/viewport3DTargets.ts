@@ -42,6 +42,7 @@ export function resolveViewport3DSelectionBounds(
   if (!selection.kind) return null;
 
   return (
+    resolveMeshQualityElementBounds(selection, fallbackBounds) ??
     resolveMeshPartBounds(
       selection.nodeId ? domain.partsById.get(selection.nodeId) : null,
     ) ??
@@ -51,6 +52,22 @@ export function resolveViewport3DSelectionBounds(
       ? resolveAirboxBounds(domain)
       : fallbackBounds)
   );
+}
+
+function resolveMeshQualityElementBounds(
+  selection: Selection,
+  fallbackBounds: Viewport3DBounds | null,
+): Viewport3DBounds | null {
+  if (selection.ref?.type !== "mesh-quality-element" || !selection.ref.centroid) {
+    return null;
+  }
+  const radius = Math.max((fallbackBounds?.radius ?? 1e-9) * 0.03, 1e-12);
+  const size = radius * 2;
+  return {
+    center: selection.ref.centroid,
+    radius,
+    size: [size, size, size],
+  };
 }
 
 function resolveAirboxBounds(

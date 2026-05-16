@@ -15,6 +15,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/demag.cpp
     cpu/mfem/interactions/demag_fem_bem.cpp
     cpu/mfem/interactions/demag_poisson.cpp
+    cpu/mfem/interactions/demag_poisson_cache.cpp
     cpu/mfem/interactions/dmi.cpp
     cpu/mfem/interactions/effective_field.cpp
     cpu/mfem/interactions/exchange.cpp
