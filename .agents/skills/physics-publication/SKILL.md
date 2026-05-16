@@ -29,6 +29,11 @@ Enforce Fullmag's rule: physics first, implementation second. A solver patch wit
 9. Validation strategy, reference oracle, tolerances, artifacts, and regression tests.
 10. Completeness checklist and deferred work.
 
+For native FEM solver changes, also state the operator/subsystem boundary:
+exchange, demag, local interaction, direct torque, stepper, runtime/residency,
+or observable. Do not describe new native FEM physics as an implementation
+detail inside `Context` or `mfem_bridge.cpp`.
+
 ## Blocker policy
 
 If the physics note is missing, incomplete, or vague about units/validity/backend interpretation, implementation is blocked. Do not hide this as "follow-up docs."
@@ -40,5 +45,6 @@ After the physics note is complete, apply the relevant skills in this order:
 1. `problem-ir-design`
 2. `python-api-class`
 3. `capability-matrix-check`
-4. `resource-first-api-check` when browser/API/runtime resources, OpenAPI, generated types, realtime events, commands, codecs, or viewport data are affected
-5. `adr-check` when the decision changes architecture or long-lived migration policy
+4. `fem-native-backend-architecture` when native FEM backend ownership, operator extraction, demag Poisson, exchange, local terms, stepper, CPU/GPU separation, or solver performance is affected
+5. `resource-first-api-check` when browser/API/runtime resources, OpenAPI, generated types, realtime events, commands, codecs, or viewport data are affected
+6. `adr-check` when the decision changes architecture or long-lived migration policy

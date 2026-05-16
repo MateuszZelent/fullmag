@@ -1,4 +1,5 @@
 #include "context.hpp"
+#include "cpu/mfem/interactions/zeeman.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -405,6 +406,21 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         error = "FEM time step must be positive";
         return false;
     }
+    if (plan.fe_order != 1) {
+        error = "native FEM CPU backend supports P1 tetrahedral elements only (fe_order = 1). Requested fe_order = " +
+                std::to_string(plan.fe_order);
+        return false;
+    }
+    switch (plan.integrator) {
+        case FULLMAG_FEM_INTEGRATOR_HEUN:
+        case FULLMAG_FEM_INTEGRATOR_RK4:
+        case FULLMAG_FEM_INTEGRATOR_RK23_BS:
+        case FULLMAG_FEM_INTEGRATOR_RK45_DP54:
+            break;
+        default:
+            error = "native FEM plan requested an unsupported explicit RK integrator";
+            return false;
+    }
     if (plan.field_refresh.has_demag_interval_s != 0 &&
         plan.field_refresh.demag_interval_s <= 0.0) {
         error = "field_refresh.demag_interval_s must be positive when provided";
@@ -648,6 +664,11 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
             error = "material.damping must be finite and >= 0";
             return false;
         }
+        if (!std::isfinite(ctx.material.gyromagnetic_ratio) ||
+            ctx.material.gyromagnetic_ratio <= 0.0) {
+            error = "material.gyromagnetic_ratio must be finite and > 0; native FEM expects gamma_mu0 in m/(A s), not gamma in rad/(T s)";
+            return false;
+        }
     }
 
     // F-14 fix: normalize anisotropy axes.
@@ -701,18 +722,60 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
 
     // Adaptive time-stepping from plan
     if (plan.adaptive_config != nullptr) {
+        const auto &adaptive = *plan.adaptive_config;
+        if (!std::isfinite(adaptive.atol) || adaptive.atol <= 0.0) {
+            error = "adaptive_config.atol must be finite and > 0";
+            return false;
+        }
+        if (!std::isfinite(adaptive.rtol) || adaptive.rtol <= 0.0) {
+            error = "adaptive_config.rtol must be finite and > 0";
+            return false;
+        }
+        if (!std::isfinite(adaptive.dt_initial) || adaptive.dt_initial < 0.0) {
+            error = "adaptive_config.dt_initial must be finite and >= 0";
+            return false;
+        }
+        if (!std::isfinite(adaptive.dt_min) || adaptive.dt_min <= 0.0) {
+            error = "adaptive_config.dt_min must be finite and > 0";
+            return false;
+        }
+        if (!std::isfinite(adaptive.dt_max) || adaptive.dt_max < adaptive.dt_min) {
+            error = "adaptive_config.dt_max must be finite and >= adaptive_config.dt_min";
+            return false;
+        }
+        if (!std::isfinite(adaptive.safety) ||
+            adaptive.safety <= 0.0 ||
+            adaptive.safety >= 1.0) {
+            error = "adaptive_config.safety must be finite and satisfy 0 < safety < 1";
+            return false;
+        }
+        if (!std::isfinite(adaptive.growth_limit) || adaptive.growth_limit <= 1.0) {
+            error = "adaptive_config.growth_limit must be finite and > 1";
+            return false;
+        }
+        if (!std::isfinite(adaptive.shrink_limit) ||
+            adaptive.shrink_limit <= 0.0 ||
+            adaptive.shrink_limit >= 1.0) {
+            error = "adaptive_config.shrink_limit must be finite and satisfy 0 < shrink_limit < 1";
+            return false;
+        }
+        if (adaptive.max_reject == 0) {
+            error = "adaptive_config.max_reject must be > 0";
+            return false;
+        }
         ctx.adaptive_dt_enabled = true;
-        ctx.adaptive_atol = plan.adaptive_config->atol;
-        ctx.adaptive_rtol = plan.adaptive_config->rtol;
-        ctx.dt_seconds = plan.adaptive_config->dt_initial > 0.0
-                             ? plan.adaptive_config->dt_initial
+        ctx.adaptive_atol = adaptive.atol;
+        ctx.adaptive_rtol = adaptive.rtol;
+        ctx.dt_seconds = adaptive.dt_initial > 0.0
+                             ? adaptive.dt_initial
                              : plan.dt_seconds;
         ctx.current_dt = ctx.dt_seconds;
-        ctx.dt_min = plan.adaptive_config->dt_min;
-        ctx.dt_max = plan.adaptive_config->dt_max;
-        ctx.safety_factor = plan.adaptive_config->safety;
-        ctx.dt_grow_max = plan.adaptive_config->growth_limit;
-        ctx.dt_shrink_min = plan.adaptive_config->shrink_limit;
+        ctx.dt_min = adaptive.dt_min;
+        ctx.dt_max = adaptive.dt_max;
+        ctx.safety_factor = adaptive.safety;
+        ctx.dt_grow_max = adaptive.growth_limit;
+        ctx.dt_shrink_min = adaptive.shrink_limit;
+        ctx.max_reject = adaptive.max_reject;
     }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -796,11 +859,10 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     // magnetic_element_mask and elements are populated).
     compute_node_volumes(ctx);
 
+    initialize_uniform_zeeman_field(ctx);
     if (ctx.has_external_field) {
-        fill_repeated_vector_field(ctx.h_ext_xyz, ctx.n_nodes, ctx.external_field_am);
         ctx.h_eff_xyz = ctx.h_ext_xyz;
     } else {
-        fill_zero_vector_field(ctx.h_ext_xyz, ctx.n_nodes);
         fill_zero_vector_field(ctx.h_eff_xyz, ctx.n_nodes);
     }
 

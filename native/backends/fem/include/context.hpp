@@ -67,6 +67,7 @@ struct Context {
     double safety_factor = 0.9;       // safety multiplier on predicted dt
     double dt_grow_max = 2.0;         // max growth ratio per step
     double dt_shrink_min = 0.2;       // min shrink ratio per step
+    uint32_t max_reject = 50;         // max rejected attempts per accepted step
     double prev_error_norm = 1.0;     // for PI: error from previous accepted step
     uint64_t rejected_steps = 0;      // total rejected (retried) steps
 
@@ -224,6 +225,10 @@ struct Context {
     uint64_t thermal_seed = 0;      // 0 = random seed from system entropy
     std::vector<double> h_therm_xyz;  // Per-node thermal field buffer (AOS-3)
 
+    // Transitional nodal integration weights used by local interaction energy
+    // tests and, in the MFEM path, populated from the scalar lumped mass form.
+    std::vector<double> mfem_lumped_mass;
+
     // FEM-029 fix: explicit GPU device index from plan. -1 = env / default.
     int32_t gpu_device_index = -1;
 
@@ -238,7 +243,6 @@ struct Context {
     std::vector<double> mfem_h_ex_y;
     std::vector<double> mfem_h_ex_z;
     std::vector<double> mfem_exchange_tmp;
-    std::vector<double> mfem_lumped_mass;
 
     int mfem_selected_device_index = -1;
     void *mfem_mesh = nullptr;
@@ -410,7 +414,7 @@ void context_destroy_poisson(Context &ctx);
 // from context.cpp.
 struct PhaseTimings;
 
-// MFEM device classification helpers (defined in mfem_bridge.cpp)
+// MFEM device classification helpers (defined in cpu/mfem/runtime/mfem_device.cpp)
 const char *configured_mfem_device_string();
 const char *configured_mfem_device_string(const Context &ctx);
 bool is_gpu_device_string(const char *device);

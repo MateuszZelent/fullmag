@@ -145,6 +145,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             domain_generation_id,
             artifacts_revision: snapshot.artifacts.len() as u64,
             engine_log_revision: snapshot.engine_log.len() as u64,
+            solver_profile_revision: snapshot.solver_profile.revision,
             display_revision,
             visualization_state_revision: display_revision,
             workspace_revision,
@@ -284,6 +285,17 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/diagnostics/engine-log".to_string()),
         },
     ];
+    if realtime_state.revisions.solver_profile_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Diagnostics,
+            revision: realtime_state.revisions.solver_profile_revision,
+            resource_id: Some("solver-profile".to_string()),
+            domain_generation_id: None,
+            recommended_fetch: Some(
+                "/v2/sessions/current/diagnostics/solver-profile".to_string(),
+            ),
+        });
+    }
     for recommended_fetch in &realtime_state.field_vector_fetches {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::Fields,
@@ -371,6 +383,7 @@ mod realtime_change_tests {
             domain_generation_id: 19,
             artifacts_revision: 20,
             engine_log_revision: 21,
+            solver_profile_revision: 0,
             display_revision: 22,
             workspace_revision: 23,
             mesh_revision: 24,
@@ -968,6 +981,7 @@ where
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
+            solver_profile: None,
             fem_mesh: None,
         }),
     };

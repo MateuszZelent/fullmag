@@ -99,6 +99,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             scene_document: value.scene_document,
             scalar_rows: value.scalar_rows,
             engine_log: value.engine_log,
+            solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
             quantities: value.quantities,
             fem_mesh: value.fem_mesh,
             latest_fields: value.latest_fields,

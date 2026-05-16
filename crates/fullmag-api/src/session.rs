@@ -508,6 +508,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
+        solver_profile: req.solver_profile.clone().unwrap_or_default(),
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
@@ -689,6 +690,9 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
     }
+    if let Some(solver_profile) = req.solver_profile {
+        current.solver_profile = solver_profile;
+    }
 
     finalize_current_live_apply(current, flags)
 }
@@ -748,6 +752,9 @@ pub(crate) fn apply_current_live_runtime_frame(
     }
     if let Some(engine_log) = frame.engine_log {
         current.engine_log = engine_log;
+    }
+    if let Some(solver_profile) = frame.solver_profile {
+        current.solver_profile = solver_profile;
     }
 
     finalize_current_live_apply(current, CurrentLiveApplyFlags::default())
@@ -923,6 +930,7 @@ mod tests {
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
+            solver_profile: None,
             fem_mesh: None,
         });
 
@@ -978,6 +986,7 @@ mod tests {
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
+            solver_profile: None,
             fem_mesh: None,
         });
         current.stage_execution = Some(StageExecutionState {
@@ -1155,6 +1164,7 @@ mod tests {
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
+            solver_profile: None,
             fem_mesh: None,
         });
         current.stage_execution = Some(StageExecutionState {
@@ -1265,6 +1275,7 @@ mod tests {
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         }
     }
 
@@ -1295,6 +1306,7 @@ mod tests {
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
+            solver_profile: None,
             fem_mesh: None,
         })
     }

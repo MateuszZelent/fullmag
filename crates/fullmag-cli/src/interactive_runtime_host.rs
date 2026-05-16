@@ -202,6 +202,10 @@ impl CurrentLiveDisplaySelectionHandle {
         }
     }
 
+    pub(super) fn take_solver_profile_command(&self) -> Option<SessionCommand> {
+        self.pop_front_matching(|command| command.kind == "set_solver_profile")
+    }
+
     fn set_running_interrupt(&self, interrupt: InteractiveStageInterrupt) {
         if let Ok(mut slot) = self.running_interrupt.lock() {
             *slot = Some(interrupt);
@@ -347,6 +351,7 @@ fn synthetic_display_sync_command(selection: CurrentDisplaySelection) -> Session
         display_selection: Some(selection.clone()),
         preview_config: Some(selection.preview_request()),
         stages: None,
+        profile: None,
     }
 }
 
@@ -951,6 +956,7 @@ mod tests {
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
+            solver_profile: fullmag_runner::SolverProfileState::default(),
         }
     }
 
@@ -984,6 +990,7 @@ mod tests {
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         }
     }
 

@@ -296,6 +296,37 @@ fn publish_live_step_update(
     });
 }
 
+fn solver_profile_config_from_command(
+    command: &SessionCommand,
+) -> Result<fullmag_runner::SolverProfileConfig> {
+    let value = command
+        .profile
+        .clone()
+        .ok_or_else(|| anyhow!("set_solver_profile command is missing profile payload"))?;
+    serde_json::from_value::<fullmag_runner::SolverProfileConfig>(value)
+        .context("failed to decode set_solver_profile payload")
+        .map(fullmag_runner::SolverProfileConfig::normalized)
+}
+
+fn apply_solver_profile_command(live_workspace: &LocalLiveWorkspace, command: &SessionCommand) {
+    match solver_profile_config_from_command(command) {
+        Ok(config) => live_workspace.set_solver_profile_config(config),
+        Err(error) => live_workspace.push_log(
+            "error",
+            format!("Solver profiler command rejected: {}", error),
+        ),
+    }
+}
+
+fn drain_solver_profile_commands(
+    control: &CurrentLiveDisplaySelectionHandle,
+    live_workspace: &LocalLiveWorkspace,
+) {
+    while let Some(command) = control.take_solver_profile_command() {
+        apply_solver_profile_command(live_workspace, &command);
+    }
+}
+
 fn apply_live_step_update_to_workspace_state(
     state: &mut LocalLiveWorkspaceState,
     run_id: &str,
@@ -3548,6 +3579,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
+            solver_profile: fullmag_runner::SolverProfileState::default(),
         },
         current_live_publisher.clone(),
     );
@@ -3777,6 +3809,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
                 clear_preview_cache: false,
                 engine_log: previous_engine_log,
+                solver_profile: fullmag_runner::SolverProfileState::default(),
             });
             live_workspace.push_log("error", format!("Script materialization failed: {}", error));
             return Err(error);
@@ -3911,6 +3944,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
         clear_preview_cache: false,
         engine_log: previous_engine_log,
+        solver_profile: fullmag_runner::SolverProfileState::default(),
     });
     live_workspace.push_log(
         "system",
@@ -4722,6 +4756,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
                         }
+                        drain_solver_profile_commands(&display_selection_handle, &live_workspace);
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
                                 publish_live_step_update(
@@ -4740,6 +4775,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
+                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -4786,6 +4822,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
                         }
+                        drain_solver_profile_commands(&display_selection_handle, &live_workspace);
+                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -5048,6 +5086,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     display_selection: None,
                     preview_config: None,
                     stages: None,
+                    profile: None,
                 };
                 paused_stage = build_resumable_interactive_command(&stage_command, &stage_result)
                     .map(|command| PausedInteractiveStage {
@@ -5207,6 +5246,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             };
 
             if interactive_runtime_host.handle_display_sync(&command, &live_workspace) {
+                continue;
+            }
+
+            if command.kind == "set_solver_profile" {
+                apply_solver_profile_command(&live_workspace, &command);
                 continue;
             }
 
@@ -5681,6 +5725,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
                         }
+                        drain_solver_profile_commands(&running_control, &live_workspace);
                         if is_control_checkpoint_only(&adjusted) {
                             if live_cadence.should_publish(&adjusted) {
                                 publish_live_step_update(
@@ -5698,6 +5743,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             return fullmag_runner::StepAction::Continue;
                         }
                         let s = &adjusted.stats;
+                        live_workspace.record_solver_profile_step(s);
                         if live_cadence.should_log(s.step, adjusted.finished) {
                             eprintln!(
                                 "{}",
@@ -5783,6 +5829,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             if let Some(heartbeat) = stage_heartbeat.as_mut() {
                                 heartbeat.record(&adjusted);
                             }
+                            drain_solver_profile_commands(&running_control, &live_workspace);
+                            live_workspace.record_solver_profile_step(s);
                             if live_cadence.should_log(s.step, adjusted.finished) {
                                 eprintln!(
                                     "{}",
@@ -6572,6 +6620,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
+            solver_profile: fullmag_runner::SolverProfileState::default(),
         },
         current_live_publisher,
     );
@@ -6716,6 +6765,7 @@ mod tests {
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
+            solver_profile: fullmag_runner::SolverProfileState::default(),
         }
     }
 

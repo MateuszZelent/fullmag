@@ -50,6 +50,8 @@ export type GeometryValidationResource =
 export type GpuTelemetryResource =
   components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
+export type SolverProfileResource =
+  components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =
   components["schemas"]["MaterialPatchRequest"];
 export type MaterialResource = components["schemas"]["MaterialResource"];

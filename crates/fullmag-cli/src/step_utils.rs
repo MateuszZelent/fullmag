@@ -2225,6 +2225,7 @@ pub(crate) fn sequence_stage_to_session_command(
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         },
         fullmag_runner::SequenceStage::Relax {
             until_seconds,
@@ -2262,6 +2263,7 @@ pub(crate) fn sequence_stage_to_session_command(
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         },
     }
 }
@@ -2635,6 +2637,7 @@ mod tests {
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)
@@ -2677,6 +2680,7 @@ mod tests {
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)
@@ -2719,6 +2723,7 @@ mod tests {
             display_selection: None,
             preview_config: None,
             stages: None,
+            profile: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)

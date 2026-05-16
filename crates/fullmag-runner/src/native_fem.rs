@@ -62,6 +62,9 @@ pub(crate) fn is_cpu_available() -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct GpuAvailability {
     pub available: bool,
+    pub available_any: bool,
+    pub available_cpu: bool,
+    pub available_gpu: bool,
     pub built_with_mfem_stack: bool,
     pub built_with_cuda_runtime: bool,
     pub built_with_ceed: bool,
@@ -74,6 +77,8 @@ pub(crate) struct GpuAvailability {
     pub requested_gpu_index: i32,
     pub resolved_gpu_index: i32,
     pub reason: String,
+    pub reason_cpu: String,
+    pub reason_gpu: String,
 }
 
 pub(crate) fn native_availability() -> GpuAvailability {
@@ -93,11 +98,19 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
             reason: [0; 256],
+            available_any: 0,
+            available_cpu: 0,
+            available_gpu: 0,
+            reason_cpu: [0; 256],
+            reason_gpu: [0; 256],
         };
         let rc = unsafe { ffi::fullmag_fem_get_availability_info(&mut info) };
         if rc != ffi::FULLMAG_FEM_OK {
             return GpuAvailability {
                 available: false,
+                available_any: false,
+                available_cpu: false,
+                available_gpu: false,
                 built_with_mfem_stack: false,
                 built_with_cuda_runtime: false,
                 built_with_ceed: false,
@@ -112,15 +125,26 @@ pub(crate) fn native_availability() -> GpuAvailability {
                 reason: last_global_error_or(
                     "fullmag_fem_get_availability_info failed without an error message",
                 ),
+                reason_cpu: String::new(),
+                reason_gpu: String::new(),
             };
         }
 
         let reason = unsafe { CStr::from_ptr(info.reason.as_ptr()) }
             .to_string_lossy()
             .to_string();
+        let reason_cpu = unsafe { CStr::from_ptr(info.reason_cpu.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
+        let reason_gpu = unsafe { CStr::from_ptr(info.reason_gpu.as_ptr()) }
+            .to_string_lossy()
+            .to_string();
 
         GpuAvailability {
             available: info.available == 1,
+            available_any: info.available_any == 1,
+            available_cpu: info.available_cpu == 1,
+            available_gpu: info.available_gpu == 1,
             built_with_mfem_stack: info.built_with_mfem_stack == 1,
             built_with_cuda_runtime: info.built_with_cuda_runtime == 1,
             built_with_ceed: info.built_with_ceed == 1,
@@ -133,12 +157,17 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: info.requested_gpu_index,
             resolved_gpu_index: info.resolved_gpu_index,
             reason,
+            reason_cpu,
+            reason_gpu,
         }
     }
     #[cfg(not(feature = "fem-gpu"))]
     {
         GpuAvailability {
             available: false,
+            available_any: false,
+            available_cpu: false,
+            available_gpu: false,
             built_with_mfem_stack: false,
             built_with_cuda_runtime: false,
             built_with_ceed: false,
@@ -151,6 +180,8 @@ pub(crate) fn native_availability() -> GpuAvailability {
             requested_gpu_index: -1,
             resolved_gpu_index: -1,
             reason: "fullmag-runner was built without the fem-gpu feature".to_string(),
+            reason_cpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
+            reason_gpu: "fullmag-runner was built without the fem-gpu feature".to_string(),
         }
     }
 }
@@ -813,6 +844,7 @@ impl NativeFemBackend {
                     safety: a.safety,
                     growth_limit: a.growth_limit,
                     shrink_limit: a.shrink_limit,
+                    max_reject: 50,
                 })
             })
             .transpose()?;

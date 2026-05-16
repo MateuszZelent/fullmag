@@ -1,6 +1,7 @@
 //! API request/response types and view models.
 
 use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
+use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
@@ -445,6 +446,7 @@ pub(crate) struct SessionStateResponse {
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
     pub engine_log: Vec<EngineLogEntry>,
+    pub solver_profile: SolverProfileResource,
     pub quantities: Vec<QuantityDescriptor>,
     pub fem_mesh: Option<FemMeshPayload>,
     pub latest_fields: LatestFields,
@@ -486,6 +488,7 @@ pub(crate) struct SessionStateResponseView<'a> {
     pub scalar_rows: &'a [ScalarRow],
     pub scalar_rows_total: usize,
     pub engine_log: &'a [EngineLogEntry],
+    pub solver_profile: &'a SolverProfileResource,
     pub quantities: &'a [QuantityDescriptor],
     pub fem_mesh: Option<&'a FemMeshPayload>,
     pub latest_fields: &'a LatestFields,
@@ -745,6 +748,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     pub clear_preview_cache: bool,
     #[serde(default)]
     pub engine_log: Option<Vec<EngineLogEntry>>,
+    #[serde(default)]
+    pub solver_profile: Option<SolverProfileResource>,
     /// Explicit mesh payload promoted to top-level — replaces the old implicit
     /// one-time-at-step-0 transmission that relied on API-side caching.
     /// Legacy payloads that still carry the mesh inside `live_state.latest_step`
@@ -777,6 +782,8 @@ pub(crate) struct CurrentLiveRuntimeFrameRequest {
     pub live_state: Option<LiveState>,
     #[serde(default)]
     pub engine_log: Option<Vec<EngineLogEntry>>,
+    #[serde(default)]
+    pub solver_profile: Option<SolverProfileResource>,
     #[serde(default)]
     pub fem_mesh: Option<FemMeshPayload>,
 }
@@ -971,6 +978,8 @@ pub(crate) struct SessionCommand {
     pub preview_config: Option<CurrentPreviewConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1230,6 +1239,7 @@ mod tests {
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
             engine_log: Vec::new(),
+            solver_profile: SolverProfileResource::default(),
             quantities: Vec::new(),
             fem_mesh: None,
             latest_fields: LatestFields::default(),
@@ -1256,6 +1266,7 @@ mod tests {
             scene_document: response.scene_document.as_ref(),
             scalar_rows: &response.scalar_rows,
             engine_log: &response.engine_log,
+            solver_profile: &response.solver_profile,
             quantities: &response.quantities,
             fem_mesh: response.fem_mesh.as_ref(),
             latest_fields: &response.latest_fields,

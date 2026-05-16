@@ -109,6 +109,7 @@ pub struct ResourceRevisionMap {
     pub domain_generation_id: u64,
     pub artifacts_revision: u64,
     pub engine_log_revision: u64,
+    pub solver_profile_revision: u64,
     pub display_revision: u64,
     pub workspace_revision: u64,
     pub mesh_revision: u64,

@@ -18,10 +18,12 @@ description: "Use when changing Fullmag backend legality, execution modes, plann
 3. State what the planner may resolve automatically and what must remain visible as requested user intent.
 4. State failure, degradation, and diagnostic behavior for unsupported paths. Hidden fallback is not allowed.
 5. Keep Python DSL and UI authoring vocabulary aligned with `ProblemIR`; do not expose CUDA image names, MFEM internals, raw buffers, or implementation-only toggles as common semantics.
-6. Update capability maps so the unified workspace can guard commands, panels, and viewport layers without branching into separate FDM/FEM app trees.
-7. Ensure OpenAPI schemas, generated frontend types, API modules, and resource hooks expose the capability vocabulary consistently.
-8. Ensure session/run/provenance surfaces preserve requested intent, resolved backend/runtime, precision, degraded mode, and stage stop reasons where relevant.
-9. Add tests covering planner capability decisions, OpenAPI/type generation impact, UI command gating, and unavailable-path diagnostics.
+6. For native FEM, distinguish executable availability from validated workload coverage. `production_executable` on a native FEM lane does not imply `validated` unless the operator-specific gates in `docs/physics/0900-native-fem-operator-contracts-and-validation.md` are covered.
+7. For native FEM, record whether the affected feature belongs to exchange, demag, local interactions, direct torques, thermal, stepper, runtime/residency, or observables so planner and UI status do not collapse the solver into one opaque FEM bucket.
+8. Update capability maps so the unified workspace can guard commands, panels, and viewport layers without branching into separate FDM/FEM app trees.
+9. Ensure OpenAPI schemas, generated frontend types, API modules, and resource hooks expose the capability vocabulary consistently.
+10. Ensure session/run/provenance surfaces preserve requested intent, resolved backend/runtime, precision, degraded mode, and stage stop reasons where relevant.
+11. Add tests covering planner capability decisions, OpenAPI/type generation impact, UI command gating, and unavailable-path diagnostics.
 
 ## Outputs
 
@@ -31,3 +33,4 @@ description: "Use when changing Fullmag backend legality, execution modes, plann
 - Record explicit go/no-go status for FDM, FEM, CPU, GPU, and hybrid where relevant
 - Record fallback and diagnostic behavior for unavailable execution paths
 - Update domain adapters, command registry/ribbon gating, and unified viewport capabilities when the browser can see or act on the capability.
+- For native FEM status changes, update `docs/specs/native-fem-backend-architecture-v1.md` when the change affects backend ownership, operator modules, CPU/GPU separation, or validation scope.

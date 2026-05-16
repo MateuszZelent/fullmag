@@ -724,6 +724,7 @@ pub(crate) fn sync_current_live_snapshot(
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
             engine_log: payload.engine_log.as_deref(),
+            solver_profile: payload.solver_profile.as_ref(),
             fem_mesh: payload.fem_mesh.as_ref(),
         })
         .send()
@@ -765,6 +766,7 @@ fn sync_current_live_runtime_frame(
             session_id,
             live_state: payload.live_state.as_ref(),
             engine_log: payload.engine_log.as_deref(),
+            solver_profile: payload.solver_profile.as_ref(),
             fem_mesh: payload.fem_mesh.as_ref(),
         })
         .send()

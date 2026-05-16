@@ -2,7 +2,7 @@
 
 - Status: implementation note
 - Owners: Fullmag core
-- Last updated: 2026-05-15
+- Last updated: 2026-05-16
 - Related reports:
   - `docs/reports/15.05.2026/fem-cpu-module-implementation-report.md`
   - `docs/reports/15.05.2026/fem-solver-physics-performance-audit.md`
@@ -73,7 +73,7 @@ conditions, recovered field, or energy.
 
 ## 6. Validation strategy
 
-1. Add a source-level regression proving `solve_poisson_hypre` guards the
+1. Add a source-level regression proving `solve_demag_poisson_hypre` guards the
    solution-to-Hypre warm-start copy behind a workspace validity flag.
 2. Add a source-level regression proving `HyprePCG` and `HypreGMRES` enable
    iterative mode before `Mult(b, x)`.

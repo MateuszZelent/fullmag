@@ -38,6 +38,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
     pub clear_preview_cache: bool,
     pub engine_log: Vec<EngineLogEntry>,
+    pub solver_profile: fullmag_runner::SolverProfileState,
 }
 
 impl LocalLiveWorkspaceState {
@@ -73,6 +74,7 @@ impl LocalLiveWorkspaceState {
             preview_fields,
             clear_preview_cache,
             engine_log: Some(self.engine_log.clone()),
+            solver_profile: Some(self.solver_profile.snapshot()),
         }
     }
 
@@ -160,6 +162,64 @@ impl LocalLiveWorkspace {
             push_engine_log(&mut state.engine_log, level, message);
         }
         self.publish_snapshot();
+    }
+
+    pub fn set_solver_profile_config(&self, config: fullmag_runner::SolverProfileConfig) {
+        if let Ok(mut state) = self.state.lock() {
+            state.solver_profile.set_config(config);
+            let snapshot = state.solver_profile.snapshot();
+            push_engine_log(
+                &mut state.engine_log,
+                "system",
+                format!(
+                    "Solver profiler {} (sample_every={}, max_samples={})",
+                    if snapshot.config.enabled { "enabled" } else { "disabled" },
+                    snapshot.config.sample_every,
+                    snapshot.config.max_samples,
+                ),
+            );
+        }
+        self.publish_snapshot();
+    }
+
+    pub fn record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
+        let mut artifact_line: Option<(String, String)> = None;
+        let mut should_publish = false;
+        if let Ok(mut state) = self.state.lock() {
+            let persist_artifact = state.solver_profile.config().persist_artifact;
+            let emit_engine_log = state.solver_profile.config().emit_engine_log;
+            if let Some(sample) = state.solver_profile.record_step(stats) {
+                if emit_engine_log {
+                    push_engine_log(&mut state.engine_log, "profile", sample.compact_log_line());
+                }
+                if persist_artifact {
+                    let artifact_ref = "diagnostics/solver_profile.jsonl".to_string();
+                    state.solver_profile.add_artifact_ref(artifact_ref.clone());
+                    artifact_line = Some((
+                        state.run.artifact_dir.clone(),
+                        serde_json::to_string(&sample).unwrap_or_else(|_| "{}".to_string()),
+                    ));
+                }
+                should_publish = true;
+            }
+        }
+        if let Some((artifact_dir, line)) = artifact_line {
+            let path = std::path::Path::new(&artifact_dir).join("diagnostics");
+            if std::fs::create_dir_all(&path).is_ok() {
+                let file = path.join("solver_profile.jsonl");
+                if let Ok(mut writer) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(file)
+                {
+                    use std::io::Write;
+                    let _ = writeln!(writer, "{line}");
+                }
+            }
+        }
+        if should_publish {
+            self.publish_snapshot();
+        }
     }
 
     /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,

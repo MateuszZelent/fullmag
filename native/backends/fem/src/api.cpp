@@ -61,6 +61,49 @@ void set_reason(fullmag_fem_availability_info &info, const std::string &message)
     std::snprintf(info.reason, sizeof(info.reason), "%s", message.c_str());
 }
 
+void set_cpu_reason(fullmag_fem_availability_info &info, const std::string &message) {
+    std::snprintf(info.reason_cpu, sizeof(info.reason_cpu), "%s", message.c_str());
+}
+
+void set_gpu_reason(fullmag_fem_availability_info &info, const std::string &message) {
+    std::snprintf(info.reason_gpu, sizeof(info.reason_gpu), "%s", message.c_str());
+}
+
+void finalize_availability(fullmag_fem_availability_info &info) {
+    info.available_cpu = info.native_fem_cpu_available;
+    info.available_gpu = info.native_fem_gpu_available;
+    info.available_any = (info.available_cpu != 0 || info.available_gpu != 0) ? 1 : 0;
+    info.available = info.available_any;
+
+    if (info.available_cpu != 0 && info.available_gpu != 0) {
+        set_reason(info, "native FEM CPU and GPU backends are available");
+    } else if (info.available_cpu != 0) {
+        std::string message = "native FEM CPU backend is available";
+        if (info.reason_gpu[0] != '\0') {
+            message += "; native FEM GPU backend is unavailable: ";
+            message += info.reason_gpu;
+        }
+        set_reason(info, message);
+    } else if (info.available_gpu != 0) {
+        std::string message = "native FEM GPU backend is available";
+        if (info.reason_cpu[0] != '\0') {
+            message += "; native FEM CPU backend is unavailable: ";
+            message += info.reason_cpu;
+        }
+        set_reason(info, message);
+    } else if (info.reason_cpu[0] != '\0' && info.reason_gpu[0] != '\0') {
+        std::string message = "native FEM CPU backend is unavailable: ";
+        message += info.reason_cpu;
+        message += "; native FEM GPU backend is unavailable: ";
+        message += info.reason_gpu;
+        set_reason(info, message);
+    } else if (info.reason_gpu[0] != '\0') {
+        set_reason(info, info.reason_gpu);
+    } else if (info.reason_cpu[0] != '\0') {
+        set_reason(info, info.reason_cpu);
+    }
+}
+
 void set_stage_completion_reason(
     fullmag::fem::Context &ctx,
     fullmag_fem_stage_stop_reason reason,
@@ -100,17 +143,21 @@ fullmag_fem_availability_info query_availability() {
 #if FULLMAG_HAS_MFEM_STACK
     info.built_with_mfem_stack = 1;
     info.native_fem_cpu_available = 1;
+    set_cpu_reason(info, "native FEM CPU backend is available (MFEM/hypre stack)");
 #else
-    set_reason(info, kUnavailableMessage);
+    set_cpu_reason(info, kUnavailableMessage);
+    set_gpu_reason(info, kUnavailableMessage);
+    finalize_availability(info);
     return info;
 #endif
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     info.built_with_cuda_runtime = 1;
 #else
-    set_reason(
+    set_gpu_reason(
         info,
-        "native FEM CPU backend is available; native FEM GPU backend is unavailable because fullmag_fem was built without CUDA runtime support");
+        "fullmag_fem was built without CUDA runtime support");
+    finalize_availability(info);
     return info;
 #endif
 
@@ -128,16 +175,18 @@ fullmag_fem_availability_info query_availability() {
 #endif
 
     if (!info.mfem_cuda_available) {
-        set_reason(
+        set_gpu_reason(
             info,
             "native FEM GPU backend requires an MFEM build with CUDA device support");
+        finalize_availability(info);
         return info;
     }
 
     if (mfem_device_request_needs_ceed() && !info.built_with_ceed) {
-        set_reason(
+        set_gpu_reason(
             info,
             "FULLMAG_FEM_MFEM_DEVICE requests a CEED backend, but MFEM was built without libCEED support");
+        finalize_availability(info);
         return info;
     }
 
@@ -145,15 +194,17 @@ fullmag_fem_availability_info query_availability() {
 #if FULLMAG_HAS_CUDA_RUNTIME
     const cudaError_t device_count_rc = cudaGetDeviceCount(&device_count);
     if (device_count_rc != cudaSuccess) {
-        set_reason(
+        set_gpu_reason(
             info,
             std::string("cudaGetDeviceCount failed for fullmag_fem: ") + cudaGetErrorString(device_count_rc));
+        finalize_availability(info);
         return info;
     }
 
     info.visible_cuda_device_count = device_count;
     if (device_count <= 0) {
-        set_reason(info, "no CUDA devices are visible to the native FEM backend");
+        set_gpu_reason(info, "no CUDA devices are visible to the native FEM backend");
+        finalize_availability(info);
         return info;
     }
 
@@ -164,28 +215,30 @@ fullmag_fem_availability_info query_availability() {
 
     const int resolved_index = selected.value_or(0);
     if (resolved_index < 0 || resolved_index >= device_count) {
-        set_reason(
+        set_gpu_reason(
             info,
             "requested FEM GPU device index is out of range for the visible CUDA device set");
+        finalize_availability(info);
         return info;
     }
     info.resolved_gpu_index = resolved_index;
 #endif
 
     if (env_flag("FULLMAG_FEM_REQUIRE_CEED") && !info.built_with_ceed) {
-        set_reason(
+        set_gpu_reason(
             info,
             "FULLMAG_FEM_REQUIRE_CEED=1 requested a libCEED-enabled FEM runtime, but the detected MFEM stack has no libCEED support");
+        finalize_availability(info);
         return info;
     }
 
-    info.available = 1;
     info.native_fem_gpu_available = 1;
     if (info.built_with_ceed) {
-        set_reason(info, "native FEM GPU backend is available (MFEM + CUDA + libCEED)");
+        set_gpu_reason(info, "native FEM GPU backend is available (MFEM + CUDA + libCEED)");
     } else {
-        set_reason(info, "native FEM GPU backend is available in bootstrap mode (MFEM + CUDA, without libCEED)");
+        set_gpu_reason(info, "native FEM GPU backend is available in bootstrap mode (MFEM + CUDA, without libCEED)");
     }
+    finalize_availability(info);
     return info;
 }
 

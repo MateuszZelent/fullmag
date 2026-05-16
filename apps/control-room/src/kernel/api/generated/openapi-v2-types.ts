@@ -628,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/diagnostics/solver-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diagnostics_get_sessions_current_diagnostics_solver_profile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/events/ws": {
         parameters: {
             query?: never;
@@ -3515,6 +3531,8 @@ export interface components {
             /** Format: int64 */
             slice_revision: number;
             /** Format: int64 */
+            solver_profile_revision: number;
+            /** Format: int64 */
             stages_revision: number;
             /** Format: int64 */
             topology_revision: number;
@@ -3898,6 +3916,82 @@ export interface components {
             /** Format: double */
             zeeman: number;
         };
+        SolverProfileAggregatesResource: {
+            /** Format: int64 */
+            average_demag_ns: number;
+            /** Format: int64 */
+            average_exchange_ns: number;
+            /** Format: int64 */
+            average_total_ns: number;
+            /** Format: int64 */
+            max_total_ns: number;
+            sample_count: number;
+        };
+        SolverProfileCommandConfig: {
+            emit_engine_log?: boolean;
+            enabled?: boolean;
+            max_samples?: number;
+            persist_artifact?: boolean;
+            /** Format: int64 */
+            sample_every?: number;
+        };
+        SolverProfilePhaseResource: {
+            id: string;
+            label: string;
+            /** Format: double */
+            percent_of_total: number;
+            /** Format: int64 */
+            wall_time_ns: number;
+        };
+        SolverProfileResource: {
+            aggregates: components["schemas"]["SolverProfileAggregatesResource"];
+            artifact_refs: string[];
+            config: components["schemas"]["SolverProfileCommandConfig"];
+            latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
+            /** Format: int64 */
+            revision: number;
+            state: string;
+            threading?: null | components["schemas"]["SolverProfileThreadingResource"];
+        };
+        SolverProfileStepSampleResource: {
+            /** Format: int32 */
+            demag_solves: number;
+            /** Format: int64 */
+            demag_subphase_sum_ns: number;
+            demag_subphases: components["schemas"]["SolverProfilePhaseResource"][];
+            /** Format: double */
+            dt: number;
+            /** Format: int64 */
+            missing_ns: number;
+            /** Format: int64 */
+            phase_sum_ns: number;
+            phases: components["schemas"]["SolverProfilePhaseResource"][];
+            /** Format: double */
+            poisson_final_residual: number;
+            /** Format: int32 */
+            poisson_iterations: number;
+            /** Format: int32 */
+            rejected_attempts: number;
+            /** Format: int32 */
+            rhs_evaluations: number;
+            /** Format: int64 */
+            step: number;
+            threading: components["schemas"]["SolverProfileThreadingResource"];
+            /** Format: double */
+            time: number;
+            /** Format: int64 */
+            total_ns: number;
+        };
+        SolverProfileThreadingResource: {
+            /** Format: int32 */
+            effective_omp_threads: number;
+            mfem_device?: string | null;
+            openmp_available?: boolean | null;
+            openmp_compiled?: boolean | null;
+            /** Format: int32 */
+            requested_omp_threads: number;
+            thread_mode: string;
+        };
         SolverStatusResource: {
             algorithm?: string | null;
             can_accept_commands: boolean;
@@ -4035,6 +4129,11 @@ export interface components {
         } & {
             /** @enum {string} */
             kind: "mesh_build";
+        }) | (components["schemas"]["RuntimeCommandIntent"] & {
+            profile: components["schemas"]["SolverProfileCommandConfig"];
+        } & {
+            /** @enum {string} */
+            kind: "set_solver_profile";
         });
         StructuredGridDescriptor: {
             /**
@@ -6078,6 +6177,40 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GpuTelemetryResponse"];
                 };
+            };
+        };
+    };
+    diagnostics_get_sessions_current_diagnostics_solver_profile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Opt-in FEM solver phase profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolverProfileResource"];
+                };
+            };
+            /** @description Solver profile not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

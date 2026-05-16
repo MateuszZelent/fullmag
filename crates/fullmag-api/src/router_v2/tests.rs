@@ -427,6 +427,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
+        solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
@@ -745,6 +746,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 display_selection: None,
                 preview_config: None,
                 stages: None,
+                profile: None,
             },
             request_id: Some("req-cmd-1".into()),
             status: CommandLifecycleState::Queued,
@@ -783,6 +785,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 display_selection: None,
                 preview_config: None,
                 stages: None,
+                profile: None,
             },
             request_id: Some("req-cmd-2".into()),
             status: CommandLifecycleState::Dispatched,
@@ -821,6 +824,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 display_selection: None,
                 preview_config: None,
                 stages: None,
+                profile: None,
             },
             request_id: Some("req-cmd-3".into()),
             status: CommandLifecycleState::Completed,
@@ -895,6 +899,7 @@ async fn test_router_with_session_and_artifact_dir() -> (axum::Router, PathBuf) 
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
+        solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
@@ -1031,6 +1036,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
+        solver_profile: crate::schemas::diagnostics::SolverProfileResource::default(),
         quantities: Vec::new(),
         fem_mesh: None,
         latest_fields: LatestFields::default(),
@@ -3794,6 +3800,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
+                solver_profile: None,
                 fem_mesh: None,
             },
         )
@@ -6581,6 +6588,7 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
                 display_selection: None,
                 preview_config: None,
                 stages: None,
+                profile: None,
             },
             request_id: None,
             status: CommandLifecycleState::Queued,
@@ -7011,6 +7019,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 display_selection: None,
                 preview_config: None,
                 stages: None,
+                profile: None,
             },
             request_id: None,
             status: CommandLifecycleState::Completed,
@@ -7783,6 +7792,84 @@ async fn engine_log_returns_304_when_etag_matches() {
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/diagnostics/engine-log")
+                .header("if-none-match", etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let body = body_bytes(second).await;
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn solver_profile_returns_404_without_session() {
+    let app = test_router();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/solver-profile")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn solver_profile_returns_200_with_session() {
+    let app = test_router_with_session().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/solver-profile")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 0);
+    assert_eq!(json["state"], "disabled");
+    assert!(json["latest_samples"].is_array());
+    assert_eq!(json["aggregates"]["sample_count"], 0);
+}
+
+#[tokio::test]
+async fn solver_profile_returns_304_when_etag_matches() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/solver-profile")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("missing etag")
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/diagnostics/solver-profile")
                 .header("if-none-match", etag)
                 .body(Body::empty())
                 .unwrap(),

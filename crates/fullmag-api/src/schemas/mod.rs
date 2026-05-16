@@ -1,6 +1,7 @@
 pub mod authoring;
 pub mod commands;
 pub mod common;
+pub mod diagnostics;
 pub mod display;
 pub mod domain;
 pub mod fields;

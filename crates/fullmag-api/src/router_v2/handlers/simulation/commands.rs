@@ -852,6 +852,7 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
         display_selection: None,
         preview_config: None,
         stages: None,
+        profile: None,
     }
 }
 
@@ -990,6 +991,13 @@ fn command_from_structured(
             command.mesh_reason = mesh_reason;
             command
         }
+        StructuredCommandRequest::SetSolverProfile { intent, profile } => {
+            let mut command =
+                new_session_command(command_id, "set_solver_profile", created_at_unix_ms);
+            apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
+            command.profile = Some(serde_json::to_value(profile).unwrap_or(serde_json::Value::Null));
+            command
+        }
     }
 }
 
@@ -1003,4 +1011,43 @@ fn apply_command_intent(
     command.precondition = intent.precondition;
     command.client_intent_id = intent.client_intent_id;
     command.requested_at_unix_ms = intent.requested_at_unix_ms;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::diagnostics::SolverProfileCommandConfig;
+
+    #[test]
+    fn set_solver_profile_command_preserves_profile_payload() {
+        let command = command_from_structured(
+            StructuredCommandRequest::SetSolverProfile {
+                intent: RuntimeCommandIntent::default(),
+                profile: SolverProfileCommandConfig {
+                    enabled: true,
+                    sample_every: 2,
+                    max_samples: 7,
+                    emit_engine_log: true,
+                    persist_artifact: false,
+                },
+            },
+            "cmd-profile".to_string(),
+            123,
+        );
+
+        assert_eq!(command.kind, "set_solver_profile");
+        assert_eq!(command.command_id, "cmd-profile");
+        assert_eq!(
+            command.profile.as_ref().and_then(|value| value.get("enabled")),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            command.profile.as_ref().and_then(|value| value.get("sample_every")),
+            Some(&serde_json::json!(2))
+        );
+        assert_eq!(
+            command.profile.as_ref().and_then(|value| value.get("max_samples")),
+            Some(&serde_json::json!(7))
+        );
+    }
 }

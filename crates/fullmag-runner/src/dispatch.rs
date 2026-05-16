@@ -2920,7 +2920,7 @@ fn execute_native_fem(
         device_info.compute_capability,
         device_info.driver_version,
         device_info.runtime_version,
-        plan.mfem_device_string.as_deref().unwrap_or("cuda"),
+        plan.mfem_device_string.as_deref().unwrap_or("cpu"),
         demag_policy.solver,
         demag_policy.preconditioner,
     ));
@@ -4565,7 +4565,10 @@ mod tests {
         reason: &str,
     ) -> native_fem::GpuAvailability {
         native_fem::GpuAvailability {
-            available: gpu,
+            available: cpu || gpu,
+            available_any: cpu || gpu,
+            available_cpu: cpu,
+            available_gpu: gpu,
             built_with_mfem_stack: cpu || gpu,
             built_with_cuda_runtime: gpu,
             built_with_ceed: false,
@@ -4578,6 +4581,16 @@ mod tests {
             requested_gpu_index: -1,
             resolved_gpu_index: if gpu { 0 } else { -1 },
             reason: reason.to_string(),
+            reason_cpu: if cpu {
+                "native FEM CPU backend is available".to_string()
+            } else {
+                reason.to_string()
+            },
+            reason_gpu: if gpu {
+                "native FEM GPU backend is available".to_string()
+            } else {
+                reason.to_string()
+            },
         }
     }
 

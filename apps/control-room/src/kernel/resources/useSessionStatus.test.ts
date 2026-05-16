@@ -20,6 +20,7 @@ const resources: LiveStatusResource["resources"] = {
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
+  solver_profile_revision: 0,
   stages_revision: 0,
   topology_revision: 0,
   visualization_state_revision: 0,

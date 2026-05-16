@@ -11,6 +11,15 @@ set(FEM_PUBLIC_HEADERS
 )
 
 set(FEM_SOURCES
+    cpu/mfem/interactions/anisotropy.cpp
+    cpu/mfem/interactions/demag_poisson.cpp
+    cpu/mfem/interactions/zeeman.cpp
+    cpu/mfem/integrators/heun.cpp
+    cpu/mfem/integrators/rk_explicit.cpp
+    cpu/mfem/integrators/rk4.cpp
+    cpu/mfem/integrators/rk23.cpp
+    cpu/mfem/integrators/rk45.cpp
+    cpu/mfem/runtime/mfem_device.cpp
     src/api.cpp
     src/context.cpp
     src/dmi_weak_residual.cpp
@@ -25,6 +34,7 @@ if(FULLMAG_USE_MFEM_STACK)
     find_package(MFEM CONFIG REQUIRED)
 
     list(APPEND FEM_SOURCES
+        cpu/mfem/interactions/exchange.cpp
         src/mfem_bridge.cpp
     )
 
@@ -44,6 +54,7 @@ target_include_directories(fullmag_fem
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
     PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
@@ -92,6 +103,35 @@ add_executable(fem_dmi_weak_residual tests/dmi_weak_residual.cpp)
 target_link_libraries(fem_dmi_weak_residual PRIVATE fullmag_fem)
 target_include_directories(fem_dmi_weak_residual PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME fem_dmi_weak_residual COMMAND fem_dmi_weak_residual)
+
+add_executable(fem_anisotropy_contract tests/anisotropy_contract.cpp)
+target_link_libraries(fem_anisotropy_contract PRIVATE fullmag_fem)
+target_include_directories(fem_anisotropy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_anisotropy_contract COMMAND fem_anisotropy_contract)
+
+add_executable(fem_zeeman_contract tests/zeeman_contract.cpp)
+target_link_libraries(fem_zeeman_contract PRIVATE fullmag_fem)
+target_include_directories(fem_zeeman_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_zeeman_contract COMMAND fem_zeeman_contract)
+
+add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
+target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)
+target_include_directories(fem_demag_poisson_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
+
+add_executable(fem_contract_validation tests/contract_validation.cpp)
+target_link_libraries(fem_contract_validation PRIVATE fullmag_fem)
+target_include_directories(fem_contract_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME fem_contract_validation COMMAND fem_contract_validation)
 
 # S14: PA vs Assembled benchmark (opt-in)
 if(FULLMAG_USE_MFEM_STACK)

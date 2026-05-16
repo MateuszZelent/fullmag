@@ -34,10 +34,16 @@ Recommended filenames:
 - `0000-physics-documentation-standard.md`
 - `0050-shared-problem-semantics-and-embedded-python-api.md`
 - `0100-mesh-and-region-discretization.md`
+- `units.md`
 - `0200-llg-exchange-reference-engine.md`
 - `0300-gpu-fdm-precision-and-calibration.md`
 - `0400-demagnetization.md`
+- `fem_zeeman.md`
+- `fem_anisotropy_uniaxial.md`
+- `fem_anisotropy_cubic.md`
+- `fem_demag_poisson.md`
 - `0700-frequency-domain-linearized-llg.md`
 - `0710-periodic-and-floquet-boundary-conditions.md`
+- `0900-native-fem-operator-contracts-and-validation.md`
 
 The numbering is semantic, not bureaucratic.

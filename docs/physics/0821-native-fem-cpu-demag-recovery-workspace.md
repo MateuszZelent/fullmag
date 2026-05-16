@@ -2,7 +2,7 @@
 
 - Status: implementation note
 - Owners: Fullmag core
-- Last updated: 2026-05-15
+- Last updated: 2026-05-16
 - Related ADRs: none
 - Related specs:
   - `docs/reports/15.05.2026/fem-solver-physics-performance-audit.md`
@@ -118,7 +118,7 @@ No cross-backend behavior changes in this slice.
 
 ### 5.3 Regression tests
 
-1. Add a source-level guard proving `recover_demag_field` no longer creates
+1. Add a source-level guard proving `recover_demag_poisson_field` no longer creates
    per-call full-size partial vectors in the function body.
 2. Compile the native FEM FFI path with `cargo check -p fullmag-cli --features
    "cuda fem-gpu"`.

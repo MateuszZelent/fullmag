@@ -1292,6 +1292,15 @@ fn command_diagnostic_references(
             severity: "info".into(),
             message: "Engine log may contain runtime entries for this command.".into(),
         });
+        if record.command.kind == "set_solver_profile" {
+            diagnostics.push(CommandDiagnosticReferenceResource {
+                resource_key: "diagnostics/solver-profile".into(),
+                revision: snapshot.solver_profile.revision,
+                severity: "info".into(),
+                message: "Solver profiler configuration and samples are available as a diagnostics resource."
+                    .into(),
+            });
+        }
         if stage_linkage.is_some_and(|linkage| !linkage.artifact_refs.is_empty()) {
             diagnostics.push(CommandDiagnosticReferenceResource {
                 resource_key: "data/artifacts".into(),
