@@ -6,6 +6,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -15,6 +18,42 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void demag_update_execution_is_owned_by_demag_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string demag =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.cpp");
+
+    check(
+        demag.find("bool compute_demag_field_for_magnetization(") != std::string::npos,
+        "demag field execution wrapper must be defined in demag.cpp");
+    check(
+        bridge.find("DemagFieldUpdateDecision demag_decision") == std::string::npos,
+        "mfem_bridge.cpp must not own demag update decision state");
+    check(
+        bridge.find("case DemagFieldUpdateAction::") == std::string::npos,
+        "mfem_bridge.cpp must not dispatch concrete demag update actions");
 }
 
 void cached_field_plan_does_not_validate_fresh_solve_readiness() {
@@ -93,6 +132,7 @@ void unsupported_fresh_demag_plan_is_rejected() {
 } // namespace
 
 int main() {
+    demag_update_execution_is_owned_by_demag_module();
     cached_field_plan_does_not_validate_fresh_solve_readiness();
     poisson_airbox_plan_requires_ready_poisson_operator();
     fredkin_koehler_plan_requires_ready_fem_bem_operator();

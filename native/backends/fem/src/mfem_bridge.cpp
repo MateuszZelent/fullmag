@@ -4,12 +4,20 @@
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
+#include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
+#include "cpu/mfem/integrators/adaptive_dt.hpp"
+#include "cpu/mfem/integrators/llg_rhs.hpp"
+#include "cpu/mfem/integrators/rk_stage_rhs.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/runtime/step_metrics.hpp"
 #include "gpu_rk.hpp"
 #include "transfer_audit.hpp"
 
@@ -51,24 +59,6 @@ constexpr int kInterruptPollStride = 256;
 
 using Vec3 = std::array<double, 3>;
 using SteadyClock = std::chrono::steady_clock;
-
-// FND-005 fix: helper to check if any effective-field term is enabled,
-// so that snapshot/step are not blocked for anisotropy-only, DMI-only, etc.
-inline bool has_any_effective_field_term(const Context &ctx) {
-    return ctx.enable_exchange
-        || ctx.enable_demag
-        || ctx.has_external_field
-        || ctx.enable_anisotropy
-        || ctx.enable_dmi
-        || ctx.enable_bulk_dmi
-        || ctx.enable_cubic_anisotropy
-        || ctx.has_oersted_cylinder
-        || ctx.has_oersted_field
-        || ctx.enable_magnetoelastic
-        || ctx.has_zhang_li_stt
-        || ctx.has_slonczewski_stt
-        || (ctx.temperature > 0.0);
-}
 
 uint64_t elapsed_ns(const SteadyClock::time_point &start) {
     return static_cast<uint64_t>(
@@ -141,117 +131,6 @@ bool env_flag_enabled(const char *name) {
            std::strcmp(raw, "YES") == 0;
 }
 
-int openmp_max_threads() {
-#ifdef _OPENMP
-    return std::max(1, omp_get_max_threads());
-#else
-    return 1;
-#endif
-}
-
-int detected_cpu_threads() {
-#ifdef _OPENMP
-    return std::max(1, omp_get_num_procs());
-#else
-    const unsigned int concurrency = std::thread::hardware_concurrency();
-    return std::max(1u, concurrency);
-#endif
-}
-
-std::optional<int> parse_positive_env_int(const char *name) {
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || *raw == '\0') {
-        return std::nullopt;
-    }
-    char *end = nullptr;
-    const long parsed = std::strtol(raw, &end, 10);
-    if (end == raw || *end != '\0' || parsed < 1) {
-        return std::nullopt;
-    }
-    return static_cast<int>(parsed);
-}
-
-bool env_requests_auto_threads(const char *name) {
-    const char *raw = std::getenv(name);
-    if (raw == nullptr || *raw == '\0') {
-        return false;
-    }
-    return std::strcmp(raw, "auto") == 0 ||
-           std::strcmp(raw, "AUTO") == 0 ||
-           std::strcmp(raw, "Auto") == 0;
-}
-
-struct CpuThreadRequest {
-    int requested_threads = 1;
-    int auto_resolved_threads = 0;
-    bool auto_requested = false;
-};
-
-CpuThreadRequest requested_cpu_threads() {
-    if (env_requests_auto_threads("FULLMAG_CPU_THREADS")) {
-        return CpuThreadRequest{
-            detected_cpu_threads(),
-            parse_positive_env_int("FULLMAG_CPU_THREADS_AUTO_RESOLVED").value_or(0),
-            true,
-        };
-    }
-    if (const auto from_omp = parse_positive_env_int("OMP_NUM_THREADS")) {
-        return CpuThreadRequest{*from_omp, 0, false};
-    }
-    if (const auto from_fullmag = parse_positive_env_int("FULLMAG_CPU_THREADS")) {
-        return CpuThreadRequest{*from_fullmag, 0, false};
-    }
-    return CpuThreadRequest{detected_cpu_threads(), 0, true};
-}
-
-int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads) {
-    if (requested_threads <= 1 || mfem_device_requests_gpu(ctx)) {
-        return std::max(1, requested_threads);
-    }
-    const uint32_t node_count = ctx.n_nodes;
-    const uint32_t element_count = ctx.n_elements;
-    if (node_count <= 10000u || element_count <= 75000u) {
-        return std::min(requested_threads, 8);
-    }
-    if (node_count <= 50000u || element_count <= 400000u) {
-        return std::min(requested_threads, 16);
-    }
-    return std::max(1, requested_threads);
-}
-
-void configure_cpu_openmp_runtime(Context &ctx) {
-    const CpuThreadRequest request = requested_cpu_threads();
-    ctx.cpu_threads_auto_requested = request.auto_requested;
-    ctx.requested_omp_threads = request.requested_threads;
-    ctx.effective_omp_threads = request.requested_threads;
-    if (request.auto_requested) {
-        ctx.effective_omp_threads = request.auto_resolved_threads > 0
-            ? std::min(request.requested_threads, request.auto_resolved_threads)
-            : auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
-    }
-#ifdef _OPENMP
-    omp_set_num_threads(ctx.effective_omp_threads);
-#endif
-}
-
-void log_cpu_runtime_selection(const Context &ctx) {
-    if (mfem_device_requests_gpu(ctx)) {
-        return;
-    }
-    const char *thread_mode = ctx.cpu_threads_auto_requested ? "auto" : "manual";
-
-    std::fprintf(
-        stderr,
-        "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
-        demag_poisson_linear_solver_name(ctx.demag_solver.solver),
-        demag_poisson_preconditioner_name(ctx.demag_solver.preconditioner),
-        thread_mode,
-        ctx.requested_omp_threads,
-        ctx.effective_omp_threads,
-        ctx.n_nodes,
-        ctx.n_elements);
-}
-
 void debug_checkpoint(const char *stage) {
     if (!env_flag_enabled("FULLMAG_FEM_DEBUG_STARTUP")) {
         return;
@@ -280,112 +159,6 @@ double scalar_field_value(
     return index < field.size() ? field[index] : fallback;
 }
 
-bool has_relax_stop_criteria(const Context &ctx) {
-    return ctx.relax_stop.has_torque_tolerance_apm != 0
-        || ctx.relax_stop.has_energy_tolerance_j != 0
-        || ctx.relax_stop.has_max_steps != 0
-        || ctx.relax_stop.has_max_pseudotime_s != 0
-        || ctx.relax_stop.has_max_physical_time_s != 0;
-}
-
-void set_stage_completion(
-    Context &ctx,
-    fullmag_fem_stage_stop_reason reason,
-    const char *metric_name,
-    double metric_value,
-    double threshold)
-{
-    if (ctx.stage_completion.has_reason != 0) {
-        return;
-    }
-    ctx.stage_completion = {};
-    ctx.stage_completion.has_reason = 1;
-    ctx.stage_completion.reason = reason;
-    if (metric_name != nullptr && metric_name[0] != '\0') {
-        ctx.stage_completion.has_metric_name = 1;
-        std::snprintf(
-            ctx.stage_completion.metric_name,
-            sizeof(ctx.stage_completion.metric_name),
-            "%s",
-            metric_name);
-    }
-    ctx.stage_completion.metric_value = metric_value;
-    ctx.stage_completion.threshold = threshold;
-}
-
-void update_stage_completion_from_stats(
-    Context &ctx,
-    const fullmag_fem_step_stats &stats)
-{
-    if (ctx.stage_completion.has_reason != 0 || !has_relax_stop_criteria(ctx)) {
-        return;
-    }
-
-    const double previous_energy = ctx.relax_previous_total_energy_j;
-    const bool has_previous_energy = ctx.relax_previous_total_energy_valid;
-    ctx.relax_previous_total_energy_j = stats.total_energy_joules;
-    ctx.relax_previous_total_energy_valid = true;
-    ctx.relax_pseudotime_s += std::max(stats.dt_seconds, 0.0);
-
-    const bool torque_ok =
-        ctx.relax_stop.has_torque_tolerance_apm == 0 ||
-        stats.max_torque_Apm <= ctx.relax_stop.torque_tolerance_apm;
-
-    if (ctx.relax_stop.has_energy_tolerance_j != 0 && has_previous_energy) {
-        const double delta_energy =
-            std::abs(stats.total_energy_joules - previous_energy);
-        if (torque_ok && delta_energy <= ctx.relax_stop.energy_tolerance_j) {
-            set_stage_completion(
-                ctx,
-                FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
-                "delta_total_energy_J",
-                delta_energy,
-                ctx.relax_stop.energy_tolerance_j);
-            return;
-        }
-    }
-    if (ctx.relax_stop.has_torque_tolerance_apm != 0 &&
-        ctx.relax_stop.has_energy_tolerance_j == 0 &&
-        stats.max_torque_Apm <= ctx.relax_stop.torque_tolerance_apm) {
-        set_stage_completion(
-            ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
-            "max_torque_Apm",
-            stats.max_torque_Apm,
-            ctx.relax_stop.torque_tolerance_apm);
-        return;
-    }
-    if (ctx.relax_stop.has_max_physical_time_s != 0 &&
-        stats.time_seconds >= ctx.relax_stop.max_physical_time_s) {
-        set_stage_completion(
-            ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME,
-            "physical_time_s",
-            stats.time_seconds,
-            ctx.relax_stop.max_physical_time_s);
-        return;
-    }
-    if (ctx.relax_stop.has_max_pseudotime_s != 0 &&
-        ctx.relax_pseudotime_s >= ctx.relax_stop.max_pseudotime_s) {
-        set_stage_completion(
-            ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME,
-            "pseudo_time_s",
-            ctx.relax_pseudotime_s,
-            ctx.relax_stop.max_pseudotime_s);
-        return;
-    }
-    if (ctx.relax_stop.has_max_steps != 0 &&
-        stats.step >= ctx.relax_stop.max_steps) {
-        set_stage_completion(
-            ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
-            "steps",
-            static_cast<double>(stats.step),
-            static_cast<double>(ctx.relax_stop.max_steps));
-    }
-}
-
 double average_magnetic_scalar_field(
     const std::vector<double> &field,
     const std::vector<uint8_t> &magnetic_node_mask,
@@ -409,84 +182,6 @@ double average_magnetic_scalar_field(
         return fallback;
     }
     return sum / static_cast<double>(count);
-}
-
-std::array<double, 3> average_magnetization_components(const Context &ctx)
-{
-    std::array<double, 3> sum{};
-    uint64_t count = 0;
-    const size_t nodes = ctx.m_xyz.size() / 3u;
-    for (size_t node = 0; node < nodes; ++node) {
-        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
-            continue;
-        }
-        const size_t base = node * 3u;
-        const double mx = ctx.m_xyz[base + 0u];
-        const double my = ctx.m_xyz[base + 1u];
-        const double mz = ctx.m_xyz[base + 2u];
-        if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
-            continue;
-        }
-        sum[0] += mx;
-        sum[1] += my;
-        sum[2] += mz;
-        count += 1;
-    }
-    if (count == 0) {
-        return {0.0, 0.0, 0.0};
-    }
-    const double inv = 1.0 / static_cast<double>(count);
-    return {sum[0] * inv, sum[1] * inv, sum[2] * inv};
-}
-
-void unpack_aos_to_components(
-    const std::vector<double> &aos,
-    std::vector<double> &x,
-    std::vector<double> &y,
-    std::vector<double> &z)
-{
-    const size_t n = aos.size() / 3u;
-    x.resize(n);
-    y.resize(n);
-    z.resize(n);
-    for (size_t i = 0; i < n; ++i) {
-        x[i] = aos[i * 3u + 0];
-        y[i] = aos[i * 3u + 1];
-        z[i] = aos[i * 3u + 2];
-    }
-}
-
-void unpack_aos_to_existing_components(
-    const std::vector<double> &aos,
-    std::vector<double> &x,
-    std::vector<double> &y,
-    std::vector<double> &z)
-{
-    const size_t n = aos.size() / 3u;
-    if (x.size() != n || y.size() != n || z.size() != n) {
-        unpack_aos_to_components(aos, x, y, z);
-        return;
-    }
-    for (size_t i = 0; i < n; ++i) {
-        x[i] = aos[i * 3u + 0];
-        y[i] = aos[i * 3u + 1];
-        z[i] = aos[i * 3u + 2];
-    }
-}
-
-void pack_components_to_aos(
-    const std::vector<double> &x,
-    const std::vector<double> &y,
-    const std::vector<double> &z,
-    std::vector<double> &aos)
-{
-    const size_t n = x.size();
-    aos.resize(n * 3u);
-    for (size_t i = 0; i < n; ++i) {
-        aos[i * 3u + 0] = x[i];
-        aos[i * 3u + 1] = y[i];
-        aos[i * 3u + 2] = z[i];
-    }
 }
 
 bool is_fully_magnetic(const Context &ctx) {
@@ -537,21 +232,6 @@ void copy_mfem_vector_to_host(const mfem::Vector &src, std::vector<double> &dst)
     }
 }
 
-void project_static_periodic_aos(const Context &ctx, std::vector<double> &field_xyz) {
-    if (ctx.periodic_reduced_node.empty()) {
-        return;
-    }
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
-        const uint32_t reduced = ctx.periodic_reduced_node[static_cast<size_t>(node)];
-        const uint32_t representative = ctx.periodic_representative_nodes[static_cast<size_t>(reduced)];
-        const size_t dst = static_cast<size_t>(node) * 3u;
-        const size_t src = static_cast<size_t>(representative) * 3u;
-        field_xyz[dst + 0u] = field_xyz[src + 0u];
-        field_xyz[dst + 1u] = field_xyz[src + 1u];
-        field_xyz[dst + 2u] = field_xyz[src + 2u];
-    }
-}
-
 double dot_host_vectors(const std::vector<double> &a, const std::vector<double> &b) {
     double value = 0.0;
     for (size_t i = 0; i < a.size(); ++i) {
@@ -560,417 +240,7 @@ double dot_host_vectors(const std::vector<double> &a, const std::vector<double> 
     return value;
 }
 
-double vector_norm3(double x, double y, double z) {
-    return std::sqrt(x * x + y * y + z * z);
-}
-
-// ── S17: PI controller for adaptive time stepping ─────────────────────
-// Given the local error estimate `error_norm` (0-based, 1 = at tolerance),
-// computes the next dt using a PI controller:
-//   dt_new = dt * safety * (1/error)^α * (prev_error/error)^β
-//
-// Returns the accepted/rejected status and the proposed new dt.
-struct AdaptiveResult {
-    bool accepted;
-    double dt_next;
-};
-
-AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm) {
-    if (!ctx.adaptive_dt_enabled || error_norm <= 0.0) {
-        return {true, ctx.dt_seconds};
-    }
-
-    const double clamped_error = std::max(error_norm, 1e-15);
-
-    if (clamped_error <= 1.0) {
-        // Accepted step — compute growth ratio
-        double ratio = ctx.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.pi_alpha) *
-                       std::pow(ctx.prev_error_norm / clamped_error, ctx.pi_beta);
-        ratio = std::min(ratio, ctx.dt_grow_max);
-        ratio = std::max(ratio, 1.0);  // never shrink on accept
-
-        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.dt_max);
-        ctx.prev_error_norm = clamped_error;
-        return {true, dt_new};
-    } else {
-        // Rejected step — shrink dt and retry
-        double ratio = ctx.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.pi_alpha);
-        ratio = std::max(ratio, ctx.dt_shrink_min);
-
-        const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.dt_min);
-        ctx.rejected_steps += 1;
-        return {false, dt_new};
-    }
-}
-
-void normalize_aos_field(std::vector<double> &m_xyz) {
-    const size_t n = m_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        const size_t base = i * 3u;
-        const double norm = vector_norm3(m_xyz[base + 0], m_xyz[base + 1], m_xyz[base + 2]);
-        if (norm > 0.0) {
-            m_xyz[base + 0] /= norm;
-            m_xyz[base + 1] /= norm;
-            m_xyz[base + 2] /= norm;
-        }
-    }
-}
-
-void llg_rhs_aos(
-    const std::vector<double> &m_xyz,
-    const std::vector<double> &h_xyz,
-    double gamma,
-    double alpha,
-    const std::vector<double> *alpha_field,
-    std::vector<double> &rhs_xyz,
-    double &max_rhs)
-{
-    const size_t n = m_xyz.size() / 3u;
-    rhs_xyz.resize(m_xyz.size());
-    max_rhs = 0.0;
-
-    for (size_t i = 0; i < n; ++i) {
-        const size_t base = i * 3u;
-        const double mx = m_xyz[base + 0];
-        const double my = m_xyz[base + 1];
-        const double mz = m_xyz[base + 2];
-        const double hx = h_xyz[base + 0];
-        const double hy = h_xyz[base + 1];
-        const double hz = h_xyz[base + 2];
-        const double alpha_i = alpha_field == nullptr
-            ? alpha
-            : scalar_field_value(*alpha_field, i, alpha);
-        const double gamma_bar = gamma / (1.0 + alpha_i * alpha_i);
-
-        const double px = my * hz - mz * hy;
-        const double py = mz * hx - mx * hz;
-        const double pz = mx * hy - my * hx;
-
-        const double dx = my * pz - mz * py;
-        const double dy = mz * px - mx * pz;
-        const double dz = mx * py - my * px;
-
-        rhs_xyz[base + 0] = -gamma_bar * (px + alpha_i * dx);
-        rhs_xyz[base + 1] = -gamma_bar * (py + alpha_i * dy);
-        rhs_xyz[base + 2] = -gamma_bar * (pz + alpha_i * dz);
-
-        max_rhs = std::max(
-            max_rhs,
-            vector_norm3(rhs_xyz[base + 0], rhs_xyz[base + 1], rhs_xyz[base + 2]));
-    }
-}
-
-double max_norm_aos(const std::vector<double> &field_xyz) {
-    double max_value = 0.0;
-    const size_t n = field_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        const size_t base = i * 3u;
-        max_value = std::max(
-            max_value,
-            vector_norm3(field_xyz[base + 0], field_xyz[base + 1], field_xyz[base + 2]));
-    }
-    return max_value;
-}
-
-double max_cross_norm_aos(const std::vector<double> &a_xyz,
-                          const std::vector<double> &b_xyz) {
-    double max_value = 0.0;
-    const size_t n = a_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        const size_t base = i * 3u;
-        double cx = a_xyz[base+1]*b_xyz[base+2] - a_xyz[base+2]*b_xyz[base+1];
-        double cy = a_xyz[base+2]*b_xyz[base+0] - a_xyz[base+0]*b_xyz[base+2];
-        double cz = a_xyz[base+0]*b_xyz[base+1] - a_xyz[base+1]*b_xyz[base+0];
-        max_value = std::max(max_value, std::sqrt(cx*cx + cy*cy + cz*cz));
-    }
-    return max_value;
-}
-
-void zero_non_magnetic_nodes_aos(
-    std::vector<double> &field_xyz,
-    const std::vector<uint8_t> &magnetic_node_mask)
-{
-    if (magnetic_node_mask.empty()) {
-        return;
-    }
-    const size_t n = field_xyz.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        if (magnetic_node_mask[i] == 0u) {
-            const size_t base = i * 3u;
-            field_xyz[base + 0] = 0.0;
-            field_xyz[base + 1] = 0.0;
-            field_xyz[base + 2] = 0.0;
-        }
-    }
-}
-
-bool compute_effective_fields_for_magnetization_impl(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ex_xyz,
-    std::vector<double> &h_demag_xyz,
-    std::vector<double> &h_eff_xyz,
-    double *exchange_energy,
-    double *demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error)
-{
-    if (ctx.enable_exchange) {
-        h_ex_xyz.resize(m_xyz.size());
-    } else {
-        h_ex_xyz.assign(m_xyz.size(), 0.0);
-    }
-    if (ctx.enable_demag) {
-        h_demag_xyz.resize(m_xyz.size());
-    } else {
-        h_demag_xyz.assign(m_xyz.size(), 0.0);
-    }
-    h_eff_xyz.resize(m_xyz.size());
-
-    double exchange = 0.0;
-    if (ctx.enable_exchange) {
-        ScopedPhaseTimer timer(timings != nullptr ? &timings->exchange_wall_time_ns : nullptr);
-        if (!compute_exchange_for_magnetization(
-                ctx,
-                m_xyz,
-                h_ex_xyz,
-                nullptr,
-                exchange_energy != nullptr ? &exchange : nullptr,
-                allow_interrupt,
-                error))
-        {
-            return false;
-        }
-        if (allow_interrupt && poll_interrupt(ctx)) {
-            return false;
-        }
-    }
-
-    double demag = 0.0;
-    if (ctx.enable_demag) {
-        ScopedPhaseTimer timer(timings != nullptr ? &timings->demag.wall_time_ns : nullptr);
-        DemagFieldUpdateDecision demag_decision{};
-        if (!plan_demag_field_update(ctx, demag_decision, error)) {
-            return false;
-        }
-        switch (demag_decision.action) {
-            case DemagFieldUpdateAction::FreshFemBemSolve:
-                if (!context_compute_demag_fem_bem(
-                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, timings, error)) {
-                    return false;
-                }
-                break;
-            case DemagFieldUpdateAction::FreshPoissonSolve:
-                if (!context_compute_demag_poisson(
-                        ctx, m_xyz, h_demag_xyz, demag, allow_interrupt, timings, error)) {
-                    return false;
-                }
-                break;
-            case DemagFieldUpdateAction::UseCachedField:
-                if (demag_poisson_try_load_cached_field(ctx, h_demag_xyz)) {
-                    demag = demag_poisson_cached_energy_from_field(
-                        ctx,
-                        m_xyz,
-                        h_demag_xyz,
-                        ctx.effective_omp_threads);
-                }
-                break;
-        }
-        if (demag_decision.store_refreshed_field_cache) {
-            demag_poisson_store_refreshed_field_cache(ctx, h_demag_xyz);
-        }
-        if (allow_interrupt && poll_interrupt(ctx)) {
-            return false;
-        }
-    }
-
-    {
-        ScopedPhaseTimer timer(timings != nullptr ? &timings->extra_energy_wall_time_ns : nullptr);
-        double anisotropy_energy = 0.0;
-        if (ctx.enable_anisotropy) {
-            compute_uniaxial_anisotropy_field(
-                ctx, m_xyz, ctx.h_ani_xyz,
-                &anisotropy_energy);
-            // Project anisotropy field onto periodic classes so all nodes in
-            // the same class carry the same value (local term, so this is safe).
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_ani_xyz);
-            }
-        } else {
-            ctx.h_ani_xyz.assign(m_xyz.size(), 0.0);
-        }
-
-        double dmi = 0.0;
-        if (ctx.enable_dmi) {
-            if (!compute_interfacial_dmi_field(
-                    ctx, m_xyz, ctx.h_dmi_xyz, &dmi, error)) {
-                return false;
-            }
-            // Project interfacial DMI field onto periodic classes.
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_dmi_xyz);
-            }
-        }
-
-        // F-03 fix: compute cubic anisotropy and add to H_eff.
-        if (ctx.enable_cubic_anisotropy) {
-            double cubic_energy = 0.0;
-            compute_cubic_anisotropy_field(
-                ctx, m_xyz, ctx.h_cubic_ani_xyz, &cubic_energy);
-            anisotropy_energy += cubic_energy;
-            // Same periodic projection for cubic anisotropy.
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_cubic_ani_xyz);
-            }
-        }
-
-        // F-03/F-07 fix: compute bulk DMI and add to H_eff.
-        // FEM-027 fix: persist bulk DMI field in context for readback.
-        double bulk_dmi = 0.0;
-        if (ctx.enable_bulk_dmi) {
-            if (!compute_bulk_dmi_field(
-                    ctx, m_xyz, ctx.h_bulk_dmi_xyz, &bulk_dmi, error)) {
-                return false;
-            }
-            // Project bulk DMI field onto periodic classes.
-            if (!ctx.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.h_bulk_dmi_xyz);
-            }
-        }
-
-        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-            h_eff_xyz[i] = h_ex_xyz[i] + h_demag_xyz[i] +
-                           ctx.h_ani_xyz[i] + ctx.h_dmi_xyz[i] +
-                           ctx.h_cubic_ani_xyz[i];
-        }
-        add_zeeman_field(ctx, h_eff_xyz);
-
-        // Add bulk DMI to H_eff
-        if (ctx.enable_bulk_dmi && !ctx.h_bulk_dmi_xyz.empty()) {
-            for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-                h_eff_xyz[i] += ctx.h_bulk_dmi_xyz[i];
-            }
-        }
-
-        add_oersted_field(ctx, h_eff_xyz);
-
-        // F-09 fix: add thermal noise to H_eff per step.
-        if (ctx.temperature > 0.0) {
-            refresh_thermal_brown_field(ctx);
-            add_thermal_brown_field(ctx, h_eff_xyz);
-        }
-
-        // Add magnetoelastic field
-        double magnetoelastic_energy = 0.0;
-        if (ctx.enable_magnetoelastic) {
-            compute_magnetoelastic_field(ctx, m_xyz);
-            magnetoelastic_energy = ctx.mel_energy;
-            add_magnetoelastic_field(ctx, h_eff_xyz);
-        }
-        // After all local terms are assembled, project H_eff onto periodic
-        // classes.  This removes floating-point rounding mismatches between
-        // paired nodes that could otherwise accumulate over many steps.
-        if (!ctx.periodic_reduced_node.empty()) {
-            project_static_periodic_aos(ctx, h_eff_xyz);
-        }
-        if (allow_interrupt && poll_interrupt(ctx)) {
-            return false;
-        }
-        ctx.last_anisotropy_energy_joules = anisotropy_energy;
-        ctx.last_dmi_energy_joules = dmi + bulk_dmi;
-        ctx.last_magnetoelastic_energy_joules = magnetoelastic_energy;
-    }
-
-    update_demag_poisson_visual_effective_field(ctx, h_eff_xyz, h_demag_xyz);
-
-    if (exchange_energy != nullptr) {
-        *exchange_energy = exchange;
-    }
-    if (demag_energy != nullptr) {
-        *demag_energy = demag;
-    }
-
-    return true;
-}
-
-void fill_demag_solver_stats(
-    const Context &ctx,
-    fullmag_fem_step_stats &stats)
-{
-    fill_demag_poisson_solver_stats(ctx, stats);
-    // Thread provenance: filled from context each step for telemetry.
-    stats.requested_omp_threads = ctx.requested_omp_threads;
-    stats.effective_omp_threads = ctx.effective_omp_threads;
-}
-
-void fill_common_step_metrics(
-    Context &ctx,
-    fullmag_fem_step_stats &stats,
-    double max_rhs,
-    PhaseTimings *timings)
-{
-    ScopedPhaseTimer timer(timings != nullptr ? &timings->extra_energy_wall_time_ns : nullptr);
-
-    stats.external_energy_joules = zeeman_energy_from_field(ctx, ctx.m_xyz);
-    stats.anisotropy_energy_joules = ctx.last_anisotropy_energy_joules;
-    stats.dmi_energy_joules = ctx.last_dmi_energy_joules;
-    stats.magnetoelastic_energy_joules = ctx.last_magnetoelastic_energy_joules;
-
-    stats.total_energy_joules =
-        stats.exchange_energy_joules + stats.demag_energy_joules +
-        stats.external_energy_joules + stats.anisotropy_energy_joules +
-        stats.dmi_energy_joules + stats.magnetoelastic_energy_joules;
-    stats.max_effective_field_amplitude = max_norm_aos(ctx.h_eff_xyz);
-    stats.max_demag_field_amplitude = max_norm_aos(ctx.h_demag_xyz);
-    stats.max_rhs_amplitude = max_rhs;
-    stats.max_torque_Apm = max_cross_norm_aos(ctx.m_xyz, ctx.h_eff_xyz);
-    const auto average = average_magnetization_components(ctx);
-    stats.mx = average[0];
-    stats.my = average[1];
-    stats.mz = average[2];
-    fill_demag_solver_stats(ctx, stats);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Poisson demag: ∇²u = ∇·M on Ω_m ∪ Ω_air  (S02–S05)
-// ─────────────────────────────────────────────────────────────────────────────
-
 } // namespace
-
-bool compute_effective_fields_for_magnetization(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ex_xyz,
-    std::vector<double> &h_demag_xyz,
-    std::vector<double> &h_eff_xyz,
-    double *exchange_energy,
-    double *demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error)
-{
-    return compute_effective_fields_for_magnetization_impl(
-        ctx,
-        m_xyz,
-        h_ex_xyz,
-        h_demag_xyz,
-        h_eff_xyz,
-        exchange_energy,
-        demag_energy,
-        allow_interrupt,
-        timings,
-        error);
-}
-
-void context_update_stage_completion_from_stats(
-    Context &ctx,
-    const fullmag_fem_step_stats &stats)
-{
-    update_stage_completion_from_stats(ctx, stats);
-}
 
 bool context_initialize_mfem(Context &ctx, std::string &error) {
     try {
@@ -1281,7 +551,7 @@ bool context_snapshot_stats_mfem(
         return false;
     }
     // FND-005 fix: accept any effective-field term, not just exchange/demag.
-    if (!has_any_effective_field_term(ctx)) {
+    if (!has_any_field_or_direct_torque_term(ctx)) {
         error = "native FEM snapshot requires at least one effective-field term";
         return false;
     }
@@ -1361,7 +631,7 @@ bool context_step_exchange_heun_mfem(
         return false;
     }
     // FND-005 fix: accept any effective-field term, not just exchange/demag.
-    if (!has_any_effective_field_term(ctx)) {
+    if (!has_any_field_or_direct_torque_term(ctx)) {
         error = "native FEM stepper requires at least one effective-field term to be enabled";
         return false;
     }
@@ -1541,57 +811,6 @@ bool context_step_exchange_heun_mfem(
 // Unified explicit Runge-Kutta engine (Butcher tableau-driven)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// evaluate_rhs: compute H_eff for state m_state, then LLG RHS into out_k
-static bool evaluate_rhs(
-    Context &ctx,
-    const std::vector<double> &m_state,
-    StepperWorkspace &ws,
-    std::vector<double> &out_k,
-    double *out_max_rhs,
-    double *out_exchange_energy,
-    double *out_demag_energy,
-    PhaseTimings *timings,
-    std::string &error)
-{
-    if (!compute_effective_fields_for_magnetization(
-            ctx, m_state, ws.h_ex_tmp, ws.h_demag_tmp, ws.h_eff_tmp,
-            out_exchange_energy, out_demag_energy, true, timings, error)) {
-        return false;
-    }
-    double max_rhs = 0.0;
-    {
-        ScopedPhaseTimer timer(timings != nullptr ? &timings->rhs_wall_time_ns : nullptr);
-        llg_rhs_aos(m_state, ws.h_eff_tmp,
-                    ctx.material.gyromagnetic_ratio, ctx.material.damping,
-                    ctx.alpha_field.empty() ? nullptr : &ctx.alpha_field,
-                    out_k, max_rhs);
-        add_stt_rhs_aos(ctx, m_state, out_k, max_rhs);
-        zero_non_magnetic_nodes_aos(out_k, ctx.magnetic_node_mask);
-    }
-    if (out_max_rhs) *out_max_rhs = max_rhs;
-    return true;
-}
-
-// Compute the weighted error norm for adaptive stepping:
-// norm = max_i |err_i| / (atol + rtol * max(|m_old_i|, |m_new_i|))
-static double compute_error_norm(
-    const std::vector<double> &err,
-    const std::vector<double> &m_old,
-    const std::vector<double> &m_new,
-    double atol, double rtol)
-{
-    double max_scaled = 0.0;
-    const size_t n = err.size() / 3u;
-    for (size_t i = 0; i < n; ++i) {
-        const size_t b = i * 3u;
-        for (int d = 0; d < 3; ++d) {
-            const double scale = atol + rtol * std::max(std::abs(m_old[b+d]), std::abs(m_new[b+d]));
-            max_scaled = std::max(max_scaled, std::abs(err[b+d]) / scale);
-        }
-    }
-    return max_scaled;
-}
-
 bool context_step_explicit_rk_mfem(
     Context &ctx,
     const ExplicitTableau &tab,
@@ -1609,7 +828,7 @@ bool context_step_explicit_rk_mfem(
         return false;
     }
     // FND-005 fix: accept any effective-field term, not just exchange/demag.
-    if (!has_any_effective_field_term(ctx)) {
+    if (!has_any_field_or_direct_torque_term(ctx)) {
         error = "native FEM stepper requires at least one effective-field term";
         return false;
     }
@@ -1663,7 +882,7 @@ bool context_step_explicit_rk_mfem(
         } else {
             double exchange_energy_s0 = 0.0;
             double demag_energy_s0 = 0.0;
-            if (!evaluate_rhs(
+            if (!evaluate_rk_stage_rhs(
                     ctx,
                     ctx.m_xyz,
                     ws,
@@ -1707,12 +926,12 @@ bool context_step_explicit_rk_mfem(
                 stage_exchange_energy = &exchange_energy_final;
                 stage_demag_energy = &demag_energy_final;
             }
-            if (!evaluate_rhs(ctx, ws.m_stage, ws, ws.k[s],
-                              nullptr,
-                              stage_exchange_energy,
-                              stage_demag_energy,
-                              &timings,
-                              error)) {
+            if (!evaluate_rk_stage_rhs(ctx, ws.m_stage, ws, ws.k[s],
+                                       nullptr,
+                                       stage_exchange_energy,
+                                       stage_demag_energy,
+                                       &timings,
+                                       error)) {
                 if (ctx.step_interrupted) {
                     ctx.m_xyz = ws.m_backup;
                     ws.fsal_valid = false;
@@ -1756,8 +975,12 @@ bool context_step_explicit_rk_mfem(
                 }
                 ws.err[i] = dt * err_accum;
             }
-            double err_norm = compute_error_norm(ws.err, ws.m_backup, ctx.m_xyz,
-                                                  ctx.adaptive_atol, ctx.adaptive_rtol);
+            double err_norm = compute_adaptive_error_norm(
+                ws.err,
+                ws.m_backup,
+                ctx.m_xyz,
+                ctx.adaptive_atol,
+                ctx.adaptive_rtol);
             auto result = adaptive_pi_step(ctx, err_norm);
             if (!result.accepted) {
                 // Reject: restore, shrink dt, retry

@@ -59,10 +59,18 @@ const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator)
 }
 
 void stepper_workspace_allocate(StepperWorkspace &ws, std::size_t dof_len, int stages) {
-    if (ws.allocated && ws.dof_len == dof_len) {
+    bool stage_buffers_ready = true;
+    for (int i = 0; i < stages; ++i) {
+        if (ws.k[i].size() != dof_len) {
+            stage_buffers_ready = false;
+            break;
+        }
+    }
+    if (ws.allocated && ws.dof_len == dof_len && ws.stages == stages && stage_buffers_ready) {
         return;
     }
     ws.dof_len = dof_len;
+    ws.stages = stages;
     ws.m_backup.resize(dof_len, 0.0);
     for (int i = 0; i < stages; ++i) {
         ws.k[i].resize(dof_len, 0.0);

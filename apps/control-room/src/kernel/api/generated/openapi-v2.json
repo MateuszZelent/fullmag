@@ -4224,8 +4224,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Build/pipeline state for build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -4329,8 +4332,11 @@
           },
           "mesh_pipeline_status": {
             "description": "Detailed build pipeline state for diagnostics and build panels.",
+            "items": {
+              "$ref": "#/components/schemas/MeshBuildPipelinePhaseResource"
+            },
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },
@@ -4369,6 +4375,35 @@
           "revision",
           "history"
         ],
+        "type": "object"
+      },
+      "MeshBuildPipelinePhaseResource": {
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "MeshCapabilitiesResource": {
@@ -10237,8 +10272,17 @@
             "format": "double",
             "type": "number"
           },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "vector_color_mode": {
             "$ref": "#/components/schemas/VectorColorMode"
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": "number"
           },
           "vector_mono_color": {
             "type": "string"
@@ -10275,7 +10319,9 @@
           "surface_mono_color",
           "surface_visible",
           "vector_alpha",
+          "vector_budget",
           "vector_color_mode",
+          "vector_length_scale",
           "vector_mono_color",
           "vector_thickness",
           "vectors_visible",
@@ -10888,6 +10934,14 @@
               "null"
             ]
           },
+          "vector_budget": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "vector_color_mode": {
             "oneOf": [
               {
@@ -10896,6 +10950,13 @@
               {
                 "$ref": "#/components/schemas/VectorColorMode"
               }
+            ]
+          },
+          "vector_length_scale": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
             ]
           },
           "vector_mono_color": {

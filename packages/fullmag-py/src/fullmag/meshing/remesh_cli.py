@@ -129,6 +129,27 @@ def _geometry_from_ir(entry: dict[str, Any]) -> Any:
 
 def _mesh_options_from_dict(opts: dict[str, Any]) -> MeshOptions:
     """Build MeshOptions from a dict (as sent by the GUI)."""
+
+    def _nonempty_str(value: Any) -> str | None:
+        return value if isinstance(value, str) and value.strip() else None
+
+    def _positive_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        parsed = float(value)
+        return parsed if parsed > 0.0 else None
+
+    def _positive_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+
+    def _int_list(value: Any) -> list[int] | None:
+        if not isinstance(value, list):
+            return None
+        return [int(item) for item in value]
+
     return MeshOptions(
         algorithm_2d=opts.get("algorithm_2d", 6),
         algorithm_3d=opts.get("algorithm_3d", 1),
@@ -147,6 +168,27 @@ def _mesh_options_from_dict(opts: dict[str, Any]) -> MeshOptions:
         size_fields=opts.get("size_fields", []),
         compute_quality=opts.get("compute_quality", True),
         per_element_quality=opts.get("per_element_quality", True),
+        boundary_layer_count=_positive_int(opts.get("boundary_layer_count")),
+        boundary_layer_thickness=_positive_float(opts.get("boundary_layer_thickness")),
+        boundary_layer_stretching=_positive_float(opts.get("boundary_layer_stretching")),
+        boundary_layer_target_surface_tags=_int_list(
+            opts.get("boundary_layer_target_surface_tags")
+        ),
+        boundary_layer_target_curve_tags=_int_list(
+            opts.get("boundary_layer_target_curve_tags")
+        ),
+        mesh_strategy=_nonempty_str(opts.get("mesh_strategy")),
+        through_thickness_elements=_positive_int(opts.get("through_thickness_elements")),
+        through_thickness_distribution=_nonempty_str(
+            opts.get("through_thickness_distribution")
+        ),
+        through_thickness_element_ratio=_positive_float(
+            opts.get("through_thickness_element_ratio")
+        ),
+        through_thickness_symmetric=bool(opts.get("through_thickness_symmetric", False)),
+        sweep_face_meshing=_nonempty_str(opts.get("sweep_face_meshing")),
+        sweep_source=_nonempty_str(opts.get("sweep_source")),
+        sweep_destination=_nonempty_str(opts.get("sweep_destination")),
     )
 
 

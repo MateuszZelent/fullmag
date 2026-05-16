@@ -69,7 +69,12 @@ from fullmag.meshing.gmsh_bridge import (
     generate_mesh,
     resolve_mesh_size_controls,
 )
-from fullmag.meshing.remesh_cli import _geometry_from_ir, _mesh_result_payload, _size_field_from_dict
+from fullmag.meshing.remesh_cli import (
+    _geometry_from_ir,
+    _mesh_options_from_dict,
+    _mesh_result_payload,
+    _size_field_from_dict,
+)
 from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
     _align_quality_report_to_element_tags,
@@ -477,6 +482,12 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(stats["scopes"][0]["role"], "air")
         self.assertEqual(stats["scopes"][0]["label"], "Airbox")
         self.assertAlmostEqual(stats["global"]["volume"]["ratio"], 1.0)
+        self.assertAlmostEqual(stats["global"]["edge_length"]["min"], 1.0)
+        self.assertAlmostEqual(stats["global"]["edge_length"]["max"], np.sqrt(2.0))
+        self.assertAlmostEqual(
+            stats["global"]["edge_length"]["mean"],
+            (1.0 + np.sqrt(2.0)) / 2.0,
+        )
         self.assertEqual(
             {
                 "global_elements": stats["global"]["element_count"],
@@ -1005,6 +1016,39 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(mesh_options.through_thickness_distribution, "fixed")
         self.assertEqual(mesh_options.through_thickness_element_ratio, 1.0)
         self.assertEqual(mesh_options.sweep_face_meshing, "triangular")
+
+    def test_remesh_cli_mesh_options_preserve_swept_and_boundary_layer_controls(self) -> None:
+        mesh_options = _mesh_options_from_dict(
+            {
+                "mesh_strategy": "swept_prism",
+                "through_thickness_elements": 3,
+                "through_thickness_distribution": "exponential",
+                "through_thickness_element_ratio": 1.4,
+                "through_thickness_symmetric": True,
+                "sweep_face_meshing": "quadrilateral",
+                "sweep_source": "bottom",
+                "sweep_destination": "top",
+                "boundary_layer_count": 4,
+                "boundary_layer_thickness": 1.5e-9,
+                "boundary_layer_stretching": 1.25,
+                "boundary_layer_target_surface_tags": [11, "12"],
+                "boundary_layer_target_curve_tags": [21, "22"],
+            }
+        )
+
+        self.assertEqual(mesh_options.mesh_strategy, "swept_prism")
+        self.assertEqual(mesh_options.through_thickness_elements, 3)
+        self.assertEqual(mesh_options.through_thickness_distribution, "exponential")
+        self.assertEqual(mesh_options.through_thickness_element_ratio, 1.4)
+        self.assertTrue(mesh_options.through_thickness_symmetric)
+        self.assertEqual(mesh_options.sweep_face_meshing, "quadrilateral")
+        self.assertEqual(mesh_options.sweep_source, "bottom")
+        self.assertEqual(mesh_options.sweep_destination, "top")
+        self.assertEqual(mesh_options.boundary_layer_count, 4)
+        self.assertEqual(mesh_options.boundary_layer_thickness, 1.5e-9)
+        self.assertEqual(mesh_options.boundary_layer_stretching, 1.25)
+        self.assertEqual(mesh_options.boundary_layer_target_surface_tags, [11, 12])
+        self.assertEqual(mesh_options.boundary_layer_target_curve_tags, [21, 22])
 
     def test_component_aware_field_stack_matches_builder_name_to_geom_alias(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left_geom")

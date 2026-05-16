@@ -83,6 +83,11 @@ import {
   type VisualizationRenderMode,
   type VisualizationTargetPatch,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  meshPipelineStatusTone,
+  normalizeMeshPipelineStatus,
+  resolveMeshBuildStatusLabel,
+} from "@/shared/domain/mesh/buildPipeline";
 import { allInteractionSpecs } from "@/shared/domain/physics/interactions";
 
 import type { RibbonMenuNode, RibbonTabContent } from "./ribbonTypes";
@@ -1590,27 +1595,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
 function meshBuildStatus(context: RibbonBuildContext): {
   label: string;
   tone: "success" | "warning" | "danger" | "neutral";
 } {
   const current = context.meshBuildCurrent;
-  const activeStatus =
-    asString(asRecord(current?.active_build)?.status) ??
-    asString(asRecord(current?.mesh_pipeline_status)?.status);
-  if (activeStatus) {
+  const activeStatus = resolveMeshBuildStatusLabel(
+    asRecord(current?.active_build),
+    normalizeMeshPipelineStatus(current?.mesh_pipeline_status),
+  );
+  if (activeStatus !== "idle") {
     return {
       label: activeStatus,
-      tone:
-        activeStatus === "failed" || activeStatus === "error"
-          ? "danger"
-          : activeStatus === "ready" || activeStatus === "completed"
-            ? "success"
-            : "warning",
+      tone: meshPipelineStatusTone(activeStatus),
     };
   }
   if (current?.last_build_error || context.meshBuildLatest?.last_build_error) {

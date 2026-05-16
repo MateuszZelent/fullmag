@@ -455,8 +455,8 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         patchValue,
       ),
     });
-    // Keep the patch locally so forward-compatible fields (vectorBudget,
-    // vectorLengthScale) survive even if the backend drops them.
+    // Keep the patch locally for immediate inspector/ribbon feedback until the
+    // revision-driven resource refetch lands.
     visualization.patchTarget(target, patchValue);
     setFeedback(null);
   }

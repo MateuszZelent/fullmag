@@ -2902,7 +2902,7 @@ export interface components {
             /** @description Current/last build summary for build panels. Latest-success endpoint owns stable successful build references. */
             last_build_summary?: Record<string, never> | null;
             /** @description Build/pipeline state for build panels. */
-            mesh_pipeline_status?: Record<string, never> | null;
+            mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             /** Format: int64 */
             revision: number;
             shared_domain_build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
@@ -2927,7 +2927,7 @@ export interface components {
             /** @description Detailed latest build summary for diagnostics and inspectors. */
             last_build_summary?: Record<string, never> | null;
             /** @description Detailed build pipeline state for diagnostics and build panels. */
-            mesh_pipeline_status?: Record<string, never> | null;
+            mesh_pipeline_status?: components["schemas"]["MeshBuildPipelinePhaseResource"][] | null;
             /** @description Detailed mesh-build quality diagnostics. Dashboard quality summaries are transitional projections only. */
             mesh_quality_summary?: Record<string, never> | null;
             /** @description Full mesh statistics report for realized solver mesh diagnostics. */
@@ -2937,6 +2937,12 @@ export interface components {
             history: Record<string, never>[];
             /** Format: int64 */
             revision: number;
+        };
+        MeshBuildPipelinePhaseResource: {
+            detail?: string | null;
+            id?: string | null;
+            label?: string | null;
+            status?: string | null;
         };
         MeshCapabilitiesResource: {
             /** @description Meshing adaptivity capability/state only. UI-wide gating remains owned by `status.capabilities`. */
@@ -4351,7 +4357,11 @@ export interface components {
             surface_visible: boolean;
             /** Format: double */
             vector_alpha: number;
+            /** Format: int32 */
+            vector_budget: number;
             vector_color_mode: components["schemas"]["VectorColorMode"];
+            /** Format: double */
+            vector_length_scale: number;
             vector_mono_color: string;
             /** Format: double */
             vector_thickness: number;
@@ -4519,7 +4529,11 @@ export interface components {
             surface_mono_color?: string | null;
             /** Format: double */
             vector_alpha?: number | null;
+            /** Format: int32 */
+            vector_budget?: number | null;
             vector_color_mode?: null | components["schemas"]["VectorColorMode"];
+            /** Format: double */
+            vector_length_scale?: number | null;
             vector_mono_color?: string | null;
             /** Format: double */
             vector_thickness?: number | null;

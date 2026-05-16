@@ -39,6 +39,7 @@ Recommended filenames:
 - `0300-gpu-fdm-precision-and-calibration.md`
 - `0400-demagnetization.md`
 - `fem_exchange.md`
+- `llg_conventions.md`
 - `fem_zeeman.md`
 - `fem_anisotropy_uniaxial.md`
 - `fem_anisotropy_cubic.md`
@@ -48,6 +49,7 @@ Recommended filenames:
 - `fem_magnetoelastic.md`
 - `fem_oersted.md`
 - `fem_stt.md`
+- `fem_thermal.md`
 - `fem_thermal_brown.md`
 - `0700-frequency-domain-linearized-llg.md`
 - `0710-periodic-and-floquet-boundary-conditions.md`

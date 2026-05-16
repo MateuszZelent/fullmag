@@ -32,6 +32,7 @@ struct ExplicitTableau {
 struct StepperWorkspace {
     bool allocated = false;
     size_t dof_len = 0;                             // n_nodes * 3
+    int stages = 0;                                 // currently allocated RK stages
     std::vector<double> m_backup;                   // backup of m before stage loop
     std::vector<double> k[MAX_RK_STAGES];           // stage derivatives k_i
     std::vector<double> m_stage;                    // temp: m at stage evaluation point
@@ -236,6 +237,11 @@ struct Context {
     // FEM-030 fix: explicit MFEM device string from plan. Empty = env / default.
     std::string mfem_device_string_override;
 
+    // CPU OpenMP runtime diagnostics for Poisson/Robin demag and telemetry.
+    bool cpu_threads_auto_requested = false;
+    int requested_omp_threads = 1;
+    int effective_omp_threads = 1;
+
 #if FULLMAG_HAS_MFEM_STACK
     std::vector<double> mfem_mx;
     std::vector<double> mfem_my;
@@ -318,11 +324,6 @@ struct Context {
     double robin_beta_factor = 1.0;      // c in β = c/R*
     double robin_effective_beta = 0.0;   // computed β value
     void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
-
-    // CPU OpenMP runtime diagnostics for Poisson/Robin demag.
-    bool cpu_threads_auto_requested = false;
-    int requested_omp_threads = 1;
-    int effective_omp_threads = 1;
 
     // ── Periodic demag: algebraic P^T A P reduced Poisson system ──
     // Assembled once in context_initialize_poisson when demag_periodic_enabled().

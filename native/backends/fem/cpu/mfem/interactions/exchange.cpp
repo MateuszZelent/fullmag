@@ -1,6 +1,7 @@
 #include "cpu/mfem/interactions/exchange.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
 
@@ -122,56 +123,6 @@ double scalar_field_value(
     double fallback)
 {
     return index < field.size() ? field[index] : fallback;
-}
-
-void unpack_aos_to_components(
-    const std::vector<double> &aos,
-    std::vector<double> &x,
-    std::vector<double> &y,
-    std::vector<double> &z)
-{
-    const size_t n = aos.size() / 3u;
-    x.resize(n);
-    y.resize(n);
-    z.resize(n);
-    for (size_t i = 0; i < n; ++i) {
-        x[i] = aos[i * 3u + 0u];
-        y[i] = aos[i * 3u + 1u];
-        z[i] = aos[i * 3u + 2u];
-    }
-}
-
-void unpack_aos_to_existing_components(
-    const std::vector<double> &aos,
-    std::vector<double> &x,
-    std::vector<double> &y,
-    std::vector<double> &z)
-{
-    const size_t n = aos.size() / 3u;
-    if (x.size() != n || y.size() != n || z.size() != n) {
-        unpack_aos_to_components(aos, x, y, z);
-        return;
-    }
-    for (size_t i = 0; i < n; ++i) {
-        x[i] = aos[i * 3u + 0u];
-        y[i] = aos[i * 3u + 1u];
-        z[i] = aos[i * 3u + 2u];
-    }
-}
-
-void pack_components_to_aos(
-    const std::vector<double> &x,
-    const std::vector<double> &y,
-    const std::vector<double> &z,
-    std::vector<double> &aos)
-{
-    const size_t n = x.size();
-    aos.resize(n * 3u);
-    for (size_t i = 0; i < n; ++i) {
-        aos[i * 3u + 0u] = x[i];
-        aos[i * 3u + 1u] = y[i];
-        aos[i * 3u + 2u] = z[i];
-    }
 }
 
 void copy_host_vector_to_mfem(const std::vector<double> &src, mfem::Vector &dst) {

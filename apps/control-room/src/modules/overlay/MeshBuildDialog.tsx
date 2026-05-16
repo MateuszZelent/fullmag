@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, type CSSProperties } from "react";
 
 import {
   useMeshBuildCurrent,
@@ -9,6 +9,11 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import type { KernelApi } from "@/kernel/types";
+import {
+  normalizeMeshPipelineStatus,
+  resolveMeshBuildStatusLabel,
+  type MeshPipelinePhase,
+} from "@/shared/domain/mesh/buildPipeline";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -35,6 +40,89 @@ function text(value: unknown, fallback = "unknown"): string {
 
 function commandIsMeshBuild(commandId: string): boolean {
   return commandId === "mesh.build-selected" || commandId === "mesh.build-shared-domain";
+}
+
+function phaseIsComplete(phase: MeshPipelinePhase): boolean {
+  const status = phase.status.toLowerCase();
+  return (
+    status === "done" ||
+    status === "ready" ||
+    status === "completed" ||
+    status === "success"
+  );
+}
+
+function pipelineProgressPercent(phases: readonly MeshPipelinePhase[]): number | null {
+  if (phases.length === 0) return null;
+  const completeCount = phases.filter(phaseIsComplete).length;
+  return Math.round((completeCount / phases.length) * 100);
+}
+
+export function MeshBuildPipelineView({
+  buildReport,
+  lastSummary,
+  phases,
+}: {
+  buildReport: unknown;
+  lastSummary: Record<string, unknown> | null;
+  phases: readonly MeshPipelinePhase[];
+}) {
+  const buildReportRecord = asRecord(buildReport);
+  const buildMode = text(buildReportRecord?.build_mode, "unknown");
+  const lastElementCount = text(
+    lastSummary?.elements ?? lastSummary?.element_count,
+    "unknown",
+  );
+  const progressPercent = pipelineProgressPercent(phases);
+
+  return (
+    <section className="fm-dialog__mesh-pipeline" aria-label="Mesh build pipeline">
+      <div className="fm-dialog__mesh-pipeline-header">
+        <h3 className="fm-dialog__mesh-pipeline-title">Build pipeline</h3>
+        <span className="fm-dialog__mesh-pipeline-meta">{buildMode}</span>
+      </div>
+      {progressPercent !== null ? (
+        <div
+          className="fm-dialog__mesh-progress"
+          style={
+            {
+              "--fm-mesh-build-progress": `${progressPercent}%`,
+            } as CSSProperties
+          }
+        >
+          <span>Phase progress</span>
+          <strong>{progressPercent}%</strong>
+        </div>
+      ) : null}
+      {phases.length > 0 ? (
+        <ol className="fm-dialog__mesh-phase-list">
+          {phases.map((phase) => (
+            <li className="fm-dialog__mesh-phase" key={phase.id}>
+              <span className="fm-dialog__mesh-phase-label">{phase.label}</span>
+              <span className="fm-dialog__mesh-phase-status">{phase.status}</span>
+              {phase.detail.length > 0 ? (
+                <span className="fm-dialog__mesh-phase-detail">{phase.detail}</span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="fm-dialog__mesh-pipeline-empty">
+          No active build phases are published.
+        </p>
+      )}
+      <dl className="fm-dialog__mesh-pipeline-summary">
+        <div className="fm-dialog__details-row">
+          <dt className="fm-dialog__details-label">Build mode</dt>
+          <dd className="fm-dialog__details-value">{buildMode}</dd>
+        </div>
+        <div className="fm-dialog__details-row">
+          <dt className="fm-dialog__details-label">Last elements</dt>
+          <dd className="fm-dialog__details-value">{lastElementCount}</dd>
+        </div>
+      </dl>
+    </section>
+  );
 }
 
 interface MeshBuildDialogState {
@@ -79,11 +167,12 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const summary = useMeshSummaryResource();
   const manifest = useMeshSharedDomainManifestResource();
   const activeRecord = asRecord(activeBuild.data?.active_build);
-  const pipelineRecord = asRecord(activeBuild.data?.mesh_pipeline_status);
+  const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
   const lastSummary = asRecord(
     activeBuild.data?.last_build_summary ?? latestBuild.data?.last_success,
   );
   const buildReport = activeBuild.data?.shared_domain_build_report;
+  const buildStatus = resolveMeshBuildStatusLabel(activeRecord, pipelinePhases);
 
   useEffect(() => {
     const offSubmitted = kernel.bus.on("command:submitted", ({ commandId }) => {
@@ -129,7 +218,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             <div className="fm-dialog__details-row">
               <dt className="fm-dialog__details-label">Active build</dt>
               <dd className="fm-dialog__details-value">
-                {text(activeRecord?.status ?? pipelineRecord?.status, "idle")}
+                {buildStatus}
               </dd>
             </div>
             <div className="fm-dialog__details-row">
@@ -154,18 +243,11 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
             </div>
           </dl>
 
-          <pre className="fm-dialog__mesh-log">
-            {JSON.stringify(
-              {
-                active_build: activeBuild.data?.active_build ?? null,
-                pipeline: activeBuild.data?.mesh_pipeline_status ?? null,
-                shared_domain_build_report: buildReport ?? null,
-                last_success: lastSummary,
-              },
-              null,
-              2,
-            )}
-          </pre>
+          <MeshBuildPipelineView
+            buildReport={buildReport}
+            lastSummary={lastSummary}
+            phases={pipelinePhases}
+          />
         </div>
         <DialogFooter>
           <Button

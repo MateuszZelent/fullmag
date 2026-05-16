@@ -3,10 +3,12 @@
 #include "fullmag_fem.h"
 
 #include <string>
+#include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+struct PhaseTimings;
 
 /*
  * Native FEM demag field-update action selected for one effective-field call.
@@ -66,6 +68,23 @@ bool plan_demag_field_update(
 bool plan_demag_field_update(
     const Context &ctx,
     DemagFieldUpdateDecision &decision,
+    std::string &error);
+
+/*
+ * Execute the demag field update selected for one effective-field evaluation.
+ *
+ * This function owns the demag-specific orchestration after dispatch: cached
+ * frozen-field reuse, fresh airbox Poisson solves, fresh Fredkin-Koehler
+ * FEM/BEM solves, demag energy output, and refreshed cache storage. The caller
+ * still owns surrounding H_eff composition and step-level timing scopes.
+ */
+bool compute_demag_field_for_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_demag_xyz,
+    double &demag_energy,
+    bool allow_interrupt,
+    PhaseTimings *timings,
     std::string &error);
 #endif
 

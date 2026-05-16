@@ -1,0 +1,158 @@
+#include "cpu/mfem/runtime/step_metrics.hpp"
+
+#include "context.hpp"
+#include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/zeeman.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+
+namespace fullmag::fem {
+namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+
+uint64_t elapsed_ns(const SteadyClock::time_point &start)
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            SteadyClock::now() - start)
+            .count());
+}
+
+class ScopedPhaseTimer {
+public:
+    explicit ScopedPhaseTimer(uint64_t *accumulator)
+        : accumulator_(accumulator)
+    {
+        if (accumulator_ != nullptr) {
+            start_ = SteadyClock::now();
+        }
+    }
+
+    ~ScopedPhaseTimer()
+    {
+        if (accumulator_ != nullptr) {
+            *accumulator_ += elapsed_ns(start_);
+        }
+    }
+
+private:
+    uint64_t *accumulator_ = nullptr;
+    SteadyClock::time_point start_{};
+};
+
+double vector_norm3(double x, double y, double z)
+{
+    return std::sqrt(x * x + y * y + z * z);
+}
+
+} // namespace
+
+std::array<double, 3> average_magnetization_components(const Context &ctx)
+{
+    std::array<double, 3> sum{};
+    uint64_t count = 0;
+    const size_t nodes = ctx.m_xyz.size() / 3u;
+    for (size_t node = 0; node < nodes; ++node) {
+        if (!ctx.magnetic_node_mask.empty() && ctx.magnetic_node_mask[node] == 0u) {
+            continue;
+        }
+        const size_t base = node * 3u;
+        const double mx = ctx.m_xyz[base + 0u];
+        const double my = ctx.m_xyz[base + 1u];
+        const double mz = ctx.m_xyz[base + 2u];
+        if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
+            continue;
+        }
+        sum[0] += mx;
+        sum[1] += my;
+        sum[2] += mz;
+        count += 1;
+    }
+    if (count == 0) {
+        return {0.0, 0.0, 0.0};
+    }
+    const double inv = 1.0 / static_cast<double>(count);
+    return {sum[0] * inv, sum[1] * inv, sum[2] * inv};
+}
+
+double max_norm_aos(const std::vector<double> &field_xyz)
+{
+    double max_value = 0.0;
+    const size_t n = field_xyz.size() / 3u;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t base = i * 3u;
+        max_value = std::max(
+            max_value,
+            vector_norm3(field_xyz[base + 0], field_xyz[base + 1], field_xyz[base + 2]));
+    }
+    return max_value;
+}
+
+double max_cross_norm_aos(
+    const std::vector<double> &a_xyz,
+    const std::vector<double> &b_xyz)
+{
+    double max_value = 0.0;
+    const size_t n = a_xyz.size() / 3u;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t base = i * 3u;
+        const double cx = a_xyz[base + 1] * b_xyz[base + 2] -
+                          a_xyz[base + 2] * b_xyz[base + 1];
+        const double cy = a_xyz[base + 2] * b_xyz[base + 0] -
+                          a_xyz[base + 0] * b_xyz[base + 2];
+        const double cz = a_xyz[base + 0] * b_xyz[base + 1] -
+                          a_xyz[base + 1] * b_xyz[base + 0];
+        max_value = std::max(max_value, std::sqrt(cx * cx + cy * cy + cz * cz));
+    }
+    return max_value;
+}
+
+void fill_demag_solver_stats(
+    const Context &ctx,
+    fullmag_fem_step_stats &stats)
+{
+    fill_demag_poisson_solver_stats(ctx, stats);
+#if FULLMAG_HAS_MFEM_STACK
+    stats.requested_omp_threads = ctx.requested_omp_threads;
+    stats.effective_omp_threads = ctx.effective_omp_threads;
+#else
+    (void)ctx;
+#endif
+}
+
+void fill_common_step_metrics(
+    Context &ctx,
+    fullmag_fem_step_stats &stats,
+    double max_rhs,
+    PhaseTimings *timings)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    ScopedPhaseTimer timer(timings != nullptr ? &timings->extra_energy_wall_time_ns : nullptr);
+#else
+    (void)timings;
+#endif
+
+    stats.external_energy_joules = zeeman_energy_from_field(ctx, ctx.m_xyz);
+    stats.anisotropy_energy_joules = ctx.last_anisotropy_energy_joules;
+    stats.dmi_energy_joules = ctx.last_dmi_energy_joules;
+    stats.magnetoelastic_energy_joules = ctx.last_magnetoelastic_energy_joules;
+
+    stats.total_energy_joules =
+        stats.exchange_energy_joules + stats.demag_energy_joules +
+        stats.external_energy_joules + stats.anisotropy_energy_joules +
+        stats.dmi_energy_joules + stats.magnetoelastic_energy_joules;
+    stats.max_effective_field_amplitude = max_norm_aos(ctx.h_eff_xyz);
+    stats.max_demag_field_amplitude = max_norm_aos(ctx.h_demag_xyz);
+    stats.max_rhs_amplitude = max_rhs;
+    stats.max_torque_Apm = max_cross_norm_aos(ctx.m_xyz, ctx.h_eff_xyz);
+    const auto average = average_magnetization_components(ctx);
+    stats.mx = average[0];
+    stats.my = average[1];
+    stats.mz = average[2];
+    fill_demag_solver_stats(ctx, stats);
+}
+
+} // namespace fullmag::fem

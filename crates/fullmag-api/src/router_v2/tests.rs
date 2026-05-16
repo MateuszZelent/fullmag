@@ -2210,6 +2210,8 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                     "vector_color_mode": "orientation",
                                     "vector_mono_color": "#ff00aa",
                                     "vector_alpha": 0.45,
+                                    "vector_budget": 384,
+                                    "vector_length_scale": 1.75,
                                     "vector_thickness": 2.0,
                                     "wireframe_color": "#111111"
                                 }
@@ -2256,6 +2258,112 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
         "orientation"
     );
     assert_eq!(json["overrides"][0]["style"]["vector_alpha"], 0.45);
+    assert_eq!(json["overrides"][0]["style"]["vector_budget"], 384);
+    assert_eq!(json["overrides"][0]["style"]["vector_length_scale"], 1.75);
+}
+
+#[tokio::test]
+async fn visualization_target_overrides_resolve_vector_budget_and_length_scale() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "free-layer".to_string();
+    scene.objects[0].name = "Free Layer".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "free-layer",
+                                "display": {
+                                    "vectors": { "visible": true }
+                                },
+                                "style": {
+                                    "vector_budget": 384,
+                                    "vector_length_scale": 1.75
+                                }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let objects = json["targets"]["objects"]
+        .as_array()
+        .expect("visualization target registry should expose scene objects");
+    let target = objects
+        .iter()
+        .find(|target| target["scope_id"] == "free-layer")
+        .expect("free-layer target should be present");
+
+    assert_eq!(target["settings"]["vectors_visible"], true);
+    assert_eq!(target["settings"]["vector_budget"], 384);
+    assert_eq!(target["settings"]["vector_length_scale"], 1.75);
+    assert_eq!(target["override"]["style"]["vector_budget"], 384);
+    assert_eq!(target["override"]["style"]["vector_length_scale"], 1.75);
+}
+
+#[tokio::test]
+async fn visualization_state_rejects_invalid_target_vector_style_controls() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+
+    for style in [
+        serde_json::json!({ "vector_budget": 0 }),
+        serde_json::json!({ "vector_length_scale": 5.5 }),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v2/sessions/current/visualization/state")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "overrides": [
+                                {
+                                    "scope": "object",
+                                    "scope_id": "free-layer",
+                                    "style": style
+                                }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]
@@ -3349,7 +3457,14 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.mesh_workspace = Some(serde_json::json!({
             "active_build": { "build_id": "mesh-build-1", "status": "running" },
-            "mesh_pipeline_status": { "phase": "remesh", "queued": true },
+            "mesh_pipeline_status": [
+                {
+                    "id": "remesh",
+                    "label": "Remesh",
+                    "status": "queued",
+                    "detail": "queued for remesh"
+                }
+            ],
             "effective_airbox_target": { "hmax": "5e-9" },
             "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
             "last_build_summary": {
@@ -3393,7 +3508,8 @@ async fn mesh_active_build_returns_projection_from_mesh_workspace() {
     let json = body_json(response).await;
     assert_eq!(json["revision"], 13);
     assert_eq!(json["active_build"]["build_id"], "mesh-build-1");
-    assert_eq!(json["mesh_pipeline_status"]["phase"], "remesh");
+    assert_eq!(json["mesh_pipeline_status"][0]["id"], "remesh");
+    assert_eq!(json["mesh_pipeline_status"][0]["status"], "queued");
     assert_eq!(json["effective_airbox_target"]["hmax"], "5e-9");
     assert_eq!(json["effective_per_object_targets"]["body"]["hmax"], "2e-9");
     assert_eq!(json["last_build_summary"]["elements"], 42);
@@ -3601,7 +3717,14 @@ async fn mesh_active_build_returns_304_when_etag_matches() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.mesh_workspace = Some(serde_json::json!({
             "active_build": { "build_id": "mesh-build-1", "status": "running" },
-            "mesh_pipeline_status": { "phase": "remesh", "queued": true },
+            "mesh_pipeline_status": [
+                {
+                    "id": "remesh",
+                    "label": "Remesh",
+                    "status": "queued",
+                    "detail": "queued for remesh"
+                }
+            ],
             "effective_airbox_target": { "hmax": "5e-9" },
             "effective_per_object_targets": { "body": { "hmax": "2e-9" } },
             "last_build_summary": { "elements": 42 },
@@ -10208,7 +10331,9 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vectors_visible",
         "render_mode",
         "surface_color_source",
+        "vector_budget",
         "vector_color_mode",
+        "vector_length_scale",
     ] {
         assert!(
             target_settings_props.contains(required),
@@ -10243,6 +10368,8 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "vector_color_mode",
         "vector_mono_color",
         "vector_alpha",
+        "vector_budget",
+        "vector_length_scale",
         "vector_thickness",
         "wireframe_color",
     ] {

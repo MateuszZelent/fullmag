@@ -42,7 +42,8 @@ It is added to `H_eff` in `A/m`. It is not a direct torque.
 The current bridge supports airbox Dirichlet and airbox Robin realizations.
 The extracted module now owns the Dirichlet/Robin boundary-conditioned operator
 policy and the non-periodic Hypre solve policy. The remaining monolithic bridge
-responsibility is orchestration, interrupt polling, and timing aggregation.
+responsibility is surrounding `H_eff` composition, interrupt polling, and
+step-level timing scopes.
 
 ## Dyskretyzacja FEM
 
@@ -60,10 +61,12 @@ add optional Robin boundary correction
 The energy contract, RHS workspace/assembly, Robin/Dirichlet boundary operator
 policy, periodic reduced Poisson operator/solve, non-periodic Hypre solve, and
 `H_demag` recovery have been moved into `demag_poisson.*`. The module also owns
-the frozen-field refresh decision and cached-energy helper used when a demag
-refresh interval reuses a previous Poisson solution. Demag-specific solver
-statistics and visualization H_eff reconstruction are filled by the module;
-step orchestration and non-demag timing aggregation are still in
+the frozen-field cache helpers and cached-energy helper used when a demag
+refresh interval reuses a previous Poisson solution. The shared demag dispatcher
+and update execution wrapper live in `demag.*`, so cached reuse, fresh Poisson,
+and fresh FEM/BEM execution are selected outside `mfem_bridge.cpp`.
+Demag-specific solver statistics and visualization H_eff reconstruction are
+filled by the demag modules; non-demag timing aggregation is still in
 `mfem_bridge.cpp`.
 
 ## Ograniczenia capability

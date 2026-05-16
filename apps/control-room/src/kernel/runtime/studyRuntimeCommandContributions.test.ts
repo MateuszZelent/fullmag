@@ -748,6 +748,21 @@ describe("study runtime command contributions", () => {
     expect(registry.get("study.run")?.disabledReason?.(context)).toBe(
       "A mesh build is still running.",
     );
+
+    const pipelineContext = {
+      api: {} as never,
+      resourceData: {
+        ...runtimeResourceData(),
+        [MESHING_BUILDS_CURRENT_PATH]: {
+          mesh_pipeline_status: [
+            { id: "generate", label: "Generate", status: "running" },
+          ],
+        },
+      },
+      source: "test" as const,
+    };
+
+    expect(registry.isEnabled("study.run", pipelineContext)).toBe(false);
   });
 
   it("requires current shared-domain mesh provenance for FEM runtime start commands", () => {

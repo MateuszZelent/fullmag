@@ -36,6 +36,11 @@ import type { CommandContext } from "../commands/commandTypes";
 import type { CommandActiveResource } from "../commands/commandTypes";
 import type { CommandContribution } from "../commands/commandTypes";
 import {
+  meshPipelineStatusIsActive,
+  normalizeMeshPipelineStatus,
+  resolveMeshBuildStatusLabel,
+} from "@/shared/domain/mesh/buildPipeline";
+import {
   applyControlRoomUiState,
   exportControlRoomUiState,
 } from "../persistence/controlRoomUiState";
@@ -209,11 +214,11 @@ function isMeshBuildRunning(context: CommandContext): boolean {
   const activeBuildRecord = asRecord(activeBuild);
   const buildStatus =
     asString(activeBuildRecord?.status) ??
-    asString(asRecord(activeBuild?.active_build)?.status) ??
-    asString(asRecord(activeBuild?.mesh_pipeline_status)?.status);
-  return ["building", "pending", "queued", "running"].includes(
-    buildStatus?.toLowerCase() ?? "",
-  );
+    resolveMeshBuildStatusLabel(
+      asRecord(activeBuildRecord?.active_build),
+      normalizeMeshPipelineStatus(activeBuildRecord?.mesh_pipeline_status),
+    );
+  return meshPipelineStatusIsActive(buildStatus);
 }
 
 function requiresExplicitMesh(status: LiveStatusResource): boolean {

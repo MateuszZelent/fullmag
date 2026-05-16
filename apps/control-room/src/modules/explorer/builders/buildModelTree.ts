@@ -8,6 +8,8 @@ import type {
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
+import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
+
 function formatLength(value: number): string {
   const abs = Math.abs(value);
   if (abs >= 1e-3) return `${(value * 1e3).toFixed(1)} mm`;
@@ -249,7 +251,7 @@ function meshStatusBadge(status: ExplorerNodeStatus): string {
 
 function meshRootStatus(mesh: ModelTreeSnapshot["mesh"]): ExplorerNodeStatus {
   if (mesh?.lastError) return "mesh-failed";
-  if (mesh?.activeBuildStatus === "running" || mesh?.activeBuildStatus === "building") {
+  if (meshPipelineStatusIsActive(mesh?.activeBuildStatus)) {
     return "mesh-building";
   }
   if (mesh?.meshName) return "mesh-ready";

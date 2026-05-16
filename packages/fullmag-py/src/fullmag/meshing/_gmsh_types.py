@@ -73,6 +73,10 @@ class MeshStatisticsScope:
     volume_std: float
     volume_ratio: float | None
     volume_total: float
+    edge_length_min: float
+    edge_length_max: float
+    edge_length_mean: float
+    edge_length_std: float
     inverted_count: int
     degenerate_count: int
     sicn: dict[str, object] | None = None
@@ -801,6 +805,7 @@ def _mesh_scope_statistics(
     selected = np.asarray(element_mask, dtype=np.bool_)
     abs_volumes = np.abs(signed_volumes[selected])
     element_count = int(np.count_nonzero(selected))
+    edge_lengths = _tetra_edge_lengths(mesh, selected)
     if element_count > 0:
         node_count = int(np.unique(mesh.elements[selected].reshape(-1)).size)
     else:
@@ -811,6 +816,10 @@ def _mesh_scope_statistics(
     volume_std = float(np.std(abs_volumes)) if abs_volumes.size else 0.0
     volume_total = float(np.sum(abs_volumes)) if abs_volumes.size else 0.0
     volume_ratio = volume_max / volume_min if volume_min > 0.0 else None
+    edge_length_min = float(np.min(edge_lengths)) if edge_lengths.size else 0.0
+    edge_length_max = float(np.max(edge_lengths)) if edge_lengths.size else 0.0
+    edge_length_mean = float(np.mean(edge_lengths)) if edge_lengths.size else 0.0
+    edge_length_std = float(np.std(edge_lengths)) if edge_lengths.size else 0.0
     inverted_count = int(np.count_nonzero(signed_volumes[selected] <= 0.0))
     degenerate_count = int(np.count_nonzero(abs_volumes <= 0.0))
     warnings: list[str] = []
@@ -839,6 +848,10 @@ def _mesh_scope_statistics(
         volume_std=volume_std,
         volume_ratio=volume_ratio,
         volume_total=volume_total,
+        edge_length_min=edge_length_min,
+        edge_length_max=edge_length_max,
+        edge_length_mean=edge_length_mean,
+        edge_length_std=edge_length_std,
         inverted_count=inverted_count,
         degenerate_count=degenerate_count,
         sicn=_quality_metric_from_report(quality, "sicn"),
@@ -922,6 +935,22 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
     )
 
 
+def _tetra_edge_lengths(mesh: MeshData, element_mask: NDArray[np.bool_]) -> NDArray[np.float64]:
+    selected_elements = mesh.elements[np.asarray(element_mask, dtype=np.bool_)]
+    if selected_elements.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    nodes = mesh.nodes
+    edge_pairs = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+    lengths = [
+        np.linalg.norm(
+            nodes[selected_elements[:, start]] - nodes[selected_elements[:, end]],
+            axis=1,
+        )
+        for start, end in edge_pairs
+    ]
+    return np.concatenate(lengths).astype(np.float64, copy=False)
+
+
 def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object]:
     return {
         "id": scope.id,
@@ -939,6 +968,12 @@ def _mesh_statistics_scope_to_ir(scope: MeshStatisticsScope) -> dict[str, object
             "std": scope.volume_std,
             "ratio": scope.volume_ratio,
             "total": scope.volume_total,
+        },
+        "edge_length": {
+            "min": scope.edge_length_min,
+            "max": scope.edge_length_max,
+            "mean": scope.edge_length_mean,
+            "std": scope.edge_length_std,
         },
         "inverted_count": scope.inverted_count,
         "degenerate_count": scope.degenerate_count,
