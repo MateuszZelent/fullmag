@@ -2,6 +2,7 @@
  * demag_contract.cpp - native FEM demag dispatcher contracts.
  */
 
+#include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 
 #include <cstdio>
@@ -41,10 +42,29 @@ std::filesystem::path fem_source_root() {
 
 void demag_update_execution_is_owned_by_demag_module() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string demag_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.hpp");
     const std::string demag =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag.cpp");
 
+    check(
+        demag.find("void initialize_demag_plan_fields(") != std::string::npos,
+        "demag plan import must be defined in demag.cpp");
+    check(
+        demag_header.find("Initialize native FEM demag plan fields") != std::string::npos,
+        "demag header must document plan import ownership");
+    check(
+        context.find("ctx.enable_demag = plan.enable_demag != 0;") == std::string::npos,
+        "context_from_plan must delegate demag enable import to demag.cpp");
+    check(
+        context.find("ctx.demag_solver = plan.demag_solver;") == std::string::npos,
+        "context_from_plan must delegate demag solver import to demag.cpp");
+    check(
+        context.find("ctx.demag_realization = static_cast<int>(plan.demag_realization);") ==
+            std::string::npos,
+        "context_from_plan must delegate demag realization import to demag.cpp");
     check(
         demag.find("bool compute_demag_field_for_magnetization(") != std::string::npos,
         "demag field execution wrapper must be defined in demag.cpp");
@@ -54,6 +74,51 @@ void demag_update_execution_is_owned_by_demag_module() {
     check(
         bridge.find("case DemagFieldUpdateAction::") == std::string::npos,
         "mfem_bridge.cpp must not dispatch concrete demag update actions");
+}
+
+void demag_plan_fields_are_imported_by_demag_module() {
+    fullmag::fem::Context ctx;
+
+    fullmag_fem_plan_desc plan{};
+    plan.enable_demag = 1;
+    plan.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_GMRES;
+    plan.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+    plan.demag_solver.relative_tolerance = 1.0e-7;
+    plan.demag_solver.has_absolute_tolerance = 1;
+    plan.demag_solver.absolute_tolerance = 1.0e-11;
+    plan.demag_solver.max_iterations = 1234;
+    plan.demag_solver.print_level = 2;
+    plan.demag_realization = FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER;
+    plan.poisson_boundary_marker = 7;
+    plan.robin_beta_mode = 3;
+    plan.robin_beta_factor = 1.75;
+
+    fullmag::fem::initialize_demag_plan_fields(ctx, plan);
+
+    check(ctx.enable_demag, "demag plan import enables demag");
+    check(
+        ctx.demag_solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES,
+        "demag solver kind import");
+    check(
+        ctx.demag_solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG,
+        "demag preconditioner import");
+    check(ctx.demag_solver.relative_tolerance == 1.0e-7, "demag relative tolerance import");
+    check(ctx.demag_solver.has_absolute_tolerance == 1, "demag abs tolerance flag import");
+    check(ctx.demag_solver.absolute_tolerance == 1.0e-11, "demag absolute tolerance import");
+    check(ctx.demag_solver.max_iterations == 1234u, "demag max iterations import");
+    check(ctx.demag_solver.print_level == 2u, "demag print level import");
+#if FULLMAG_HAS_MFEM_STACK
+    check(
+        ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER,
+        "demag realization import");
+    check(ctx.poisson_boundary_marker == 7, "demag boundary marker import");
+    check(ctx.robin_beta_mode == 3, "demag robin beta mode import");
+    check(ctx.robin_beta_factor == 1.75, "demag robin beta factor import");
+#endif
+
+    plan.enable_demag = 0;
+    fullmag::fem::initialize_demag_plan_fields(ctx, plan);
+    check(!ctx.enable_demag, "demag plan import disables demag");
 }
 
 void cached_field_plan_does_not_validate_fresh_solve_readiness() {
@@ -133,6 +198,7 @@ void unsupported_fresh_demag_plan_is_rejected() {
 
 int main() {
     demag_update_execution_is_owned_by_demag_module();
+    demag_plan_fields_are_imported_by_demag_module();
     cached_field_plan_does_not_validate_fresh_solve_readiness();
     poisson_airbox_plan_requires_ready_poisson_operator();
     fredkin_koehler_plan_requires_ready_fem_bem_operator();

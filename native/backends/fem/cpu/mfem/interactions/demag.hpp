@@ -11,6 +11,16 @@ struct Context;
 struct PhaseTimings;
 
 /*
+ * Initialize native FEM demag plan fields.
+ *
+ * Copies the ABI plan's demag enable flag, solver configuration, and MFEM-stack
+ * realization settings into Context compatibility storage. Solver lifecycle,
+ * RHS assembly, potential solves, recovery, cache policy, and telemetry remain
+ * in dedicated demag modules.
+ */
+void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+/*
  * Native FEM demag field-update action selected for one effective-field call.
  *
  * Demag has multiple concrete realizations. The dispatcher owns only the shared

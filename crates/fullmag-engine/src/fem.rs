@@ -477,31 +477,97 @@ fn solve_sparse_cg_cached(
         return Ok(());
     }
 
+    #[cfg(feature = "parallel")]
+    let use_parallel = n >= 2_000;
+    #[cfg(not(feature = "parallel"))]
+    let use_parallel = false;
+
     for _iter in 0..max_iter {
         matrix.spmv_into(&ws.p[..n], &mut ws.ap[..n]);
 
-        let pap: f64 = (0..n).map(|i| ws.p[i] * ws.ap[i]).sum();
-        if pap.abs() <= ZERO_THRESHOLD {
-            break;
+        if use_parallel {
+            #[cfg(feature = "parallel")]
+            {
+                use rayon::prelude::*;
+
+                let pap: f64 = ws.p[..n]
+                    .par_iter()
+                    .zip(ws.ap[..n].par_iter())
+                    .map(|(p, ap)| p * ap)
+                    .sum();
+                if pap.abs() <= ZERO_THRESHOLD {
+                    break;
+                }
+                let alpha = rz / pap;
+
+                // AXPY: x += alpha*p, r -= alpha*ap (two independent writes)
+                let p_slice = &ws.p[..n];
+                ws.x[..n]
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, xi)| *xi += alpha * p_slice[i]);
+                let ap_slice = &ws.ap[..n];
+                ws.r[..n]
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, ri)| *ri -= alpha * ap_slice[i]);
+
+                let r_norm: f64 = ws.r[..n]
+                    .par_iter()
+                    .map(|ri| ri * ri)
+                    .sum::<f64>()
+                    .sqrt();
+                if r_norm < tol_abs {
+                    break;
+                }
+
+                // z = r * inv_diag
+                let r_slice = &ws.r[..n];
+                ws.z[..n]
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, zi)| *zi = r_slice[i] * inv_diag[i]);
+
+                let rz_new: f64 = ws.r[..n]
+                    .par_iter()
+                    .zip(ws.z[..n].par_iter())
+                    .map(|(r, z)| r * z)
+                    .sum();
+                let beta = rz_new / rz.max(ZERO_THRESHOLD);
+
+                // p = z + beta*p
+                let z_slice = &ws.z[..n];
+                ws.p[..n]
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(i, pi)| *pi = z_slice[i] + beta * *pi);
+
+                rz = rz_new;
+            }
+        } else {
+            let pap: f64 = (0..n).map(|i| ws.p[i] * ws.ap[i]).sum();
+            if pap.abs() <= ZERO_THRESHOLD {
+                break;
+            }
+            let alpha = rz / pap;
+            for i in 0..n {
+                ws.x[i] += alpha * ws.p[i];
+                ws.r[i] -= alpha * ws.ap[i];
+            }
+            let r_norm: f64 = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
+            if r_norm < tol_abs {
+                break;
+            }
+            for i in 0..n {
+                ws.z[i] = ws.r[i] * inv_diag[i];
+            }
+            let rz_new: f64 = (0..n).map(|i| ws.r[i] * ws.z[i]).sum();
+            let beta = rz_new / rz.max(ZERO_THRESHOLD);
+            for i in 0..n {
+                ws.p[i] = ws.z[i] + beta * ws.p[i];
+            }
+            rz = rz_new;
         }
-        let alpha = rz / pap;
-        for i in 0..n {
-            ws.x[i] += alpha * ws.p[i];
-            ws.r[i] -= alpha * ws.ap[i];
-        }
-        let r_norm: f64 = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
-        if r_norm < tol_abs {
-            break;
-        }
-        for i in 0..n {
-            ws.z[i] = ws.r[i] * inv_diag[i];
-        }
-        let rz_new: f64 = (0..n).map(|i| ws.r[i] * ws.z[i]).sum();
-        let beta = rz_new / rz.max(ZERO_THRESHOLD);
-        for i in 0..n {
-            ws.p[i] = ws.z[i] + beta * ws.p[i];
-        }
-        rz = rz_new;
     }
 
     Ok(())

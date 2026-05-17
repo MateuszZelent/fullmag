@@ -68,6 +68,7 @@ void anisotropy_families_are_owned_by_separate_modules() {
 
     const char *uniaxial_symbol = "void compute_uniaxial_anisotropy_field(";
     const char *cubic_symbol = "void compute_cubic_anisotropy_field(";
+    const char *plan_symbol = "void initialize_anisotropy_plan_fields(";
     const char *axis_symbol = "bool normalize_anisotropy_axes(";
 
     check(
@@ -91,6 +92,21 @@ void anisotropy_families_are_owned_by_separate_modules() {
     check(
         aggregate.find(axis_symbol) != std::string::npos,
         "anisotropy axis normalization must be defined in anisotropy.cpp");
+    check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "anisotropy plan import must be defined in anisotropy.cpp");
+    check(
+        aggregate_header.find("Initialize native FEM anisotropy plan fields") !=
+            std::string::npos,
+        "aggregate anisotropy header must document plan import ownership");
+    check(
+        context.find("ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;") ==
+            std::string::npos,
+        "context_from_plan must delegate uniaxial anisotropy import to anisotropy.cpp");
+    check(
+        context.find("ctx.enable_cubic_anisotropy = plan.has_cubic_anisotropy != 0;") ==
+            std::string::npos,
+        "context_from_plan must delegate cubic anisotropy import to anisotropy.cpp");
     check(
         uniaxial_header.find("Compute the uniaxial anisotropy effective field") !=
             std::string::npos,
@@ -123,6 +139,47 @@ fullmag::fem::Context make_base_context() {
     ctx.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
     ctx.magnetic_node_mask = {1u, 1u, 0u};
     return ctx;
+}
+
+void anisotropy_plan_fields_are_imported_by_aggregate() {
+    fullmag::fem::Context ctx;
+
+    fullmag_fem_plan_desc plan{};
+    plan.has_uniaxial_anisotropy = 1;
+    plan.uniaxial_anisotropy_constant = 1.2e5;
+    plan.uniaxial_anisotropy_k2 = 3.4e4;
+    plan.anisotropy_axis[0] = 1.0;
+    plan.anisotropy_axis[1] = 2.0;
+    plan.anisotropy_axis[2] = 3.0;
+    plan.has_cubic_anisotropy = 1;
+    plan.cubic_kc1 = 4.0e4;
+    plan.cubic_kc2 = 5.0e4;
+    plan.cubic_kc3 = 6.0e4;
+    plan.cubic_axis1[0] = 7.0;
+    plan.cubic_axis1[1] = 8.0;
+    plan.cubic_axis1[2] = 9.0;
+    plan.cubic_axis2[0] = 10.0;
+    plan.cubic_axis2[1] = 11.0;
+    plan.cubic_axis2[2] = 12.0;
+
+    fullmag::fem::initialize_anisotropy_plan_fields(ctx, plan);
+
+    check(ctx.enable_anisotropy, "uniaxial anisotropy plan enable import");
+    check_near(ctx.anisotropy_Ku, 1.2e5, 0.0, "uniaxial Ku plan import");
+    check_near(ctx.anisotropy_Ku2, 3.4e4, 0.0, "uniaxial Ku2 plan import");
+    check_near(ctx.anisotropy_axis[0], 1.0, 0.0, "uniaxial axis x plan import");
+    check_near(ctx.anisotropy_axis[1], 2.0, 0.0, "uniaxial axis y plan import");
+    check_near(ctx.anisotropy_axis[2], 3.0, 0.0, "uniaxial axis z plan import");
+    check(ctx.enable_cubic_anisotropy, "cubic anisotropy plan enable import");
+    check_near(ctx.cubic_Kc1, 4.0e4, 0.0, "cubic Kc1 plan import");
+    check_near(ctx.cubic_Kc2, 5.0e4, 0.0, "cubic Kc2 plan import");
+    check_near(ctx.cubic_Kc3, 6.0e4, 0.0, "cubic Kc3 plan import");
+    check_near(ctx.cubic_axis1[0], 7.0, 0.0, "cubic axis1 x plan import");
+    check_near(ctx.cubic_axis1[1], 8.0, 0.0, "cubic axis1 y plan import");
+    check_near(ctx.cubic_axis1[2], 9.0, 0.0, "cubic axis1 z plan import");
+    check_near(ctx.cubic_axis2[0], 10.0, 0.0, "cubic axis2 x plan import");
+    check_near(ctx.cubic_axis2[1], 11.0, 0.0, "cubic axis2 y plan import");
+    check_near(ctx.cubic_axis2[2], 12.0, 0.0, "cubic axis2 z plan import");
 }
 
 void uniaxial_uses_per_node_terms_and_energy_convention() {
@@ -241,6 +298,7 @@ void anisotropy_axis_plan_values_are_normalized_and_validated() {
 
 int main() {
     anisotropy_families_are_owned_by_separate_modules();
+    anisotropy_plan_fields_are_imported_by_aggregate();
     uniaxial_uses_per_node_terms_and_energy_convention();
     cubic_reports_energy_and_field_in_crystal_frame();
     anisotropy_axis_plan_values_are_normalized_and_validated();

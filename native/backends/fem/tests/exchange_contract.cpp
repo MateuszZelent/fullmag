@@ -47,9 +47,12 @@ std::filesystem::path fem_source_root() {
 
 void exchange_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.hpp");
     const std::string operator_module =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.cpp");
     const std::string operator_header =
@@ -67,6 +70,7 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
     const std::string fallback_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_fallback.hpp");
 
+    const char *plan_symbol = "void initialize_exchange_plan_fields(";
     const char *init_symbol = "bool initialize_exchange_operator_mfem(";
     const char *compute_symbol = "bool compute_exchange_for_magnetization(";
     const char *refresh_symbol = "bool context_refresh_exchange_field_mfem(";
@@ -87,6 +91,17 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
     check(
         aggregate.find(fallback_error) == std::string::npos,
         "exchange no-MFEM fallback must not be defined in exchange.cpp");
+    check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "exchange plan import must be defined in exchange.cpp");
+    check(
+        aggregate_header.find("Initialize native FEM exchange plan fields") !=
+            std::string::npos,
+        "exchange aggregate header must document plan import ownership");
+    check(
+        context.find("ctx.enable_exchange = plan.enable_exchange != 0;") ==
+            std::string::npos,
+        "context_from_plan must delegate exchange enable import to exchange.cpp");
     check(
         operator_module.find(init_symbol) != std::string::npos,
         "exchange operator assembly must be defined in exchange_operator.cpp");
@@ -195,6 +210,19 @@ fullmag::fem::Context make_context() {
     return ctx;
 }
 
+void exchange_plan_fields_are_imported_by_aggregate() {
+    fullmag::fem::Context ctx;
+
+    fullmag_fem_plan_desc plan{};
+    plan.enable_exchange = 1;
+    fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
+    check(ctx.enable_exchange, "exchange plan import enables exchange");
+
+    plan.enable_exchange = 0;
+    fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
+    check(!ctx.enable_exchange, "exchange plan import disables exchange");
+}
+
 #if !FULLMAG_HAS_MFEM_STACK
 void disabled_exchange_is_zero_without_mfem_stack() {
     auto ctx = make_context();
@@ -245,6 +273,7 @@ int main() {
     exchange_responsibilities_are_owned_by_separate_modules();
     exchange_mass_projection_is_owned_by_mass_module();
     exchange_legacy_gpu_upload_is_owned_by_upload_module();
+    exchange_plan_fields_are_imported_by_aggregate();
 #if !FULLMAG_HAS_MFEM_STACK
     disabled_exchange_is_zero_without_mfem_stack();
     active_exchange_reports_mfem_requirement_without_stack();

@@ -26,8 +26,8 @@ can be treated as production-quality. It complements the module contracts under
 | FEM state | `fem_state_contract` | initial magnetization validation/copy ownership, static periodic projection, and time/step reset ownership |
 | FEM material fields | `fem_material_fields_contract` | per-node material field import/validation ownership and scalar material convention validation |
 | FEM field buffers | `fem_field_buffers_contract` | nodal field-buffer sizing/zeroing ownership and external-field seeding of `H_eff` |
-| Exchange | `fem_exchange_contract` | no-MFEM behavior, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and source ownership |
-| Demag dispatcher | `fem_demag_contract` | cached/Poisson/FEM-BEM dispatch decision |
+| Exchange | `fem_exchange_contract` | no-MFEM behavior, plan-field initialization ownership, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and source ownership |
+| Demag dispatcher | `fem_demag_contract` | plan-field initialization ownership, cached/Poisson/FEM-BEM dispatch decision |
 | Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, ready/lifecycle/solve ownership |
 | Demag FEM/BEM | `fem_demag_fem_bem_contract` | boundary extraction, dense BEM sanity, energy sign, energy/solve ownership |
 | DMI | `fem_dmi_contract` | DMI disabled/error contracts, interfacial-DMI ownership, bulk-DMI ownership, workspace ownership, plan-field/normal initialization ownership, and module ownership |
@@ -35,7 +35,7 @@ can be treated as production-quality. It complements the module contracts under
 | STT | `fem_stt_contract` | direct torque families, Slonczewski/Zhang-Li module ownership, plan-field/family validation ownership, and disabled behavior |
 | Oersted | `fem_oersted_contract` | analytical cylinder, explicit nodal field behavior, plan-field/realization validation ownership, and module ownership |
 | Magnetoelastic | `fem_magnetoelastic_contract` | prescribed-strain field/energy, field-add module ownership, plan-field initialization ownership, masking, and additive H_eff |
-| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman broadcast/field/energy module ownership, uniaxial/cubic module ownership, and anisotropy axis normalization/validation ownership |
+| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman plan-field initialization and broadcast/field/energy module ownership, uniaxial/cubic module ownership, and anisotropy plan-field initialization plus axis normalization/validation ownership |
 
 ## Required Physics Fixtures
 

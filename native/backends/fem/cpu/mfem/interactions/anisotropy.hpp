@@ -2,6 +2,7 @@
 
 #include "cpu/mfem/interactions/anisotropy_cubic.hpp"
 #include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
+#include "fullmag_fem.h"
 
 #include <string>
 
@@ -12,6 +13,12 @@ struct Context;
 /*
  * Aggregated include surface for local anisotropy families.
  *
+ * Initialize native FEM anisotropy plan fields before validation and runtime
+ * field modules consume the Context compatibility storage.
+ */
+void initialize_anisotropy_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
+
+/*
  * Validate and normalize anisotropy axes from the native FEM plan before local
  * uniaxial/cubic field modules consume the Context compatibility storage.
  */

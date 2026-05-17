@@ -61,34 +61,44 @@ void material_field_helpers_are_owned_by_core_module() {
         context.find("auto validate_field_values = ") == std::string::npos,
         "Context must not define per-node material field value helper");
     check(
+        context.find("ctx.material = plan.material;") == std::string::npos,
+        "Context must not copy scalar material fields directly");
+    check(
+        material_fields.find("void initialize_material_plan_fields(") != std::string::npos,
+        "Scalar material plan import must be defined in core/fem_material_fields.cpp");
+    check(
         material_fields.find("void copy_plan_material_fields(") != std::string::npos,
         "Material field copy helper must be defined in core/fem_material_fields.cpp");
     check(
         material_fields.find("bool validate_material_fields(") != std::string::npos,
         "Material field validation helper must be defined in core/fem_material_fields.cpp");
     check(
-        material_header.find("Own FEM material field import and scalar material validation") !=
+        material_header.find("Own FEM scalar and per-node material field import") !=
             std::string::npos,
         "FemMaterialFields header must document its contract");
 }
 
-void material_field_copy_and_validation_contract() {
+void material_plan_import_and_validation_contract() {
     fullmag::fem::Context ctx;
     ctx.n_nodes = 2;
-    ctx.material.saturation_magnetisation = 800e3;
-    ctx.material.exchange_stiffness = 13e-12;
-    ctx.material.damping = 0.1;
-    ctx.material.gyromagnetic_ratio = 2.211e5;
 
     const double ms[] = {800e3, 1.0e6};
     const double alpha[] = {0.1, 0.2};
     fullmag_fem_plan_desc plan = {};
+    plan.material.saturation_magnetisation = 800e3;
+    plan.material.exchange_stiffness = 13e-12;
+    plan.material.damping = 0.1;
+    plan.material.gyromagnetic_ratio = 2.211e5;
     plan.ms_field = ms;
     plan.ms_field_len = 2;
     plan.alpha_field = alpha;
     plan.alpha_field_len = 2;
 
-    fullmag::fem::copy_plan_material_fields(ctx, plan);
+    fullmag::fem::initialize_material_plan_fields(ctx, plan);
+    check(ctx.material.saturation_magnetisation == 800e3, "scalar Ms copied from plan");
+    check(ctx.material.exchange_stiffness == 13e-12, "scalar A copied from plan");
+    check(ctx.material.damping == 0.1, "scalar alpha copied from plan");
+    check(ctx.material.gyromagnetic_ratio == 2.211e5, "scalar gamma_mu0 copied from plan");
     check(ctx.Ms_field == std::vector<double>({800e3, 1.0e6}), "Ms field copied from plan");
     check(ctx.alpha_field == std::vector<double>({0.1, 0.2}), "alpha field copied from plan");
 
@@ -119,6 +129,6 @@ void material_field_copy_and_validation_contract() {
 
 int main() {
     material_field_helpers_are_owned_by_core_module();
-    material_field_copy_and_validation_contract();
+    material_plan_import_and_validation_contract();
     return 0;
 }

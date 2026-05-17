@@ -9,6 +9,19 @@
 
 namespace fullmag::fem {
 
+void initialize_demag_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
+{
+    ctx.enable_demag = plan.enable_demag != 0;
+    ctx.demag_solver = plan.demag_solver;
+
+#if FULLMAG_HAS_MFEM_STACK
+    ctx.demag_realization = static_cast<int>(plan.demag_realization);
+    ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
+    ctx.robin_beta_mode = plan.robin_beta_mode;
+    ctx.robin_beta_factor = plan.robin_beta_factor;
+#endif
+}
+
 bool plan_demag_field_update(
     const DemagFieldUpdateInputs &inputs,
     DemagFieldUpdateDecision &decision,

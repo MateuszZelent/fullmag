@@ -60,6 +60,11 @@ bool validate_field_values(
 
 } // namespace
 
+void initialize_material_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
+    ctx.material = plan.material;
+    copy_plan_material_fields(ctx, plan);
+}
+
 void copy_plan_material_fields(Context &ctx, const fullmag_fem_plan_desc &plan) {
     copy_field(ctx.Ms_field, plan.ms_field, plan.ms_field_len);
     copy_field(ctx.A_field, plan.a_field, plan.a_field_len);

@@ -53,6 +53,8 @@ void zeeman_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.hpp");
     const std::string uniform =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.cpp");
     const std::string uniform_header =
@@ -65,7 +67,9 @@ void zeeman_responsibilities_are_owned_by_separate_modules() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.cpp");
     const std::string energy_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.hpp");
+    const std::string context_cpp = read_text_file(root / "src" / "context.cpp");
 
+    const char *plan_symbol = "void initialize_zeeman_plan_fields(";
     const char *broadcast_symbol = "void initialize_uniform_zeeman_field(";
     const char *add_symbol = "void add_zeeman_field(";
     const char *energy_symbol = "double zeeman_energy_from_field(";
@@ -89,6 +93,13 @@ void zeeman_responsibilities_are_owned_by_separate_modules() {
         energy.find(energy_symbol) != std::string::npos,
         "Zeeman energy must be defined in zeeman_energy.cpp");
     check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "Zeeman plan import must be defined in zeeman.cpp");
+    check(
+        aggregate_header.find("Initialize native FEM Zeeman plan fields") !=
+            std::string::npos,
+        "Zeeman aggregate header must document plan import ownership");
+    check(
         uniform_header.find("Initialize the native FEM Zeeman field buffer") !=
             std::string::npos,
         "Zeeman uniform-field header must document its physical contract");
@@ -98,6 +109,14 @@ void zeeman_responsibilities_are_owned_by_separate_modules() {
     check(
         energy_header.find("Compute Zeeman energy") != std::string::npos,
         "Zeeman energy header must document its physical contract");
+    check(
+        context_cpp.find("ctx.has_external_field = plan.has_external_field != 0;") ==
+            std::string::npos,
+        "context_from_plan must delegate Zeeman enable import to zeeman.cpp");
+    check(
+        context_cpp.find("ctx.external_field_am = {\n        plan.external_field_am[0]") ==
+            std::string::npos,
+        "context_from_plan must delegate Zeeman field import to zeeman.cpp");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -119,6 +138,37 @@ fullmag::fem::Context make_context() {
     ctx.Ms_field = {800e3, 1.0e6};
     ctx.mfem_lumped_mass = {2.0e-27, 3.0e-27};
     return ctx;
+}
+
+void plan_fields_are_imported_by_zeeman_module() {
+    fullmag::fem::Context ctx;
+    ctx.has_external_field = false;
+    ctx.external_field_am = {-1.0, -2.0, -3.0};
+
+    fullmag_fem_plan_desc plan{};
+    plan.has_external_field = 1;
+    plan.external_field_am[0] = 11.0;
+    plan.external_field_am[1] = 22.0;
+    plan.external_field_am[2] = 33.0;
+
+    fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
+
+    check(ctx.has_external_field, "Zeeman plan import enables external field");
+    check_near(ctx.external_field_am[0], 11.0, 0.0, "Zeeman plan Hx import");
+    check_near(ctx.external_field_am[1], 22.0, 0.0, "Zeeman plan Hy import");
+    check_near(ctx.external_field_am[2], 33.0, 0.0, "Zeeman plan Hz import");
+
+    plan.has_external_field = 0;
+    plan.external_field_am[0] = 44.0;
+    plan.external_field_am[1] = 55.0;
+    plan.external_field_am[2] = 66.0;
+
+    fullmag::fem::initialize_zeeman_plan_fields(ctx, plan);
+
+    check(!ctx.has_external_field, "Zeeman plan import disables external field");
+    check_near(ctx.external_field_am[0], 44.0, 0.0, "disabled Zeeman plan still imports Hx");
+    check_near(ctx.external_field_am[1], 55.0, 0.0, "disabled Zeeman plan still imports Hy");
+    check_near(ctx.external_field_am[2], 66.0, 0.0, "disabled Zeeman plan still imports Hz");
 }
 
 void disabled_zeeman_is_zero() {
@@ -192,6 +242,7 @@ void uniform_field_is_broadcast_added_and_integrated() {
 
 int main() {
     zeeman_responsibilities_are_owned_by_separate_modules();
+    plan_fields_are_imported_by_zeeman_module();
     disabled_zeeman_is_zero();
     uniform_field_is_broadcast_added_and_integrated();
     return 0;

@@ -4,8 +4,10 @@
 #include "core/fem_mesh.hpp"
 #include "core/fem_state.hpp"
 #include "cpu/mfem/interactions/anisotropy.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
+#include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
@@ -76,39 +78,19 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     initialize_stage_completion_state(ctx, plan.relax_stop);
     ctx.precision = plan.precision;
     ctx.integrator = plan.integrator;
-    ctx.enable_exchange = plan.enable_exchange != 0;
-    ctx.enable_demag = plan.enable_demag != 0;
-    ctx.has_external_field = plan.has_external_field != 0;
-    ctx.external_field_am = {
-        plan.external_field_am[0],
-        plan.external_field_am[1],
-        plan.external_field_am[2],
-    };
+    initialize_exchange_plan_fields(ctx, plan);
+    initialize_demag_plan_fields(ctx, plan);
+    initialize_zeeman_plan_fields(ctx, plan);
     if (!initialize_mesh_plan_fields(ctx, plan.mesh, error)) {
         return false;
     }
-    ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;
-    ctx.anisotropy_Ku = plan.uniaxial_anisotropy_constant;
-    ctx.anisotropy_Ku2 = plan.uniaxial_anisotropy_k2;
-    ctx.anisotropy_axis = {
-        plan.anisotropy_axis[0],
-        plan.anisotropy_axis[1],
-        plan.anisotropy_axis[2],
-    };
+    initialize_anisotropy_plan_fields(ctx, plan);
     initialize_dmi_plan_fields(ctx, plan);
-    ctx.enable_cubic_anisotropy = plan.has_cubic_anisotropy != 0;
-    ctx.cubic_Kc1 = plan.cubic_kc1;
-    ctx.cubic_Kc2 = plan.cubic_kc2;
-    ctx.cubic_Kc3 = plan.cubic_kc3;
-    ctx.cubic_axis1 = {plan.cubic_axis1[0], plan.cubic_axis1[1], plan.cubic_axis1[2]};
-    ctx.cubic_axis2 = {plan.cubic_axis2[0], plan.cubic_axis2[1], plan.cubic_axis2[2]};
-    ctx.material = plan.material;
-    ctx.demag_solver = plan.demag_solver;
+    initialize_material_plan_fields(ctx, plan);
     if (!initialize_stt_plan_fields(ctx, plan, error)) {
         return false;
     }
 
-    copy_plan_material_fields(ctx, plan);
     if (!validate_material_fields(ctx, error)) {
         return false;
     }
@@ -121,12 +103,6 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
         return false;
     }
 
-#if FULLMAG_HAS_MFEM_STACK
-    ctx.demag_realization = static_cast<int>(plan.demag_realization);
-    ctx.poisson_boundary_marker = plan.poisson_boundary_marker;
-    ctx.robin_beta_mode = plan.robin_beta_mode;
-    ctx.robin_beta_factor = plan.robin_beta_factor;
-#endif
     if (!initialize_state_plan_fields(ctx, plan, error)) {
         return false;
     }
