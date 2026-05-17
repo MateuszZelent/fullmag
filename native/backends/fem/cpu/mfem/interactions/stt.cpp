@@ -23,6 +23,51 @@ double vector_norm3(double x, double y, double z)
 
 } // namespace
 
+bool initialize_stt_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
+{
+    if (plan.has_zhang_li_stt != 0 && plan.has_slonczewski_stt != 0) {
+        error = "native FEM plan supports only one executable STT family at a time";
+        return false;
+    }
+
+    ctx.has_zhang_li_stt = plan.has_zhang_li_stt != 0;
+    ctx.has_slonczewski_stt = plan.has_slonczewski_stt != 0;
+    ctx.stt_current_density_am2 = {
+        plan.stt_current_density_am2[0],
+        plan.stt_current_density_am2[1],
+        plan.stt_current_density_am2[2],
+    };
+    ctx.stt_degree = plan.stt_degree;
+    ctx.stt_beta = plan.stt_beta;
+    ctx.stt_spin_polarization = {
+        plan.stt_spin_polarization[0],
+        plan.stt_spin_polarization[1],
+        plan.stt_spin_polarization[2],
+    };
+    ctx.stt_lambda = plan.stt_lambda;
+    ctx.stt_epsilon_prime = plan.stt_epsilon_prime;
+    ctx.stt_free_layer_thickness = plan.stt_free_layer_thickness;
+    ctx.stt_current_sign = plan.stt_current_sign;
+
+    if (ctx.has_slonczewski_stt) {
+        const double len = vector_norm3(
+            ctx.stt_spin_polarization[0],
+            ctx.stt_spin_polarization[1],
+            ctx.stt_spin_polarization[2]);
+        if (!std::isfinite(len) || len <= 1e-30) {
+            error = "stt_spin_polarization must be finite and non-zero";
+            return false;
+        }
+        ctx.stt_spin_polarization[0] /= len;
+        ctx.stt_spin_polarization[1] /= len;
+        ctx.stt_spin_polarization[2] /= len;
+    }
+    return true;
+}
+
 void add_stt_rhs_aos(
     const Context &ctx,
     const std::vector<double> &m_xyz,

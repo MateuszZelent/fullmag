@@ -51,8 +51,11 @@ std::filesystem::path fem_source_root() {
 
 void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic.hpp");
     const std::string prescribed =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.cpp");
     const std::string prescribed_header =
@@ -64,6 +67,7 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
 
     const char *compute_symbol = "void compute_magnetoelastic_field(";
     const char *add_symbol = "void add_magnetoelastic_field(";
+    const char *plan_symbol = "void initialize_magnetoelastic_plan_fields(";
 
     check(
         aggregate.find(compute_symbol) == std::string::npos,
@@ -71,6 +75,15 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     check(
         aggregate.find(add_symbol) == std::string::npos,
         "magnetoelastic H_eff addition must not be defined in magnetoelastic.cpp");
+    check(
+        context.find("ctx.enable_magnetoelastic = plan.has_magnetoelastic") == std::string::npos,
+        "Context must not own magnetoelastic flag plan import");
+    check(
+        context.find("plan.mel_strain_voigt") == std::string::npos,
+        "Context must not own magnetoelastic strain plan import");
+    check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "magnetoelastic plan import must be defined in magnetoelastic.cpp");
     check(
         prescribed.find(compute_symbol) != std::string::npos,
         "magnetoelastic field/energy compute must be defined in magnetoelastic_prescribed_strain.cpp");
@@ -84,6 +97,10 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     check(
         field_header.find("Add the current magnetoelastic H field") != std::string::npos,
         "magnetoelastic field-add header must document its physical contract");
+    check(
+        aggregate_header.find("Initialize prescribed-strain magnetoelastic plan fields") !=
+            std::string::npos,
+        "magnetoelastic aggregate header must document plan-field initialization ownership");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -195,6 +212,29 @@ void add_magnetoelastic_field_is_additive() {
     check_near(h_eff[2], 33.0, 0.0, "magnetoelastic Hz added");
 }
 
+void magnetoelastic_plan_import_copies_coupling_and_strain() {
+    fullmag::fem::Context ctx;
+    ctx.mel_energy = 42.0;
+    const double strain[] = {0.1, 0.2, 0.3, 0.04, 0.05, 0.06};
+    fullmag_fem_plan_desc plan{};
+    plan.has_magnetoelastic = 1;
+    plan.mel_b1 = 1.5e6;
+    plan.mel_b2 = -2.5e6;
+    plan.mel_uniform_strain = 1;
+    plan.mel_strain_voigt = strain;
+    plan.mel_strain_len = 6;
+
+    fullmag::fem::initialize_magnetoelastic_plan_fields(ctx, plan);
+
+    check(ctx.enable_magnetoelastic, "magnetoelastic flag copied from plan");
+    check_near(ctx.mel_b1, 1.5e6, 0.0, "magnetoelastic B1 copied");
+    check_near(ctx.mel_b2, -2.5e6, 0.0, "magnetoelastic B2 copied");
+    check(ctx.mel_uniform_strain, "magnetoelastic uniform strain flag copied");
+    check(ctx.mel_strain_voigt == std::vector<double>({0.1, 0.2, 0.3, 0.04, 0.05, 0.06}),
+          "magnetoelastic strain copied from plan");
+    check_near(ctx.mel_energy, 0.0, 0.0, "magnetoelastic energy reset on plan import");
+}
+
 } // namespace
 
 int main() {
@@ -202,5 +242,6 @@ int main() {
     uniform_strain_field_and_energy_follow_b1_b2_contract();
     per_node_strain_and_masking_are_respected();
     add_magnetoelastic_field_is_additive();
+    magnetoelastic_plan_import_copies_coupling_and_strain();
     return 0;
 }

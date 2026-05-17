@@ -192,7 +192,7 @@ void fem_bem_compute_wrapper_is_owned_by_solve_module() {
         "combine_demag_fem_bem_total_potential(",
         "recover_demag_poisson_field(",
         "publish_demag_fem_bem_solver_stats(",
-        "accumulate_fem_bem_phase_timings(",
+        "accumulate_demag_fem_bem_phase_timings(",
     };
     for (const char *symbol : symbols) {
         check(

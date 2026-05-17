@@ -160,7 +160,7 @@ bool context_compute_demag_fem_bem(
             u2_solve_ns,
         });
 
-    accumulate_fem_bem_phase_timings(
+    accumulate_demag_fem_bem_phase_timings(
         timings,
         assemble_ns,
         solve_ns,

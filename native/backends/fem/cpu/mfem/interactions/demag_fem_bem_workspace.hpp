@@ -49,6 +49,9 @@ DemagFemBemWorkspace *demag_fem_bem_workspace(Context &ctx);
 bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error);
 void destroy_demag_fem_bem_workspace(Context &ctx);
 
+bool context_initialize_demag_fem_bem(Context &ctx, std::string &error);
+void context_destroy_demag_fem_bem(Context &ctx);
+
 } // namespace fullmag::fem
 
 #endif

@@ -125,6 +125,28 @@ void zhang_li_cip_is_owned_by_zhang_li_module() {
         "Zhang-Li module header must document its physical contract");
 }
 
+void stt_plan_fields_are_owned_by_stt_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string stt =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
+    const std::string stt_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.hpp");
+
+    check(
+        context.find("plan.has_zhang_li_stt") == std::string::npos,
+        "Context must not own STT plan-family validation");
+    check(
+        context.find("stt_spin_polarization must be finite") == std::string::npos,
+        "Context must not own Slonczewski spin-polarization validation");
+    check(
+        stt.find("bool initialize_stt_plan_fields(") != std::string::npos,
+        "STT plan import must be defined in stt.cpp");
+    check(
+        stt_header.find("Initialize executable STT plan fields") != std::string::npos,
+        "STT aggregate header must document plan-field initialization ownership");
+}
+
 void check_near(double actual, double expected, double tol, const char *msg) {
     if (std::fabs(actual - expected) > tol) {
         std::fprintf(
@@ -242,14 +264,62 @@ void combined_stt_updates_max_rhs() {
     check(max_rhs > 0.0, "combined STT updates max_rhs");
 }
 
+void stt_plan_import_copies_parameters_and_validates_family() {
+    fullmag::fem::Context ctx;
+    fullmag_fem_plan_desc plan{};
+    plan.has_slonczewski_stt = 1;
+    plan.stt_current_density_am2[0] = 1.0;
+    plan.stt_current_density_am2[1] = 2.0;
+    plan.stt_current_density_am2[2] = 3.0;
+    plan.stt_degree = 0.7;
+    plan.stt_beta = 0.2;
+    plan.stt_spin_polarization[2] = 4.0;
+    plan.stt_lambda = 1.5;
+    plan.stt_epsilon_prime = 0.25;
+    plan.stt_free_layer_thickness = 2.0e-9;
+    plan.stt_current_sign = -1.0;
+
+    std::string error;
+    check(fullmag::fem::initialize_stt_plan_fields(ctx, plan, error), error.c_str());
+    check(ctx.has_slonczewski_stt, "Slonczewski flag copied");
+    check(!ctx.has_zhang_li_stt, "Zhang-Li flag copied");
+    check(ctx.stt_current_density_am2[2] == 3.0, "STT current density copied");
+    check(ctx.stt_degree == 0.7, "STT degree copied");
+    check(ctx.stt_beta == 0.2, "STT beta copied");
+    check(ctx.stt_spin_polarization[2] == 1.0, "STT spin polarization normalized");
+    check(ctx.stt_lambda == 1.5, "STT lambda copied");
+    check(ctx.stt_epsilon_prime == 0.25, "STT epsilon prime copied");
+    check(ctx.stt_free_layer_thickness == 2.0e-9, "STT free-layer thickness copied");
+    check(ctx.stt_current_sign == -1.0, "STT current sign copied");
+
+    plan.has_zhang_li_stt = 1;
+    check(
+        !fullmag::fem::initialize_stt_plan_fields(ctx, plan, error),
+        "simultaneous STT families must fail");
+    check(
+        error.find("only one executable STT family") != std::string::npos,
+        "STT family validation error should identify exclusivity");
+
+    plan.has_zhang_li_stt = 0;
+    plan.stt_spin_polarization[2] = 0.0;
+    check(
+        !fullmag::fem::initialize_stt_plan_fields(ctx, plan, error),
+        "zero Slonczewski spin polarization must fail");
+    check(
+        error.find("stt_spin_polarization") != std::string::npos,
+        "STT spin-polarization error should identify the field");
+}
+
 } // namespace
 
 int main() {
     slonczewski_cpp_is_owned_by_slonczewski_module();
     zhang_li_cip_is_owned_by_zhang_li_module();
+    stt_plan_fields_are_owned_by_stt_module();
     slonczewski_cpp_rhs_uses_current_sign_and_field_like_term();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
     combined_stt_updates_max_rhs();
+    stt_plan_import_copies_parameters_and_validates_family();
     return 0;
 }

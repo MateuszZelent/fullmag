@@ -2,12 +2,27 @@
 
 #include "cpu/mfem/interactions/oersted_cylinder.hpp"
 #include "cpu/mfem/interactions/oersted_explicit.hpp"
+#include "fullmag_fem.h"
 
+#include <string>
 #include <vector>
 
 namespace fullmag::fem {
 
 struct Context;
+
+/*
+ * Initialize Oersted plan fields.
+ *
+ * Copies either an analytical-cylinder realization or an explicit nodal
+ * Oersted field from the ABI plan into Context compatibility storage. The
+ * function validates mutually exclusive realizations, explicit field length,
+ * cylinder-axis normalization, and precomputes the unit-current cylinder field.
+ */
+bool initialize_oersted_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
 
 /*
  * Aggregated include surface and public dispatcher for Oersted realizations.

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "fullmag_fem.h"
+
+#include <string>
 #include <vector>
 
 namespace fullmag::fem {
@@ -17,6 +20,18 @@ struct AdaptiveResult {
     bool accepted = true;
     double dt_next = 0.0;
 };
+
+/*
+ * Initialize adaptive RK plan fields.
+ *
+ * Validates the optional ABI adaptive_config and copies tolerances, time-step
+ * bounds, PI safety/growth/shrink factors, and rejection budget into Context.
+ * If no adaptive config is provided, fixed-step plan state is left unchanged.
+ */
+bool initialize_adaptive_dt_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
 
 /*
  * Compute the next native FEM adaptive time step using the PI controller.

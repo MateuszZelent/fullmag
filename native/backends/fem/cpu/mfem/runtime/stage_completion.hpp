@@ -2,9 +2,33 @@
 
 #include "fullmag_fem.h"
 
+#include <string>
+
 namespace fullmag::fem {
 
 struct Context;
+
+/*
+ * Validate native FEM relaxation stop configuration.
+ *
+ * Checks the ABI relaxation-stop thresholds before Context state is initialized:
+ * positive torque, non-negative energy tolerance, at least one max step, and
+ * positive physical/pseudo-time limits when the corresponding flags are set.
+ */
+bool validate_relax_stop_config(
+    const fullmag_fem_relax_stop &relax_stop,
+    std::string &error);
+
+/*
+ * Own native FEM relaxation stop state initialization.
+ *
+ * Copies the ABI relaxation-stop policy into Context compatibility storage and
+ * resets stage-completion, pseudo-time, previous-energy, and plateau-window
+ * state for a fresh native FEM plan.
+ */
+void initialize_stage_completion_state(
+    Context &ctx,
+    const fullmag_fem_relax_stop &relax_stop);
 
 /*
  * Return whether the context has any relaxation stop criterion configured.

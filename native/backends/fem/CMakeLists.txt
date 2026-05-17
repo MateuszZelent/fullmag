@@ -11,7 +11,10 @@ set(FEM_PUBLIC_HEADERS
 )
 
 set(FEM_SOURCES
+    core/fem_field_buffers.cpp
+    core/fem_material_fields.cpp
     core/fem_mesh.cpp
+    core/fem_state.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp
     cpu/mfem/interactions/anisotropy_uniaxial.cpp
@@ -81,6 +84,7 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/field_refresh.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
     cpu/mfem/runtime/snapshot.cpp
@@ -281,6 +285,14 @@ target_include_directories(fem_cpu_threads_contract PRIVATE
 )
 add_test(NAME fem_cpu_threads_contract COMMAND fem_cpu_threads_contract)
 
+add_executable(fem_mfem_device_contract tests/mfem_device_contract.cpp)
+target_link_libraries(fem_mfem_device_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mfem_device_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mfem_device_contract COMMAND fem_mfem_device_contract)
+
 add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
 target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)
 target_include_directories(fem_snapshot_contract PRIVATE
@@ -313,6 +325,14 @@ target_include_directories(fem_stage_completion_contract PRIVATE
 )
 add_test(NAME fem_stage_completion_contract COMMAND fem_stage_completion_contract)
 
+add_executable(fem_field_refresh_contract tests/field_refresh_contract.cpp)
+target_link_libraries(fem_field_refresh_contract PRIVATE fullmag_fem)
+target_include_directories(fem_field_refresh_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_field_refresh_contract COMMAND fem_field_refresh_contract)
+
 add_executable(fem_aos_field_contract tests/aos_field_contract.cpp)
 target_link_libraries(fem_aos_field_contract PRIVATE fullmag_fem)
 target_include_directories(fem_aos_field_contract PRIVATE
@@ -328,6 +348,30 @@ target_include_directories(fem_mesh_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_mesh_contract COMMAND fem_mesh_contract)
+
+add_executable(fem_state_contract tests/fem_state_contract.cpp)
+target_link_libraries(fem_state_contract PRIVATE fullmag_fem)
+target_include_directories(fem_state_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_state_contract COMMAND fem_state_contract)
+
+add_executable(fem_material_fields_contract tests/fem_material_fields_contract.cpp)
+target_link_libraries(fem_material_fields_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_fields_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_fields_contract COMMAND fem_material_fields_contract)
+
+add_executable(fem_field_buffers_contract tests/fem_field_buffers_contract.cpp)
+target_link_libraries(fem_field_buffers_contract PRIVATE fullmag_fem)
+target_include_directories(fem_field_buffers_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_field_buffers_contract COMMAND fem_field_buffers_contract)
 
 add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)

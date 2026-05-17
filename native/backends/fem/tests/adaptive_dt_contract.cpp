@@ -65,9 +65,13 @@ std::filesystem::path fem_source_root() {
 
 void adaptive_dt_controller_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string adaptive =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "adaptive_dt.cpp");
+    const std::string adaptive_header =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "adaptive_dt.hpp");
+    const char *plan_symbol = "bool initialize_adaptive_dt_plan_fields(";
 
     check(
         bridge.find("AdaptiveResult adaptive_pi_step(") == std::string::npos,
@@ -81,6 +85,18 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
     check(
         adaptive.find("double compute_adaptive_error_norm(") != std::string::npos,
         "adaptive RK error norm must be defined in adaptive_dt.cpp");
+    check(
+        context.find("adaptive_config.atol must be finite") == std::string::npos,
+        "Context must not own adaptive config validation");
+    check(
+        context.find("ctx.adaptive_dt_enabled = true") == std::string::npos,
+        "Context must not own adaptive config field import");
+    check(
+        adaptive.find(plan_symbol) != std::string::npos,
+        "adaptive config plan import must be defined in adaptive_dt.cpp");
+    check(
+        adaptive_header.find("Initialize adaptive RK plan fields") != std::string::npos,
+        "adaptive_dt header must document plan-field initialization ownership");
 }
 
 fullmag::fem::Context make_context() {
@@ -162,6 +178,46 @@ void adaptive_error_norm_scales_each_aos_component() {
     check_near(norm, 1.0, 1e-15, "adaptive error norm uses max scaled AoS component");
 }
 
+void adaptive_plan_import_validates_and_copies_config() {
+    fullmag::fem::Context ctx;
+    ctx.dt_seconds = 2.0e-12;
+    fullmag_fem_adaptive_config adaptive{};
+    adaptive.atol = 1.0e-6;
+    adaptive.rtol = 1.0e-4;
+    adaptive.dt_initial = 0.0;
+    adaptive.dt_min = 1.0e-15;
+    adaptive.dt_max = 1.0e-10;
+    adaptive.safety = 0.9;
+    adaptive.growth_limit = 2.5;
+    adaptive.shrink_limit = 0.25;
+    adaptive.max_reject = 17;
+    fullmag_fem_plan_desc plan{};
+    plan.dt_seconds = 2.0e-12;
+    plan.adaptive_config = &adaptive;
+
+    std::string error;
+    check(fullmag::fem::initialize_adaptive_dt_plan_fields(ctx, plan, error), error.c_str());
+    check(ctx.adaptive_dt_enabled, "adaptive plan import enables adaptive dt");
+    check_near(ctx.adaptive_atol, 1.0e-6, 0.0, "adaptive atol copied");
+    check_near(ctx.adaptive_rtol, 1.0e-4, 0.0, "adaptive rtol copied");
+    check_near(ctx.dt_seconds, 2.0e-12, 0.0, "adaptive dt_initial zero falls back to plan dt");
+    check_near(ctx.current_dt, 2.0e-12, 0.0, "adaptive current dt copied");
+    check_near(ctx.dt_min, 1.0e-15, 0.0, "adaptive dt_min copied");
+    check_near(ctx.dt_max, 1.0e-10, 0.0, "adaptive dt_max copied");
+    check_near(ctx.safety_factor, 0.9, 0.0, "adaptive safety copied");
+    check_near(ctx.dt_grow_max, 2.5, 0.0, "adaptive growth limit copied");
+    check_near(ctx.dt_shrink_min, 0.25, 0.0, "adaptive shrink limit copied");
+    check(ctx.max_reject == 17u, "adaptive max_reject copied");
+
+    adaptive.max_reject = 0;
+    check(
+        !fullmag::fem::initialize_adaptive_dt_plan_fields(ctx, plan, error),
+        "adaptive max_reject zero must fail");
+    check(
+        error.find("adaptive_config.max_reject must be > 0") != std::string::npos,
+        "adaptive max_reject error string");
+}
+
 } // namespace
 
 int main() {
@@ -170,5 +226,6 @@ int main() {
     accepted_error_grows_dt_and_updates_previous_error();
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_scales_each_aos_component();
+    adaptive_plan_import_validates_and_copies_config();
     return 0;
 }

@@ -82,7 +82,9 @@ pub(crate) fn build_live_status(
             stage_count: stage_exec.map(|se| se.total_stages as u32).unwrap_or(0),
             started_at: snapshot.session.started_at_unix_ms.to_string(),
             solver_steps: r.total_steps as u64,
-            solver_time: r.final_time.unwrap_or(0.0),
+            solver_time: r.final_time
+                .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
+                .unwrap_or(0.0),
         }
     });
 
@@ -188,13 +190,21 @@ pub(crate) fn build_live_status(
         .saturating_sub(snapshot.session.started_at_unix_ms as u64 / 1000);
     let total_steps = latest.map(|s| s.step).unwrap_or(0);
 
+    // Compute instantaneous steps/s from the solver profiler's per-step wall
+    // time when available, falling back to the lifetime average.
+    let steps_per_second = instantaneous_steps_per_second(&snapshot.solver_profile)
+        .or_else(|| {
+            latest
+                .and_then(|step| {
+                    (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9)
+                })
+                .filter(|elapsed| *elapsed > 0.0)
+                .map(|elapsed| total_steps as f64 / elapsed)
+        });
     let metrics = MetricsSummary {
         uptime_seconds: uptime,
         total_steps,
-        steps_per_second: latest
-            .and_then(|step| (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9))
-            .filter(|elapsed| *elapsed > 0.0)
-            .map(|elapsed| total_steps as f64 / elapsed),
+        steps_per_second,
     };
 
     LiveStatus {
@@ -300,4 +310,23 @@ pub(crate) fn artifact_revision(snapshot: &SessionStateResponse) -> u64 {
                 .wrapping_add(artifact.path.len() as u64)
                 .wrapping_add(artifact.kind.len() as u64)
         })
+}
+
+/// Compute instantaneous steps/s from the solver profiler's recent per-step
+/// wall time samples.  Returns `None` when the profiler is inactive or has
+/// no samples, allowing the caller to fall back to the lifetime average.
+fn instantaneous_steps_per_second(
+    profile: &crate::schemas::diagnostics::SolverProfileResource,
+) -> Option<f64> {
+    if profile.latest_samples.is_empty() {
+        return None;
+    }
+    // Average the per-step wall time from the most recent samples (up to 5).
+    let window = &profile.latest_samples[profile.latest_samples.len().saturating_sub(5)..];
+    let total_ns: u64 = window.iter().map(|s| s.total_ns).sum();
+    if total_ns == 0 || window.is_empty() {
+        return None;
+    }
+    let avg_ns = total_ns as f64 / window.len() as f64;
+    Some(1.0e9 / avg_ns)
 }

@@ -52,8 +52,11 @@ std::filesystem::path fem_source_root() {
 
 void anisotropy_families_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.hpp");
     const std::string uniaxial =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_uniaxial.cpp");
     const std::string uniaxial_header =
@@ -65,6 +68,7 @@ void anisotropy_families_are_owned_by_separate_modules() {
 
     const char *uniaxial_symbol = "void compute_uniaxial_anisotropy_field(";
     const char *cubic_symbol = "void compute_cubic_anisotropy_field(";
+    const char *axis_symbol = "bool normalize_anisotropy_axes(";
 
     check(
         aggregate.find(uniaxial_symbol) == std::string::npos,
@@ -79,12 +83,25 @@ void anisotropy_families_are_owned_by_separate_modules() {
         cubic.find(cubic_symbol) != std::string::npos,
         "cubic anisotropy must be defined in anisotropy_cubic.cpp");
     check(
+        context.find("auto normalize3 = []") == std::string::npos,
+        "Context must not define anisotropy axis normalization helper");
+    check(
+        context.find("cubic anisotropy axes must be finite") == std::string::npos,
+        "Context must not own cubic anisotropy axis validation");
+    check(
+        aggregate.find(axis_symbol) != std::string::npos,
+        "anisotropy axis normalization must be defined in anisotropy.cpp");
+    check(
         uniaxial_header.find("Compute the uniaxial anisotropy effective field") !=
             std::string::npos,
         "uniaxial module header must document its physical contract");
     check(
         cubic_header.find("Compute the cubic anisotropy effective field") != std::string::npos,
         "cubic module header must document its physical contract");
+    check(
+        aggregate_header.find("Validate and normalize anisotropy axes from the native FEM plan") !=
+            std::string::npos,
+        "aggregate anisotropy header must document plan-axis normalization");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -196,11 +213,36 @@ void cubic_reports_energy_and_field_in_crystal_frame() {
         "cubic energy");
 }
 
+void anisotropy_axis_plan_values_are_normalized_and_validated() {
+    fullmag::fem::Context ctx;
+    ctx.enable_anisotropy = true;
+    ctx.anisotropy_axis = {0.0, 0.0, 4.0};
+    ctx.enable_cubic_anisotropy = true;
+    ctx.cubic_axis1 = {2.0, 0.0, 0.0};
+    ctx.cubic_axis2 = {0.0, 3.0, 0.0};
+
+    std::string error;
+    check(fullmag::fem::normalize_anisotropy_axes(ctx, error), error.c_str());
+    check_near(ctx.anisotropy_axis[2], 1.0, 1e-12, "uniaxial axis normalized");
+    check_near(ctx.cubic_axis1[0], 1.0, 1e-12, "cubic axis1 normalized");
+    check_near(ctx.cubic_axis2[1], 1.0, 1e-12, "cubic axis2 normalized");
+
+    ctx.cubic_axis1 = {1.0, 0.0, 0.0};
+    ctx.cubic_axis2 = {2.0, 0.0, 0.0};
+    check(
+        !fullmag::fem::normalize_anisotropy_axes(ctx, error),
+        "parallel cubic axes must fail validation");
+    check(
+        error.find("cubic anisotropy axes") != std::string::npos,
+        "cubic axis validation error should identify the interaction");
+}
+
 } // namespace
 
 int main() {
     anisotropy_families_are_owned_by_separate_modules();
     uniaxial_uses_per_node_terms_and_energy_convention();
     cubic_reports_energy_and_field_in_crystal_frame();
+    anisotropy_axis_plan_values_are_normalized_and_validated();
     return 0;
 }

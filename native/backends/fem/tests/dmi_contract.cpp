@@ -78,6 +78,29 @@ void dmi_workspace_is_owned_by_workspace_module() {
         "DMI workspace destroy helper must be defined in dmi_workspace.cpp");
 }
 
+void dmi_plan_fields_are_owned_by_dmi_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string dmi =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi.cpp");
+    const std::string dmi_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi.hpp");
+
+    check(
+        context.find("ctx.enable_dmi = plan.has_interfacial_dmi") == std::string::npos,
+        "Context must not own DMI plan flag import");
+    check(
+        context.find("plan.dmi_interface_normal") == std::string::npos,
+        "Context must not own DMI interface-normal normalization");
+    check(
+        dmi.find("void initialize_dmi_plan_fields(") != std::string::npos,
+        "DMI plan import must be defined in dmi.cpp");
+    check(
+        dmi_header.find("Initialize DMI plan fields and normalize the interface normal") !=
+            std::string::npos,
+        "DMI aggregate header must document plan-field initialization ownership");
+}
+
 void bulk_dmi_is_owned_by_bulk_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string dmi =
@@ -258,15 +281,45 @@ void active_bulk_dmi_reports_mfem_requirement_without_stack() {
 #endif
 }
 
+void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
+    fullmag::fem::Context ctx;
+    fullmag_fem_plan_desc plan{};
+    plan.has_interfacial_dmi = 1;
+    plan.dmi_constant = 1.25e-3;
+    plan.dmi_interface_normal[0] = 0.0;
+    plan.dmi_interface_normal[1] = 0.0;
+    plan.dmi_interface_normal[2] = 4.0;
+    plan.has_bulk_dmi = 1;
+    plan.bulk_dmi_constant = 2.5e-3;
+
+    fullmag::fem::initialize_dmi_plan_fields(ctx, plan);
+
+    check(ctx.enable_dmi, "interfacial DMI flag copied");
+    check(ctx.dmi_D == 1.25e-3, "interfacial DMI constant copied");
+    check(ctx.enable_bulk_dmi, "bulk DMI flag copied");
+    check(ctx.bulk_dmi_D == 2.5e-3, "bulk DMI constant copied");
+    check(ctx.dmi_n_hat[0] == 0.0, "DMI normal x normalized");
+    check(ctx.dmi_n_hat[1] == 0.0, "DMI normal y normalized");
+    check(ctx.dmi_n_hat[2] == 1.0, "DMI normal z normalized");
+
+    fullmag_fem_plan_desc zero_normal_plan{};
+    fullmag::fem::initialize_dmi_plan_fields(ctx, zero_normal_plan);
+    check(ctx.dmi_n_hat[0] == 0.0, "zero DMI normal defaults x");
+    check(ctx.dmi_n_hat[1] == 0.0, "zero DMI normal defaults y");
+    check(ctx.dmi_n_hat[2] == 1.0, "zero DMI normal defaults z");
+}
+
 } // namespace
 
 int main() {
     dmi_workspace_is_owned_by_workspace_module();
+    dmi_plan_fields_are_owned_by_dmi_module();
     bulk_dmi_is_owned_by_bulk_module();
     interfacial_dmi_is_owned_by_interfacial_module();
     disabled_interfacial_dmi_is_zero();
     disabled_bulk_dmi_is_zero();
     active_dmi_reports_mfem_requirement_without_stack();
     active_bulk_dmi_reports_mfem_requirement_without_stack();
+    dmi_plan_import_normalizes_interface_normal_and_defaults_zero();
     return 0;
 }

@@ -53,8 +53,11 @@ std::filesystem::path fem_source_root() {
 
 void thermal_brown_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context = read_text_file(root / "src" / "context.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown.cpp");
+    const std::string aggregate_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown.hpp");
     const std::string sigma =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sigma.cpp");
     const std::string sigma_header =
@@ -71,6 +74,7 @@ void thermal_brown_responsibilities_are_owned_by_separate_modules() {
     const char *sigma_symbol = "double thermal_brown_sigma(";
     const char *refresh_symbol = "void refresh_thermal_brown_field(";
     const char *add_symbol = "void add_thermal_brown_field(";
+    const char *plan_symbol = "void initialize_thermal_brown_plan_fields(";
 
     check(
         aggregate.find(sigma_symbol) == std::string::npos,
@@ -81,6 +85,15 @@ void thermal_brown_responsibilities_are_owned_by_separate_modules() {
     check(
         aggregate.find(add_symbol) == std::string::npos,
         "Brown H_eff addition must not be defined in thermal_brown.cpp");
+    check(
+        context.find("ctx.temperature = plan.temperature") == std::string::npos,
+        "Context must not own Brown temperature plan import");
+    check(
+        context.find("ctx.thermal_seed = plan.thermal_seed") == std::string::npos,
+        "Context must not own Brown thermal seed plan import");
+    check(
+        aggregate.find(plan_symbol) != std::string::npos,
+        "Brown plan import must be defined in thermal_brown.cpp");
     check(
         sigma.find(sigma_symbol) != std::string::npos,
         "Brown sigma formula must be defined in thermal_brown_sigma.cpp");
@@ -100,6 +113,9 @@ void thermal_brown_responsibilities_are_owned_by_separate_modules() {
     check(
         field_header.find("Add the current Brown thermal field") != std::string::npos,
         "Brown field header must document its physical contract");
+    check(
+        aggregate_header.find("Initialize Brown thermal plan fields") != std::string::npos,
+        "Brown aggregate header must document plan-field initialization ownership");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -236,6 +252,21 @@ void thermal_field_adds_to_effective_field() {
     check_near(h_eff[0], 11.0, 0.0, "disabled thermal add skipped");
 }
 
+void thermal_plan_import_sets_temperature_seed_and_initializes_buffer() {
+    fullmag::fem::Context ctx;
+    ctx.n_nodes = 2;
+    fullmag_fem_plan_desc plan{};
+    plan.temperature = 300.0;
+    plan.thermal_seed = 987654321ull;
+
+    fullmag::fem::initialize_thermal_brown_plan_fields(ctx, plan);
+
+    check_near(ctx.temperature, 300.0, 0.0, "Brown temperature copied from plan");
+    check(ctx.thermal_seed == 987654321ull, "Brown thermal seed copied from plan");
+    check(ctx.h_therm_xyz == std::vector<double>({0.0, 0.0, 0.0, 0.0, 0.0, 0.0}),
+          "Brown plan import initializes thermal field buffer");
+}
+
 } // namespace
 
 int main() {
@@ -244,5 +275,6 @@ int main() {
     refresh_uses_per_node_sigma_mask_and_cache();
     disabled_or_invalid_state_clears_thermal_field();
     thermal_field_adds_to_effective_field();
+    thermal_plan_import_sets_temperature_seed_and_initializes_buffer();
     return 0;
 }

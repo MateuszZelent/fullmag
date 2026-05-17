@@ -7,6 +7,73 @@
 
 namespace fullmag::fem {
 
+bool initialize_adaptive_dt_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
+{
+    if (plan.adaptive_config == nullptr) {
+        return true;
+    }
+
+    const auto &adaptive = *plan.adaptive_config;
+    if (!std::isfinite(adaptive.atol) || adaptive.atol <= 0.0) {
+        error = "adaptive_config.atol must be finite and > 0";
+        return false;
+    }
+    if (!std::isfinite(adaptive.rtol) || adaptive.rtol <= 0.0) {
+        error = "adaptive_config.rtol must be finite and > 0";
+        return false;
+    }
+    if (!std::isfinite(adaptive.dt_initial) || adaptive.dt_initial < 0.0) {
+        error = "adaptive_config.dt_initial must be finite and >= 0";
+        return false;
+    }
+    if (!std::isfinite(adaptive.dt_min) || adaptive.dt_min <= 0.0) {
+        error = "adaptive_config.dt_min must be finite and > 0";
+        return false;
+    }
+    if (!std::isfinite(adaptive.dt_max) || adaptive.dt_max < adaptive.dt_min) {
+        error = "adaptive_config.dt_max must be finite and >= adaptive_config.dt_min";
+        return false;
+    }
+    if (!std::isfinite(adaptive.safety) ||
+        adaptive.safety <= 0.0 ||
+        adaptive.safety >= 1.0) {
+        error = "adaptive_config.safety must be finite and satisfy 0 < safety < 1";
+        return false;
+    }
+    if (!std::isfinite(adaptive.growth_limit) || adaptive.growth_limit <= 1.0) {
+        error = "adaptive_config.growth_limit must be finite and > 1";
+        return false;
+    }
+    if (!std::isfinite(adaptive.shrink_limit) ||
+        adaptive.shrink_limit <= 0.0 ||
+        adaptive.shrink_limit >= 1.0) {
+        error = "adaptive_config.shrink_limit must be finite and satisfy 0 < shrink_limit < 1";
+        return false;
+    }
+    if (adaptive.max_reject == 0) {
+        error = "adaptive_config.max_reject must be > 0";
+        return false;
+    }
+
+    ctx.adaptive_dt_enabled = true;
+    ctx.adaptive_atol = adaptive.atol;
+    ctx.adaptive_rtol = adaptive.rtol;
+    ctx.dt_seconds = adaptive.dt_initial > 0.0
+                         ? adaptive.dt_initial
+                         : plan.dt_seconds;
+    ctx.current_dt = ctx.dt_seconds;
+    ctx.dt_min = adaptive.dt_min;
+    ctx.dt_max = adaptive.dt_max;
+    ctx.safety_factor = adaptive.safety;
+    ctx.dt_grow_max = adaptive.growth_limit;
+    ctx.dt_shrink_min = adaptive.shrink_limit;
+    ctx.max_reject = adaptive.max_reject;
+    return true;
+}
+
 double compute_adaptive_error_norm(
     const std::vector<double> &err,
     const std::vector<double> &m_old,

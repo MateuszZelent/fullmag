@@ -305,6 +305,11 @@ pub(crate) fn build_problem_and_state(
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
     }
+    // Wire user-configurable CG solver parameters from the plan.
+    if let Some(ref policy) = plan.demag_solver_policy {
+        problem.sparse_cg_tol = Some(policy.rtol);
+        problem.sparse_cg_max_iter = Some(policy.max_iterations as usize);
+    }
     problem
         .validate_reference_semantics()
         .map_err(|e| RunError {

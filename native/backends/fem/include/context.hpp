@@ -364,7 +364,6 @@ int context_upload_magnetization_f64(
     const double *m_xyz,
     uint64_t len,
     std::string &error);
-void context_populate_device_info(Context &ctx);
 #if FULLMAG_HAS_MFEM_STACK
 bool context_initialize_mfem(Context &ctx, std::string &error);
 bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);

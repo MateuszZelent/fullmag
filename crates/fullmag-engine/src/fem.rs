@@ -580,6 +580,12 @@ impl DemagWorkspace {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DemagCacheEntry {
+    magnetization: Vec<Vector3>,
+    result: (Vec<Vector3>, f64),
+}
+
 /// Precomputed state for the periodic PBC demag solve.
 ///
 /// Built once in `FemLlgProblem` constructors when `periodic_node_pairs` is
@@ -1183,7 +1189,7 @@ pub struct FemLlgProblem {
     demag_dirichlet_boundary: bool,
     /// Cache of the last demag field + energy to avoid redundant CG solves
     /// in `step_report_from_vectors` (called right after the integrator step).
-    demag_cache: Mutex<Option<(Vec<Vector3>, f64)>>,
+    demag_cache: Mutex<Option<DemagCacheEntry>>,
     /// Reusable demag solve workspace for Poisson/Robin solves, eliminating
     /// per-solve heap allocations for CG, RHS assembly, and nodal averaging.
     demag_ws: Mutex<DemagWorkspace>,
@@ -2533,11 +2539,13 @@ impl FemLlgProblem {
             self.uniaxial_anisotropy_energy_from_vectors(magnetization);
         let cubic_anisotropy_energy_joules =
             self.cubic_anisotropy_energy_from_vectors(magnetization)?;
+        let dmi_energy_joules = self.dmi_energy_from_vectors(magnetization);
         let total_energy_joules = exchange_energy_joules
             + demag_energy_joules
             + external_energy_joules
             + uniaxial_anisotropy_energy_joules
-            + cubic_anisotropy_energy_joules;
+            + cubic_anisotropy_energy_joules
+            + dmi_energy_joules;
 
         let max_torque_Apm = max_cross_norm(magnetization, &effective_field);
 
@@ -2569,18 +2577,15 @@ impl FemLlgProblem {
         } else {
             vec![[0.0, 0.0, 0.0]; n]
         };
-        // Reuse the cached demag from the last integrator RHS evaluation to
-        // avoid a redundant CG solve / FFT demag.  The cache is populated by
-        // every `demag_observables_from_vectors` call inside the step, so it
-        // is always fresh here.  Fall back to a full recomputation only if
-        // the cache is empty (e.g. first call or after an explicit observe).
+        // Reuse cached demag only when it was computed for the exact same
+        // magnetization. Integrator stages and external set_magnetization()
+        // calls can otherwise leave a valid cache for a different state.
         let (demag_field, demag_energy_joules) = if self.terms.demag {
-            self.demag_cache
-                .lock()
-                .unwrap()
-                .take()
-                .map(Ok)
-                .unwrap_or_else(|| self.demag_observables_from_vectors(magnetization))?
+            let cached = self.demag_cache.lock().unwrap().take();
+            match cached {
+                Some(entry) if entry.magnetization == magnetization => entry.result,
+                _ => self.demag_observables_from_vectors(magnetization)?,
+            }
         } else {
             (vec![[0.0, 0.0, 0.0]; n], 0.0)
         };
@@ -2602,11 +2607,13 @@ impl FemLlgProblem {
             self.uniaxial_anisotropy_energy_from_vectors(magnetization);
         let cubic_anisotropy_energy_joules =
             self.cubic_anisotropy_energy_from_vectors(magnetization)?;
+        let dmi_energy_joules = self.dmi_energy_from_vectors(magnetization);
         let total_energy_joules = exchange_energy_joules
             + demag_energy_joules
             + external_energy_joules
             + uniaxial_anisotropy_energy_joules
-            + cubic_anisotropy_energy_joules;
+            + cubic_anisotropy_energy_joules
+            + dmi_energy_joules;
         let max_demag_field_amplitude = max_norm(&demag_field);
         let mut max_effective_field_amplitude = 0.0f64;
         let mut max_rhs_amplitude = 0.0f64;
@@ -2922,7 +2929,10 @@ impl FemLlgProblem {
         };
         // Cache the result so step_report_from_vectors can skip the redundant
         // CG solve / FFT demag after the integrator step.
-        *self.demag_cache.lock().unwrap() = Some(result.clone());
+        *self.demag_cache.lock().unwrap() = Some(DemagCacheEntry {
+            magnetization: magnetization.to_vec(),
+            result: result.clone(),
+        });
         Ok(result)
     }
 
@@ -3035,7 +3045,7 @@ impl FemLlgProblem {
             max_iter,
             cg,
             &self.demag_inv_diag,
-            CgInitialGuess::Zero,
+            CgInitialGuess::Workspace,
         )?;
         self.demag_field_from_potential_into(&cg.x[..n], &mut field[..n], &mut weights[..n]);
         // Energy identity for the Galerkin Poisson demag solve:
@@ -3126,22 +3136,30 @@ impl FemLlgProblem {
         if !has_uni && !has_cub {
             return Ok(vec![[0.0, 0.0, 0.0]; self.topology.n_nodes]);
         }
+        // Pre-compute constant axis data outside the per-node loop.
+        let uni_axis_unit: Option<(Vector3, f64, f64)> =
+            self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
+                let n_u = norm(uni.axis).max(ZERO_THRESHOLD);
+                let u = scale(uni.axis, 1.0 / n_u);
+                let ku1_coeff = 2.0 * uni.ku1 / (MU0 * ms);
+                let ku2_coeff = 4.0 * uni.ku2 / (MU0 * ms);
+                (u, ku1_coeff, ku2_coeff)
+            });
         let cubic_basis = self
             .terms
             .cubic_anisotropy
             .as_ref()
             .map(|cub| cubic_anisotropy_basis(cub.axis1, cub.axis2))
             .transpose()?;
+        let cubic_pf = 2.0 / (MU0 * ms);
         Ok(magnetization
             .iter()
             .map(|m| {
                 let mut h = [0.0f64, 0.0, 0.0];
-                if let Some(ref uni) = self.terms.uniaxial_anisotropy {
-                    let n_u = norm(uni.axis).max(ZERO_THRESHOLD);
-                    let u = scale(uni.axis, 1.0 / n_u);
+                if let Some((u, ku1_coeff, ku2_coeff)) = uni_axis_unit {
                     let m_dot_u = dot(*m, u);
-                    let coeff = 2.0 * uni.ku1 / (MU0 * ms) * m_dot_u
-                        + 4.0 * uni.ku2 / (MU0 * ms) * m_dot_u * m_dot_u * m_dot_u;
+                    let coeff = ku1_coeff * m_dot_u
+                        + ku2_coeff * m_dot_u * m_dot_u * m_dot_u;
                     h = add(h, scale(u, coeff));
                 }
                 if let (Some(ref cub), Some((c1, c2, c3))) =
@@ -3150,12 +3168,11 @@ impl FemLlgProblem {
                     let m1 = dot(*m, c1);
                     let m2 = dot(*m, c2);
                     let m3 = dot(*m, c3);
-                    let pf = 2.0 / (MU0 * ms);
-                    let g1 = -pf
+                    let g1 = -cubic_pf
                         * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
-                    let g2 = -pf
+                    let g2 = -cubic_pf
                         * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
-                    let g3 = -pf
+                    let g3 = -cubic_pf
                         * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
                     h = add(h, add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)));
                 }
@@ -3176,19 +3193,27 @@ impl FemLlgProblem {
         if !has_uni && !has_cub {
             return Ok(());
         }
+        // Pre-compute constant axis data outside the per-node loop.
+        let uni_axis_unit: Option<(Vector3, f64, f64)> =
+            self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
+                let n_u = norm(uni.axis).max(ZERO_THRESHOLD);
+                let u = scale(uni.axis, 1.0 / n_u);
+                let ku1_coeff = 2.0 * uni.ku1 / (MU0 * ms);
+                let ku2_coeff = 4.0 * uni.ku2 / (MU0 * ms);
+                (u, ku1_coeff, ku2_coeff)
+            });
         let cubic_basis = self
             .terms
             .cubic_anisotropy
             .as_ref()
             .map(|cub| cubic_anisotropy_basis(cub.axis1, cub.axis2))
             .transpose()?;
+        let cubic_pf = 2.0 / (MU0 * ms);
         for (i, m) in magnetization.iter().enumerate() {
-            if let Some(ref uni) = self.terms.uniaxial_anisotropy {
-                let n_u = norm(uni.axis).max(ZERO_THRESHOLD);
-                let u = scale(uni.axis, 1.0 / n_u);
+            if let Some((u, ku1_coeff, ku2_coeff)) = uni_axis_unit {
                 let m_dot_u = dot(*m, u);
-                let coeff = 2.0 * uni.ku1 / (MU0 * ms) * m_dot_u
-                    + 4.0 * uni.ku2 / (MU0 * ms) * m_dot_u * m_dot_u * m_dot_u;
+                let coeff = ku1_coeff * m_dot_u
+                    + ku2_coeff * m_dot_u * m_dot_u * m_dot_u;
                 h_eff[i] = add(h_eff[i], scale(u, coeff));
             }
             if let (Some(ref cub), Some((c1, c2, c3))) = (&self.terms.cubic_anisotropy, cubic_basis)
@@ -3196,13 +3221,12 @@ impl FemLlgProblem {
                 let m1 = dot(*m, c1);
                 let m2 = dot(*m, c2);
                 let m3 = dot(*m, c3);
-                let pf = 2.0 / (MU0 * ms);
                 let g1 =
-                    -pf * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
+                    -cubic_pf * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
                 let g2 =
-                    -pf * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
+                    -cubic_pf * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
                 let g3 =
-                    -pf * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
+                    -cubic_pf * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
                 h_eff[i] = add(
                     h_eff[i],
                     add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)),
@@ -3375,6 +3399,81 @@ impl FemLlgProblem {
         self.dmi_fields_compute_into(magnetization, &mut interfacial_field, &mut bulk_field);
 
         (interfacial_field, bulk_field)
+    }
+
+    fn dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
+        let interfacial_d = self
+            .terms
+            .interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
+        if interfacial_d.is_none() && bulk_d.is_none() {
+            return 0.0;
+        }
+
+        let mut n_hat = self.dmi_interface_normal;
+        if n_hat.iter().any(|component| !component.is_finite()) || norm(n_hat) <= ZERO_THRESHOLD {
+            n_hat = [0.0, 0.0, 1.0];
+        } else {
+            n_hat = scale(n_hat, norm(n_hat).recip());
+        }
+
+        let m_ref: &[Vector3];
+        let m_projected: Vec<Vector3>;
+        if let Some(dof_map) = &self.static_periodic_dof_map {
+            let mut tmp = magnetization.to_vec();
+            apply_static_periodic_constraints_to_vectors(&mut tmp, dof_map);
+            m_projected = tmp;
+            m_ref = &m_projected;
+        } else {
+            m_ref = magnetization;
+        }
+
+        let mut energy = 0.0;
+        for (element_index, element) in self.topology.elements.iter().enumerate() {
+            if !self.topology.magnetic_element_mask[element_index] {
+                continue;
+            }
+
+            let gradients = self.topology.grad_phi[element_index];
+            let volume = self.topology.element_volumes[element_index];
+            let mut grad_m = [[0.0f64; 3]; 3];
+            let mut m_centroid = [0.0, 0.0, 0.0];
+            for local_index in 0..4 {
+                let node = element[local_index] as usize;
+                let m = m_ref[node];
+                m_centroid = add(m_centroid, m);
+                let g = gradients[local_index];
+                for comp in 0..3 {
+                    grad_m[comp][0] += m[comp] * g[0];
+                    grad_m[comp][1] += m[comp] * g[1];
+                    grad_m[comp][2] += m[comp] * g[2];
+                }
+            }
+            m_centroid = scale(m_centroid, 0.25);
+
+            if let Some(d) = interfacial_d {
+                let div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
+                let grad_m_dot_n = [
+                    n_hat[0] * grad_m[0][0] + n_hat[1] * grad_m[1][0] + n_hat[2] * grad_m[2][0],
+                    n_hat[0] * grad_m[0][1] + n_hat[1] * grad_m[1][1] + n_hat[2] * grad_m[2][1],
+                    n_hat[0] * grad_m[0][2] + n_hat[1] * grad_m[1][2] + n_hat[2] * grad_m[2][2],
+                ];
+                energy +=
+                    d * volume * (dot(m_centroid, n_hat) * div_m - dot(m_centroid, grad_m_dot_n));
+            }
+
+            if let Some(d) = bulk_d {
+                let curl_m = [
+                    grad_m[2][1] - grad_m[1][2],
+                    grad_m[0][2] - grad_m[2][0],
+                    grad_m[1][0] - grad_m[0][1],
+                ];
+                energy += d * volume * dot(m_centroid, curl_m);
+            }
+        }
+
+        energy
     }
 
     /// Add interfacial + bulk DMI field contributions directly into `h_eff` —
@@ -4190,9 +4289,7 @@ mod tests {
             "fixture must distinguish cached and requested demag energies"
         );
 
-        let mut state = problem
-            .new_state(z_magnetization)
-            .expect("initial state");
+        let mut state = problem.new_state(z_magnetization).expect("initial state");
         state
             .set_magnetization(x_magnetization)
             .expect("external magnetization update");
@@ -4554,10 +4651,9 @@ mod tests {
         ];
         let state = problem.new_state(magnetization).expect("state");
 
-        let expected_dmi_energy = interfacial_dmi_energy_on_free_tet(
-            &problem,
-            state.magnetization(),
-        ) + bulk_dmi_energy_on_free_tet(&problem, state.magnetization());
+        let expected_dmi_energy =
+            interfacial_dmi_energy_on_free_tet(&problem, state.magnetization())
+                + bulk_dmi_energy_on_free_tet(&problem, state.magnetization());
         assert!(
             expected_dmi_energy.abs() > 0.0,
             "fixture must have non-zero DMI energy"

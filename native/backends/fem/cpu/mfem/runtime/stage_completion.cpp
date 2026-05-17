@@ -54,6 +54,50 @@ bool relax_energy_plateau_range(const Context &ctx, double &range_joules)
 
 } // namespace
 
+bool validate_relax_stop_config(
+    const fullmag_fem_relax_stop &relax_stop,
+    std::string &error)
+{
+    if (relax_stop.has_torque_tolerance_apm != 0 &&
+        relax_stop.torque_tolerance_apm <= 0.0) {
+        error = "relax_stop.torque_tolerance_apm must be positive when provided";
+        return false;
+    }
+    if (relax_stop.has_energy_tolerance_j != 0 &&
+        relax_stop.energy_tolerance_j < 0.0) {
+        error = "relax_stop.energy_tolerance_j must be non-negative when provided";
+        return false;
+    }
+    if (relax_stop.has_max_steps != 0 &&
+        relax_stop.max_steps == 0) {
+        error = "relax_stop.max_steps must be >= 1 when provided";
+        return false;
+    }
+    if (relax_stop.has_max_pseudotime_s != 0 &&
+        relax_stop.max_pseudotime_s <= 0.0) {
+        error = "relax_stop.max_pseudotime_s must be positive when provided";
+        return false;
+    }
+    if (relax_stop.has_max_physical_time_s != 0 &&
+        relax_stop.max_physical_time_s <= 0.0) {
+        error = "relax_stop.max_physical_time_s must be positive when provided";
+        return false;
+    }
+    return true;
+}
+
+void initialize_stage_completion_state(
+    Context &ctx,
+    const fullmag_fem_relax_stop &relax_stop)
+{
+    ctx.relax_stop = relax_stop;
+    ctx.stage_completion = {};
+    ctx.relax_pseudotime_s = 0.0;
+    ctx.relax_previous_total_energy_j = 0.0;
+    ctx.relax_previous_total_energy_valid = false;
+    reset_relax_energy_window(ctx);
+}
+
 bool has_relax_stop_criteria(const Context &ctx)
 {
     return ctx.relax_stop.has_torque_tolerance_apm != 0

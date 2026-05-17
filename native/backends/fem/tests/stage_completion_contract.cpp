@@ -47,8 +47,13 @@ void stage_completion_is_owned_by_runtime_module() {
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string stage =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "stage_completion.cpp");
+    const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string stage_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "stage_completion.hpp");
 
     const char *symbols[] = {
+        "bool validate_relax_stop_config(",
+        "void initialize_stage_completion_state(",
         "bool has_relax_stop_criteria(",
         "void set_stage_completion(",
         "void update_stage_completion_from_stats(",
@@ -62,6 +67,110 @@ void stage_completion_is_owned_by_runtime_module() {
             stage.find(symbol) != std::string::npos,
             "stage completion helper must be defined in stage_completion.cpp");
     }
+    check(
+        context.find("ctx.relax_stop = plan.relax_stop;") == std::string::npos,
+        "Context construction must delegate relaxation stop state initialization");
+    check(
+        context.find("ctx.relax_energy_window_j = {};") == std::string::npos,
+        "Context construction must not reset relaxation energy window directly");
+    check(
+        context.find("relax_stop.torque_tolerance_apm must be positive") == std::string::npos,
+        "Context construction must not own relaxation stop validation");
+    check(
+        stage_header.find("Own native FEM relaxation stop state initialization") !=
+            std::string::npos,
+        "stage completion header must document initialization ownership");
+    check(
+        stage_header.find("Validate native FEM relaxation stop configuration") !=
+            std::string::npos,
+        "stage completion header must document validation ownership");
+}
+
+void relax_stop_validation_rejects_invalid_thresholds() {
+    fullmag_fem_relax_stop relax_stop{};
+    std::string error;
+
+    check(fullmag::fem::validate_relax_stop_config(relax_stop, error), "empty relax stop is valid");
+
+    relax_stop.has_torque_tolerance_apm = 1;
+    relax_stop.torque_tolerance_apm = 0.0;
+    check(
+        !fullmag::fem::validate_relax_stop_config(relax_stop, error),
+        "non-positive torque tolerance is invalid");
+    check(
+        error.find("relax_stop.torque_tolerance_apm must be positive when provided") !=
+            std::string::npos,
+        "torque tolerance error string");
+
+    relax_stop = {};
+    relax_stop.has_energy_tolerance_j = 1;
+    relax_stop.energy_tolerance_j = -1.0;
+    check(
+        !fullmag::fem::validate_relax_stop_config(relax_stop, error),
+        "negative energy tolerance is invalid");
+    check(
+        error.find("relax_stop.energy_tolerance_j must be non-negative when provided") !=
+            std::string::npos,
+        "energy tolerance error string");
+
+    relax_stop = {};
+    relax_stop.has_max_steps = 1;
+    relax_stop.max_steps = 0;
+    check(
+        !fullmag::fem::validate_relax_stop_config(relax_stop, error),
+        "zero max steps is invalid");
+    check(
+        error.find("relax_stop.max_steps must be >= 1 when provided") != std::string::npos,
+        "max steps error string");
+
+    relax_stop = {};
+    relax_stop.has_max_pseudotime_s = 1;
+    relax_stop.max_pseudotime_s = 0.0;
+    check(
+        !fullmag::fem::validate_relax_stop_config(relax_stop, error),
+        "non-positive max pseudotime is invalid");
+    check(
+        error.find("relax_stop.max_pseudotime_s must be positive when provided") !=
+            std::string::npos,
+        "max pseudotime error string");
+
+    relax_stop = {};
+    relax_stop.has_max_physical_time_s = 1;
+    relax_stop.max_physical_time_s = 0.0;
+    check(
+        !fullmag::fem::validate_relax_stop_config(relax_stop, error),
+        "non-positive max physical time is invalid");
+    check(
+        error.find("relax_stop.max_physical_time_s must be positive when provided") !=
+            std::string::npos,
+        "max physical time error string");
+}
+
+void stage_completion_initialization_resets_relaxation_state() {
+    fullmag::fem::Context ctx;
+    ctx.stage_completion.has_reason = 1;
+    ctx.relax_pseudotime_s = 5.0;
+    ctx.relax_previous_total_energy_j = 9.0;
+    ctx.relax_previous_total_energy_valid = true;
+    ctx.relax_energy_window_j[0] = 3.0;
+    ctx.relax_energy_window_count = 4;
+    ctx.relax_energy_window_next = 2;
+
+    fullmag_fem_relax_stop relax_stop{};
+    relax_stop.has_max_steps = 1;
+    relax_stop.max_steps = 7;
+
+    fullmag::fem::initialize_stage_completion_state(ctx, relax_stop);
+
+    check(ctx.relax_stop.has_max_steps == 1, "relax stop flag copied");
+    check(ctx.relax_stop.max_steps == 7, "relax stop value copied");
+    check(ctx.stage_completion.has_reason == 0, "stage completion reset");
+    check(ctx.relax_pseudotime_s == 0.0, "relax pseudotime reset");
+    check(ctx.relax_previous_total_energy_j == 0.0, "previous energy reset");
+    check(!ctx.relax_previous_total_energy_valid, "previous energy validity reset");
+    check(ctx.relax_energy_window_j[0] == 0.0, "relax energy window reset");
+    check(ctx.relax_energy_window_count == 0, "relax energy window count reset");
+    check(ctx.relax_energy_window_next == 0, "relax energy window index reset");
 }
 
 void no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged() {
@@ -188,6 +297,8 @@ void torque_physical_time_pseudotime_and_step_stops_are_reported() {
 
 int main() {
     stage_completion_is_owned_by_runtime_module();
+    relax_stop_validation_rejects_invalid_thresholds();
+    stage_completion_initialization_resets_relaxation_state();
     no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged();
     energy_stop_requires_50_step_plateau_and_torque_gate();
     energy_plateau_uses_unsigned_range_for_signed_total_energy();
