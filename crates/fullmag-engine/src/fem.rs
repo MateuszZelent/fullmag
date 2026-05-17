@@ -4201,7 +4201,7 @@ mod tests {
             .evaluate_rhs_summary_from_vectors(state.magnetization())
             .expect("rhs summary after external magnetization update");
 
-        let tolerance = expected_x_energy.abs().max(1.0) * 1e-10;
+        let tolerance = expected_x_energy.abs().max(z_energy.abs()).max(1e-30) * 1e-10;
         assert!(
             (evaluation.demag_energy_joules - expected_x_energy).abs() <= tolerance,
             "demag cache must be invalidated or bypassed when magnetization changes; \
