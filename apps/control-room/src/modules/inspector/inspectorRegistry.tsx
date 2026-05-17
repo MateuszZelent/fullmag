@@ -101,10 +101,6 @@ const PANELS: InspectorPanelContribution[] = [
   },
 ];
 
-export function allInspectorPanels(): InspectorPanelContribution[] {
-  return [...PANELS];
-}
-
 export function resolveInspectorPanel(
   selection: Pick<Selection, "kind">,
 ): InspectorPanelContribution | null {

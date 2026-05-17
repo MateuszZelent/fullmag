@@ -1,4 +1,4 @@
-export interface MeshQualityHistogramBin {
+interface MeshQualityHistogramBin {
   count: number;
   fraction: number;
   label: string;
@@ -7,6 +7,8 @@ export interface MeshQualityHistogramBin {
 }
 
 export interface MeshQualityMetric {
+  belowThresholdCount: number | null;
+  belowThresholdFraction: number | null;
   histogram: MeshQualityHistogramBin[];
   id: "gamma" | "sicn";
   label: string;
@@ -14,6 +16,7 @@ export interface MeshQualityMetric {
   mean: number | null;
   min: number | null;
   p05: number | null;
+  threshold: number | null;
 }
 
 export interface MeshWorstElement {
@@ -39,6 +42,10 @@ export interface MeshQualityStatistics {
   volumeRatio: number | null;
   warnings: string[];
   worstElements: MeshWorstElement[];
+  worstElementsByMetric: {
+    gamma: MeshWorstElement[];
+    sicn: MeshWorstElement[];
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -79,32 +86,34 @@ function normalizeHistogram(
 ): MeshQualityHistogramBin[] {
   if (!Array.isArray(value)) return [];
 
-  const rawBins = value
-    .map((entry, index) => {
-      const record = asRecord(entry);
-      if (record) {
-        const lo = asNumber(record.lo);
-        const hi = asNumber(record.hi);
-        return {
-          count: asNumber(record.count) ?? 0,
-          hi,
-          label: formatBinLabel(lo, hi),
-          lo,
-        };
-      }
-      const count = asNumber(entry);
-      if (count === null) return null;
+  const rawBins: Omit<MeshQualityHistogramBin, "fraction">[] = [];
+  value.forEach((entry, index) => {
+    const record = asRecord(entry);
+    if (record) {
+      const lo = asNumber(record.lo);
+      const hi = asNumber(record.hi);
+      rawBins.push({
+        count: asNumber(record.count) ?? 0,
+        hi,
+        label: formatBinLabel(lo, hi),
+        lo,
+      });
+      return;
+    }
+
+    const count = asNumber(entry);
+    if (count !== null) {
       const width = (fallbackHi - fallbackLo) / value.length;
       const lo = fallbackLo + width * index;
       const hi = fallbackLo + width * (index + 1);
-      return {
+      rawBins.push({
         count,
         hi,
         label: formatBinLabel(lo, hi),
         lo,
-      };
-    })
-    .filter((bin): bin is Omit<MeshQualityHistogramBin, "fraction"> => bin !== null);
+      });
+    }
+  });
 
   const maxCount = Math.max(...rawBins.map((bin) => bin.count), 0);
   return rawBins.map((bin) => ({
@@ -132,6 +141,8 @@ function normalizeMetric(
     asNumber(record.p05) !== null;
   if (!hasMetric) return null;
   return {
+    belowThresholdCount: asNumber(record.below_threshold_count),
+    belowThresholdFraction: asNumber(record.below_threshold_fraction),
     histogram,
     id,
     label: metricLabel(id),
@@ -139,6 +150,7 @@ function normalizeMetric(
     mean: asNumber(record.mean),
     min: asNumber(record.min),
     p05: asNumber(record.p05),
+    threshold: asNumber(record.threshold),
   };
 }
 
@@ -196,5 +208,13 @@ export function normalizeMeshQualityStatistics(
     volumeRatio: asNumber(asRecord(global.volume)?.ratio),
     warnings,
     worstElements: normalizeWorstElements(record.worst_elements),
+    worstElementsByMetric: {
+      gamma: normalizeWorstElements(
+        asRecord(record.worst_elements_by_metric)?.gamma,
+      ),
+      sicn: normalizeWorstElements(
+        asRecord(record.worst_elements_by_metric)?.sicn,
+      ),
+    },
   };
 }

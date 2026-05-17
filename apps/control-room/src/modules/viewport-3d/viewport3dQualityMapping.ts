@@ -1,0 +1,71 @@
+import type {
+  DecodedMeshQualityData,
+  DecodedTopology,
+} from "@/kernel/api/codecs";
+
+import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
+import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+
+export type MeshQualityColorMetric = "gamma" | "sicn" | "volume";
+
+export function buildMeshQualityVertexColors(
+  topology: DecodedTopology | null | undefined,
+  quality: DecodedMeshQualityData | null | undefined,
+  metric: MeshQualityColorMetric,
+): ScalarColorBuffer | null {
+  if (!topology || !quality || quality.elementCount !== topology.elementCount) {
+    return null;
+  }
+
+  const values = quality[metric];
+  if (!values || values.length !== topology.elementCount) return null;
+  if (topology.indices.length !== topology.elementCount * 4) return null;
+
+  const range = rangeFor(values);
+  if (!range) return null;
+
+  const sums = new Float64Array(topology.nodeCount);
+  const counts = new Uint32Array(topology.nodeCount);
+  for (let element = 0; element < topology.elementCount; element += 1) {
+    const value = values[element] ?? 0;
+    const offset = element * 4;
+    for (let corner = 0; corner < 4; corner += 1) {
+      const node = topology.indices[offset + corner];
+      if (node === undefined || node >= topology.nodeCount) return null;
+      sums[node] += value;
+      counts[node] += 1;
+    }
+  }
+
+  const colors = new Float32Array(topology.nodeCount * 3);
+  for (let node = 0; node < topology.nodeCount; node += 1) {
+    const value = counts[node] > 0 ? sums[node] / counts[node] : range.min;
+    const [red, green, blue] = magnitudeColorRgb(normalize(value, range));
+    const target = node * 3;
+    colors[target] = red;
+    colors[target + 1] = green;
+    colors[target + 2] = blue;
+  }
+
+  return { colors, range };
+}
+
+function rangeFor(values: Float64Array): { max: number; min: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    if (!Number.isFinite(value)) return null;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return { max, min };
+}
+
+function normalize(
+  value: number,
+  range: { max: number; min: number },
+): number {
+  const span = Math.max(range.max - range.min, 1e-12);
+  return Math.min(Math.max((value - range.min) / span, 0), 1);
+}

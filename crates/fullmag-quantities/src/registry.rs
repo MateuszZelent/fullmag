@@ -213,8 +213,8 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, HAniCubic, HDmiBulk, HOe,
-        HTherm, ModeReal, ModeImag, // Second wave (QB-17)
+        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, U, Eps, Sigma, HAniCubic,
+        HDmiBulk, HOe, HTherm, ModeReal, ModeImag, // Second wave (QB-17)
         DmDt, TorqueStt, TorqueSot,
     ] {
         registry.register(Box::new(VectorFieldProvider::new(id)));
@@ -242,6 +242,9 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         (EExt, "e_ext"),
         (EAni, "e_ani"),
         (EDmi, "e_dmi"),
+        (EEl, "e_el"),
+        (EKinEl, "e_kin_el"),
+        (ElasticResidualNorm, "elastic_residual_norm"),
         (ETotal, "e_total"),
     ];
     for &(id, key) in scalars {
@@ -256,12 +259,11 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_33() {
+    fn standard_providers_register_all_39() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 16 base vectors + torque + 3 torque/dmdt + 2 mode vectors + 8 spatial-scalars + 6 global scalars = 33
-        // (but grouped: 19 vector + 8 spatial-scalar + 6 global = 33)
-        assert_eq!(reg.len(), 33);
+        // 22 vector + 8 spatial-scalar + 9 global scalar providers = 39.
+        assert_eq!(reg.len(), 39);
     }
 
     #[test]

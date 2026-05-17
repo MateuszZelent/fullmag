@@ -5,6 +5,7 @@ import type {
   MeshQualityStatistics,
   MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
+import type { MeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
 
 import {
   formatCount,
@@ -21,11 +22,39 @@ function metricSummary(metric: MeshQualityMetric): string {
   return parts.join(" / ");
 }
 
+function formatPercent(value: number | null): string {
+  return value === null ? "unknown" : `${(value * 100).toPrecision(3)}%`;
+}
+
+function belowThresholdSummary(
+  metric: MeshQualityMetric,
+  elementCount: number | null,
+): string | null {
+  if (
+    metric.belowThresholdCount === null &&
+    metric.threshold === null &&
+    metric.belowThresholdFraction === null
+  ) {
+    return null;
+  }
+  return `Below target ${formatCount(metric.belowThresholdCount)} / ${formatCount(
+    elementCount,
+  )} below ${formatValue(metric.threshold)} (${formatPercent(
+    metric.belowThresholdFraction,
+  )})`;
+}
+
 export function MeshQualityStatisticsView({
+  onRefineWorstElement,
+  onSelectMetric,
   onSelectWorstElement,
+  refinementState,
   statistics,
 }: {
+  onRefineWorstElement?: () => void;
+  onSelectMetric?: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement?: (element: MeshWorstElement) => void;
+  refinementState?: MeshQualityRefinementState;
   statistics: MeshQualityStatistics | null;
 }) {
   if (!statistics) {
@@ -55,31 +84,52 @@ export function MeshQualityStatisticsView({
 
       {statistics.metrics.length > 0 ? (
         <div className="fm-mesh-quality-metrics">
-          {statistics.metrics.map((metric) => (
-            <section className="fm-mesh-quality-metric" key={metric.id}>
-              <div className="fm-mesh-quality-metric__header">
-                <h4>{metric.label}</h4>
-                <span>{metricSummary(metric)}</span>
-              </div>
-              <div className="fm-mesh-quality-histogram" role="list">
-                {metric.histogram.map((bin) => (
-                  <div
-                    className="fm-mesh-quality-histogram__bin"
-                    key={`${metric.id}:${bin.label}`}
-                    role="listitem"
-                    style={
-                      {
-                        "--fm-mesh-quality-bin": `${Math.round(bin.fraction * 100)}%`,
-                      } as CSSProperties
-                    }
-                  >
-                    <span>{bin.label}</span>
-                    <strong>{bin.count.toLocaleString("en-US")}</strong>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
+          {statistics.metrics.map((metric) => {
+            const thresholdSummary = belowThresholdSummary(
+              metric,
+              statistics.elementCount,
+            );
+            return (
+              <section className="fm-mesh-quality-metric" key={metric.id}>
+                <div className="fm-mesh-quality-metric__header">
+                  <h4>{metric.label}</h4>
+                  <span>{metricSummary(metric)}</span>
+                  {thresholdSummary ? (
+                    <span className="fm-mesh-quality-metric__threshold">
+                      {thresholdSummary}
+                    </span>
+                  ) : null}
+                  {onSelectMetric ? (
+                    <button
+                      className="fm-mesh-quality-metric__action"
+                      data-metric-id={metric.id}
+                      onClick={() => onSelectMetric(metric.id)}
+                      type="button"
+                    >
+                      Show heatmap
+                    </button>
+                  ) : null}
+                </div>
+                <div className="fm-mesh-quality-histogram" role="list">
+                  {metric.histogram.map((bin) => (
+                    <div
+                      className="fm-mesh-quality-histogram__bin"
+                      key={`${metric.id}:${bin.label}`}
+                      role="listitem"
+                      style={
+                        {
+                          "--fm-mesh-quality-bin": `${Math.round(bin.fraction * 100)}%`,
+                        } as CSSProperties
+                      }
+                    >
+                      <span>{bin.label}</span>
+                      <strong>{bin.count.toLocaleString("en-US")}</strong>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </div>
       ) : (
         <MeshResourceEmpty label="No SICN or gamma histograms are available." />
@@ -91,6 +141,28 @@ export function MeshQualityStatisticsView({
             <li key={warning}>{warning}</li>
           ))}
         </ul>
+      ) : null}
+
+      {refinementState ? (
+        <section
+          className="fm-mesh-quality-refinement"
+          data-status={refinementState.status}
+        >
+          <div>
+            <h4>Quality refinement</h4>
+            <p>{refinementState.reason}</p>
+          </div>
+          {refinementState.plan && onRefineWorstElement ? (
+            <button
+              className="fm-mesh-quality-refinement__action"
+              data-element-index={refinementState.plan.elementIndex}
+              onClick={onRefineWorstElement}
+              type="button"
+            >
+              Refine worst region
+            </button>
+          ) : null}
+        </section>
       ) : null}
 
       <section className="fm-mesh-quality-worst">

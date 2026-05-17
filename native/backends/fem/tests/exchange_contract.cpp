@@ -45,19 +45,137 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
-void exchange_runtime_wrapper_is_owned_by_exchange_module() {
+void exchange_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
-    const std::string exchange =
+    const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
-    const char *symbol = "bool context_refresh_exchange_field_mfem(";
+    const std::string operator_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.cpp");
+    const std::string operator_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.hpp");
+    const std::string field_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_field.cpp");
+    const std::string field_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_field.hpp");
+    const std::string runtime_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_runtime.cpp");
+    const std::string runtime_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_runtime.hpp");
+    const std::string fallback_module =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_fallback.cpp");
+    const std::string fallback_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_fallback.hpp");
+
+    const char *init_symbol = "bool initialize_exchange_operator_mfem(";
+    const char *compute_symbol = "bool compute_exchange_for_magnetization(";
+    const char *refresh_symbol = "bool context_refresh_exchange_field_mfem(";
+    const char *fallback_error = "Native FEM exchange requires the MFEM stack";
 
     check(
-        bridge.find(symbol) == std::string::npos,
+        bridge.find(refresh_symbol) == std::string::npos,
         "exchange runtime wrapper must not be defined in mfem_bridge.cpp");
     check(
-        exchange.find(symbol) != std::string::npos,
-        "exchange runtime wrapper must be defined in exchange.cpp");
+        aggregate.find(init_symbol) == std::string::npos,
+        "exchange operator assembly must not be defined in exchange.cpp");
+    check(
+        aggregate.find(compute_symbol) == std::string::npos,
+        "exchange field compute must not be defined in exchange.cpp");
+    check(
+        aggregate.find(refresh_symbol) == std::string::npos,
+        "exchange runtime wrapper must not be defined in exchange.cpp");
+    check(
+        aggregate.find(fallback_error) == std::string::npos,
+        "exchange no-MFEM fallback must not be defined in exchange.cpp");
+    check(
+        operator_module.find(init_symbol) != std::string::npos,
+        "exchange operator assembly must be defined in exchange_operator.cpp");
+    check(
+        field_module.find(compute_symbol) != std::string::npos,
+        "exchange field compute must be defined in exchange_field.cpp");
+    check(
+        runtime_module.find(refresh_symbol) != std::string::npos,
+        "exchange runtime wrapper must be defined in exchange_runtime.cpp");
+    check(
+        fallback_module.find(fallback_error) != std::string::npos,
+        "exchange no-MFEM fallback must be defined in exchange_fallback.cpp");
+    check(
+        operator_header.find("Initialize the native FEM exchange operator") !=
+            std::string::npos,
+        "exchange operator header must document its physical contract");
+    check(
+        field_header.find("Compute the exchange field for a magnetization state") !=
+            std::string::npos,
+        "exchange field header must document its physical contract");
+    check(
+        runtime_header.find("Refresh the current Context exchange/effective-field buffers") !=
+            std::string::npos,
+        "exchange runtime header must document its contract");
+    check(
+        fallback_header.find("no-MFEM exchange fallback") != std::string::npos,
+        "exchange fallback header must document its contract");
+}
+
+void exchange_mass_projection_is_owned_by_mass_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string exchange =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
+    const std::string mass_projection = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_mass_projection.cpp");
+
+    const char *lumping_symbol = "void prepare_exchange_mass_lumping(";
+    const char *projection_symbol = "bool apply_exchange_component_mass_projection(";
+    const char *consistent_mass_marker = "mfem::CGSolver cg_solver";
+
+    check(
+        exchange.find(lumping_symbol) == std::string::npos,
+        "exchange mass lumping must not be defined in exchange.cpp");
+    check(
+        exchange.find(projection_symbol) == std::string::npos,
+        "exchange component mass projection must not be defined in exchange.cpp");
+    check(
+        exchange.find(consistent_mass_marker) == std::string::npos,
+        "consistent-mass projection solve must not be defined in exchange.cpp");
+    check(
+        mass_projection.find(lumping_symbol) != std::string::npos,
+        "exchange mass lumping must be defined in exchange_mass_projection.cpp");
+    check(
+        mass_projection.find(projection_symbol) != std::string::npos,
+        "exchange component mass projection must be defined in exchange_mass_projection.cpp");
+    check(
+        mass_projection.find(consistent_mass_marker) != std::string::npos,
+        "consistent-mass projection solve must be defined in exchange_mass_projection.cpp");
+}
+
+void exchange_legacy_gpu_upload_is_owned_by_upload_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string exchange =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
+    const std::string upload = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "exchange_legacy_gpu_upload.cpp");
+
+    const char *upload_symbol = "bool upload_legacy_sparse_exchange_to_gpu_state(";
+    const char *gpu_upload_call = "gpu_state_upload_exchange_legacy_sparse(";
+    const char *csr_validation = "legacy sparse exchange CSR row offsets do not match nnz";
+
+    check(
+        exchange.find(upload_symbol) == std::string::npos,
+        "legacy sparse exchange GPU upload must not be defined in exchange.cpp");
+    check(
+        exchange.find(gpu_upload_call) == std::string::npos,
+        "legacy sparse exchange GPU upload call must not be in exchange.cpp");
+    check(
+        exchange.find(csr_validation) == std::string::npos,
+        "legacy sparse exchange CSR validation must not be in exchange.cpp");
+    check(
+        upload.find(upload_symbol) != std::string::npos,
+        "legacy sparse exchange GPU upload must be defined in exchange_legacy_gpu_upload.cpp");
+    check(
+        upload.find(gpu_upload_call) != std::string::npos,
+        "legacy sparse exchange GPU upload call must be in exchange_legacy_gpu_upload.cpp");
+    check(
+        upload.find(csr_validation) != std::string::npos,
+        "legacy sparse exchange CSR validation must be in exchange_legacy_gpu_upload.cpp");
 }
 
 void check_zero_field(const std::vector<double> &field, const char *label) {
@@ -124,7 +242,9 @@ void active_exchange_reports_mfem_requirement_without_stack() {
 } // namespace
 
 int main() {
-    exchange_runtime_wrapper_is_owned_by_exchange_module();
+    exchange_responsibilities_are_owned_by_separate_modules();
+    exchange_mass_projection_is_owned_by_mass_module();
+    exchange_legacy_gpu_upload_is_owned_by_upload_module();
 #if !FULLMAG_HAS_MFEM_STACK
     disabled_exchange_is_zero_without_mfem_stack();
     active_exchange_reports_mfem_requirement_without_stack();

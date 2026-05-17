@@ -4,10 +4,14 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
+#include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -30,6 +34,25 @@ void check_near(double actual, double expected, double tol, const char *msg) {
             actual);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
 fullmag::fem::Context unit_tet_context() {
@@ -130,11 +153,298 @@ void fem_bem_energy_matches_demag_energy_contract() {
         "FEM/BEM energy sign follows demag contract");
 }
 
+void fem_bem_energy_is_owned_by_energy_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_energy.cpp");
+    const std::string energy_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_energy.hpp");
+
+    check(
+        fem_bem.find("double demag_fem_bem_energy_from_field(") == std::string::npos,
+        "FEM/BEM energy wrapper must not be defined in demag_fem_bem.cpp");
+    check(
+        energy.find("double demag_fem_bem_energy_from_field(") != std::string::npos,
+        "FEM/BEM energy wrapper must be defined in demag_fem_bem_energy.cpp");
+    check(
+        energy_header.find("Compute demag energy for a FEM/BEM recovered field") !=
+            std::string::npos,
+        "FEM/BEM energy header must document its contract");
+}
+
+void fem_bem_compute_wrapper_is_owned_by_solve_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_solve.cpp");
+    const std::string solve_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_solve.hpp");
+
+    const char *symbols[] = {
+        "bool context_compute_demag_fem_bem(",
+        "prepare_demag_fem_bem_neumann_rhs(",
+        "extract_demag_fem_bem_boundary_trace(",
+        "workspace->boundary_operator.apply(",
+        "prepare_demag_fem_bem_dirichlet_rhs(",
+        "combine_demag_fem_bem_total_potential(",
+        "recover_demag_poisson_field(",
+        "publish_demag_fem_bem_solver_stats(",
+        "accumulate_fem_bem_phase_timings(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM compute orchestration must not be defined in demag_fem_bem.cpp");
+        check(
+            solve.find(symbol) != std::string::npos,
+            "FEM/BEM compute orchestration must be defined in demag_fem_bem_solve.cpp");
+    }
+    check(
+        solve_header.find("Compute one Fredkin-Koehler FEM/BEM demag field") !=
+            std::string::npos,
+        "FEM/BEM solve header must document its contract");
+}
+
+void fem_bem_boundary_surface_is_owned_by_surface_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string surface =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_surface.cpp");
+
+    const char *symbols[] = {
+        "struct FaceRecord",
+        "bool build_face_records(",
+        "const FaceRecord *find_face_record(",
+        "bool add_oriented_boundary_face(",
+        "bool build_demag_boundary_surface(",
+        "surface.global_to_boundary.assign",
+        "surface.triangles.push_back",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM boundary surface extraction must not be defined in demag_fem_bem.cpp");
+        check(
+            surface.find(symbol) != std::string::npos,
+            "FEM/BEM boundary surface extraction must be defined in demag_fem_bem_surface.cpp");
+    }
+}
+
+void fem_bem_dense_operator_is_owned_by_operator_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string op =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_operator.cpp");
+
+    const char *symbols[] = {
+        "double solid_angle_magnitude(",
+        "std::array<double, 3> lindholm_linear_triangle_weights(",
+        "double boundary_node_solid_angle_sum(",
+        "bool DenseDemagBemOperator::build(",
+        "bool DenseDemagBemOperator::apply(",
+        "matrix_.assign(",
+        "const double omega_sum = boundary_node_solid_angle_sum",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM dense BEM operator must not be defined in demag_fem_bem.cpp");
+        check(
+            op.find(symbol) != std::string::npos,
+            "FEM/BEM dense BEM operator must be defined in demag_fem_bem_operator.cpp");
+    }
+}
+
+void fem_bem_sparse_solve_is_owned_by_linear_solve_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_linear_solve.cpp");
+
+    const char *symbols[] = {
+        "void ensure_local_mpi_initialized(",
+        "bool solve_demag_fem_bem_sparse_system(",
+        "std::make_unique<mfem::HypreParMatrix>",
+        "mfem::HypreGMRES solver",
+        "mfem::HyprePCG solver",
+        "FEM/BEM demag requires an MPI/Hypre-enabled MFEM runtime",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM sparse solve policy must not be defined in demag_fem_bem.cpp");
+        check(
+            solve.find(symbol) != std::string::npos,
+            "FEM/BEM sparse solve policy must be defined in demag_fem_bem_linear_solve.cpp");
+    }
+}
+
+void fem_bem_boundary_value_rhs_is_owned_by_boundary_values_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string boundary_values =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_boundary_values.cpp");
+
+    const char *symbols[] = {
+        "bool set_demag_fem_bem_boundary_values(",
+        "bool prepare_demag_fem_bem_dirichlet_rhs(",
+        "boundary_values_global(tdof) = boundary_values[i]",
+        "stiffness_form.SpMat().Mult(",
+        "laplace_rhs *= -1.0",
+        "laplace_rhs(tdof) = boundary_values_global(tdof)",
+        "u2(tdof) = boundary_values_global(tdof)",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM boundary value and Dirichlet RHS preparation must not be defined in demag_fem_bem.cpp");
+        check(
+            boundary_values.find(symbol) != std::string::npos,
+            "FEM/BEM boundary value and Dirichlet RHS preparation must be defined in demag_fem_bem_boundary_values.cpp");
+    }
+}
+
+void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string workspace =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.cpp");
+    const std::string workspace_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.hpp");
+
+    check(
+        fem_bem.find("struct DemagFemBemWorkspace") == std::string::npos,
+        "FEM/BEM workspace struct must not be defined in demag_fem_bem.cpp");
+    check(
+        workspace_header.find("struct DemagFemBemWorkspace") != std::string::npos,
+        "FEM/BEM workspace struct must be declared in demag_fem_bem_workspace.hpp");
+
+    const char *symbols[] = {
+        "bool initialize_demag_fem_bem_workspace(",
+        "void destroy_demag_fem_bem_workspace(",
+        "bool context_initialize_demag_fem_bem(",
+        "void context_destroy_demag_fem_bem(",
+        "std::make_unique<mfem::H1_FECollection>",
+        "AddDomainIntegrator(new mfem::DiffusionIntegrator())",
+        "eliminate_row_col_zero(*workspace->dirichlet_op, tdof)",
+        "ctx.mfem_demag_fem_bem_workspace = workspace.release()",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM workspace lifecycle must not be defined in demag_fem_bem.cpp");
+        check(
+            workspace.find(symbol) != std::string::npos,
+            "FEM/BEM workspace lifecycle must be defined in demag_fem_bem_workspace.cpp");
+    }
+}
+
+void fem_bem_potential_trace_is_owned_by_potential_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string potential =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_potential.cpp");
+
+    const char *symbols[] = {
+        "bool extract_demag_fem_bem_boundary_trace(",
+        "bool combine_demag_fem_bem_total_potential(",
+        "boundary_trace.assign(boundary_nodes.size(), 0.0)",
+        "boundary_trace[i] = potential(tdof)",
+        "total_potential.SetSize(u1.Size())",
+        "total_potential(i) = u1(i) + u2(i)",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM boundary trace and total potential helpers must not be defined in demag_fem_bem.cpp");
+        check(
+            potential.find(symbol) != std::string::npos,
+            "FEM/BEM boundary trace and total potential helpers must be defined in demag_fem_bem_potential.cpp");
+    }
+}
+
+void fem_bem_telemetry_is_owned_by_telemetry_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string telemetry =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_telemetry.cpp");
+    const std::string telemetry_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_telemetry.hpp");
+
+    check(
+        fem_bem.find("struct DemagFemBemSolveTelemetry") == std::string::npos,
+        "FEM/BEM solve telemetry struct must not be defined in demag_fem_bem.cpp");
+    check(
+        telemetry_header.find("struct DemagFemBemSolveTelemetry") != std::string::npos,
+        "FEM/BEM solve telemetry struct must be declared in demag_fem_bem_telemetry.hpp");
+
+    const char *symbols[] = {
+        "void publish_demag_fem_bem_solver_stats(",
+        "void accumulate_demag_fem_bem_phase_timings(",
+        "ctx.demag_solves_current_step += 2u",
+        "ctx.poisson_last_iterations =",
+        "ctx.poisson_last_residual =",
+        "ctx.poisson_last_solver_apply_wall_time_ns =",
+        "accumulate_demag_poisson_phase_timings(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM solver stats and timing publication must not be defined in demag_fem_bem.cpp");
+        check(
+            telemetry.find(symbol) != std::string::npos,
+            "FEM/BEM solver stats and timing publication must be defined in demag_fem_bem_telemetry.cpp");
+    }
+}
+
+void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string fem_bem =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem.cpp");
+    const std::string rhs =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_rhs.cpp");
+
+    const char *symbols[] = {
+        "bool prepare_demag_fem_bem_neumann_rhs(",
+        "neumann_rhs.SetSize(source_rhs.Size())",
+        "neumann_rhs(i) = source_rhs(i)",
+        "neumann_rhs(0) = 0.0",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            fem_bem.find(symbol) == std::string::npos,
+            "FEM/BEM Neumann RHS preparation must not be defined in demag_fem_bem.cpp");
+        check(
+            rhs.find(symbol) != std::string::npos,
+            "FEM/BEM Neumann RHS preparation must be defined in demag_fem_bem_rhs.cpp");
+    }
+}
+
 } // namespace
 
 int main() {
     boundary_surface_extracts_closed_body_only_tet();
     dense_bem_operator_is_finite_and_has_constant_sanity();
     fem_bem_energy_matches_demag_energy_contract();
+    fem_bem_energy_is_owned_by_energy_module();
+    fem_bem_compute_wrapper_is_owned_by_solve_module();
+    fem_bem_boundary_surface_is_owned_by_surface_module();
+    fem_bem_dense_operator_is_owned_by_operator_module();
+    fem_bem_sparse_solve_is_owned_by_linear_solve_module();
+    fem_bem_boundary_value_rhs_is_owned_by_boundary_values_module();
+    fem_bem_workspace_lifecycle_is_owned_by_workspace_module();
+    fem_bem_potential_trace_is_owned_by_potential_module();
+    fem_bem_telemetry_is_owned_by_telemetry_module();
+    fem_bem_neumann_rhs_is_owned_by_rhs_module();
     return 0;
 }

@@ -20,11 +20,11 @@ export const BACKEND_INTERACTION_IDS = [
 
 export type PhysicsInteractionId = (typeof BACKEND_INTERACTION_IDS)[number];
 
-export type InteractionAvailability = "object" | "study" | "deferred";
-export type InteractionScope = "object_or_region" | "global" | "global_or_region";
-export type InteractionFieldKind = "number" | "select" | "text" | "vector3" | "vector6";
+type InteractionAvailability = "object" | "study" | "deferred";
+type InteractionScope = "object_or_region" | "global" | "global_or_region";
+type InteractionFieldKind = "number" | "select" | "text" | "vector3" | "vector6";
 
-export interface InteractionFieldOption {
+interface InteractionFieldOption {
   label: string;
   value: string;
 }

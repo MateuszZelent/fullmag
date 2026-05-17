@@ -12,12 +12,79 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
 
 constexpr double kPiTest = 3.14159265358979323846;
 constexpr double kMu0Test = 4.0e-7 * kPiTest;
+
+void check(bool condition, const char *msg) {
+    if (!condition) {
+        std::fprintf(stderr, "FAIL: %s\n", msg);
+        std::exit(1);
+    }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic.cpp");
+    const std::string prescribed =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.cpp");
+    const std::string prescribed_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.hpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_field.cpp");
+    const std::string field_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_field.hpp");
+
+    const char *compute_symbol = "void compute_magnetoelastic_field(";
+    const char *add_symbol = "void add_magnetoelastic_field(";
+
+    check(
+        aggregate.find(compute_symbol) == std::string::npos,
+        "magnetoelastic field/energy compute must not be defined in magnetoelastic.cpp");
+    check(
+        aggregate.find(add_symbol) == std::string::npos,
+        "magnetoelastic H_eff addition must not be defined in magnetoelastic.cpp");
+    check(
+        prescribed.find(compute_symbol) != std::string::npos,
+        "magnetoelastic field/energy compute must be defined in magnetoelastic_prescribed_strain.cpp");
+    check(
+        field.find(add_symbol) != std::string::npos,
+        "magnetoelastic H_eff addition must be defined in magnetoelastic_field.cpp");
+    check(
+        prescribed_header.find("Compute prescribed-strain magnetoelastic effective field and energy") !=
+            std::string::npos,
+        "magnetoelastic prescribed-strain header must document its physical contract");
+    check(
+        field_header.find("Add the current magnetoelastic H field") != std::string::npos,
+        "magnetoelastic field-add header must document its physical contract");
+}
 
 void check_near(double actual, double expected, double tol, const char *msg) {
     if (std::fabs(actual - expected) > tol) {
@@ -131,6 +198,7 @@ void add_magnetoelastic_field_is_additive() {
 } // namespace
 
 int main() {
+    magnetoelastic_responsibilities_are_owned_by_separate_modules();
     uniform_strain_field_and_energy_follow_b1_b2_contract();
     per_node_strain_and_masking_are_respected();
     add_magnetoelastic_field_is_additive();

@@ -26,7 +26,7 @@ export type SlotId =
   | "overlay";
 
 export type ModuleId = string;
-export type CapabilityKey = string;
+type CapabilityKey = string;
 export type ModuleConfig = Record<string, unknown>;
 
 export interface ModuleProps {

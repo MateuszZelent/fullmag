@@ -2394,10 +2394,8 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
         "transition_growth": _text_number(
             _number_or_none(mesh_options.get("transition_growth"))
         ),
-        "edge_hmax": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
         "edge_maximum_element_size": _text_number(_number_or_none(mesh_options.get("edge_hmax"))),
         "edge_thickness": _text_number(_number_or_none(mesh_options.get("edge_thickness"))),
-        "corner_hmax": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
         "corner_maximum_element_size": _text_number(_number_or_none(mesh_options.get("corner_hmax"))),
         "corner_extent": _text_number(_number_or_none(mesh_options.get("corner_extent"))),
         "boundary_layer_count": (
@@ -2521,10 +2519,8 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
                 _number_or_none(mesh_entry.get("transition_distance"))
             ),
             "transition_growth": _number_or_none(mesh_entry.get("transition_growth")),
-            "edge_hmax": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
             "edge_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("edge_hmax"))),
             "edge_thickness": _text_number(_number_or_none(mesh_entry.get("edge_thickness"))),
-            "corner_hmax": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
             "corner_maximum_element_size": _text_number(_number_or_none(mesh_entry.get("corner_hmax"))),
             "corner_extent": _text_number(_number_or_none(mesh_entry.get("corner_extent"))),
             "boundary_layer_count": (
@@ -2599,10 +2595,8 @@ def _export_geometry_mesh_entry(magnet_name: str, problem: Problem) -> dict[str,
             "interface_thickness": "",
             "transition_distance": "",
             "transition_growth": None,
-            "edge_hmax": "",
             "edge_maximum_element_size": "",
             "edge_thickness": "",
-            "corner_hmax": "",
             "corner_maximum_element_size": "",
             "corner_extent": "",
             "boundary_layer_count": None,

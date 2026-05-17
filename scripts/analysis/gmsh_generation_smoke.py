@@ -56,6 +56,14 @@ CASE_CONFIGS: dict[str, GmshGenerationCase] = {
     ),
 }
 
+RELEASE_BUDGET_PROFILES = {
+    "release-smoke": {
+        "medium_box": 10.0,
+        "medium_cylinder_airbox": 15.0,
+        "large_box": 30.0,
+    },
+}
+
 
 def gmsh_available() -> bool:
     return importlib.util.find_spec("gmsh") is not None
@@ -128,15 +136,53 @@ def run_case(
     }
 
 
+def resolve_case_budgets(
+    cases: list[str],
+    *,
+    budget_profile: str | None,
+    max_case_seconds: float | None,
+) -> dict[str, float]:
+    if budget_profile is not None:
+        profile = RELEASE_BUDGET_PROFILES[budget_profile]
+        budgets = {case: float(profile[case]) for case in cases if case in profile}
+    else:
+        budgets = {}
+    if max_case_seconds is not None:
+        budgets.update({case: float(max_case_seconds) for case in cases})
+    return budgets
+
+
+def budget_failures(
+    results: list[dict[str, Any]],
+    budgets: dict[str, float],
+    *,
+    duration_key: str,
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for result in results:
+        case = str(result["case"])
+        budget = budgets.get(case)
+        duration = float(result[duration_key])
+        if budget is not None and duration > budget:
+            failure = dict(result)
+            failure["budget_seconds"] = budget
+            failure["duration_key"] = duration_key
+            failures.append(failure)
+    return failures
+
+
 def run_smoke(
     cases: list[str],
     *,
     max_case_seconds: float | None,
     require_gmsh: bool,
     compute_quality: bool,
+    budget_profile: str | None = None,
 ) -> dict[str, Any]:
     if not gmsh_available():
         payload = {
+            "budget_profile": budget_profile,
+            "case_budgets_seconds": {},
             "skipped": True,
             "reason": "gmsh is not available",
             "cases": [],
@@ -148,13 +194,15 @@ def run_smoke(
         run_case(case, compute_quality=compute_quality)
         for case in cases
     ]
-    failures = [
-        result
-        for result in results
-        if max_case_seconds is not None
-        and result["generation_seconds"] > max_case_seconds
-    ]
+    budgets = resolve_case_budgets(
+        cases,
+        budget_profile=budget_profile,
+        max_case_seconds=max_case_seconds,
+    )
+    failures = budget_failures(results, budgets, duration_key="generation_seconds")
     return {
+        "budget_profile": budget_profile,
+        "case_budgets_seconds": budgets,
         "skipped": False,
         "cases": results,
         "failed": len(failures) > 0,
@@ -181,7 +229,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--max-case-seconds",
         type=float,
         default=None,
-        help="Fail if any case exceeds this generation wall-time budget.",
+        help="Override and fail if any case exceeds this generation wall-time budget.",
+    )
+    parser.add_argument(
+        "--budget-profile",
+        choices=sorted(RELEASE_BUDGET_PROFILES),
+        default=None,
+        help="Named release budget profile to apply per generation case.",
     )
     parser.add_argument(
         "--require-gmsh",
@@ -210,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         max_case_seconds=args.max_case_seconds,
         require_gmsh=args.require_gmsh,
         compute_quality=not args.skip_quality,
+        budget_profile=args.budget_profile,
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 1 if payload["failed"] else 0

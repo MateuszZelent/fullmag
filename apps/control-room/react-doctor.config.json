@@ -23,6 +23,25 @@
       {
         "files": ["src/kernel/api/ControlRoomApi.test.ts"],
         "rules": ["react-doctor/server-sequential-independent-await"]
+      },
+      {
+        "files": ["src/kernel/api/generated/openapi-v2-types.ts"],
+        "rules": ["knip/types"]
+      },
+      {
+        "files": [
+          "src/kernel/resources/geometryLifecycleResources.ts",
+          "src/kernel/resources/studyRuntimeResources.ts"
+        ],
+        "rules": ["knip/exports"]
+      },
+      {
+        "files": [
+          "src/shared/ui/ContextMenu.tsx",
+          "src/shared/ui/Dialog.tsx",
+          "src/shared/ui/DropdownMenu.tsx"
+        ],
+        "rules": ["knip/exports"]
       }
     ]
   }

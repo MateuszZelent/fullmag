@@ -1,8 +1,10 @@
 # FEM Spin-Transfer Torque
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation: `native/backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
 - Test: `native/backends/fem/tests/stt_contract.cpp`
 - Shared sign reference: `docs/physics/stt_sign_conventions.md`
 
@@ -13,8 +15,8 @@ field and must not be added to `H_eff`.
 
 The executable native FEM CPU module currently supports:
 
-- Slonczewski CPP torque;
-- Zhang-Li CIP torque.
+- Slonczewski CPP torque in `stt_slonczewski.hpp/.cpp`;
+- Zhang-Li CIP torque in `stt_zhang_li.hpp/.cpp`.
 
 `add_stt_rhs_aos(...)` is called after the ordinary LLG field RHS has been
 assembled and updates `max_rhs` when a torque changed the RHS.
@@ -33,6 +35,12 @@ The module uses explicit `stt_free_layer_thickness` when provided. Otherwise it
 derives a magnetic thickness from the mesh extent along the current-density
 axis.
 
+Source ownership: Slonczewski CPP is isolated in
+`stt_slonczewski.hpp/.cpp`. It owns the CPP current-density magnitude/sign,
+spin polarization axis, asymmetry factor, free-layer thickness fallback, and
+local damping-like/field-like RHS update. It does not assemble Zhang-Li
+gradients or add any effective-field contribution.
+
 ## Zhang-Li CIP
 
 The Zhang-Li path computes one P1 tetrahedral gradient of `m` per magnetic
@@ -48,8 +56,10 @@ and projects the element RHS back to nodes with lumped P1 weights:
 tau = -m x [m x ((u.grad) m)] - beta * [m x ((u.grad) m)]
 ```
 
-This records the current executable contract in `stt.cpp`; the shared public
-sign discussion remains in `docs/physics/stt_sign_conventions.md`.
+Source ownership: Zhang-Li CIP is isolated in `stt_zhang_li.hpp/.cpp`. It owns
+tetrahedral gradient reconstruction, Bohr-magneton drift scaling, nodal P1
+projection, non-adiabatic beta handling, and per-node Ms fallback. The public
+aggregate `add_stt_rhs_aos(...)` entry point remains in `stt.cpp`.
 
 ## Energia
 
@@ -91,7 +101,8 @@ boundary coupling remains outside this module.
 Current gate:
 
 - `fem_stt_contract` checks Slonczewski damping-like and field-like terms,
-  current-sign handling, nonmagnetic-node masking, Zhang-Li tetrahedral
+  current-sign handling, nonmagnetic-node masking, Slonczewski source-module
+  ownership, Zhang-Li source-module ownership, Zhang-Li tetrahedral
   gradient/nodal projection, and combined `max_rhs` updates.
 
 Required before production qualification:

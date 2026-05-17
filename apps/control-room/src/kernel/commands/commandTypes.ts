@@ -8,7 +8,7 @@ import type { ObjectVisualizationController } from "../visualization/ObjectVisua
 import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 export type CommandId = string;
-export type CommandGroupId = string;
+type CommandGroupId = string;
 export type CommandCategory = string;
 
 export interface CommandContext {

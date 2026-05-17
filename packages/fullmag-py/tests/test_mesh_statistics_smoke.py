@@ -36,7 +36,60 @@ class MeshStatisticsSmokeTests(unittest.TestCase):
         self.assertEqual(result["nodes"], 256)
         self.assertGreaterEqual(result["duration_seconds"], 0.0)
         self.assertGreater(result["edge_length_mean"], 0.0)
+        self.assertEqual(result["topology_artifact_kind"], "remesh_topology_json")
+        self.assertEqual(result["topology_artifact_nodes"], 256)
+        self.assertEqual(result["topology_artifact_elements"], 64)
+        self.assertGreater(result["topology_artifact_byte_size"], 0)
+        self.assertGreaterEqual(result["topology_artifact_seconds"], 0.0)
         self.assertGreaterEqual(result["worst_element_count"], 1)
+
+    def test_release_smoke_budget_profile_detects_over_budget_case(self) -> None:
+        smoke = load_smoke_module()
+
+        budgets = smoke.resolve_case_budgets(
+            ["medium", "large"],
+            budget_profile="release-smoke",
+            max_case_seconds=None,
+        )
+        failures = smoke.budget_failures(
+            [
+                {"case": "medium", "duration_seconds": budgets["medium"] / 2.0},
+                {"case": "large", "duration_seconds": budgets["large"] + 0.1},
+            ],
+            budgets,
+            duration_key="duration_seconds",
+        )
+
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["case"], "large")
+        self.assertEqual(failures[0]["budget_seconds"], budgets["large"])
+
+    def test_release_smoke_budget_profile_detects_topology_artifact_regression(self) -> None:
+        smoke = load_smoke_module()
+
+        budgets = smoke.resolve_case_budgets(
+            ["medium", "large"],
+            budget_profile="release-smoke",
+            max_case_seconds=None,
+        )
+        failures = smoke.budget_failures(
+            [
+                {
+                    "case": "medium",
+                    "topology_artifact_seconds": budgets["medium"] / 2.0,
+                },
+                {
+                    "case": "large",
+                    "topology_artifact_seconds": budgets["large"] + 0.1,
+                },
+            ],
+            budgets,
+            duration_key="topology_artifact_seconds",
+        )
+
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["case"], "large")
+        self.assertEqual(failures[0]["duration_key"], "topology_artifact_seconds")
 
 
 if __name__ == "__main__":

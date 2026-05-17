@@ -1,6 +1,6 @@
 import type { SlotId } from "../types";
 
-export type WorkspaceColumnId = Extract<
+type WorkspaceColumnId = Extract<
   SlotId,
   "panel-left" | "viewport-main" | "panel-right"
 >;

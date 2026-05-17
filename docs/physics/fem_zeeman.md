@@ -1,8 +1,12 @@
 # FEM Zeeman / External Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/zeeman.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation:
+  `native/backends/fem/cpu/mfem/interactions/zeeman.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/zeeman_uniform_field.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/zeeman_field.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/zeeman_energy.hpp/.cpp`
 - Test: `native/backends/fem/tests/zeeman_contract.cpp`
 
 ## Energia
@@ -43,9 +47,14 @@ condition.
 
 ## Dyskretyzacja FEM
 
-The current module broadcasts the uniform field into `h_ext_xyz` and adds it to
+The current modules broadcast the uniform field into `h_ext_xyz` and add it to
 the assembled effective field. Energy uses nodal lumped weights and per-node
 `Ms` overrides when present.
+
+Source ownership: `zeeman_uniform_field.hpp/.cpp` owns the uniform `H_ext`
+broadcast, `zeeman_field.hpp/.cpp` owns additive `H_eff` composition, and
+`zeeman_energy.hpp/.cpp` owns the `E_Z` integration. `zeeman.hpp/.cpp` remains
+an aggregate include and compatibility translation unit.
 
 ## Ograniczenia capability
 
@@ -59,7 +68,8 @@ the assembled effective field. Energy uses nodal lumped weights and per-node
 Current gate:
 
 - `fem_zeeman_contract` checks disabled-field zero behavior, uniform field
-  broadcast, additive `H_eff` semantics, and Zeeman energy sign/units.
+  broadcast, additive `H_eff` semantics, Zeeman energy sign/units, and
+  source-module ownership.
 
 Required before production qualification:
 

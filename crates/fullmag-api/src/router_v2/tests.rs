@@ -10515,6 +10515,7 @@ fn openapi_mesh_read_model_overlap_is_explicitly_transitional() {
 
     for path in [
         "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
+        "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
         "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
     ] {
         assert!(paths.contains_key(path), "OpenAPI missing `{path}`");

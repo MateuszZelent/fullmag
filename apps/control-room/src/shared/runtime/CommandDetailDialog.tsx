@@ -60,7 +60,7 @@ export function CommandDetailDialog({
   );
 }
 
-export function CommandDetailBody({
+function CommandDetailBody({
   command,
 }: {
   command: CommandDetailResource;
@@ -163,7 +163,7 @@ export function CommandDetailBody({
   );
 }
 
-export function formatCommandTimestamp(
+function formatCommandTimestamp(
   value: number | null | undefined,
 ): string {
   return typeof value === "number" && Number.isFinite(value)
@@ -171,7 +171,7 @@ export function formatCommandTimestamp(
     : "—";
 }
 
-export function formatExecutionReadback(
+function formatExecutionReadback(
   value: CommandDetailResource["requested_execution"] | null | undefined,
 ): string {
   if (!value) return "—";

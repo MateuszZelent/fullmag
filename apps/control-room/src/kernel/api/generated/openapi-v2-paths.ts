@@ -56,6 +56,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
   "/v2/sessions/current/meshing/meshes/shared-domain/quality",
   "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates",
+  "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
   "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields",
   "/v2/sessions/current/meshing/meshes/shared-domain/report",
   "/v2/sessions/current/meshing/meshes/shared-domain/topology",

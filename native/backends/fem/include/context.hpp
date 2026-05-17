@@ -335,7 +335,7 @@ struct Context {
     bool poisson_periodic_reduced_ready = false;
 
     // Body-only Fredkin-Koehler FEM/BEM demag subsystem.
-    // Owned by cpu/mfem/interactions/demag_fem_bem.cpp.
+    // Owned by cpu/mfem/interactions/demag_fem_bem_workspace.cpp.
     void *mfem_demag_fem_bem_workspace = nullptr;
     bool demag_fem_bem_ready = false;
 #endif

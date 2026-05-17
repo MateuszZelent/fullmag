@@ -177,6 +177,21 @@ function makeFieldVectorBuffer(): ArrayBuffer {
   return buffer;
 }
 
+function makeMeshQualityDataBuffer(): ArrayBuffer {
+  const elementCount = 1;
+  const buffer = new ArrayBuffer(32 + 3 * Float64Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMQ"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, elementCount, true);
+  view.setUint32(12, 0b111, true);
+  new Float64Array(buffer, 32).set([0.5, 0.25, 1 / 6]);
+  return buffer;
+}
+
 function parseRequestBody(body: BodyInit | null | undefined): unknown {
   if (body instanceof ArrayBuffer) {
     return JSON.parse(new TextDecoder().decode(body));
@@ -761,6 +776,33 @@ describe("ControlRoomApi", () => {
         status: 200,
       },
     ]);
+  });
+
+  it("loads shared-domain per-element quality data through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makeMeshQualityDataBuffer(), {
+          headers: { etag: '"quality-data-1"', ...contractHeaders },
+        });
+      },
+    });
+
+    const result = await api.meshing.sharedDomain.qualityData();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready quality data, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element",
+    );
+    expect(result.etag).toBe('"quality-data-1"');
+    expect(result.data.elementCount).toBe(1);
+    expect(Array.from(result.data.sicn ?? [])).toEqual([0.5]);
+    expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
   });
 
   it("returns not-modified for fresh binary topology resources", async () => {

@@ -10,6 +10,8 @@
   - `docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md`
   - `docs/physics/0817-native-fem-cpu-demag-hot-path-profile.md`
   - `docs/physics/0870-fem-bem-demag-open-boundary.md`
+- Related patch specs:
+  - `docs/specs/native-fem-magnetoelastic-patch-v1.md`
 - Related reports:
   - `docs/reports/16.05.2026/fullmag_fem_cpu_audit.md`
   - `docs/reports/16.05.2026/fullmag_fem_cpu_refactor_architecture.md`

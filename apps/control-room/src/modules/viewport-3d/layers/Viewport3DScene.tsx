@@ -27,7 +27,10 @@ import type {
   Viewport3DPrimitiveObject,
   Viewport3DPrimitiveRenderModel,
 } from "../viewport3dPrimitiveModel";
-import type { Viewport3DCameraProjection, Viewport3DCameraState } from "../viewport3dStore";
+import type {
+  Viewport3DCameraProjection,
+  Viewport3DCameraState,
+} from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import { OrientationHudLayer } from "../orientation/OrientationHudLayer";
@@ -79,6 +82,8 @@ interface Viewport3DSceneProps {
     Viewport3DMagnetizationTexturePreview
   >;
   maxVectorGlyphs: number;
+  meshQualityColors: ScalarColorBuffer | null;
+  meshQualityOverlayVisible: boolean;
   onCameraChange: (camera: Viewport3DCameraState) => Promise<void> | void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
@@ -204,6 +209,8 @@ export function Viewport3DScene({
   getPartSettings,
   magnetizationTexturePreviews,
   maxVectorGlyphs,
+  meshQualityColors,
+  meshQualityOverlayVisible,
   onCameraChange,
   onVisualizationFrameCommitted,
   onSelectObject,
@@ -334,6 +341,8 @@ export function Viewport3DScene({
         getPartSettings={getPartSettings}
         materialProfile={materialProfile}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
+        meshQualityColors={meshQualityColors}
+        meshQualityOverlayVisible={meshQualityOverlayVisible}
         onSelectDomain={onSelectDomain}
         onSelectPart={onSelectPart}
         tracker={tracker}

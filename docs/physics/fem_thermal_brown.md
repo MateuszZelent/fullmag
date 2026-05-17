@@ -1,8 +1,11 @@
 # FEM Brown Thermal Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp/.cpp`
 - Test: `native/backends/fem/tests/thermal_brown_contract.cpp`
 
 ## Pole
@@ -22,6 +25,12 @@ where `V_i` is the local dual volume. The executable module uses per-node
 `alpha_i`, `Ms_i`, and `V_i` when available and falls back to scalar material
 values plus the legacy average magnetic-node volume only when node volumes are
 missing.
+
+Source ownership: `thermal_brown_sigma.hpp/.cpp` owns the Brown sigma formula,
+`thermal_brown_sampler.hpp/.cpp` owns buffer initialization, RNG seed handling,
+node-volume fallback, nonmagnetic-node zeroing, and same-time/dt cache reuse,
+and `thermal_brown_field.hpp/.cpp` owns additive `H_eff` composition. The
+`thermal_brown.hpp/.cpp` surface is only the compatibility aggregate.
 
 ## Energia
 
@@ -77,8 +86,8 @@ Current gate:
 
 - `fem_thermal_brown_contract` checks the Brown sigma formula, invalid-input
   zero behavior, buffer initialization, per-node sigma diagnostics,
-  nonmagnetic-node zeroing, same-time/dt refresh caching, and additive `H_eff`
-  semantics.
+  nonmagnetic-node zeroing, same-time/dt refresh caching, source-module
+  ownership, and additive `H_eff` semantics.
 
 Required before production qualification:
 

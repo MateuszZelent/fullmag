@@ -13,6 +13,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -25,6 +29,62 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void anisotropy_families_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.cpp");
+    const std::string uniaxial =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_uniaxial.cpp");
+    const std::string uniaxial_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_uniaxial.hpp");
+    const std::string cubic =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_cubic.cpp");
+    const std::string cubic_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy_cubic.hpp");
+
+    const char *uniaxial_symbol = "void compute_uniaxial_anisotropy_field(";
+    const char *cubic_symbol = "void compute_cubic_anisotropy_field(";
+
+    check(
+        aggregate.find(uniaxial_symbol) == std::string::npos,
+        "uniaxial anisotropy must not be defined in anisotropy.cpp");
+    check(
+        aggregate.find(cubic_symbol) == std::string::npos,
+        "cubic anisotropy must not be defined in anisotropy.cpp");
+    check(
+        uniaxial.find(uniaxial_symbol) != std::string::npos,
+        "uniaxial anisotropy must be defined in anisotropy_uniaxial.cpp");
+    check(
+        cubic.find(cubic_symbol) != std::string::npos,
+        "cubic anisotropy must be defined in anisotropy_cubic.cpp");
+    check(
+        uniaxial_header.find("Compute the uniaxial anisotropy effective field") !=
+            std::string::npos,
+        "uniaxial module header must document its physical contract");
+    check(
+        cubic_header.find("Compute the cubic anisotropy effective field") != std::string::npos,
+        "cubic module header must document its physical contract");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -139,6 +199,7 @@ void cubic_reports_energy_and_field_in_crystal_frame() {
 } // namespace
 
 int main() {
+    anisotropy_families_are_owned_by_separate_modules();
     uniaxial_uses_per_node_terms_and_energy_convention();
     cubic_reports_energy_and_field_in_crystal_frame();
     return 0;

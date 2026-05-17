@@ -1,7 +1,7 @@
 # FEM CPU Validation Matrix
 
 - Status: release-gate validation matrix for native FEM CPU modularization
-- Last updated: 2026-05-16
+- Last updated: 2026-05-17
 - Implementation: `native/backends/fem/`
 - Test: `native/backends/fem/tests/interaction_docs_contract.cpp`
 
@@ -17,16 +17,16 @@ can be treated as production-quality. It complements the module contracts under
 |---|---|---|
 | ABI/native create | `fem_contract_validation` | availability lanes, `fe_order = 1`, adaptive config sanity |
 | Interaction docs | `fem_interaction_docs_contract` | required release docs and per-interaction docs exist |
-| Exchange | `fem_exchange_contract` | no-MFEM behavior and source ownership |
+| Exchange | `fem_exchange_contract` | no-MFEM behavior, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and source ownership |
 | Demag dispatcher | `fem_demag_contract` | cached/Poisson/FEM-BEM dispatch decision |
-| Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, ownership |
-| Demag FEM/BEM | `fem_demag_fem_bem_contract` | boundary extraction, dense BEM sanity, energy sign |
-| DMI | `fem_dmi_contract` | DMI disabled/error contracts and module ownership |
-| Thermal | `fem_thermal_brown_contract` | Brown sigma, seed/cache, nonmagnetic zeroing |
-| STT | `fem_stt_contract` | direct torque families and disabled behavior |
-| Oersted | `fem_oersted_contract` | analytical cylinder and explicit nodal field behavior |
-| Magnetoelastic | `fem_magnetoelastic_contract` | prescribed-strain field and energy |
-| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field and energy contracts |
+| Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, ready/lifecycle/solve ownership |
+| Demag FEM/BEM | `fem_demag_fem_bem_contract` | boundary extraction, dense BEM sanity, energy sign, energy/solve ownership |
+| DMI | `fem_dmi_contract` | DMI disabled/error contracts, interfacial-DMI ownership, bulk-DMI ownership, workspace ownership, and module ownership |
+| Thermal | `fem_thermal_brown_contract` | Brown sigma, seed/cache, field addition, module ownership, nonmagnetic zeroing |
+| STT | `fem_stt_contract` | direct torque families, Slonczewski/Zhang-Li module ownership, and disabled behavior |
+| Oersted | `fem_oersted_contract` | analytical cylinder, explicit nodal field behavior, and module ownership |
+| Magnetoelastic | `fem_magnetoelastic_contract` | prescribed-strain field/energy, field-add module ownership, masking, and additive H_eff |
+| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman broadcast/field/energy module ownership, and uniaxial/cubic module ownership |
 
 ## Required Physics Fixtures
 

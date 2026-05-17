@@ -29,11 +29,12 @@ When you need to understand Fullmag quickly, read in this order:
 14. `docs/specs/problem-ir-v0.md`
 15. `docs/specs/capability-matrix-v0.md`
 16. `docs/specs/native-fem-backend-architecture-v1.md`
-17. `docs/specs/mesh-roundtrip-semantics-v1.md`
-18. `docs/specs/frequency-domain-artifacts-v2.md`
-19. `docs/specs/viewport3d-contract-v1.md`
-20. the relevant `docs/physics/` notes
-21. the relevant `docs/plans/active/` plan
+17. `docs/specs/native-fem-magnetoelastic-patch-v1.md`
+18. `docs/specs/mesh-roundtrip-semantics-v1.md`
+19. `docs/specs/frequency-domain-artifacts-v2.md`
+20. `docs/specs/viewport3d-contract-v1.md`
+21. the relevant `docs/physics/` notes
+22. the relevant `docs/plans/active/` plan
 
 ## Document hierarchy
 
@@ -68,12 +69,17 @@ cutover acceptance. They do not override the resource-first API contract.
 ### 2. Solver architecture
 
 - `docs/specs/native-fem-backend-architecture-v1.md`
+- `docs/specs/native-fem-magnetoelastic-patch-v1.md`
 - `docs/specs/exchange-only-full-solver-architecture-v1.md`
 
 `native-fem-backend-architecture-v1.md` is the target architecture for the
 native FEM backend after the 2026-05-16 audit. It defines the modular split
 between FEM core, CPU/MFEM, GPU/CUDA, operator modules, demag subsystem,
 runtime ownership, and validation/qualification boundaries.
+
+`native-fem-magnetoelastic-patch-v1.md` is the staged contract for moving from
+the current prescribed-strain magnetoelastic slice to same-mesh quasistatic
+two-way FEM magnetoelasticity.
 
 `exchange-only-full-solver-architecture-v1.md` is the architecture for the
 first physically meaningful solver slice.

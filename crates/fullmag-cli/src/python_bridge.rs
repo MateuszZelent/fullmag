@@ -73,6 +73,17 @@ pub(crate) struct RemeshQualitySummary {
     pub avg_quality: f64,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RemeshQualityDataArtifactRef {
+    pub kind: String,
+    pub schema_version: u32,
+    pub path: PathBuf,
+    pub byte_size: u64,
+    pub element_count: u32,
+    #[serde(default)]
+    pub metrics: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct RemeshCliResponse {
     pub mesh_name: String,
@@ -99,6 +110,8 @@ pub(crate) struct RemeshCliResponse {
     /// Per-domain element quality, keyed by domain marker string (from Python).
     #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
+    #[serde(default)]
+    pub quality_data_artifact: Option<RemeshQualityDataArtifactRef>,
     #[serde(default)]
     topology_artifact: Option<RemeshTopologyArtifactRef>,
 }

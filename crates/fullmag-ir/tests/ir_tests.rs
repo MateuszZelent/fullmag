@@ -89,6 +89,92 @@ fn bootstrap_example_validates() {
     assert!(ir.validate().is_ok());
 }
 
+fn add_valid_magnetoelastic_semantics(ir: &mut ProblemIR) {
+    ir.elastic_materials = vec![ElasticMaterialIR {
+        name: "elastic".to_string(),
+        c11: 2.0e11,
+        c12: 1.2e11,
+        c44: 8.0e10,
+        density: 8700.0,
+        mechanical_damping: None,
+    }];
+    ir.elastic_bodies = vec![ElasticBodyIR {
+        name: "solid".to_string(),
+        geometry: "strip".to_string(),
+        elastic_material: "elastic".to_string(),
+    }];
+    ir.magnetostriction_laws = vec![MagnetostrictionLawIR::Cubic {
+        name: "cubic".to_string(),
+        b1: 1.0e6,
+        b2: -2.0e6,
+    }];
+    ir.mechanical_loads = vec![MechanicalLoadIR::PrescribedStrain {
+        strain: [1.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }];
+    ir.energy_terms.push(EnergyTermIR::Magnetoelastic {
+        magnet: "strip".to_string(),
+        body: "solid".to_string(),
+        law: "cubic".to_string(),
+    });
+}
+
+#[test]
+fn magnetoelastic_references_validate_when_semantics_are_complete() {
+    let mut ir = ProblemIR::bootstrap_example();
+    add_valid_magnetoelastic_semantics(&mut ir);
+
+    assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn magnetoelastic_references_are_validated() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::Magnetoelastic {
+        magnet: "missing_magnet".to_string(),
+        body: "missing_body".to_string(),
+        law: "missing_law".to_string(),
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("invalid magnetoelastic references must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("references unknown magnet 'missing_magnet'")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("references unknown elastic body 'missing_body'")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("references unknown magnetostriction law 'missing_law'")));
+}
+
+#[test]
+fn mechanics_requires_magnetoelastic_energy_term() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study = StudyIR::TimeEvolution {
+        dynamics: DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: Some(MechanicsIR::QuasistaticElasticity {
+                max_picard_iterations: 2,
+                picard_tolerance: 1e-6,
+            }),
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+
+    let errors = ir
+        .validate()
+        .expect_err("mechanics without Magnetoelastic must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("llg.mechanics requires a Magnetoelastic energy term")));
+}
+
 #[test]
 fn hybrid_mode_requires_hybrid_backend() {
     let mut ir = ProblemIR::bootstrap_example();

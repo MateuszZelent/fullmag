@@ -1,8 +1,11 @@
 # FEM Thermal Interaction
 
 - Status: native FEM CPU interaction documentation umbrella
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation: `native/backends/fem/cpu/mfem/interactions/thermal_brown.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp/.cpp`
 - Test: `native/backends/fem/tests/thermal_brown_contract.cpp`
 
 ## Zakres
@@ -31,6 +34,9 @@ gamma0_i = gamma_red * (1 + alpha_i^2)
 where `V_i` is the FEM nodal dual volume. Repeated RHS evaluations at the same
 accepted `(time, dt)` reuse the sampled thermal field.
 
+The executable Brown implementation is split into the sigma formula module,
+the sampler/cache/RNG module, and the additive field-composition module.
+
 ## Jednostki
 
 | Quantity | Symbol | Solver unit |
@@ -49,7 +55,7 @@ Current local gate:
 
 - `fem_thermal_brown_contract` checks sigma, invalid-input zero behavior,
   initialization, per-node diagnostics, nonmagnetic-node zeroing, same-time/dt
-  cache reuse, and additive `H_eff` semantics.
+  cache reuse, source-module ownership, and additive `H_eff` semantics.
 
 Required before production qualification:
 

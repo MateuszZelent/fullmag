@@ -93,6 +93,9 @@ class MeshStatisticsReport:
     global_scope: MeshStatisticsScope
     scopes: list[MeshStatisticsScope]
     worst_elements: list[dict[str, object]] = field(default_factory=list)
+    worst_elements_by_metric: dict[str, list[dict[str, object]]] = field(
+        default_factory=dict
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +134,9 @@ MESH_SIZE_PRESETS = (
     "extra_coarse",
     "extremely_coarse",
 )
+
+GAMMA_MIN_QUALITY_THRESHOLD = 0.08
+SICN_P05_QUALITY_THRESHOLD = 0.1
 
 _MESH_SIZE_PRESET_DEFAULTS: dict[str, dict[str, float]] = {
     "extremely_fine": {"growth_rate": 1.2, "curvature_factor": 0.20, "narrow_region_resolution": 1.0},
@@ -764,6 +770,20 @@ def _quality_histogram_bins(counts: list[int], lo: float, hi: float) -> list[dic
     ]
 
 
+def _quality_below_threshold(
+    values: list[float] | None,
+    threshold: float,
+) -> tuple[int | None, float | None]:
+    if values is None:
+        return None, None
+    quality_values = np.asarray(values, dtype=np.float64)
+    finite_values = quality_values[np.isfinite(quality_values)]
+    if finite_values.size == 0:
+        return None, None
+    count = int(np.count_nonzero(finite_values < threshold))
+    return count, count / float(finite_values.size)
+
+
 def _quality_metric_from_report(
     report: MeshQualityReport | None,
     metric: str,
@@ -771,19 +791,33 @@ def _quality_metric_from_report(
     if report is None:
         return None
     if metric == "sicn":
+        below_threshold_count, below_threshold_fraction = _quality_below_threshold(
+            report.element_sicn,
+            SICN_P05_QUALITY_THRESHOLD,
+        )
         return {
             "min": report.sicn_min,
             "p05": report.sicn_p5,
             "mean": report.sicn_mean,
             "max": report.sicn_max,
+            "threshold": SICN_P05_QUALITY_THRESHOLD,
+            "below_threshold_count": below_threshold_count,
+            "below_threshold_fraction": below_threshold_fraction,
             "histogram": _quality_histogram_bins(report.sicn_histogram, -1.0, 1.0),
         }
     if metric == "gamma":
+        below_threshold_count, below_threshold_fraction = _quality_below_threshold(
+            report.element_gamma,
+            GAMMA_MIN_QUALITY_THRESHOLD,
+        )
         return {
             "min": report.gamma_min,
             "p05": None,
             "mean": report.gamma_mean,
             "max": None,
+            "threshold": GAMMA_MIN_QUALITY_THRESHOLD,
+            "below_threshold_count": below_threshold_count,
+            "below_threshold_fraction": below_threshold_fraction,
             "histogram": _quality_histogram_bins(report.gamma_histogram, 0.0, 1.0),
         }
     return None
@@ -900,39 +934,82 @@ def _build_mesh_statistics_report(mesh: MeshData, mesh_name: str) -> MeshStatist
         for scope in scopes
         if scope.marker is not None
     }
-    worst_elements: list[dict[str, object]] = []
-    if mesh.quality is not None and mesh.quality.element_gamma is not None:
-        gamma = np.asarray(mesh.quality.element_gamma, dtype=np.float64)
-        if gamma.size == mesh.n_elements and gamma.size:
-            count = min(10, gamma.size)
-            for element_index in np.argsort(gamma)[:count]:
-                elem = int(element_index)
-                worst_elements.append(
-                    {
-                        "element_index": elem,
-                        "marker": int(mesh.element_markers[elem]),
-                        "scope_label": scope_label_by_marker.get(
-                            int(mesh.element_markers[elem]),
-                            f"Domain {int(mesh.element_markers[elem])}",
-                        ),
-                        "gamma": float(gamma[elem]),
-                        "sicn": (
-                            float(mesh.quality.element_sicn[elem])
-                            if mesh.quality.element_sicn is not None
-                            and elem < len(mesh.quality.element_sicn)
-                            else None
-                        ),
-                        "volume": float(abs(signed_volumes[elem])),
-                        "centroid": np.mean(mesh.nodes[mesh.elements[elem]], axis=0).tolist(),
-                    }
-                )
+    worst_elements_by_metric: dict[str, list[dict[str, object]]] = {}
+    if mesh.quality is not None:
+        if mesh.quality.element_gamma is not None:
+            worst_elements_by_metric["gamma"] = _ranked_worst_elements(
+                mesh,
+                signed_volumes=signed_volumes,
+                scope_label_by_marker=scope_label_by_marker,
+                metric="gamma",
+                values=mesh.quality.element_gamma,
+            )
+        if mesh.quality.element_sicn is not None:
+            worst_elements_by_metric["sicn"] = _ranked_worst_elements(
+                mesh,
+                signed_volumes=signed_volumes,
+                scope_label_by_marker=scope_label_by_marker,
+                metric="sicn",
+                values=mesh.quality.element_sicn,
+            )
+    worst_elements = worst_elements_by_metric.get("gamma", [])
     return MeshStatisticsReport(
         mesh_name=mesh_name,
         quality_source="gmsh" if mesh.quality is not None else "topology",
         global_scope=global_scope,
         scopes=scopes,
         worst_elements=worst_elements,
+        worst_elements_by_metric=worst_elements_by_metric,
     )
+
+
+def _ranked_worst_elements(
+    mesh: MeshData,
+    *,
+    signed_volumes: NDArray[np.float64],
+    scope_label_by_marker: dict[int, str],
+    metric: str,
+    values: list[float],
+) -> list[dict[str, object]]:
+    quality_values = np.asarray(values, dtype=np.float64)
+    if quality_values.size != mesh.n_elements or quality_values.size == 0:
+        return []
+    gamma = (
+        np.asarray(mesh.quality.element_gamma, dtype=np.float64)
+        if mesh.quality is not None and mesh.quality.element_gamma is not None
+        else None
+    )
+    sicn = (
+        np.asarray(mesh.quality.element_sicn, dtype=np.float64)
+        if mesh.quality is not None and mesh.quality.element_sicn is not None
+        else None
+    )
+    count = min(10, quality_values.size)
+    ranked: list[dict[str, object]] = []
+    for element_index in np.argsort(quality_values)[:count]:
+        elem = int(element_index)
+        marker = int(mesh.element_markers[elem])
+        ranked.append(
+            {
+                "element_index": elem,
+                "rank_metric": metric,
+                "marker": marker,
+                "scope_label": scope_label_by_marker.get(marker, f"Domain {marker}"),
+                "gamma": (
+                    float(gamma[elem])
+                    if gamma is not None and elem < gamma.size
+                    else None
+                ),
+                "sicn": (
+                    float(sicn[elem])
+                    if sicn is not None and elem < sicn.size
+                    else None
+                ),
+                "volume": float(abs(signed_volumes[elem])),
+                "centroid": np.mean(mesh.nodes[mesh.elements[elem]], axis=0).tolist(),
+            }
+        )
+    return ranked
 
 
 def _tetra_edge_lengths(mesh: MeshData, element_mask: NDArray[np.bool_]) -> NDArray[np.float64]:
@@ -990,6 +1067,7 @@ def _mesh_statistics_report_to_ir(report: MeshStatisticsReport) -> dict[str, obj
         "global": _mesh_statistics_scope_to_ir(report.global_scope),
         "scopes": [_mesh_statistics_scope_to_ir(scope) for scope in report.scopes],
         "worst_elements": report.worst_elements,
+        "worst_elements_by_metric": report.worst_elements_by_metric,
     }
 
 

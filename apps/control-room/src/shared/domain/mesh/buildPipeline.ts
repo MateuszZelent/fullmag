@@ -41,11 +41,12 @@ function nonNegativeInteger(value: unknown): number | null {
 }
 
 function titleFromId(id: string): string {
-  return id
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
-    .join(" ");
+  const parts: string[] = [];
+  for (const part of id.split(/[-_]/)) {
+    if (part.length === 0) continue;
+    parts.push(part.slice(0, 1).toUpperCase() + part.slice(1));
+  }
+  return parts.join(" ");
 }
 
 function phaseFromRecord(
@@ -86,9 +87,12 @@ function phaseFromRecord(
 
 export function normalizeMeshPipelineStatus(value: unknown): MeshPipelinePhase[] {
   if (Array.isArray(value)) {
-    return value
-      .map((entry, index) => phaseFromRecord(entry, `phase-${index + 1}`))
-      .filter((phase): phase is MeshPipelinePhase => phase !== null);
+    const phases: MeshPipelinePhase[] = [];
+    value.forEach((entry, index) => {
+      const phase = phaseFromRecord(entry, `phase-${index + 1}`);
+      if (phase) phases.push(phase);
+    });
+    return phases;
   }
 
   const phase = phaseFromRecord(value, "active");

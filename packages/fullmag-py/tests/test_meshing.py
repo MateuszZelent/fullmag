@@ -588,6 +588,66 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(per_domain[0].n_elements, 1)
         self.assertEqual(per_domain[1].n_elements, 1)
 
+    def test_mesh_statistics_publish_metric_ranked_worst_elements(self) -> None:
+        mesh = MeshData(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [2.0, 0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            elements=np.asarray([[0, 1, 2, 3], [1, 4, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1, 1], dtype=np.int32),
+            boundary_faces=np.zeros((0, 3), dtype=np.int32),
+            boundary_markers=np.zeros(0, dtype=np.int32),
+            quality=MeshQualityReport(
+                n_elements=2,
+                sicn_min=0.05,
+                sicn_max=0.8,
+                sicn_mean=0.425,
+                sicn_p5=0.0875,
+                sicn_histogram=[0] * 20,
+                gamma_min=0.04,
+                gamma_mean=0.47,
+                gamma_histogram=[0] * 20,
+                volume_min=1.0,
+                volume_max=2.0,
+                volume_mean=1.5,
+                volume_std=0.5,
+                avg_quality=0.425,
+                element_sicn=[0.8, 0.05],
+                element_gamma=[0.04, 0.9],
+                element_volume=[1.0, 2.0],
+                element_tags=[1, 2],
+            ),
+        )
+
+        payload = mesh.to_ir("ranked")["mesh_statistics"]
+
+        self.assertEqual(payload["worst_elements"][0]["element_index"], 0)
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["gamma"][0]["element_index"],
+            0,
+        )
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["sicn"][0]["element_index"],
+            1,
+        )
+        self.assertEqual(
+            payload["worst_elements_by_metric"]["sicn"][0]["rank_metric"],
+            "sicn",
+        )
+        self.assertEqual(payload["global"]["gamma"]["threshold"], 0.08)
+        self.assertEqual(payload["global"]["gamma"]["below_threshold_count"], 1)
+        self.assertEqual(payload["global"]["gamma"]["below_threshold_fraction"], 0.5)
+        self.assertEqual(payload["global"]["sicn"]["threshold"], 0.1)
+        self.assertEqual(payload["global"]["sicn"]["below_threshold_count"], 1)
+        self.assertEqual(payload["global"]["sicn"]["below_threshold_fraction"], 0.5)
+
     def test_remesh_cli_payload_carries_build_truth_and_mesh_statistics(self) -> None:
         mesh = self._unit_tet_mesh()
         report = SharedDomainBuildReport(
@@ -1202,6 +1262,7 @@ class MeshScaffoldTests(unittest.TestCase):
             def __init__(self) -> None:
                 self._next_id = 1
                 self.background: int | None = None
+                self.strings: dict[tuple[int, str], str] = {}
 
             def add(self, _kind: str) -> int:
                 field_id = self._next_id
@@ -1214,7 +1275,8 @@ class MeshScaffoldTests(unittest.TestCase):
             def setNumbers(self, _field_id: int, _key: str, _values: object) -> None:
                 return None
 
-            def setString(self, _field_id: int, _key: str, _value: str) -> None:
+            def setString(self, field_id: int, key: str, value: str) -> None:
+                self.strings[(field_id, key)] = value
                 return None
 
             def setAsBackgroundMesh(self, field_id: int) -> None:
@@ -1252,6 +1314,7 @@ class MeshScaffoldTests(unittest.TestCase):
                             "YMax": 1.0,
                             "ZMin": -1.0,
                             "ZMax": 1.0,
+                            "Source": "test_metadata",
                         },
                     }
                 ],
@@ -1260,6 +1323,7 @@ class MeshScaffoldTests(unittest.TestCase):
 
         self.assertEqual(fake_gmsh.option.values["Mesh.Algorithm3D"], float(ALGO_3D_HXT))
         self.assertIsNotNone(fake_field_api.background)
+        self.assertNotIn((1, "Source"), fake_field_api.strings)
 
     def test_geometry_from_ir_preserves_imported_geometry_name(self) -> None:
         geometry = _geometry_from_ir(

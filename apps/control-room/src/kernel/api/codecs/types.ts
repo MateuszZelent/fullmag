@@ -18,3 +18,10 @@ export interface DecodedTopology {
   nodeCount: number;
   positions: Float64Array;
 }
+
+export interface DecodedMeshQualityData {
+  elementCount: number;
+  gamma: Float64Array | null;
+  sicn: Float64Array | null;
+  volume: Float64Array | null;
+}

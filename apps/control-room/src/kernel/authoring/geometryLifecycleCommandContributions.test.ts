@@ -2,9 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   MESHING_BUILDS_CURRENT_PATH,
+  MESHING_BUILDS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_PATH,
+  MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
+  MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -116,6 +124,84 @@ describe("geometry lifecycle command contributions", () => {
         source: "test",
       }),
     ).toBe(false);
+  });
+
+  it("submits quality-threshold refinement as a shared-domain mesh build", async () => {
+    const registry = registryWithLifecycleCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const meshOptions = {
+      compute_quality: true,
+      per_element_quality: true,
+      quality_refinement: {
+        element_index: 7,
+        kind: "worst_element_box",
+        metric: "gamma",
+        threshold: 0.08,
+      },
+      size_fields: [
+        {
+          kind: "Box",
+          source: "quality_threshold_refinement",
+          params: {
+            VIn: 2e-9,
+            VOut: 1e22,
+            XMax: 1.8e-8,
+            XMin: 2e-9,
+            YMax: 2.8e-8,
+            YMin: 1.2e-8,
+            ZMax: 1.1e-8,
+            ZMin: -5e-9,
+          },
+        },
+      ],
+    };
+    const submit = vi.fn(async () => ({
+      accepted: true,
+      command_id: "cmd-refine",
+      error: null,
+    }));
+
+    const result = await registry.execute(
+      "mesh.refine-worst-quality-element",
+      {
+        api: {
+          commands: { submit },
+        } as never,
+        resources,
+        source: "test",
+      },
+      { elementIndex: 7, meshOptions },
+    );
+
+    expect(result).toEqual({ status: "completed" });
+    expect(submit).toHaveBeenCalledWith({
+      kind: "mesh_build",
+      mesh_options: meshOptions,
+      mesh_reason: "quality_threshold_refinement",
+      mesh_target: { kind: "study_domain" },
+    });
+    expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe("cmd-refine");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-refine");
+    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("cmd-refine");
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+      "cmd-refine",
+    );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(
+      "cmd-refine",
+    );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
+      "cmd-refine",
+    );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(
+      "cmd-refine",
+    );
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH)).toBe(
+      "cmd-refine",
+    );
+    expect(
+      resources.getRevision(MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH),
+    ).toBe("cmd-refine");
   });
 
   it("disables primitive commands when geometry capabilities reject them", () => {

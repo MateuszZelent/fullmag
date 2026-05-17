@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 33] = [
+const CATALOG: [QuantitySpec; 39] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -216,6 +216,69 @@ const CATALOG: [QuantitySpec; 33] = [
         supports_export: true,
     },
     QuantitySpec {
+        id: QuantityId::U,
+        label: "Displacement",
+        description: "Mechanical displacement field",
+        shape: QuantityShape::VectorField,
+        unit: "m",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("u"),
+        scalar_metric_key: None,
+        ui_exposed: false,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Vector3,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::Eps,
+        label: "Strain",
+        description: "Small-strain tensor in Voigt notation",
+        shape: QuantityShape::VectorField,
+        unit: "1",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("eps"),
+        scalar_metric_key: None,
+        ui_exposed: false,
+        n_comp: 6,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::Sigma,
+        label: "Stress",
+        description: "Cauchy stress tensor in Voigt notation",
+        shape: QuantityShape::VectorField,
+        unit: "Pa",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("sigma"),
+        scalar_metric_key: None,
+        ui_exposed: false,
+        n_comp: 6,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
         id: QuantityId::HAniCubic,
         label: "Cubic Anisotropy Field",
         description: "Cubic magnetocrystalline anisotropy effective field",
@@ -397,6 +460,69 @@ const CATALOG: [QuantitySpec; 33] = [
         n_comp: 1,
         location: QuantityLocation::Global,
         domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EEl,
+        label: "Elastic Energy",
+        description: "Mechanical elastic strain energy",
+        shape: QuantityShape::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_el"),
+        ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EKinEl,
+        label: "Elastic Kinetic Energy",
+        description: "Mechanical kinetic energy for elastodynamics",
+        shape: QuantityShape::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_kin_el"),
+        ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::ElasticResidualNorm,
+        label: "Elastic Residual Norm",
+        description: "Mechanical solver residual norm",
+        shape: QuantityShape::GlobalScalar,
+        unit: "1",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("elastic_residual_norm"),
+        ui_exposed: false,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::FullDomain,
         normalization_hint: NormalizationHint::None,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: false,
@@ -745,4 +871,30 @@ pub fn cached_preview_quantity_ids() -> Vec<&'static str> {
 /// Look up the display unit for a quantity.
 pub fn quantity_unit(id: &str) -> &'static str {
     quantity_spec(id).map(|spec| spec.unit).unwrap_or("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mechanical_magnetoelastic_quantities_are_canonical_but_not_previewed_yet() {
+        let expected = [
+            ("u", QuantityShape::VectorField, "m"),
+            ("eps", QuantityShape::VectorField, "1"),
+            ("sigma", QuantityShape::VectorField, "Pa"),
+            ("E_el", QuantityShape::GlobalScalar, "J"),
+            ("E_kin_el", QuantityShape::GlobalScalar, "J"),
+            ("elastic_residual_norm", QuantityShape::GlobalScalar, "1"),
+        ];
+
+        for (id, shape, unit) in expected {
+            let spec = quantity_spec(id).expect("mechanical quantity should be catalogued");
+            assert_eq!(normalize_quantity_id(id).expect("known quantity").as_str(), id);
+            assert_eq!(spec.shape, shape);
+            assert_eq!(spec.unit, unit);
+            assert!(!spec.interactive_preview);
+            assert!(!spec.cached_preview);
+        }
+    }
 }

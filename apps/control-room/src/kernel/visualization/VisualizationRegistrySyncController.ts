@@ -327,7 +327,7 @@ function snapshotChangeAffectsRender(
   );
 }
 
-export function applyVisualizationStatePatch<TState>(
+function applyVisualizationStatePatch<TState>(
   state: TState,
   patch: VisualizationStatePatch | null | undefined,
 ): TState {
@@ -335,7 +335,7 @@ export function applyVisualizationStatePatch<TState>(
   return deepMerge(state, patch) as TState;
 }
 
-export function mergeVisualizationStatePatch(
+function mergeVisualizationStatePatch(
   current: VisualizationStatePatch | null | undefined,
   next: VisualizationStatePatch | null | undefined,
 ): VisualizationStatePatch | null {
@@ -436,7 +436,7 @@ function sortJson(value: unknown): unknown {
   return value;
 }
 
-export function isCameraOnlyPatch(
+function isCameraOnlyPatch(
   patch: VisualizationStatePatch | null | undefined,
 ): boolean {
   if (!patch) return true;

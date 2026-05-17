@@ -447,7 +447,10 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
 
 pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<String>) {
     validate_unique_names(
-        problem.elastic_materials.iter().map(|material| material.name.as_str()),
+        problem
+            .elastic_materials
+            .iter()
+            .map(|material| material.name.as_str()),
         "elastic_materials",
         errors,
     );
@@ -457,10 +460,7 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         errors,
     );
     validate_unique_names(
-        problem
-            .magnetostriction_laws
-            .iter()
-            .map(|law| law.name()),
+        problem.magnetostriction_laws.iter().map(|law| law.name()),
         "magnetostriction_laws",
         errors,
     );
@@ -470,13 +470,17 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
             errors.push(format!("elastic_materials[{index}].name must not be empty"));
         }
         if !(material.c11.is_finite() && material.c11 > 0.0) {
-            errors.push(format!("elastic_materials[{index}].c11 must be finite and > 0"));
+            errors.push(format!(
+                "elastic_materials[{index}].c11 must be finite and > 0"
+            ));
         }
         if !material.c12.is_finite() {
             errors.push(format!("elastic_materials[{index}].c12 must be finite"));
         }
         if !(material.c44.is_finite() && material.c44 > 0.0) {
-            errors.push(format!("elastic_materials[{index}].c44 must be finite and > 0"));
+            errors.push(format!(
+                "elastic_materials[{index}].c44 must be finite and > 0"
+            ));
         }
         if !(material.density.is_finite() && material.density > 0.0) {
             errors.push(format!(
@@ -493,9 +497,17 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         }
     }
 
-    let geometry_names: BTreeSet<&str> = problem.geometry.entries.iter().map(|entry| entry.name()).collect();
-    let elastic_material_names: BTreeSet<&str> =
-        problem.elastic_materials.iter().map(|material| material.name.as_str()).collect();
+    let geometry_names: BTreeSet<&str> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| entry.name())
+        .collect();
+    let elastic_material_names: BTreeSet<&str> = problem
+        .elastic_materials
+        .iter()
+        .map(|material| material.name.as_str())
+        .collect();
     for (index, body) in problem.elastic_bodies.iter().enumerate() {
         if body.name.trim().is_empty() {
             errors.push(format!("elastic_bodies[{index}].name must not be empty"));
@@ -516,7 +528,9 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
 
     for (index, law) in problem.magnetostriction_laws.iter().enumerate() {
         if law.name().trim().is_empty() {
-            errors.push(format!("magnetostriction_laws[{index}].name must not be empty"));
+            errors.push(format!(
+                "magnetostriction_laws[{index}].name must not be empty"
+            ));
         }
         match law {
             crate::MagnetostrictionLawIR::Cubic { b1, b2, .. } => {
@@ -541,7 +555,9 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         match load {
             MechanicalLoadIR::BodyForce { f } => {
                 if !vector3_is_finite(f) {
-                    errors.push(format!("mechanical_loads[{index}].f must contain finite values"));
+                    errors.push(format!(
+                        "mechanical_loads[{index}].f must contain finite values"
+                    ));
                 }
             }
             MechanicalLoadIR::PrescribedStrain { strain } => {
@@ -561,8 +577,16 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         }
     }
 
-    let magnet_names: BTreeSet<&str> = problem.magnets.iter().map(|magnet| magnet.name.as_str()).collect();
-    let body_names: BTreeSet<&str> = problem.elastic_bodies.iter().map(|body| body.name.as_str()).collect();
+    let magnet_names: BTreeSet<&str> = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.name.as_str())
+        .collect();
+    let body_names: BTreeSet<&str> = problem
+        .elastic_bodies
+        .iter()
+        .map(|body| body.name.as_str())
+        .collect();
     let law_names: BTreeSet<&str> = problem
         .magnetostriction_laws
         .iter()
@@ -627,8 +651,7 @@ pub(crate) fn validate_magnetoelastic(problem: &ProblemIR, errors: &mut Vec<Stri
         Some(MechanicsIR::Elastodynamics { mechanical_dt }) => {
             if mechanical_dt.is_some_and(|value| !value.is_finite() || value <= 0.0) {
                 errors.push(
-                    "llg.mechanics.mechanical_dt must be finite and > 0 when provided"
-                        .to_string(),
+                    "llg.mechanics.mechanical_dt must be finite and > 0 when provided".to_string(),
                 );
             }
         }

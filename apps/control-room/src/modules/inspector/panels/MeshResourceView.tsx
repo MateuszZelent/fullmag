@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-import type { JsonObject, JsonValue } from "@/kernel/api/apiTypes";
-
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
 
@@ -19,12 +17,8 @@ export function asRecord(value: unknown): JsonRecord | null {
     : null;
 }
 
-export function asNumber(value: unknown): number | null {
+function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-export function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 export function formatCount(value: unknown): string {
@@ -58,7 +52,7 @@ export function formatValue(value: unknown): string {
   return String(value);
 }
 
-export function formatJson(value: unknown): string {
+function formatJson(value: unknown): string {
   if (value === null || value === undefined) return "null";
   return JSON.stringify(value, null, 2);
 }
@@ -87,11 +81,6 @@ export function nestedRecord(
     current = asRecord(current)?.[key];
   }
   return asRecord(current);
-}
-
-export function maybeJsonObject(value: unknown): JsonObject | null {
-  const record = asRecord(value);
-  return record ? (record as JsonObject) : null;
 }
 
 export function MeshResourceFields({
@@ -145,35 +134,4 @@ export function MeshResourceEmpty({ label }: { label: string }) {
       {label}
     </p>
   );
-}
-
-export function jsonValue(value: unknown): JsonValue | null {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    const result: JsonValue[] = [];
-    for (const entry of value) {
-      const converted = jsonValue(entry);
-      if (converted !== undefined) {
-        result.push(converted);
-      }
-    }
-    return result;
-  }
-  const record = asRecord(value);
-  if (!record) return null;
-  const result: JsonObject = {};
-  for (const [key, entry] of Object.entries(record)) {
-    const converted = jsonValue(entry);
-    if (converted !== undefined) {
-      result[key] = converted;
-    }
-  }
-  return result;
 }

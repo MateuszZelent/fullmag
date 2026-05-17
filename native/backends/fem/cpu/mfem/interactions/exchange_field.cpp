@@ -1,0 +1,186 @@
+#include "cpu/mfem/interactions/exchange_field.hpp"
+
+#include "context.hpp"
+#include "cpu/mfem/interactions/exchange_mass_projection.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
+#include "transfer_audit.hpp"
+
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace fullmag::fem {
+
+#if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+constexpr int kInterruptPollStride = 256;
+
+uint64_t vector_bytes(const mfem::Vector &vector) {
+    return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
+}
+
+double *audited_host_write(mfem::Vector &vector) {
+    record_mfem_host_write(vector_bytes(vector));
+    return vector.HostWrite();
+}
+
+void copy_host_vector_to_mfem(const std::vector<double> &src, mfem::Vector &dst) {
+    dst.SetSize(static_cast<int>(src.size()));
+    dst.UseDevice(true);
+    double *host = audited_host_write(dst);
+    for (size_t i = 0; i < src.size(); ++i) {
+        host[static_cast<int>(i)] = src[i];
+    }
+}
+
+} // namespace
+
+bool compute_exchange_for_magnetization(
+    Context &ctx,
+    const std::vector<double> &m_xyz,
+    std::vector<double> &h_ex_xyz,
+    std::vector<double> *h_eff_xyz,
+    double *exchange_energy,
+    bool allow_interrupt,
+    std::string &error)
+{
+    if (!ctx.mfem_ready) {
+        error = "MFEM exchange requested before MFEM context initialization";
+        return false;
+    }
+
+    auto *exchange_form = static_cast<mfem::BilinearForm *>(ctx.mfem_exchange_form);
+    auto *mass_form = static_cast<mfem::BilinearForm *>(ctx.mfem_mass_form);
+    auto *gf_mx = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mx);
+    auto *gf_my = static_cast<mfem::GridFunction *>(ctx.mfem_gf_my);
+    auto *gf_mz = static_cast<mfem::GridFunction *>(ctx.mfem_gf_mz);
+    auto *gf_ms = static_cast<mfem::GridFunction *>(ctx.mfem_gf_ms);
+    auto *inv_lumped_mass = static_cast<mfem::Vector *>(ctx.mfem_inv_lumped_mass);
+    auto *tmp_vec = static_cast<mfem::Vector *>(ctx.mfem_exchange_tmp_vec);
+    auto *out_vec = static_cast<mfem::Vector *>(ctx.mfem_exchange_out_vec);
+    if (exchange_form == nullptr || gf_mx == nullptr || gf_my == nullptr || gf_mz == nullptr ||
+        gf_ms == nullptr || inv_lumped_mass == nullptr || tmp_vec == nullptr || out_vec == nullptr) {
+        error = "MFEM exchange scaffold is missing one or more operator/device buffers";
+        return false;
+    }
+    if (ctx.use_consistent_mass && mass_form == nullptr) {
+        error = "MFEM mass form is required for consistent-mass exchange but is null";
+        return false;
+    }
+
+    TransferAuditScope exchange_audit_scope(
+        ctx.transfer_audit,
+        TransferAuditScopeKind::ExchangeInterop);
+
+    unpack_aos_to_existing_components(m_xyz, ctx.mfem_mx, ctx.mfem_my, ctx.mfem_mz);
+    copy_host_vector_to_mfem(ctx.mfem_mx, *gf_mx);
+    copy_host_vector_to_mfem(ctx.mfem_my, *gf_my);
+    copy_host_vector_to_mfem(ctx.mfem_mz, *gf_mz);
+
+    double exchange_energy_accum = 0.0;
+    double component_energy = 0.0;
+
+    if (!apply_exchange_component_mass_projection(
+            &ctx,
+            allow_interrupt,
+            *exchange_form,
+            *gf_mx,
+            *gf_ms,
+            *inv_lumped_mass,
+            *mass_form,
+            ctx.use_consistent_mass,
+            *tmp_vec,
+            *out_vec,
+            ctx.mfem_h_ex_x,
+            exchange_energy != nullptr ? &component_energy : nullptr)) {
+        return false;
+    }
+    if (exchange_energy != nullptr) {
+        exchange_energy_accum += component_energy;
+    }
+    component_energy = 0.0;
+    if (!apply_exchange_component_mass_projection(
+            &ctx,
+            allow_interrupt,
+            *exchange_form,
+            *gf_my,
+            *gf_ms,
+            *inv_lumped_mass,
+            *mass_form,
+            ctx.use_consistent_mass,
+            *tmp_vec,
+            *out_vec,
+            ctx.mfem_h_ex_y,
+            exchange_energy != nullptr ? &component_energy : nullptr)) {
+        return false;
+    }
+    if (exchange_energy != nullptr) {
+        exchange_energy_accum += component_energy;
+    }
+    component_energy = 0.0;
+    if (!apply_exchange_component_mass_projection(
+            &ctx,
+            allow_interrupt,
+            *exchange_form,
+            *gf_mz,
+            *gf_ms,
+            *inv_lumped_mass,
+            *mass_form,
+            ctx.use_consistent_mass,
+            *tmp_vec,
+            *out_vec,
+            ctx.mfem_h_ex_z,
+            exchange_energy != nullptr ? &component_energy : nullptr)) {
+        return false;
+    }
+    if (allow_interrupt && poll_interrupt(ctx)) {
+        return false;
+    }
+    if (exchange_energy != nullptr) {
+        exchange_energy_accum += component_energy;
+    }
+    pack_components_to_aos(ctx.mfem_h_ex_x, ctx.mfem_h_ex_y, ctx.mfem_h_ex_z, h_ex_xyz);
+
+    if (!ctx.magnetic_node_mask.empty()) {
+        for (size_t i = 0; i < ctx.magnetic_node_mask.size(); ++i) {
+            if (allow_interrupt &&
+                i > 0 &&
+                (i % static_cast<size_t>(kInterruptPollStride)) == 0 &&
+                poll_interrupt(ctx)) {
+                return false;
+            }
+            if (ctx.magnetic_node_mask[i] == 0u) {
+                const size_t base = i * 3u;
+                h_ex_xyz[base + 0u] = 0.0;
+                h_ex_xyz[base + 1u] = 0.0;
+                h_ex_xyz[base + 2u] = 0.0;
+            }
+        }
+    }
+
+    if (h_eff_xyz != nullptr) {
+        h_eff_xyz->resize(h_ex_xyz.size());
+        if (ctx.has_external_field) {
+            for (size_t i = 0; i < h_ex_xyz.size(); ++i) {
+                (*h_eff_xyz)[i] = h_ex_xyz[i] + ctx.h_ext_xyz[i];
+            }
+        } else {
+            *h_eff_xyz = h_ex_xyz;
+        }
+    }
+
+    if (exchange_energy != nullptr) {
+        *exchange_energy = exchange_energy_accum;
+    }
+
+    return true;
+}
+#endif
+
+} // namespace fullmag::fem

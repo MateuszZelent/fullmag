@@ -7,7 +7,7 @@ import type {
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
 
-export interface StudyStageSnapshot {
+interface StudyStageSnapshot {
   algorithm: string | null;
   energyTolerance: string | null;
   index: number;

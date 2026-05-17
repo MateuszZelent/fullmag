@@ -4,11 +4,13 @@ import { useCallback } from "react";
 
 import {
   MESHING_CAPABILITIES_PATH,
+  MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_POLICY_PATH,
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -38,6 +40,7 @@ import type {
   ObjectInteractionKind,
   ObjectInteractionResource,
   MeshActiveBuildResource,
+  MeshBuildHistoryResource,
   MeshCapabilitiesResource,
   MeshLastSuccessfulBuildResource,
   MeshObjectConfigResource,
@@ -62,7 +65,7 @@ import type {
 import {
   isOptionalObjectInteractionKind,
 } from "../api/apiTypes";
-import type { DecodedTopology } from "../api/codecs";
+import type { DecodedMeshQualityData, DecodedTopology } from "../api/codecs";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { useKernel } from "../KernelContext";
 export {
@@ -104,11 +107,14 @@ export const MESH_SHARED_DOMAIN_REPORT_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REPORT_PATH;
 export const MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_PATH;
+export const MESH_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY =
+  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH;
 export const MESH_SHARED_DOMAIN_QUALITY_GATES_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH;
 export const MESH_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_RESOURCE_KEY =
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH;
 export const MODEL_REGIONS_RESOURCE_KEY = MODEL_REGIONS_PATH;
+export const MESH_BUILD_HISTORY_RESOURCE_KEY = MESHING_BUILDS_PATH;
 
 export function resolveObjectTopologyResourceKey(objectId: string): string {
   return MESHING_OBJECT_TOPOLOGY_PATH.replace(
@@ -321,6 +327,24 @@ export function useMeshBuildLatestSuccessful(
   });
 }
 
+export function useMeshBuildHistoryResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.builds.history({ signal }),
+    [api],
+  );
+
+  return useResource<MeshBuildHistoryResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: resolveJsonResourceRevision,
+    resourceKey: MESH_BUILD_HISTORY_RESOURCE_KEY,
+  });
+}
+
 export function useMeshSummaryResource(options: ResourceHookOptions = {}) {
   const { api } = useKernel();
   const load = useCallback(
@@ -427,6 +451,26 @@ export function useMeshSharedDomainQualityResource() {
     load,
     resolveRevision: resolveJsonResourceRevision,
     resourceKey: MESH_SHARED_DOMAIN_QUALITY_RESOURCE_KEY,
+  });
+}
+
+export function useMeshSharedDomainQualityDataResource(
+  options: ResourceHookOptions = {},
+) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.meshing.sharedDomain.qualityData({ signal }).then((result) => {
+        if (result.status === "ready") return result.data;
+        return null;
+      }),
+    [api],
+  );
+
+  return useResource<DecodedMeshQualityData | null>({
+    enabled: options.enabled,
+    load,
+    resourceKey: MESH_SHARED_DOMAIN_QUALITY_DATA_RESOURCE_KEY,
   });
 }
 

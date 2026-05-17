@@ -1,8 +1,11 @@
 # FEM Magnetoelastic Prescribed Strain
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/magnetoelastic.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation:
+  `native/backends/fem/cpu/mfem/interactions/magnetoelastic.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/magnetoelastic_field.hpp/.cpp`
 - Test: `native/backends/fem/tests/magnetoelastic_contract.cpp`
 - Parent note: `docs/physics/0700-shared-magnetoelastic-semantics.md`
 
@@ -66,6 +69,12 @@ integrates energy with existing nodal lumped masses. Nonmagnetic nodes are
 zeroed. `add_magnetoelastic_field(...)` adds the current `h_mel_xyz` buffer to
 `H_eff`.
 
+Source ownership: `magnetoelastic_prescribed_strain.hpp/.cpp` owns the
+prescribed-strain `B1/B2` field and conservative-energy computation.
+`magnetoelastic_field.hpp/.cpp` owns additive `H_eff` composition.
+`magnetoelastic.hpp/.cpp` remains an aggregate include and compatibility
+translation unit.
+
 No gamma, damping, or direct RHS torque conversion is applied in this module.
 
 ## Ograniczenia capability
@@ -82,7 +91,8 @@ Current gate:
 
 - `fem_magnetoelastic_contract` checks the `B1/B2` field formula, engineering
   shear conversion, energy integration with nodal lumped masses, per-node strain
-  selection, nonmagnetic-node masking, and additive `H_eff` semantics.
+  selection, nonmagnetic-node masking, additive `H_eff` semantics, and
+  source-module ownership.
 
 Required before production qualification:
 

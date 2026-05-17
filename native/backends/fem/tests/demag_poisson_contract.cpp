@@ -8,6 +8,8 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/demag_poisson_field.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -62,13 +64,26 @@ std::filesystem::path fem_source_root() {
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
 }
 
-void poisson_runtime_wrappers_are_owned_by_demag_poisson_module() {
+void poisson_runtime_wrappers_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
-    const std::string poisson =
+    const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string ready =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_ready.cpp");
+    const std::string ready_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_ready.hpp");
+    const std::string lifecycle =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_lifecycle.cpp");
+    const std::string lifecycle_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_lifecycle.hpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+    const std::string solve_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.hpp");
 
     const char *symbols[] = {
+        "bool demag_poisson_operator_ready_for_fresh_solve(",
         "bool context_initialize_poisson(",
         "void context_destroy_poisson(",
         "bool context_compute_demag_poisson(",
@@ -78,9 +93,32 @@ void poisson_runtime_wrappers_are_owned_by_demag_poisson_module() {
             bridge.find(symbol) == std::string::npos,
             "Poisson demag runtime wrapper must not be defined in mfem_bridge.cpp");
         check(
-            poisson.find(symbol) != std::string::npos,
-            "Poisson demag runtime wrapper must be defined in demag_poisson.cpp");
+            aggregate.find(symbol) == std::string::npos,
+            "Poisson demag runtime wrapper must not be defined in demag_poisson.cpp");
     }
+    check(
+        ready.find(symbols[0]) != std::string::npos,
+        "Poisson demag readiness gate must be defined in demag_poisson_ready.cpp");
+    check(
+        lifecycle.find(symbols[1]) != std::string::npos,
+        "Poisson demag init must be defined in demag_poisson_lifecycle.cpp");
+    check(
+        lifecycle.find(symbols[2]) != std::string::npos,
+        "Poisson demag destroy must be defined in demag_poisson_lifecycle.cpp");
+    check(
+        solve.find(symbols[3]) != std::string::npos,
+        "Poisson demag solve must be defined in demag_poisson_solve.cpp");
+    check(
+        ready_header.find("Validate whether the native Poisson-demag operator") !=
+            std::string::npos,
+        "Poisson demag readiness header must document its contract");
+    check(
+        lifecycle_header.find("Initialize the native Poisson-demag MFEM lifecycle") !=
+            std::string::npos,
+        "Poisson demag lifecycle header must document its contract");
+    check(
+        solve_header.find("Compute one native Poisson-demag field solve") != std::string::npos,
+        "Poisson demag solve header must document its contract");
 }
 
 void demag_energy_uses_half_factor_ms_mass_and_magnetic_mask() {
@@ -163,6 +201,27 @@ void cached_demag_energy_includes_frozen_robin_boundary_term() {
         expected,
         std::fabs(expected) * 1e-12,
         "cached demag energy includes frozen Robin boundary term");
+}
+
+void demag_energy_is_owned_by_poisson_energy_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_energy.cpp");
+
+    const char *symbols[] = {
+        "double demag_poisson_energy_from_field(",
+        "double demag_poisson_cached_energy_from_field(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag energy must not be defined in demag_poisson.cpp");
+        check(
+            energy.find(symbol) != std::string::npos,
+            "Poisson demag energy must be defined in demag_poisson_energy.cpp");
+    }
 }
 
 void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
@@ -280,6 +339,136 @@ void demag_field_visual_postprocessing_is_owned_by_poisson_field_module() {
         check(
             field.find(symbol) != std::string::npos,
             "Poisson demag field/visual postprocessing must be defined in demag_poisson_field.cpp");
+    }
+}
+
+void demag_rhs_assembly_is_owned_by_poisson_rhs_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string rhs =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_rhs.cpp");
+
+    const char *symbols[] = {
+        "class MagnetizationCoefficient",
+        "struct PoissonRhsWorkspace",
+        "bool initialize_demag_poisson_rhs_workspace(",
+        "void destroy_demag_poisson_rhs_workspace(",
+        "bool assemble_demag_poisson_rhs(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag RHS assembly must not be defined in demag_poisson.cpp");
+        check(
+            rhs.find(symbol) != std::string::npos,
+            "Poisson demag RHS assembly must be defined in demag_poisson_rhs.cpp");
+    }
+}
+
+void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string boundary =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_boundary.cpp");
+
+    const char *symbols[] = {
+        "bool initialize_demag_poisson_boundary_operator(",
+        "ctx.robin_effective_beta = c / R_star;",
+        "A_robin->Add(ctx.robin_effective_beta",
+        "A_bc->EliminateRowCol",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag boundary operator must not be defined in demag_poisson.cpp");
+        check(
+            boundary.find(symbol) != std::string::npos,
+            "Poisson demag boundary operator must be defined in demag_poisson_boundary.cpp");
+    }
+}
+
+void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string periodic =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_periodic.cpp");
+
+    const char *symbols[] = {
+        "struct PeriodicPoissonReducedWorkspace",
+        "mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(",
+        "void reduce_vector_by_periodic_classes(",
+        "void lift_vector_by_periodic_classes(",
+        "bool initialize_demag_periodic_poisson_reduction(",
+        "void destroy_demag_periodic_poisson_reduction(",
+        "bool solve_demag_periodic_poisson_reduced(",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag periodic reduction must not be defined in demag_poisson.cpp");
+        check(
+            periodic.find(symbol) != std::string::npos,
+            "Poisson demag periodic reduction must be defined in demag_poisson_periodic.cpp");
+    }
+}
+
+void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string hypre =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
+
+    const char *symbols[] = {
+        "struct PoissonHypreWorkspace",
+        "void zero_poisson_essential_values(",
+        "void ensure_mpi_initialized(",
+        "bool demag_poisson_hypre_has_warm_start(",
+        "void destroy_demag_poisson_hypre_workspace(",
+        "bool solve_demag_poisson_hypre(",
+        "auto *A_par = new mfem::HypreParMatrix",
+        "new mfem::HypreBoomerAMG",
+        "new mfem::HyprePCG",
+        "new mfem::HypreGMRES",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag Hypre solve must not be defined in demag_poisson.cpp");
+        check(
+            hypre.find(symbol) != std::string::npos,
+            "Poisson demag Hypre solve must be defined in demag_poisson_hypre.cpp");
+    }
+}
+
+void demag_recovery_is_owned_by_poisson_recovery_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string recovery =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
+
+    const char *symbols[] = {
+        "struct DemagRecoveryWorkspace",
+        "void zero_non_magnetic_nodes_aos(",
+        "bool initialize_demag_poisson_recovery_workspace(",
+        "void destroy_demag_poisson_recovery_workspace(",
+        "bool recover_demag_poisson_field(",
+        "fe->CalcPhysDShape",
+        "ctx.h_demag_visual_xyz = h_demag_xyz;",
+        "ctx.cached_robin_boundary_energy =",
+        "bdr_mass->SpMat().Mult(gf_u",
+    };
+    for (const char *symbol : symbols) {
+        check(
+            poisson.find(symbol) == std::string::npos,
+            "Poisson demag field recovery must not be defined in demag_poisson.cpp");
+        check(
+            recovery.find(symbol) != std::string::npos,
+            "Poisson demag field recovery must be defined in demag_poisson_recovery.cpp");
     }
 }
 
@@ -528,13 +717,19 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 } // namespace
 
 int main() {
-    poisson_runtime_wrappers_are_owned_by_demag_poisson_module();
+    poisson_runtime_wrappers_are_owned_by_separate_modules();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
     demag_cache_refresh_policy_matches_bridge_contract();
     cached_demag_energy_includes_frozen_robin_boundary_term();
+    demag_energy_is_owned_by_poisson_energy_module();
     demag_cache_store_and_reuse_are_owned_by_poisson_module();
     demag_telemetry_is_owned_by_poisson_telemetry_module();
     demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
+    demag_rhs_assembly_is_owned_by_poisson_rhs_module();
+    demag_boundary_operator_is_owned_by_poisson_boundary_module();
+    demag_periodic_reduction_is_owned_by_poisson_periodic_module();
+    demag_hypre_solve_is_owned_by_poisson_hypre_module();
+    demag_recovery_is_owned_by_poisson_recovery_module();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();
     demag_solver_telemetry_names_are_owned_by_poisson_module();

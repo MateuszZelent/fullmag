@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:binary": "node dev-server.mjs",
     "audit:idle-performance": "node scripts/audit-idle-performance.mjs",
     "audit:viewport-3d-profile-switch": "node scripts/audit-viewport-3d-profile-switch.mjs",
     "build": "next build",
@@ -19,6 +20,7 @@
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",
+    "verify:mesh-build-new-object": "node scripts/verify-mesh-build-new-object.mjs",
     "test": "vitest run",
     "typecheck": "next typegen . && tsc --noEmit"
   },

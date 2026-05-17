@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/anisotropy.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"

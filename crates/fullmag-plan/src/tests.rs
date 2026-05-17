@@ -630,15 +630,36 @@ fn bootstrap_example_plans_successfully() {
 }
 
 #[test]
-fn unsupported_term_is_rejected() {
+fn fdm_magnetoelastic_term_is_rejected_until_fdm_lane_exists() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Magnetoelastic {
-        magnet: "m".to_string(),
-        body: "b".to_string(),
-        law: "l".to_string(),
+        magnet: "strip".to_string(),
+        body: "solid".to_string(),
+        law: "cubic".to_string(),
+    }];
+    ir.elastic_materials = vec![fullmag_ir::ElasticMaterialIR {
+        name: "elastic".to_string(),
+        c11: 2.0e11,
+        c12: 1.2e11,
+        c44: 8.0e10,
+        density: 8700.0,
+        mechanical_damping: None,
+    }];
+    ir.elastic_bodies = vec![fullmag_ir::ElasticBodyIR {
+        name: "solid".to_string(),
+        geometry: "strip".to_string(),
+        elastic_material: "elastic".to_string(),
+    }];
+    ir.magnetostriction_laws = vec![fullmag_ir::MagnetostrictionLawIR::Cubic {
+        name: "cubic".to_string(),
+        b1: 1.0e6,
+        b2: -2.0e6,
+    }];
+    ir.mechanical_loads = vec![fullmag_ir::MechanicalLoadIR::PrescribedStrain {
+        strain: [1.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0],
     }];
 
-    let err = plan(&ir).expect_err("Magnetoelastic should be rejected");
+    let err = plan(&ir).expect_err("FDM Magnetoelastic should be rejected");
     assert!(err.reasons.iter().any(|r| r.contains("semantic-only")));
 }
 
@@ -690,6 +711,220 @@ fn imported_geometry_with_grid_asset_plans_successfully() {
         }
         _ => panic!("expected FDM plan"),
     }
+}
+
+fn fem_shared_domain_ir_for_magnetoelastic() -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    ir.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 5e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: None,
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: Some(fullmag_ir::FemHintsIR {
+            order: 1,
+            hmax: 2e-9,
+            mesh: None,
+            demag_solver_policy: None,
+        }),
+        hybrid: None,
+    });
+    ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(fullmag_ir::FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(fullmag_ir::MeshIR {
+                mesh_name: "strip".to_string(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [-2.0, -2.0, -2.0],
+                    [2.0, -2.0, -2.0],
+                    [-2.0, 2.0, -2.0],
+                    [-2.0, -2.0, 2.0],
+                ],
+                elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+                element_markers: vec![1, 0],
+                boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
+                boundary_markers: vec![1, 99],
+                periodic_boundary_pairs: Vec::new(),
+                periodic_node_pairs: Vec::new(),
+                per_domain_quality: std::collections::HashMap::new(),
+            }),
+            region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "strip".to_string(),
+                marker: 1,
+            }],
+            build_report: None,
+        }),
+    });
+    ir.elastic_materials = vec![fullmag_ir::ElasticMaterialIR {
+        name: "elastic".to_string(),
+        c11: 2.0e11,
+        c12: 1.2e11,
+        c44: 8.0e10,
+        density: 8700.0,
+        mechanical_damping: None,
+    }];
+    ir.elastic_bodies = vec![fullmag_ir::ElasticBodyIR {
+        name: "solid".to_string(),
+        geometry: "strip".to_string(),
+        elastic_material: "elastic".to_string(),
+    }];
+    ir.magnetostriction_laws = vec![fullmag_ir::MagnetostrictionLawIR::Cubic {
+        name: "cubic".to_string(),
+        b1: 1.1e6,
+        b2: -2.2e6,
+    }];
+    ir.mechanical_loads = vec![fullmag_ir::MechanicalLoadIR::PrescribedStrain {
+        strain: [1.0e-4, 2.0e-4, 0.0, 3.0e-5, 0.0, 0.0],
+    }];
+    ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Magnetoelastic {
+        magnet: "strip".to_string(),
+        body: "solid".to_string(),
+        law: "cubic".to_string(),
+    }];
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: Some(fullmag_ir::MechanicsIR::PrescribedStrain),
+        },
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![
+                fullmag_ir::OutputIR::Field {
+                    name: "H_mel".to_string(),
+                    every_seconds: 1e-12,
+                },
+                fullmag_ir::OutputIR::Scalar {
+                    name: "E_mel".to_string(),
+                    every_seconds: 1e-12,
+                },
+            ],
+        },
+    };
+    ir
+}
+
+#[test]
+fn fem_prescribed_strain_magnetoelastic_lowers_to_native_plan() {
+    let ir = fem_shared_domain_ir_for_magnetoelastic();
+
+    let planned = plan(&ir).expect("prescribed-strain FEM magnetoelastic should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let mel = fem
+        .magnetoelastic
+        .expect("FemPlanIR should carry prescribed-strain magnetoelastic");
+    assert_eq!(mel.b1, 1.1e6);
+    assert_eq!(mel.b2, -2.2e6);
+    assert_eq!(
+        mel.prescribed_strain,
+        Some([1.0e-4, 2.0e-4, 0.0, 3.0e-5, 0.0, 0.0])
+    );
+}
+
+#[test]
+fn fem_prescribed_strain_magnetoelastic_serializes_mechanics_contract() {
+    let ir = fem_shared_domain_ir_for_magnetoelastic();
+
+    let planned = plan(&ir).expect("prescribed-strain FEM magnetoelastic should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let value = serde_json::to_value(&fem).expect("FemPlanIR should serialize");
+    let mechanics = value
+        .get("mechanics")
+        .expect("FemPlanIR should carry a mechanics contract");
+
+    assert_eq!(mechanics["mode"], "prescribed_strain");
+    assert_eq!(mechanics["body"]["name"], "solid");
+    assert_eq!(mechanics["elastic_material"]["name"], "elastic");
+    assert_eq!(mechanics["magnetostriction_law"]["name"], "cubic");
+    assert_eq!(
+        mechanics["loads"],
+        serde_json::json!([
+            {
+                "kind": "prescribed_strain",
+                "strain": [1.0e-4, 2.0e-4, 0.0, 3.0e-5, 0.0, 0.0]
+            }
+        ])
+    );
+}
+
+#[test]
+fn fem_quasistatic_magnetoelastic_is_explicitly_rejected_until_mechanics_solver_exists() {
+    let mut ir = fem_shared_domain_ir_for_magnetoelastic();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: Some(fullmag_ir::MechanicsIR::QuasistaticElasticity {
+                max_picard_iterations: 2,
+                picard_tolerance: 1e-6,
+            }),
+        },
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![fullmag_ir::OutputIR::Field {
+                name: "H_mel".to_string(),
+                every_seconds: 1e-12,
+            }],
+        },
+    };
+
+    let err = plan(&ir).expect_err("quasistatic mechanics has no executable FEM solver yet");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("quasistatic magnetoelasticity is not executable yet")));
+}
+
+#[test]
+fn fem_mechanics_observables_are_rejected_until_mechanics_solver_exists() {
+    let mut ir = fem_shared_domain_ir_for_magnetoelastic();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "heun".to_string(),
+            fixed_timestep: Some(1e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: Some(fullmag_ir::MechanicsIR::PrescribedStrain),
+        },
+        sampling: fullmag_ir::SamplingIR {
+            outputs: vec![
+                fullmag_ir::OutputIR::Field {
+                    name: "u".to_string(),
+                    every_seconds: 1e-12,
+                },
+                fullmag_ir::OutputIR::Scalar {
+                    name: "E_el".to_string(),
+                    every_seconds: 1e-12,
+                },
+            ],
+        },
+    };
+
+    let err = plan(&ir).expect_err("mechanics observables need an executable mechanics solver");
+    assert!(err.reasons.iter().any(|reason| reason
+        .contains("field output 'u' requires the quasistatic/elastodynamic mechanics solver")));
+    assert!(err.reasons.iter().any(|reason| reason
+        .contains("scalar output 'E_el' requires the quasistatic/elastodynamic mechanics solver")));
 }
 
 #[test]

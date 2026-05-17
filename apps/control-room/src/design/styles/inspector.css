@@ -660,6 +660,79 @@ button.fm-mesh-detail-list__item:focus-visible {
   line-height: 1.35;
 }
 
+.fm-mesh-build-history {
+  display: grid;
+  gap: var(--fm-space-2);
+}
+
+.fm-mesh-build-history__comparison {
+  display: grid;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 72%, transparent);
+}
+
+.fm-mesh-build-history__comparison header {
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-mesh-build-history__controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--fm-space-2);
+}
+
+.fm-mesh-build-history__controls label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-mesh-build-history__comparison h4 {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 650;
+}
+
+.fm-mesh-build-history__comparison header span {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-mesh-build-comparison {
+  display: grid;
+  gap: 1px;
+}
+
+.fm-mesh-build-comparison__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(64px, max-content));
+  min-height: 24px;
+  align-items: center;
+  gap: var(--fm-space-2);
+  border-radius: var(--fm-radius-sm);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  padding: 2px var(--fm-space-2);
+}
+
+.fm-mesh-build-comparison__row:first-child {
+  color: var(--fm-text-muted);
+  font-weight: 600;
+}
+
+.fm-mesh-build-comparison__row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .fm-mesh-quality-view {
   display: grid;
   gap: var(--fm-space-3);
@@ -714,6 +787,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 }
 
 .fm-mesh-quality-metric__header h4,
+.fm-mesh-quality-refinement h4,
 .fm-mesh-quality-worst h4 {
   margin: 0;
   color: var(--fm-text-primary);
@@ -725,6 +799,26 @@ button.fm-mesh-detail-list__item:focus-visible {
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-xs);
+}
+
+.fm-mesh-quality-metric__header .fm-mesh-quality-metric__threshold {
+  color: var(--fm-warning);
+}
+
+.fm-mesh-quality-metric__action {
+  justify-self: start;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-elevated);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-mesh-quality-metric__action:hover,
+.fm-mesh-quality-metric__action:focus-visible {
+  border-color: var(--fm-border-strong);
+  background: var(--fm-bg-hover);
 }
 
 .fm-mesh-quality-histogram {
@@ -779,6 +873,53 @@ button.fm-mesh-detail-list__item:focus-visible {
   color: var(--fm-warning);
   font-size: var(--fm-font-size-xs);
   padding: 0 var(--fm-space-4);
+}
+
+.fm-mesh-quality-refinement {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--fm-space-2);
+  align-items: center;
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-left: 2px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-sm);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 72%, transparent);
+}
+
+.fm-mesh-quality-refinement[data-status="ready"] {
+  border-left-color: var(--fm-warning);
+}
+
+.fm-mesh-quality-refinement[data-status="not_required"] {
+  border-left-color: var(--fm-success);
+}
+
+.fm-mesh-quality-refinement[data-status="unavailable"] {
+  border-left-color: var(--fm-border-strong);
+}
+
+.fm-mesh-quality-refinement p {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.35;
+}
+
+.fm-mesh-quality-refinement__action {
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-elevated);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  white-space: nowrap;
+}
+
+.fm-mesh-quality-refinement__action:hover,
+.fm-mesh-quality-refinement__action:focus-visible {
+  border-color: var(--fm-border-strong);
+  background: var(--fm-bg-hover);
 }
 
 .fm-mesh-quality-worst {

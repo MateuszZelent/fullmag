@@ -12,6 +12,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -24,6 +28,76 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void zeeman_responsibilities_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman.cpp");
+    const std::string uniform =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.cpp");
+    const std::string uniform_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_uniform_field.hpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_field.cpp");
+    const std::string field_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_field.hpp");
+    const std::string energy =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.cpp");
+    const std::string energy_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "zeeman_energy.hpp");
+
+    const char *broadcast_symbol = "void initialize_uniform_zeeman_field(";
+    const char *add_symbol = "void add_zeeman_field(";
+    const char *energy_symbol = "double zeeman_energy_from_field(";
+
+    check(
+        aggregate.find(broadcast_symbol) == std::string::npos,
+        "Zeeman broadcast must not be defined in zeeman.cpp");
+    check(
+        aggregate.find(add_symbol) == std::string::npos,
+        "Zeeman H_eff addition must not be defined in zeeman.cpp");
+    check(
+        aggregate.find(energy_symbol) == std::string::npos,
+        "Zeeman energy must not be defined in zeeman.cpp");
+    check(
+        uniform.find(broadcast_symbol) != std::string::npos,
+        "Zeeman broadcast must be defined in zeeman_uniform_field.cpp");
+    check(
+        field.find(add_symbol) != std::string::npos,
+        "Zeeman H_eff addition must be defined in zeeman_field.cpp");
+    check(
+        energy.find(energy_symbol) != std::string::npos,
+        "Zeeman energy must be defined in zeeman_energy.cpp");
+    check(
+        uniform_header.find("Initialize the native FEM Zeeman field buffer") !=
+            std::string::npos,
+        "Zeeman uniform-field header must document its physical contract");
+    check(
+        field_header.find("Add the Zeeman field contribution") != std::string::npos,
+        "Zeeman field-add header must document its physical contract");
+    check(
+        energy_header.find("Compute Zeeman energy") != std::string::npos,
+        "Zeeman energy header must document its physical contract");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -117,6 +191,7 @@ void uniform_field_is_broadcast_added_and_integrated() {
 } // namespace
 
 int main() {
+    zeeman_responsibilities_are_owned_by_separate_modules();
     disabled_zeeman_is_zero();
     uniform_field_is_broadcast_added_and_integrated();
     return 0;

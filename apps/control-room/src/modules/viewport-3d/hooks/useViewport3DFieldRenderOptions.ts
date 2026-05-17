@@ -2,7 +2,6 @@
 
 import { useMemo } from "react";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import {
   surfaceColorSourceToColorMode,
   type VisualizationTargetSettings,
@@ -230,12 +229,4 @@ function sameStringSet(
     if (!right.has(value)) return false;
   }
   return true;
-}
-
-export function resolveViewport3DAirboxMaxVectorGlyphs(
-  state: VisualizationStateResource | null | undefined,
-  fallback: number,
-): number {
-  const density = state?.layers?.airbox?.vectors?.density ?? fallback;
-  return Math.max(0, Math.floor(density));
 }

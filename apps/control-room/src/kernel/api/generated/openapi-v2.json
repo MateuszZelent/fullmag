@@ -14438,6 +14438,45 @@
         ]
       }
     },
+    "/v2/sessions/current/meshing/meshes/shared-domain/quality/per-element": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_quality_per_element",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous per-element quality response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary per-element shared-domain mesh quality data (FMMQ)"
+          },
+          "204": {
+            "description": "No per-element quality data artifact available"
+          },
+          "304": {
+            "description": "Per-element mesh quality data not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
     "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields": {
       "get": {
         "operationId": "meshing_get_sessions_current_meshing_meshes_shared_domain_realized_size_fields",

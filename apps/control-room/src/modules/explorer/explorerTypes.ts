@@ -7,7 +7,7 @@ export type ExplorerTabId =
   | "jobs"
   | "diagnostics";
 
-export type ExplorerNodeKind =
+type ExplorerNodeKind =
   | "session.root"
   | "universe.root"
   | "objects.root"
@@ -144,7 +144,7 @@ export interface ModelTreeSnapshot {
   study?: ModelTreeStudySnapshot | null;
 }
 
-export interface ModelTreeStudySnapshot {
+interface ModelTreeStudySnapshot {
   demagRealization?: string | null;
   externalField?: readonly [number, number, number] | null;
   requestedBackend?: string | null;

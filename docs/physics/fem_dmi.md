@@ -2,17 +2,22 @@
 
 - Status: native FEM CPU module contract, MFEM execution path requires runtime validation
 - Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`
+- Implementation: `native/backends/fem/cpu/mfem/interactions/dmi.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/dmi_bulk.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/dmi_workspace.hpp/.cpp`
 - Test: `native/backends/fem/tests/dmi_contract.cpp`
 - Residual helpers: `native/backends/fem/src/dmi_weak_residual.cpp`
 
 ## Pole
 
-The native FEM CPU DMI module owns interfacial and bulk DMI for the MFEM bridge.
-Both variants assemble a weak residual over MFEM elements and recover an
-observable `H_DMI` field in `A/m` with lumped-mass projection. The ordinary LLG
-RHS converts this field to `dm/dt`; this module does not apply gamma, damping,
-or direct-torque scaling.
+The native FEM CPU DMI modules own interfacial and bulk DMI for the MFEM
+bridge. `dmi_interfacial.*` owns the interfacial path, `dmi_bulk.*` owns the
+Bloch/bulk path, `dmi_workspace.*` owns shared element-loop scratch, and
+`dmi.*` is only the umbrella public include surface. Both variants assemble a
+weak residual over MFEM elements and recover an observable `H_DMI` field in
+`A/m` with lumped-mass projection. The ordinary LLG RHS converts this field to
+`dm/dt`; these modules do not apply gamma, damping, or direct-torque scaling.
 
 For interfacial DMI the implemented energy density is:
 
@@ -67,17 +72,20 @@ magnetic elements and quadrature points, assembles interfacial or bulk DMI
 residuals, projects the residual with lumped mass and `Ms`, and lets the bridge
 apply any periodic output projection and energy aggregation.
 
-Bulk DMI projects periodic input magnetization before assembly. The bridge
-still owns higher-level orchestration; the element-loop workspace and
-residual/projection sequence are owned by `dmi.*`.
+Bulk DMI projects periodic input magnetization before assembly and now lives in
+`dmi_bulk.*`. The bridge still owns higher-level orchestration. Element-loop
+scratch lifetime and per-element MFEM buffers are isolated in
+`dmi_workspace.*`; interfacial residual and energy assembly live in
+`dmi_interfacial.*`.
 
 ## Ograniczenia capability
 
 - Active DMI requires `FULLMAG_HAS_MFEM_STACK`.
 - Local non-MFEM builds verify disabled behavior and explicit environment
   errors, but do not compile the MFEM element-loop branch.
-- Interfacial and bulk DMI are separate entry points, but still share one
-  internal workspace type.
+- Interfacial and bulk DMI are separate entry points. Interfacial DMI is
+  isolated in `dmi_interfacial.*`, bulk DMI is isolated in `dmi_bulk.*`, and
+  both paths share `dmi_workspace.*` for private element-loop scratch.
 - Public unit semantics for interfacial thin-film DMI remain release-blocking
   before a production label.
 - GPU parity is not claimed by this module.
@@ -87,8 +95,10 @@ residual/projection sequence are owned by `dmi.*`.
 Current gate:
 
 - `fem_dmi_contract` checks that disabled interfacial and bulk DMI return zero
-  field/energy and that active DMI reports a clear MFEM-stack requirement in a
-  non-MFEM build.
+  field/energy, that active DMI reports a clear MFEM-stack requirement in a
+  non-MFEM build, that interfacial DMI ownership stays in
+  `dmi_interfacial.*`, that bulk DMI ownership stays in `dmi_bulk.*`, and that
+  DMI workspace ownership stays in `dmi_workspace.*`.
 
 Required before production qualification:
 

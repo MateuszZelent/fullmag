@@ -53,6 +53,27 @@ class GmshGenerationSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(result["statistics_seconds"], 0.0)
         self.assertGreater(result["edge_length_mean"], 0.0)
 
+    def test_release_smoke_budget_profile_detects_generation_regression(self) -> None:
+        smoke = load_smoke_module()
+
+        budgets = smoke.resolve_case_budgets(
+            ["medium_box", "large_box"],
+            budget_profile="release-smoke",
+            max_case_seconds=None,
+        )
+        failures = smoke.budget_failures(
+            [
+                {"case": "medium_box", "generation_seconds": budgets["medium_box"] / 2.0},
+                {"case": "large_box", "generation_seconds": budgets["large_box"] + 0.1},
+            ],
+            budgets,
+            duration_key="generation_seconds",
+        )
+
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0]["case"], "large_box")
+        self.assertEqual(failures[0]["budget_seconds"], budgets["large_box"])
+
 
 if __name__ == "__main__":
     unittest.main()

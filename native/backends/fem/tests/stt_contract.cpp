@@ -11,6 +11,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -26,6 +30,99 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void slonczewski_cpp_is_owned_by_slonczewski_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string stt =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
+    const std::string slonczewski = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "stt_slonczewski.cpp");
+    const std::string slonczewski_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "stt_slonczewski.hpp");
+
+    const char *symbol = "void add_slonczewski_stt_rhs_aos(";
+    const char *hbar_marker = "HBAR";
+    const char *thickness_marker = "effective_magnetic_thickness_along_axis";
+
+    check(
+        stt.find(symbol) == std::string::npos,
+        "Slonczewski CPP STT must not be defined in stt.cpp");
+    check(
+        stt.find(hbar_marker) == std::string::npos,
+        "Slonczewski physical constants must not remain in stt.cpp");
+    check(
+        stt.find(thickness_marker) == std::string::npos,
+        "Slonczewski thickness helper must not remain in stt.cpp");
+    check(
+        slonczewski.find(symbol) != std::string::npos,
+        "Slonczewski CPP STT must be defined in stt_slonczewski.cpp");
+    check(
+        slonczewski.find(hbar_marker) != std::string::npos,
+        "Slonczewski physical constants must be defined in stt_slonczewski.cpp");
+    check(
+        slonczewski.find(thickness_marker) != std::string::npos,
+        "Slonczewski thickness helper must be defined in stt_slonczewski.cpp");
+    check(
+        slonczewski_header.find("Add Slonczewski CPP spin-transfer torque") !=
+            std::string::npos,
+        "Slonczewski module header must document its physical contract");
+}
+
+void zhang_li_cip_is_owned_by_zhang_li_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string stt =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
+    const std::string zhang_li =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt_zhang_li.cpp");
+    const std::string zhang_li_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "stt_zhang_li.hpp");
+
+    const char *symbol = "void add_zhang_li_stt_rhs_aos(";
+    const char *gradient_marker = "tetrahedron_gradients";
+    const char *bohr_marker = "MU_B";
+
+    check(
+        stt.find(symbol) == std::string::npos,
+        "Zhang-Li CIP STT must not be defined in stt.cpp");
+    check(
+        stt.find(gradient_marker) == std::string::npos,
+        "Zhang-Li tetrahedral gradient helper must not remain in stt.cpp");
+    check(
+        stt.find(bohr_marker) == std::string::npos,
+        "Zhang-Li physical constants must not remain in stt.cpp");
+    check(
+        zhang_li.find(symbol) != std::string::npos,
+        "Zhang-Li CIP STT must be defined in stt_zhang_li.cpp");
+    check(
+        zhang_li.find(gradient_marker) != std::string::npos,
+        "Zhang-Li tetrahedral gradient helper must be defined in stt_zhang_li.cpp");
+    check(
+        zhang_li.find(bohr_marker) != std::string::npos,
+        "Zhang-Li physical constants must be defined in stt_zhang_li.cpp");
+    check(
+        zhang_li_header.find("Add Zhang-Li CIP spin-transfer torque") !=
+            std::string::npos,
+        "Zhang-Li module header must document its physical contract");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -148,6 +245,8 @@ void combined_stt_updates_max_rhs() {
 } // namespace
 
 int main() {
+    slonczewski_cpp_is_owned_by_slonczewski_module();
+    zhang_li_cip_is_owned_by_zhang_li_module();
     slonczewski_cpp_rhs_uses_current_sign_and_field_like_term();
     slonczewski_skips_nonmagnetic_nodes();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();

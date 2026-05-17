@@ -12,19 +12,62 @@ set(FEM_PUBLIC_HEADERS
 
 set(FEM_SOURCES
     cpu/mfem/interactions/anisotropy.cpp
+    cpu/mfem/interactions/anisotropy_cubic.cpp
+    cpu/mfem/interactions/anisotropy_uniaxial.cpp
     cpu/mfem/interactions/demag.cpp
     cpu/mfem/interactions/demag_fem_bem.cpp
+    cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp
+    cpu/mfem/interactions/demag_fem_bem_energy.cpp
+    cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp
+    cpu/mfem/interactions/demag_fem_bem_operator.cpp
+    cpu/mfem/interactions/demag_fem_bem_potential.cpp
+    cpu/mfem/interactions/demag_fem_bem_rhs.cpp
+    cpu/mfem/interactions/demag_fem_bem_solve.cpp
+    cpu/mfem/interactions/demag_fem_bem_surface.cpp
+    cpu/mfem/interactions/demag_fem_bem_telemetry.cpp
+    cpu/mfem/interactions/demag_fem_bem_workspace.cpp
     cpu/mfem/interactions/demag_poisson.cpp
+    cpu/mfem/interactions/demag_poisson_boundary.cpp
     cpu/mfem/interactions/demag_poisson_cache.cpp
+    cpu/mfem/interactions/demag_poisson_energy.cpp
+    cpu/mfem/interactions/demag_poisson_field.cpp
+    cpu/mfem/interactions/demag_poisson_hypre.cpp
+    cpu/mfem/interactions/demag_poisson_lifecycle.cpp
+    cpu/mfem/interactions/demag_poisson_periodic.cpp
+    cpu/mfem/interactions/demag_poisson_ready.cpp
+    cpu/mfem/interactions/demag_poisson_recovery.cpp
+    cpu/mfem/interactions/demag_poisson_rhs.cpp
+    cpu/mfem/interactions/demag_poisson_solve.cpp
     cpu/mfem/interactions/demag_poisson_telemetry.cpp
     cpu/mfem/interactions/dmi.cpp
+    cpu/mfem/interactions/dmi_bulk.cpp
+    cpu/mfem/interactions/dmi_interfacial.cpp
+    cpu/mfem/interactions/dmi_workspace.cpp
     cpu/mfem/interactions/effective_field.cpp
     cpu/mfem/interactions/exchange.cpp
+    cpu/mfem/interactions/exchange_fallback.cpp
+    cpu/mfem/interactions/exchange_field.cpp
+    cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp
+    cpu/mfem/interactions/exchange_mass_projection.cpp
+    cpu/mfem/interactions/exchange_operator.cpp
+    cpu/mfem/interactions/exchange_runtime.cpp
     cpu/mfem/interactions/magnetoelastic.cpp
+    cpu/mfem/interactions/magnetoelastic_field.cpp
+    cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp
     cpu/mfem/interactions/oersted.cpp
+    cpu/mfem/interactions/oersted_cylinder.cpp
+    cpu/mfem/interactions/oersted_explicit.cpp
     cpu/mfem/interactions/stt.cpp
+    cpu/mfem/interactions/stt_slonczewski.cpp
+    cpu/mfem/interactions/stt_zhang_li.cpp
     cpu/mfem/interactions/thermal_brown.cpp
+    cpu/mfem/interactions/thermal_brown_field.cpp
+    cpu/mfem/interactions/thermal_brown_sampler.cpp
+    cpu/mfem/interactions/thermal_brown_sigma.cpp
     cpu/mfem/interactions/zeeman.cpp
+    cpu/mfem/interactions/zeeman_energy.cpp
+    cpu/mfem/interactions/zeeman_field.cpp
+    cpu/mfem/interactions/zeeman_uniform_field.cpp
     cpu/mfem/integrators/adaptive_dt.cpp
     cpu/mfem/integrators/heun.cpp
     cpu/mfem/integrators/heun_step.cpp

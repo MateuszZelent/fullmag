@@ -726,6 +726,7 @@ fn current_fem_mesh_workspace(
     adaptive_mesh: Option<&serde_json::Value>,
     adaptive_runtime_state: Option<&serde_json::Value>,
     quality_summary: Option<&crate::python_bridge::RemeshQualitySummary>,
+    quality_data_artifact: Option<&crate::python_bridge::RemeshQualityDataArtifactRef>,
     mesh_statistics: Option<&serde_json::Value>,
     mesh_history: &[serde_json::Value],
 ) -> serde_json::Value {
@@ -873,6 +874,9 @@ fn current_fem_mesh_workspace(
                 .or_else(|| entry.get("duration_seconds"))
         })
         .and_then(|value| value.as_f64());
+    let quality_data_artifact_json =
+        quality_data_artifact.and_then(|artifact| serde_json::to_value(artifact).ok());
+    let has_quality_arrays = quality_data_artifact.is_some();
 
     serde_json::json!({
         "mesh_summary": {
@@ -906,6 +910,7 @@ fn current_fem_mesh_workspace(
             "gamma_mean": quality.gamma_mean,
             "avg_quality": quality.avg_quality,
         })),
+        "quality_data_artifact": quality_data_artifact_json,
         "mesh_statistics": mesh_statistics.cloned(),
         "mesh_cost_report": {
             "node_count": mesh.nodes.len(),
@@ -927,7 +932,7 @@ fn current_fem_mesh_workspace(
         ],
         "mesh_capabilities": {
             "has_volume_mesh": true,
-            "has_quality_arrays": quality_summary.is_some(),
+            "has_quality_arrays": has_quality_arrays,
             "supports_adaptive_remesh": adaptive_enabled,
             "supports_compare_snapshots": true,
             "supports_size_field_remesh": true,
@@ -996,6 +1001,7 @@ fn current_mesh_workspace(
             .runtime_metadata
             .get("adaptive_mesh_runtime_state"),
         quality_summary,
+        None,
         None,
         mesh_history,
     ))
@@ -2146,6 +2152,7 @@ fn execute_manual_interactive_remesh(
                     "mesh_provenance": remesh_result.mesh_provenance.clone(),
                     "mesh_statistics": remesh_result.mesh_statistics.clone(),
                     "size_field_stats": remesh_result.size_field_stats.clone(),
+                    "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
 
                 live_workspace.update(|state| {
@@ -2162,6 +2169,7 @@ fn execute_manual_interactive_remesh(
                         adaptive_mesh_runtime.as_ref(),
                         current_adaptive_runtime_state.as_ref(),
                         current_mesh_quality.as_ref(),
+                        remesh_result.quality_data_artifact.as_ref(),
                         remesh_result.mesh_statistics.as_ref(),
                         current_mesh_history,
                     );
@@ -4184,7 +4192,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     "kind": "auto_coarsen",
                                     "mesh_target": "study_domain",
                                     "mesh_reason": "auto_coarsen",
-                                    "mesh_provenance": remesh_result.mesh_provenance,
+                                    "mesh_provenance": remesh_result.mesh_provenance.clone(),
+                                    "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                                 }));
 
                                 for stage in stages.iter_mut() {
@@ -4282,6 +4291,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                                 .get("adaptive_mesh"),
                                             current_adaptive_runtime_state.as_ref(),
                                             current_mesh_quality.as_ref(),
+                                            remesh_result.quality_data_artifact.as_ref(),
                                             None,
                                             &current_mesh_history,
                                         ));

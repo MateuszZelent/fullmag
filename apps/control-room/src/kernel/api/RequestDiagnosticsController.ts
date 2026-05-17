@@ -1,7 +1,7 @@
-export type RequestOutcome = "ok" | "error" | "network-error" | "aborted";
+type RequestOutcome = "ok" | "error" | "network-error" | "aborted";
 export type TransportChannel = "http" | "websocket";
 export type TransportDirection = "rx" | "tx";
-export type TransportOutcome = RequestOutcome | "sent";
+type TransportOutcome = RequestOutcome | "sent";
 
 export interface RequestDiagnosticEntry {
   byteLength: number | null;

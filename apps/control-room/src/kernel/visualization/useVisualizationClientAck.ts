@@ -25,7 +25,7 @@ function makeVisualizationClientId(): string {
   }`;
 }
 
-export function resolveVisualizationClientId(): string {
+function resolveVisualizationClientId(): string {
   if (typeof window === "undefined") {
     return (
       volatileVisualizationClientId ??

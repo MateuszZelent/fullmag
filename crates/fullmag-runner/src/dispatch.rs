@@ -4153,6 +4153,7 @@ mod tests {
             oersted_time_dep_t_on: 0.0,
             oersted_time_dep_t_off: 0.0,
             magnetoelastic: None,
+            mechanics: None,
             demag_solver_policy: None,
             thermal_seed_config: None,
             oersted_realization: None,
@@ -4546,17 +4547,18 @@ mod tests {
 
     #[test]
     fn forced_fem_gpu_without_backend_surfaces_reason() {
-        let _guard = env_lock().lock().expect("env mutex");
         let problem = fem_policy_problem();
-        unsafe {
-            std::env::set_var("FULLMAG_FEM_EXECUTION", "gpu");
-            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
-            std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
-        }
-        let result = resolve_fem_engine(&problem);
-        unsafe {
-            std::env::remove_var("FULLMAG_FEM_EXECUTION");
-        }
+        let result = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            true,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable without fem-gpu in this test",
+            ),
+        );
         let err = result.expect_err("missing fem-gpu backend should be surfaced");
         assert!(err
             .message
@@ -4566,14 +4568,19 @@ mod tests {
 
     #[test]
     fn requested_fem_gpu_without_backend_records_fallback_trail() {
-        let _guard = env_lock().lock().expect("env mutex");
-        unsafe {
-            std::env::remove_var("FULLMAG_FEM_EXECUTION");
-            std::env::remove_var("FULLMAG_FEM_GPU_INDEX");
-            std::env::remove_var("FULLMAG_CUDA_DEVICE_INDEX");
-        }
-        let resolution = resolve_fem_engine_with_trail(&fem_policy_problem())
-            .expect("resolution should succeed");
+        let problem = fem_policy_problem();
+        let resolution = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable in this test",
+            ),
+        )
+        .expect("resolution should succeed");
         assert_eq!(resolution.engine, FemEngine::CpuNative);
         let fallback = resolution.fallback.expect("fallback should be present");
         assert!(fallback.occurred);
@@ -4704,7 +4711,6 @@ mod tests {
 
     #[test]
     fn forced_fem_gpu_rejects_current_modules() {
-        let _guard = env_lock().lock().expect("env mutex");
         let mut problem = fem_policy_problem();
         problem
             .current_modules
@@ -4726,20 +4732,23 @@ mod tests {
                 },
                 air_box_factor: 2.0,
             });
-        unsafe {
-            std::env::set_var("FULLMAG_FEM_EXECUTION", "gpu");
-        }
-        let result = resolve_fem_engine(&problem);
-        unsafe {
-            std::env::remove_var("FULLMAG_FEM_EXECUTION");
-        }
+        let result = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            true,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable in this test",
+            ),
+        );
         let err = result.expect_err("current modules must reject forced GPU");
         assert!(err.message.contains("current_modules_force_cpu"));
     }
 
     #[test]
     fn prescribed_current_transport_does_not_force_cpu_fallback() {
-        let _guard = env_lock().lock().expect("env mutex");
         let mut problem = fem_policy_problem();
         problem
             .current_modules
@@ -4751,11 +4760,18 @@ mod tests {
                 conductivity_s_per_m: None,
             });
 
-        unsafe {
-            std::env::remove_var("FULLMAG_FEM_EXECUTION");
-        }
-        let resolution =
-            resolve_fem_engine_with_trail(&problem).expect("prescribed transport should resolve");
+        let resolution = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable in this test",
+            ),
+        )
+        .expect("prescribed transport should resolve");
         assert_ne!(
             resolution
                 .fallback

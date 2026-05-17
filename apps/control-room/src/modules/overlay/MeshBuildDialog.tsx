@@ -74,6 +74,24 @@ function formatDurationMs(value: number | null): string | null {
 }
 
 type EngineLogEntry = EngineLogResource["entries"][number];
+type MeshDiagnosticNavigation = {
+  readonly bus: {
+    emit: (
+      event: "footer:tab-requested",
+      payload: { reason?: string; tab: "engine" | "logs" | "telemetry" },
+    ) => void;
+  };
+  readonly layout: Pick<KernelApi["layout"], "setFocusedSlot" | "setPanelVisible">;
+};
+
+export function openMeshBuildDiagnostics(kernel: MeshDiagnosticNavigation) {
+  kernel.layout.setPanelVisible("bottom", true);
+  kernel.layout.setFocusedSlot("panel-bottom");
+  kernel.bus.emit("footer:tab-requested", {
+    reason: "mesh-build",
+    tab: "engine",
+  });
+}
 
 function isMeshBuildLogEntry(entry: EngineLogEntry): boolean {
   const message = entry.message.toLowerCase();
@@ -345,6 +363,14 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
           />
         </div>
         <DialogFooter>
+          <Button
+            size="sm"
+            type="button"
+            variant="secondary"
+            onClick={() => openMeshBuildDiagnostics(kernel)}
+          >
+            Open diagnostics
+          </Button>
           <Button
             size="sm"
             type="button"

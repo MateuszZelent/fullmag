@@ -6,7 +6,11 @@ import {
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
 
-import { MeshBuildLogView, MeshBuildPipelineView } from "./MeshBuildDialog";
+import {
+  MeshBuildLogView,
+  MeshBuildPipelineView,
+  openMeshBuildDiagnostics,
+} from "./MeshBuildDialog";
 
 describe("MeshBuildDialog", () => {
   it("renders mesh pipeline arrays as build phases instead of falling back to idle JSON", () => {
@@ -79,5 +83,31 @@ describe("MeshBuildDialog", () => {
     expect(html).toContain("Gmsh: generating 3D tetrahedral mesh");
     expect(html).toContain("Remesh complete - 100 nodes, 200 elements");
     expect(html).not.toContain("API request completed");
+  });
+
+  it("opens the bottom engine diagnostics tab from mesh build context", () => {
+    const calls: string[] = [];
+
+    openMeshBuildDiagnostics({
+      bus: {
+        emit: (event, payload) => {
+          calls.push(`${event}:${payload.tab}:${payload.reason}`);
+        },
+      },
+      layout: {
+        setFocusedSlot: (slotId) => {
+          calls.push(`focus:${slotId}`);
+        },
+        setPanelVisible: (panel, visible) => {
+          calls.push(`panel:${panel}:${visible}`);
+        },
+      },
+    });
+
+    expect(calls).toEqual([
+      "panel:bottom:true",
+      "focus:panel-bottom",
+      "footer:tab-requested:engine:mesh-build",
+    ]);
   });
 });

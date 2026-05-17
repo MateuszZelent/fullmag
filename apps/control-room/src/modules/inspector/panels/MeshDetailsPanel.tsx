@@ -5,6 +5,7 @@ import { useCallback, useMemo } from "react";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
+  useMeshBuildHistoryResource,
   useMeshBuildLatestSuccessful,
   useMeshCapabilitiesResource,
   useMeshSemanticsResource,
@@ -23,10 +24,13 @@ import {
   normalizeMeshPipelineStatus,
   resolveMeshBuildStatusLabel,
 } from "@/shared/domain/mesh/buildPipeline";
+import { normalizeMeshBuildHistory } from "@/shared/domain/mesh/meshBuildHistory";
 import {
+  type MeshQualityMetric,
   normalizeMeshQualityStatistics,
   type MeshWorstElement,
 } from "@/shared/domain/mesh/qualityStatistics";
+import { resolveMeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -45,6 +49,7 @@ import {
   nestedRecord,
   recordField,
 } from "./MeshResourceView";
+import { MeshBuildHistoryView } from "./MeshBuildHistoryView";
 import { MeshQualityStatisticsView } from "./MeshQualityStatisticsView";
 
 function selectedSectionTitle(kind: string | null): string {
@@ -356,6 +361,24 @@ function MeshBuildPipelineSection({
   );
 }
 
+function MeshBuildHistorySection({
+  entries,
+}: {
+  entries: ReturnType<typeof normalizeMeshBuildHistory>;
+}) {
+  return (
+    <InspectorSection
+      value="build-history"
+      title="Build History Compare"
+      badge={formatCount(entries.length)}
+      collapsible
+      defaultCollapsed={entries.length === 0}
+    >
+      <MeshBuildHistoryView entries={entries} />
+    </InspectorSection>
+  );
+}
+
 function MeshQualityGatesSection({
   badge,
   gateRows,
@@ -393,10 +416,16 @@ function MeshQualityGatesSection({
 }
 
 function MeshQualityStatisticsSection({
+  onRefineWorstElement,
+  onSelectMetric,
   onSelectWorstElement,
+  refinementState,
   statistics,
 }: {
+  onRefineWorstElement: () => void;
+  onSelectMetric: (metric: MeshQualityMetric["id"]) => void;
   onSelectWorstElement: (element: MeshWorstElement) => void;
+  refinementState: ReturnType<typeof resolveMeshQualityRefinementState>;
   statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
 }) {
   return (
@@ -409,6 +438,9 @@ function MeshQualityStatisticsSection({
     >
       <MeshQualityStatisticsView
         statistics={statistics}
+        refinementState={refinementState}
+        onRefineWorstElement={onRefineWorstElement}
+        onSelectMetric={onSelectMetric}
         onSelectWorstElement={onSelectWorstElement}
       />
     </InspectorSection>
@@ -533,6 +565,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const capabilities = useMeshCapabilitiesResource();
   const semantics = useMeshSemanticsResource();
   const activeBuild = useMeshBuildCurrent();
+  const buildHistory = useMeshBuildHistoryResource();
   const latestBuild = useMeshBuildLatestSuccessful();
   const manifest = useMeshSharedDomainManifestResource();
   const sharedReport = useMeshSharedDomainReportResource();
@@ -547,6 +580,10 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
     nestedRecord(semantics.data?.mesh_build_diagnostics, "mesh_statistics") ??
     nestedRecord(sharedReport.data?.report, "mesh_statistics");
   const qualityStatistics = normalizeMeshQualityStatistics(meshStatistics);
+  const qualityRefinementState = useMemo(
+    () => resolveMeshQualityRefinementState(qualityStatistics),
+    [qualityStatistics],
+  );
   const lastBuildSummary = firstRecord(
     activeBuild.data?.last_build_summary,
     latestBuild.data?.last_success,
@@ -554,6 +591,10 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const sceneRecord = asRecord(scene.data);
   const activeBuildRecord = asRecord(activeBuild.data?.active_build);
   const pipelinePhases = normalizeMeshPipelineStatus(activeBuild.data?.mesh_pipeline_status);
+  const buildHistoryEntries = useMemo(
+    () => normalizeMeshBuildHistory(buildHistory.data?.history),
+    [buildHistory.data?.history],
+  );
   const lastBuildGeometryRealization = nestedRecord(
     lastBuildSummary,
     "geometry_realization",
@@ -608,6 +649,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
             centroid: element.centroid,
             elementIndex: element.elementIndex,
             kind: "mesh.quality.element",
+            metric: "gamma",
             nodeId,
             type: "mesh-quality-element",
             visualizationTargetId: `mesh:quality:element:${element.elementIndex}`,
@@ -619,6 +661,40 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
     },
     [kernel],
   );
+  const selectQualityMetric = useCallback(
+    (metric: MeshQualityMetric["id"]) => {
+      const nodeId = `model:mesh:quality:${metric}`;
+      kernel.selection.set(
+        {
+          kind: "mesh.quality",
+          label: `Mesh quality ${metric.toUpperCase()}`,
+          nodeId,
+          objectId: null,
+          ref: {
+            kind: "mesh.quality.metric",
+            metric,
+            nodeId,
+            type: "mesh-quality-metric",
+            visualizationTargetId: `mesh:quality:metric:${metric}`,
+          },
+        },
+        "mesh",
+      );
+      kernel.layout.setActiveTab("mesh");
+    },
+    [kernel],
+  );
+  const refineWorstQualityElement = useCallback(() => {
+    if (!qualityRefinementState.plan) return;
+    void kernel.commands.execute(
+      "mesh.refine-worst-quality-element",
+      buildContext,
+      {
+        elementIndex: qualityRefinementState.plan.elementIndex,
+        meshOptions: qualityRefinementState.plan.meshOptions,
+      },
+    );
+  }, [buildContext, kernel.commands, qualityRefinementState.plan]);
 
   return (
     <Accordion
@@ -629,6 +705,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
         "identity",
         "counts",
         "pipeline",
+        "build-history",
         "quality-gates",
         "quality-statistics",
         "size-fields",
@@ -686,9 +763,13 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           activeBuild.data?.shared_domain_build_report?.used_size_field_kinds
         }
       />
+      <MeshBuildHistorySection entries={buildHistoryEntries} />
       <MeshQualityGatesSection badge={sharedQuality.status} gateRows={gateRows} />
       <MeshQualityStatisticsSection
         statistics={qualityStatistics}
+        refinementState={qualityRefinementState}
+        onRefineWorstElement={refineWorstQualityElement}
+        onSelectMetric={selectQualityMetric}
         onSelectWorstElement={selectWorstElement}
       />
       <RealizedSizeFieldsSection sizeFields={sizeFields} />

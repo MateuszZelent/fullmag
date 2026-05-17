@@ -1,8 +1,10 @@
 # FEM Oersted Field
 
 - Status: native FEM CPU module contract
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/oersted.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation: `native/backends/fem/cpu/mfem/interactions/oersted.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/oersted_cylinder.hpp/.cpp`,
+  `native/backends/fem/cpu/mfem/interactions/oersted_explicit.hpp/.cpp`
 - Test: `native/backends/fem/tests/oersted_contract.cpp`
 
 ## Pole
@@ -16,6 +18,12 @@ For the analytical cylinder, the module precomputes the static nodal field for
 unit current, `I = 1 A`, and stores it in `h_oe_xyz` as an AoS-3 H field in
 `A/m`. Runtime stepping multiplies that buffer by the configured current and
 time envelope.
+
+Source ownership: analytical-cylinder axis normalization, unit-current field
+sampling, current-envelope scaling, and scaled addition live in
+`oersted_cylinder.hpp/.cpp`. Explicit nodal buffer addition lives in
+`oersted_explicit.hpp/.cpp`. The public `oersted.hpp/.cpp` surface is only the
+aggregate dispatcher.
 
 For a cylinder of radius `R`, normalized current axis `a`, and perpendicular
 distance `r` from the axis:
@@ -97,7 +105,8 @@ Current gate:
 
 - `fem_oersted_contract` checks unit-current Ampere-law samples inside,
   outside, and on the axis; zero-axis rejection; sinusoidal and pulse current
-  scaling; and unscaled explicit nodal field addition.
+  scaling; analytical/explicit source-module ownership; and unscaled explicit
+  nodal field addition.
 
 Required before production qualification:
 

@@ -1,8 +1,16 @@
 # FEM/BEM Open-Boundary Demag
 
 - Status: native FEM CPU dense-reference module contract, active MFEM solve path requires runtime validation
-- Last updated: 2026-05-16
-- Implementation: `native/backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp/.cpp`
+- Last updated: 2026-05-17
+- Implementation:
+  `native/backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp/.cpp`,
+  `demag_fem_bem_energy.hpp/.cpp`, `demag_fem_bem_solve.hpp/.cpp`,
+  `demag_fem_bem_surface.hpp/.cpp`, `demag_fem_bem_operator.hpp/.cpp`,
+  `demag_fem_bem_linear_solve.hpp/.cpp`,
+  `demag_fem_bem_boundary_values.hpp/.cpp`,
+  `demag_fem_bem_workspace.hpp/.cpp`,
+  `demag_fem_bem_potential.hpp/.cpp`, `demag_fem_bem_telemetry.hpp/.cpp`,
+  and `demag_fem_bem_rhs.hpp/.cpp`
 - Test: `native/backends/fem/tests/demag_fem_bem_contract.cpp`
 - Architecture reference: `docs/physics/0870-fem-bem-demag-open-boundary.md`
 
@@ -28,6 +36,8 @@ E_d = -0.5 mu0 integral_Omega_m Ms m.H_demag dV
 `demag_fem_bem_energy_from_field(...)` delegates this scalar convention to the
 shared demag energy implementation so Poisson and FEM/BEM report consistent
 sign, units, lumped-mass weighting, and magnetic-node masking.
+The wrapper is owned by `demag_fem_bem_energy.*`; `demag_fem_bem.*` is only the
+aggregate include/translation-unit surface.
 
 ## Boundary Operator
 
@@ -61,6 +71,8 @@ correctness/reference operator, not a production compressed BEM/H2/FMM path.
 - The dense BEM operator is validation/reference scale only.
 - Production qualification still requires analytic sphere/thin-film fixtures and
   comparison against converged Poisson airbox demag.
+- Per-step Fredkin-Koehler solve orchestration is owned by
+  `demag_fem_bem_solve.*`.
 
 ## Testy
 
@@ -73,4 +85,6 @@ ctest --test-dir native/build/backends/fem -R fem_demag_fem_bem_contract --outpu
 
 The current contract checks body-only boundary-surface extraction, finite dense
 BEM matrix/apply behavior, constant-potential sanity on a unit tetrahedron, and
-energy parity with the shared demag convention.
+energy parity with the shared demag convention. It also checks source ownership
+for the energy and solve modules so those definitions do not return to the
+aggregate `demag_fem_bem.cpp`.

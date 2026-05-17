@@ -13,6 +13,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -25,6 +28,72 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void oersted_realizations_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted.cpp");
+    const std::string cylinder =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_cylinder.cpp");
+    const std::string cylinder_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_cylinder.hpp");
+    const std::string explicit_field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_explicit.cpp");
+    const std::string explicit_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "oersted_explicit.hpp");
+
+    const char *normalize_symbol = "bool normalize_oersted_cylinder_axis(";
+    const char *initialize_symbol = "bool initialize_oersted_cylinder_field(";
+    const char *scale_symbol = "double oersted_current_scale(";
+    const char *explicit_symbol = "void add_explicit_oersted_field(";
+
+    check(
+        aggregate.find(normalize_symbol) == std::string::npos,
+        "Oersted cylinder axis normalization must not be defined in oersted.cpp");
+    check(
+        aggregate.find(initialize_symbol) == std::string::npos,
+        "Oersted cylinder initialization must not be defined in oersted.cpp");
+    check(
+        aggregate.find(scale_symbol) == std::string::npos,
+        "Oersted cylinder current scale must not be defined in oersted.cpp");
+    check(
+        cylinder.find(normalize_symbol) != std::string::npos,
+        "Oersted cylinder axis normalization must be defined in oersted_cylinder.cpp");
+    check(
+        cylinder.find(initialize_symbol) != std::string::npos,
+        "Oersted cylinder initialization must be defined in oersted_cylinder.cpp");
+    check(
+        cylinder.find(scale_symbol) != std::string::npos,
+        "Oersted cylinder current scale must be defined in oersted_cylinder.cpp");
+    check(
+        explicit_field.find(explicit_symbol) != std::string::npos,
+        "Explicit Oersted field addition must be defined in oersted_explicit.cpp");
+    check(
+        cylinder_header.find("analytical Oersted-cylinder") != std::string::npos,
+        "Oersted cylinder header must document its physical contract");
+    check(
+        explicit_header.find("explicit nodal Oersted") != std::string::npos,
+        "Explicit Oersted header must document its physical contract");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -161,6 +230,7 @@ void explicit_oersted_field_is_added_unscaled() {
 } // namespace
 
 int main() {
+    oersted_realizations_are_owned_by_separate_modules();
     analytical_cylinder_is_precomputed_for_unit_current();
     invalid_axis_is_rejected();
     time_modulation_scales_cylinder_current();

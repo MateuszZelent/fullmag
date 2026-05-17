@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type ComponentProps,
+} from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { useSelection } from "@/kernel/selection/useSelection";
@@ -18,10 +24,7 @@ import {
   mergeViewport3DFieldScalarColors,
   useViewport3DChunkedScalarColors,
 } from "./useViewport3DChunkedScalarColors";
-import {
-
-  useViewport3DFieldRenderOptions,
-} from "./useViewport3DFieldRenderOptions";
+import { useViewport3DFieldRenderOptions } from "./useViewport3DFieldRenderOptions";
 import {
   FULL_FIELD_QUERY,
   resolveViewport3DSelectionBounds,
@@ -47,13 +50,16 @@ import {
   type Viewport3DPrimitiveObject,
 } from "../viewport3dPrimitiveModel";
 import {
+  buildMeshQualityVertexColors,
+  type MeshQualityColorMetric,
+} from "../viewport3dQualityMapping";
+import {
   buildViewport3DFieldRenderModel,
   buildViewport3DTopologyRenderModel,
   combineViewport3DBounds,
   resolveDomainBounds,
   resolveTopologyBounds,
   resolveUniverseBounds,
-
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "../viewport3dRenderModel";
 import {
@@ -61,6 +67,7 @@ import {
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
   useViewport3DFieldVector,
+  useViewport3DMeshQualityData,
   useViewport3DScene,
   useViewport3DSharedDomainManifest,
   useViewport3DUniverse,
@@ -82,6 +89,20 @@ import {
 import { getViewport3DVisualProfile } from "../viewport3dVisualProfile";
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
+
+function resolveSelectionMeshQualityMetric(
+  selection: ReturnType<typeof useSelection>["selection"],
+): MeshQualityColorMetric {
+  const ref = selection.ref;
+  const metric =
+    ref?.type === "mesh-quality-element" || ref?.type === "mesh-quality-metric"
+      ? ref.metric
+      : null;
+  if (metric === "gamma" || metric === "sicn" || metric === "volume") {
+    return metric;
+  }
+  return "gamma";
+}
 
 export function useViewport3DSceneModel({
   commandState,
@@ -182,6 +203,30 @@ export function useViewport3DSceneModel({
   }, [scene.data, sharedDomainManifest]);
   const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
   const currentTopologyRenderModel = topologyCurrent ? topologyRenderModel : null;
+  const meshQualityOverlayVisible =
+    selection.kind === "mesh.quality" ||
+    selection.ref?.type === "mesh-quality-element";
+  const meshQualityMetric = resolveSelectionMeshQualityMetric(selection);
+  const meshQualityData = useViewport3DMeshQualityData(
+    Boolean(currentTopologyRenderModel && meshQualityOverlayVisible),
+  );
+  const meshQualityColors = useMemo(
+    () =>
+      meshQualityOverlayVisible && topologyCurrent
+        ? buildMeshQualityVertexColors(
+            topology.data,
+            meshQualityData.data,
+            meshQualityMetric,
+          )
+        : null,
+    [
+      meshQualityData.data,
+      meshQualityMetric,
+      meshQualityOverlayVisible,
+      topology.data,
+      topologyCurrent,
+    ],
+  );
   const magnetizationTexturePreviews = useMemo(
     () => buildViewport3DMagnetizationTexturePreviewMap(scene.data),
     [scene.data],
@@ -377,6 +422,7 @@ export function useViewport3DSceneModel({
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
+    (meshQualityOverlayVisible ? meshQualityData.error?.message : null) ??
     fieldVector.error?.message ??
     scene.error?.message ??
     universe.error?.message ??
@@ -412,6 +458,14 @@ export function useViewport3DSceneModel({
       id: "field-vector",
       revision: fieldVector.revision,
       status: fieldVector.status,
+    },
+    {
+      error: meshQualityOverlayVisible
+        ? meshQualityData.error?.message
+        : undefined,
+      id: "mesh-quality-data",
+      revision: meshQualityOverlayVisible ? meshQualityData.revision : null,
+      status: meshQualityOverlayVisible ? meshQualityData.status : "idle",
     },
     {
       error: scene.error?.message,
@@ -466,6 +520,10 @@ export function useViewport3DSceneModel({
     hslReferenceVisible,
     magnetizationTexturePreviews,
     maxVectorGlyphs: fdmSettings.vectorBudget,
+    meshQualityColors,
+    meshQualityMetric,
+    meshQualityOverlayVisible,
+    meshQualityRange: meshQualityColors?.range ?? null,
     primitiveModel,
     quantityId,
     resourceFrameKey,

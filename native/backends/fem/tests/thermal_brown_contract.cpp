@@ -13,6 +13,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -26,6 +30,76 @@ void check(bool condition, const char *msg) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
     }
+}
+
+std::string read_text_file(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) {
+        std::fprintf(stderr, "FAIL: unable to read %s\n", path.string().c_str());
+        std::exit(1);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::filesystem::path fem_source_root() {
+    const std::filesystem::path this_file(__FILE__);
+    if (this_file.is_absolute()) {
+        return this_file.parent_path().parent_path();
+    }
+    return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void thermal_brown_responsibilities_are_owned_by_separate_modules() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string aggregate =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown.cpp");
+    const std::string sigma =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sigma.cpp");
+    const std::string sigma_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sigma.hpp");
+    const std::string sampler =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sampler.cpp");
+    const std::string sampler_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_sampler.hpp");
+    const std::string field =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_field.cpp");
+    const std::string field_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "thermal_brown_field.hpp");
+
+    const char *sigma_symbol = "double thermal_brown_sigma(";
+    const char *refresh_symbol = "void refresh_thermal_brown_field(";
+    const char *add_symbol = "void add_thermal_brown_field(";
+
+    check(
+        aggregate.find(sigma_symbol) == std::string::npos,
+        "Brown sigma formula must not be defined in thermal_brown.cpp");
+    check(
+        aggregate.find(refresh_symbol) == std::string::npos,
+        "Brown refresh/sampling must not be defined in thermal_brown.cpp");
+    check(
+        aggregate.find(add_symbol) == std::string::npos,
+        "Brown H_eff addition must not be defined in thermal_brown.cpp");
+    check(
+        sigma.find(sigma_symbol) != std::string::npos,
+        "Brown sigma formula must be defined in thermal_brown_sigma.cpp");
+    check(
+        sampler.find(refresh_symbol) != std::string::npos,
+        "Brown refresh/sampling must be defined in thermal_brown_sampler.cpp");
+    check(
+        field.find(add_symbol) != std::string::npos,
+        "Brown H_eff addition must be defined in thermal_brown_field.cpp");
+    check(
+        sigma_header.find("Compute the Brown thermal-field standard deviation") !=
+            std::string::npos,
+        "Brown sigma header must document its physical contract");
+    check(
+        sampler_header.find("Refresh the Brown thermal field") != std::string::npos,
+        "Brown sampler header must document its physical contract");
+    check(
+        field_header.find("Add the current Brown thermal field") != std::string::npos,
+        "Brown field header must document its physical contract");
 }
 
 void check_near(double actual, double expected, double tol, const char *msg) {
@@ -165,6 +239,7 @@ void thermal_field_adds_to_effective_field() {
 } // namespace
 
 int main() {
+    thermal_brown_responsibilities_are_owned_by_separate_modules();
     sigma_formula_matches_brown_field_contract();
     refresh_uses_per_node_sigma_mask_and_cache();
     disabled_or_invalid_state_clears_thermal_field();
