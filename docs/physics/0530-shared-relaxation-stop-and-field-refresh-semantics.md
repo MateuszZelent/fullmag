@@ -49,7 +49,7 @@ the execution control explicit.
 | Symbol | Meaning | SI unit |
 |---|---|---|
 | $\tau_{\max}$ | max torque residual $\max_i \lVert \mathbf{m}_i \times \mathbf{H}_{\mathrm{eff},i} \rVert$ | A/m |
-| $\Delta E$ | absolute change in total energy between accepted steps | J |
+| $\Delta E_{50}$ | total-energy range across the last 50 accepted relax steps, $\max(E)-\min(E)$ | J |
 | $N_{\max}$ | hard iteration cap | 1 |
 | $t_{\mathrm{pseudo,max}}$ | pseudo-time budget used by relax scheduling | s |
 | $t_{\mathrm{phys,max}}$ | physical-time budget for true time-based relax workflows | s |
@@ -65,6 +65,14 @@ the execution control explicit.
 4. If neither `max_pseudotime_s` nor `max_physical_time_s` is provided, the
    relax stage is not implicitly time-bounded. `max_steps` remains an iteration
    cap only and must not be converted into a synthetic pseudo-time budget.
+5. `energy_tolerance_j` is a stagnation / plateau criterion, not a proof of a
+   zero-torque state. Backends that publish `reason=energy` must evaluate it over
+   a fixed accepted-step window of 50 total-energy samples. A single small
+   step-to-step energy delta is too noisy and must not by itself terminate
+   relaxation.
+6. The plateau metric is the unsigned range `max(E)-min(E)`, not a signed
+   descent difference. This keeps the criterion valid when Zeeman or other
+   terms make the physical total energy negative.
 
 ## 3. Numerical interpretation
 
@@ -96,6 +104,16 @@ the execution control explicit.
   name and threshold must match the shared contract.
 - `llg_overdamped` remains the public meaning of “precession disabled during
   relaxation”; no backend-specific boolean alias is introduced.
+- `gyromagnetic_ratio` used by the fallback torque reconstruction is the
+  reduced `gamma_mu0` in `m/(A s)` (typical value `2.211e5`), not the electron
+  gyromagnetic ratio in `rad/(T s)`.
+- The native energy stop metric is `total_energy_plateau_range_J`, computed as
+  `max(E)-min(E)` over the last 50 accepted relax steps. If a torque tolerance is
+  configured, the energy plateau only completes the stage when torque is also
+  below its threshold. This follows the same engineering lesson as MuMax and
+  Boris-style relax flows: energy is useful for detecting no further descent,
+  while torque-like residuals remain the physically meaningful equilibrium
+  signal when requested.
 
 ## 4. API, IR, and planner impact
 
@@ -158,7 +176,8 @@ scalar fields spread across layers.
 ### 6.3 Regression tests
 
 - Python → IR round-trip for `LLG(field_refresh=...)` and `Relaxation(stop=...)`,
-- runner/native FEM tests for torque stop, max-step stop, and demag cadence,
+- runner/native FEM tests for torque stop, 50-step energy plateau stop,
+  max-step stop, and demag cadence,
 - API/UI tests for structured stage completion state,
 - STNO vortex acceptance with explicit relax completion metadata.
 

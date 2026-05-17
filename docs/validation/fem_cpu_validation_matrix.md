@@ -17,6 +17,8 @@ can be treated as production-quality. It complements the module contracts under
 |---|---|---|
 | ABI/native create | `fem_contract_validation` | availability lanes, `fe_order = 1`, adaptive config sanity |
 | Interaction docs | `fem_interaction_docs_contract` | required release docs and per-interaction docs exist |
+| Explicit RK | `fem_rk_explicit_contract` | tableau type/dispatch ownership, RK workspace storage/allocation ownership, stage RHS ownership, explicit RK step ownership |
+| FEM mesh core | `fem_mesh_contract` | periodic topology helper ownership, nodal-volume helper ownership, and Context no longer owning static AoS periodic projection |
 | Exchange | `fem_exchange_contract` | no-MFEM behavior, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and source ownership |
 | Demag dispatcher | `fem_demag_contract` | cached/Poisson/FEM-BEM dispatch decision |
 | Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, ready/lifecycle/solve ownership |

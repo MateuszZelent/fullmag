@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/integrators/rk_stepper_workspace.hpp"
 #include "fullmag_fem.h"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -13,35 +14,7 @@
 
 namespace fullmag::fem {
 
-// ── Butcher tableau for explicit Runge-Kutta methods ──────────────────────
-// Max stages: 7 (DP54 uses 7 for FSAL).
-static constexpr int MAX_RK_STAGES = 7;
-
-struct ExplicitTableau {
-    int stages;                                     // s
-    double c[MAX_RK_STAGES];                        // nodes
-    double a[MAX_RK_STAGES][MAX_RK_STAGES];         // lower-triangular coupling
-    double b_hi[MAX_RK_STAGES];                     // high-order weights
-    double b_lo[MAX_RK_STAGES];                     // low-order weights (embedded error)
-    int order_hi;                                   // order of b_hi
-    int order_est;                                  // order of b_lo (0 = no error est)
-    bool fsal;                                      // first-same-as-last?
-};
-
-// ── Stepper workspace (device-resident allocation, reused per step) ───────
-struct StepperWorkspace {
-    bool allocated = false;
-    size_t dof_len = 0;                             // n_nodes * 3
-    int stages = 0;                                 // currently allocated RK stages
-    std::vector<double> m_backup;                   // backup of m before stage loop
-    std::vector<double> k[MAX_RK_STAGES];           // stage derivatives k_i
-    std::vector<double> m_stage;                    // temp: m at stage evaluation point
-    std::vector<double> h_ex_tmp;                   // temp exchange field
-    std::vector<double> h_demag_tmp;                // temp demag field
-    std::vector<double> h_eff_tmp;                  // temp effective field
-    std::vector<double> err;                        // error = h*(b_hi - b_lo) . K
-    bool fsal_valid = false;                        // true when k[0] holds valid FSAL RHS
-};
+constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;
 
 struct Context {
     uint32_t n_nodes = 0;
@@ -136,6 +109,9 @@ struct Context {
     double relax_pseudotime_s = 0.0;
     double relax_previous_total_energy_j = 0.0;
     bool relax_previous_total_energy_valid = false;
+    std::array<double, RELAX_ENERGY_PLATEAU_WINDOW_STEPS> relax_energy_window_j{};
+    uint32_t relax_energy_window_count = 0;
+    uint32_t relax_energy_window_next = 0;
     fullmag_fem_stage_completion stage_completion{};
 
     std::vector<double> nodes_xyz;

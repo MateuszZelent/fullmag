@@ -182,6 +182,19 @@ New cross-cutting fields should not be added directly to `Context`. If a
 temporary compatibility field is unavoidable, it must have a documented target
 owner and removal condition.
 
+Current migration note: explicit RK storage and tableau metadata have started
+moving toward the `StepperSubsystem` target. `ExplicitTableau` is owned by
+`cpu/mfem/integrators/rk_tableau.hpp`, and `StepperWorkspace` is owned by
+`cpu/mfem/integrators/rk_stepper_workspace.hpp`; `Context` may temporarily hold
+an instance for ABI compatibility, but it should not define RK storage or
+tableau types.
+
+Mesh migration has started with the topology helpers that do not require a new
+state layout. Static periodic node-class reduction, per-periodic-class scalar
+material validation, and P1 nodal dual-volume accumulation are owned by
+`native/backends/fem/core/fem_mesh.hpp/.cpp`; `Context` still stores the
+compatibility fields but no longer defines those helpers locally.
+
 ## 5. Target Native Layout
 
 The target native FEM layout is:

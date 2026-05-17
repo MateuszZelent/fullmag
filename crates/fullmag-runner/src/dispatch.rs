@@ -50,6 +50,8 @@ use crate::relaxation::llg_overdamped_uses_pure_damping;
 use crate::relaxation::relaxation_converged;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::relaxation_stop_criteria_satisfied;
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::RelaxationEnergyPlateauWindow;
 use crate::runtime_registry::RuntimeRegistry;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::scalar_metrics::single_object_scalars;
@@ -2260,7 +2262,7 @@ fn execute_cuda_fdm(
 
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
-    let mut previous_total_energy: Option<f64> = None;
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
@@ -2483,7 +2485,6 @@ fn execute_cuda_fdm(
                 _ => break,
             };
 
-            let prev_energy = energy;
             m = m_trial;
             energy = trial_stats.e_total;
             direct_step += 1;
@@ -2507,8 +2508,8 @@ fn execute_cuda_fdm(
             latest_stats = Some(accepted_stats.clone());
             current_stats = accepted_stats;
 
-            let energy_delta = (prev_energy - energy).abs();
-            if relaxation_stop_criteria_satisfied(control, Some(energy_delta), torque_apm) {
+            let energy_plateau_range = energy_plateau.record(energy);
+            if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
                 break;
             }
         }
@@ -2649,18 +2650,18 @@ fn execute_cuda_fdm(
                 &mut steps,
                 &mut artifacts,
             )?;
+            let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
                     )
             });
-            previous_total_energy = Some(stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -3012,7 +3013,7 @@ fn execute_native_fem(
 
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
-    let mut previous_total_energy: Option<f64> = None;
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -3263,7 +3264,6 @@ fn execute_native_fem(
                 _ => break,
             };
 
-            let prev_energy = energy;
             m = m_trial;
             energy = trial_stats.e_total;
             direct_step += 1;
@@ -3291,9 +3291,9 @@ fn execute_native_fem(
                 break;
             }
 
-            let energy_delta = (prev_energy - energy).abs();
             let torque = max_torque_from_field(&m, &h_eff);
-            if relaxation_stop_criteria_satisfied(control, Some(energy_delta), torque) {
+            let energy_plateau_range = energy_plateau.record(energy);
+            if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque) {
                 break;
             }
         }
@@ -3495,6 +3495,7 @@ fn execute_native_fem(
                 steps.push(stats);
             }
             let latest = steps.last().expect("just pushed stats");
+            let energy_plateau_range = energy_plateau.record(latest.e_total);
             let stop_for_relaxation = if let Some(control) = plan.relaxation.as_ref() {
                 if let Some(completion) = backend.stage_completion()? {
                     backend_completion = Some(completion);
@@ -3504,7 +3505,7 @@ fn execute_native_fem(
                     let converged = relaxation_converged(
                         control,
                         latest,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         false,
@@ -3540,7 +3541,6 @@ fn execute_native_fem(
             } else {
                 false
             };
-            previous_total_energy = Some(latest.e_total);
             if stop_for_relaxation {
                 break;
             }

@@ -33,23 +33,21 @@ pub(crate) fn compute_torque_field(
         .collect()
 }
 
-pub(crate) fn max_torque_apm_from_torque_t(max_torque_t: f64) -> f64 {
-    max_torque_t / crate::MU0
-}
-
-#[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
-pub(crate) fn max_torque_t_from_field(
+pub(crate) fn max_torque_residual_apm_from_field(
     magnetization: &[[f64; 3]],
     effective_field: &[[f64; 3]],
-    damping: f64,
-    precession_enabled: bool,
 ) -> f64 {
-    max_vector_norm(&compute_torque_field(
-        magnetization,
-        effective_field,
-        damping,
-        precession_enabled,
-    ))
+    magnetization
+        .iter()
+        .zip(effective_field.iter())
+        .fold(0.0, |acc, (m, h)| {
+            let cross = [
+                m[1] * h[2] - m[2] * h[1],
+                m[2] * h[0] - m[0] * h[2],
+                m[0] * h[1] - m[1] * h[0],
+            ];
+            acc.max((cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt())
+        })
 }
 
 #[cfg_attr(not(any(feature = "cuda", feature = "fem-gpu")), allow(dead_code))]
@@ -57,4 +55,19 @@ pub(crate) fn max_vector_norm(vectors: &[[f64; 3]]) -> f64 {
     vectors.iter().fold(0.0, |acc, v| {
         acc.max((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::max_torque_residual_apm_from_field;
+
+    #[test]
+    fn max_torque_residual_apm_uses_h_eff_units_directly() {
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let effective_field = [[0.0, 3.0, 4.0]];
+
+        let torque = max_torque_residual_apm_from_field(&magnetization, &effective_field);
+
+        assert!((torque - 5.0).abs() < 1e-15);
+    }
 }

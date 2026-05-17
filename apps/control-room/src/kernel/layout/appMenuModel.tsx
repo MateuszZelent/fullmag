@@ -20,12 +20,14 @@ import {
   SkipForward,
   Square,
   TerminalSquare,
+  Timer,
   Undo2,
   Upload,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
 export interface AppMenuNode {
+  checkable?: boolean;
   disabled?: boolean;
   icon?: ReactNode;
   id: string;
@@ -110,6 +112,7 @@ export const MAIN_MENUS: AppMenuNode[] = [
     id: "tools",
     label: "Tools",
     children: [
+      { id: "diagnostics.toggle-solver-profiler", label: "Solver Profiler", icon: <Timer size={14} />, checkable: true },
       { id: "workspace.diagnostics", label: "Diagnostics", icon: <Gauge size={14} /> },
       { id: "workspace.api-console", label: "API Console", icon: <TerminalSquare size={14} /> },
       { id: "workspace.script-view", label: "Script View", icon: <Braces size={14} /> },

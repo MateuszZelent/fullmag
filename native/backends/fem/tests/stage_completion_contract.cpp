@@ -77,34 +77,65 @@ void no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged() {
     check(ctx.relax_pseudotime_s == 0.0, "no criteria leaves pseudotime unchanged");
 }
 
-void energy_stop_requires_previous_energy_and_torque_gate() {
+void energy_stop_requires_50_step_plateau_and_torque_gate() {
     fullmag::fem::Context ctx;
     ctx.relax_stop.has_energy_tolerance_j = 1;
     ctx.relax_stop.energy_tolerance_j = 0.25;
     ctx.relax_stop.has_torque_tolerance_apm = 1;
     ctx.relax_stop.torque_tolerance_apm = 5.0;
 
-    fullmag_fem_step_stats first{};
-    first.total_energy_joules = 10.0;
-    first.max_torque_Apm = 3.0;
-    first.dt_seconds = 1.0;
-    fullmag::fem::update_stage_completion_from_stats(ctx, first);
-    check(ctx.stage_completion.has_reason == 0, "first energy sample does not stop");
-    check(ctx.relax_previous_total_energy_valid, "first energy sample becomes previous");
+    for (uint32_t i = 0; i + 1 < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
+        fullmag_fem_step_stats stats{};
+        stats.total_energy_joules = 10.0 + 0.001 * static_cast<double>(i % 3);
+        stats.max_torque_Apm = 3.0;
+        stats.dt_seconds = 1.0;
+        fullmag::fem::update_stage_completion_from_stats(ctx, stats);
+        check(ctx.stage_completion.has_reason == 0, "energy plateau needs full sample window");
+    }
+    check(ctx.relax_previous_total_energy_valid, "energy samples update previous energy");
+    check(
+        ctx.relax_energy_window_count == fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS - 1,
+        "energy plateau records samples before completion");
 
-    fullmag_fem_step_stats second{};
-    second.total_energy_joules = 9.9;
-    second.max_torque_Apm = 3.0;
-    second.dt_seconds = 1.5;
-    fullmag::fem::update_stage_completion_from_stats(ctx, second);
+    fullmag_fem_step_stats high_torque{};
+    high_torque.total_energy_joules = 10.001;
+    high_torque.max_torque_Apm = 8.0;
+    high_torque.dt_seconds = 1.0;
+    fullmag::fem::update_stage_completion_from_stats(ctx, high_torque);
+    check(ctx.stage_completion.has_reason == 0, "energy plateau still respects torque gate");
+
+    fullmag_fem_step_stats low_torque{};
+    low_torque.total_energy_joules = 10.002;
+    low_torque.max_torque_Apm = 3.0;
+    low_torque.dt_seconds = 1.5;
+    fullmag::fem::update_stage_completion_from_stats(ctx, low_torque);
 
     check(ctx.stage_completion.has_reason == 1, "energy tolerance stops");
     check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
     check(
-        std::strcmp(ctx.stage_completion.metric_name, "delta_total_energy_J") == 0,
+        std::strcmp(ctx.stage_completion.metric_name, "total_energy_plateau_range_J") == 0,
         "energy metric name");
-    check(std::fabs(ctx.stage_completion.metric_value - 0.1) < 1e-12, "energy metric value");
-    check(std::fabs(ctx.relax_pseudotime_s - 2.5) < 1e-12, "pseudotime accumulates");
+    check(ctx.stage_completion.metric_value <= 0.25, "energy plateau metric value");
+    check(std::fabs(ctx.relax_pseudotime_s - 51.5) < 1e-12, "pseudotime accumulates");
+}
+
+void energy_plateau_uses_unsigned_range_for_signed_total_energy() {
+    fullmag::fem::Context ctx;
+    ctx.relax_stop.has_energy_tolerance_j = 1;
+    ctx.relax_stop.energy_tolerance_j = 0.25;
+
+    for (uint32_t i = 0; i < fullmag::fem::RELAX_ENERGY_PLATEAU_WINDOW_STEPS; ++i) {
+        fullmag_fem_step_stats stats{};
+        stats.total_energy_joules = -10.0 + 0.001 * static_cast<double>(i % 3);
+        stats.max_torque_Apm = 3.0;
+        stats.dt_seconds = 1.0;
+        fullmag::fem::update_stage_completion_from_stats(ctx, stats);
+    }
+
+    check(ctx.stage_completion.has_reason == 1, "negative-energy plateau stops");
+    check(ctx.stage_completion.reason == FULLMAG_FEM_STAGE_STOP_REASON_ENERGY, "energy stop reason");
+    check(ctx.stage_completion.metric_value >= 0.0, "energy plateau metric is nonnegative");
+    check(ctx.stage_completion.metric_value <= 0.25, "negative-energy plateau range");
 }
 
 void torque_physical_time_pseudotime_and_step_stops_are_reported() {
@@ -158,7 +189,8 @@ void torque_physical_time_pseudotime_and_step_stops_are_reported() {
 int main() {
     stage_completion_is_owned_by_runtime_module();
     no_criteria_only_updates_previous_energy_and_pseudotime_is_unchanged();
-    energy_stop_requires_previous_energy_and_torque_gate();
+    energy_stop_requires_50_step_plateau_and_torque_gate();
+    energy_plateau_uses_unsigned_range_for_signed_total_energy();
     torque_physical_time_pseudotime_and_step_stops_are_reported();
     return 0;
 }

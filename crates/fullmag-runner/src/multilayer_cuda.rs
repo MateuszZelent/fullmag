@@ -21,9 +21,11 @@ use fullmag_ir::{
 };
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::{compute_torque_field, max_torque_apm_from_torque_t, max_vector_norm};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::native_fdm::{is_cuda_available, NativeFdmBackend};
-use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::relaxation::{
+    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+};
 use crate::scalar_metrics::apply_average_m_to_step_stats;
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -359,7 +361,7 @@ fn execute_cuda_assisted_multilayer_double(
         &mut artifacts,
     )?;
 
-    let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
     while current_time(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time(&states));
@@ -427,18 +429,18 @@ fn execute_cuda_assisted_multilayer_double(
             break;
         }
 
+        let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
-                    previous_total_energy,
+                    energy_plateau_range,
                     plan.gyromagnetic_ratio,
                     average_damping(&contexts),
                     pure_damping_relax,
                 )
         });
-        previous_total_energy = Some(latest_stats.e_total);
         if stop_for_relaxation {
             break;
         }
@@ -568,7 +570,7 @@ fn execute_cuda_assisted_multilayer_single(
         &mut artifacts,
     )?;
 
-    let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut cancelled = false;
     while current_time_single(&states) < until_seconds {
         let dt_step = dt.min(until_seconds - current_time_single(&states));
@@ -636,18 +638,18 @@ fn execute_cuda_assisted_multilayer_single(
             break;
         }
 
+        let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &latest_stats,
-                    previous_total_energy,
+                    energy_plateau_range,
                     plan.gyromagnetic_ratio,
                     average_damping(&contexts),
                     pure_damping_relax,
                 )
         });
-        previous_total_energy = Some(latest_stats.e_total);
         if stop_for_relaxation {
             break;
         }
@@ -1000,7 +1002,7 @@ fn execute_native_stacked_cuda_multilayer(
         &mut artifacts,
     )?;
 
-    let mut previous_total_energy = Some(initial_observables.total_energy);
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut latest_stats: Option<StepStats> = None;
     let mut cancelled = false;
     while latest_stats.as_ref().map_or(0.0, |stats| stats.time) < until_seconds {
@@ -1078,18 +1080,18 @@ fn execute_native_stacked_cuda_multilayer(
             break;
         }
 
+        let energy_plateau_range = energy_plateau.record(stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                 || relaxation_converged(
                     control,
                     &stats,
-                    previous_total_energy,
+                    energy_plateau_range,
                     plan.gyromagnetic_ratio,
                     native.combined_plan.material.damping,
                     pure_damping_relax,
                 )
         });
-        previous_total_energy = Some(stats.e_total);
         latest_stats = Some(stats);
         if stop_for_relaxation {
             break;
@@ -1432,7 +1434,7 @@ fn observe_multilayer_cuda(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization,
@@ -1458,7 +1460,7 @@ fn observe_multilayer_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -1733,7 +1735,7 @@ fn observe_multilayer_cuda_single(
         values.entry("e_dmi".to_string()).or_insert(0.0);
     }
 
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization,
@@ -1759,7 +1761,7 @@ fn observe_multilayer_cuda_single(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars,
     })
 }
@@ -2061,7 +2063,7 @@ fn observe_native_stacked_cuda(
         native.combined_plan.material.damping,
         !llg_overdamped_uses_pure_damping(native.combined_plan.relaxation.as_ref()),
     );
-    let max_torque_t = max_vector_norm(&torque_field);
+    let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization,
@@ -2087,7 +2089,7 @@ fn observe_native_stacked_cuda(
         max_dm_dt,
         max_h_eff,
         max_h_demag,
-        max_torque_Apm: max_torque_apm_from_torque_t(max_torque_t),
+        max_torque_Apm: max_torque_apm,
         per_object_scalars,
     })
 }

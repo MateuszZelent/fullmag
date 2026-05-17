@@ -43,13 +43,37 @@ std::filesystem::path fem_source_root() {
 void rk_workspace_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string rk_explicit =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit.cpp");
+    const std::string rk_tableau =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_tableau.hpp");
+    const std::string rk_workspace =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
     const std::string rk_explicit_step =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
     const std::string rk_stage_rhs =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
 
+    check(
+        context_header.find("struct StepperWorkspace {") == std::string::npos,
+        "StepperWorkspace definition must not live in context.hpp");
+    check(
+        context_header.find("struct ExplicitTableau {") == std::string::npos,
+        "ExplicitTableau definition must not live in context.hpp");
+    check(
+        rk_tableau.find("struct ExplicitTableau {") != std::string::npos,
+        "ExplicitTableau definition must live in rk_tableau.hpp");
+    check(
+        rk_tableau.find("Explicit Runge-Kutta tableau contract") != std::string::npos,
+        "RK tableau header must document its contract");
+    check(
+        rk_workspace.find("struct StepperWorkspace {") != std::string::npos,
+        "StepperWorkspace definition must live in rk_stepper_workspace.hpp");
+    check(
+        rk_workspace.find("Reusable explicit Runge-Kutta stepper workspace") !=
+            std::string::npos,
+        "Stepper workspace header must document its contract");
     check(
         bridge.find("void stepper_workspace_allocate(") == std::string::npos,
         "stepper workspace allocation must not be defined in mfem_bridge.cpp");

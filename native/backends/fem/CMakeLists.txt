@@ -11,6 +11,7 @@ set(FEM_PUBLIC_HEADERS
 )
 
 set(FEM_SOURCES
+    core/fem_mesh.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp
     cpu/mfem/interactions/anisotropy_uniaxial.cpp
@@ -319,6 +320,14 @@ target_include_directories(fem_aos_field_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_aos_field_contract COMMAND fem_aos_field_contract)
+
+add_executable(fem_mesh_contract tests/fem_mesh_contract.cpp)
+target_link_libraries(fem_mesh_contract PRIVATE fullmag_fem)
+target_include_directories(fem_mesh_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_mesh_contract COMMAND fem_mesh_contract)
 
 add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)

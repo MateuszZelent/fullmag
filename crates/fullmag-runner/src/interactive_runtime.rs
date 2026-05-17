@@ -21,7 +21,9 @@ use crate::preview::{
 use crate::quantities::{
     active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
 };
-use crate::relaxation::{llg_overdamped_uses_pure_damping, relaxation_converged};
+use crate::relaxation::{
+    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+};
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
     OutputSchedule,
@@ -727,8 +729,7 @@ impl CpuInteractiveFdmPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy =
-            Some(cpu_reference::observe_state(&self.problem, &self.state)?.total_energy);
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -921,18 +922,18 @@ impl CpuInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -1072,8 +1073,7 @@ impl CpuInteractiveFdmPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy =
-            Some(cpu_reference::observe_state(&self.problem, &self.state)?.total_energy);
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested: None, // CPU FDM checks interrupt via on_step StepAction
@@ -1258,18 +1258,18 @@ impl CpuInteractiveFdmPreviewRuntime {
                 break;
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -1447,7 +1447,7 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy: Option<f64> = None;
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -1622,6 +1622,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = if let Some(control) = plan.relaxation.as_ref() {
                 if let Some(completion) = self.backend.stage_completion()? {
                     backend_completion = Some(completion);
@@ -1631,7 +1632,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                         || relaxation_converged(
                             control,
                             &total_stats,
-                            previous_total_energy,
+                            energy_plateau_range,
                             plan.gyromagnetic_ratio,
                             plan.material.damping,
                             pure_damping_relax,
@@ -1640,7 +1641,6 @@ impl CudaInteractiveFdmPreviewRuntime {
             } else {
                 false
             };
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -1730,7 +1730,7 @@ impl CudaInteractiveFdmPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy: Option<f64> = None;
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -1912,18 +1912,18 @@ impl CudaInteractiveFdmPreviewRuntime {
                 &mut artifacts,
             )?;
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -2078,10 +2078,7 @@ impl CpuInteractiveFemPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy = Some(
-            fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?
-                .total_energy,
-        );
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -2279,18 +2276,18 @@ impl CpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -2380,10 +2377,7 @@ impl CpuInteractiveFemPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy = Some(
-            fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?
-                .total_energy,
-        );
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -2578,18 +2572,18 @@ impl CpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -2743,7 +2737,7 @@ impl GpuInteractiveFemPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy: Option<f64> = None;
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -2894,18 +2888,18 @@ impl GpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }
@@ -2980,7 +2974,7 @@ impl GpuInteractiveFemPreviewRuntime {
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-        let mut previous_total_energy: Option<f64> = None;
+        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -3101,18 +3095,18 @@ impl GpuInteractiveFemPreviewRuntime {
                 &mut artifacts,
             )?;
 
+            let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
                     || relaxation_converged(
                         control,
                         &total_stats,
-                        previous_total_energy,
+                        energy_plateau_range,
                         plan.gyromagnetic_ratio,
                         plan.material.damping,
                         pure_damping_relax,
                     )
             });
-            previous_total_energy = Some(total_stats.e_total);
             if stop_for_relaxation {
                 break;
             }

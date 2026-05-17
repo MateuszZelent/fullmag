@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu/mfem/integrators/rk_tableau.hpp"
 #include "fullmag_fem.h"
 
 #include <string>
@@ -7,7 +8,6 @@
 namespace fullmag::fem {
 
 struct Context;
-struct ExplicitTableau;
 
 /*
  * Advance the native MFEM state with a tableau-driven explicit RK step.

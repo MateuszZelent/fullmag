@@ -1,8 +1,8 @@
 #pragma once
 
-namespace fullmag::fem {
+#include "cpu/mfem/integrators/rk_tableau.hpp"
 
-struct ExplicitTableau;
+namespace fullmag::fem {
 
 const ExplicitTableau &heun_tableau();
 const ExplicitTableau &rk4_tableau();

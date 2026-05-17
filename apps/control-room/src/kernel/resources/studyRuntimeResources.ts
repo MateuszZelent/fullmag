@@ -348,10 +348,12 @@ export function useStudyRuntimeCommandResourceData({
   const sessionStatus = useSessionStatus();
   const stageExecution = useStageExecutionResource({ enabled });
   const solverStatus = useSolverStatusResource({ enabled });
+  const solverProfile = useSolverProfileResource({ enabled });
   const checkpointCatalog = useCheckpointCatalogResource({ enabled });
 
   return useMemo(
     () => ({
+      [DIAGNOSTICS_SOLVER_PROFILE_PATH]: solverProfile.data,
       [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: meshManifest.data,
       [MESHING_BUILDS_CURRENT_PATH]: meshBuildCurrent.data,
       [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
@@ -377,6 +379,7 @@ export function useStudyRuntimeCommandResourceData({
       meshSummary.data,
       scene.data,
       sessionStatus.data,
+      solverProfile.data,
       solverStatus.data,
       stageExecution.data,
     ],

@@ -10,9 +10,7 @@
 use fullmag_fem_sys as ffi;
 
 #[cfg(feature = "fem-gpu")]
-use crate::derived_fields::{
-    compute_torque_field, max_torque_apm_from_torque_t, max_torque_t_from_field,
-};
+use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 #[cfg(feature = "fem-gpu")]
 use crate::preview::{build_mesh_preview_field_with_active_mask, mesh_quantity_active_mask};
 #[cfg(feature = "fem-gpu")]
@@ -1234,9 +1232,7 @@ impl NativeFemBackend {
 
         let magnetization = self.copy_m(node_count)?;
         let effective_field = self.copy_h_eff(node_count)?;
-        let torque_t =
-            max_torque_t_from_field(&magnetization, &effective_field, self.damping, true);
-        let torque_apm = max_torque_apm_from_torque_t(torque_t);
+        let torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -1254,7 +1250,7 @@ impl NativeFemBackend {
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
             max_torque_Apm: torque_apm,
-            max_torque_T: torque_t,
+            max_torque_T: torque_apm * crate::MU0,
             wall_time_ns: stats.wall_time_ns,
             exchange_wall_time_ns: stats.exchange_wall_time_ns,
             demag_wall_time_ns: stats.demag_wall_time_ns,

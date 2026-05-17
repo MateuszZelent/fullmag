@@ -4152,6 +4152,67 @@ mod tests {
     }
 
     #[test]
+    fn robin_demag_reuses_previous_potential_as_cg_initial_guess() {
+        let mut problem = coarse_box_problem(true);
+        let magnetization = vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes];
+        let (_field, first_energy) = problem
+            .robin_demag_observables_from_vectors(&magnetization)
+            .expect("initial demag solve");
+        assert!(first_energy > 0.0, "fixture must produce demag energy");
+
+        problem.sparse_cg_max_iter = Some(0);
+        let (_field, warm_started_energy) = problem
+            .robin_demag_observables_from_vectors(&magnetization)
+            .expect("warm-started demag solve");
+
+        assert!(
+            warm_started_energy > 0.5 * first_energy,
+            "Robin demag should use the existing workspace potential as a CG initial guess; \
+             first={first_energy:.6e}, warm_started={warm_started_energy:.6e}"
+        );
+    }
+
+    #[test]
+    fn demag_cache_is_not_reused_for_different_magnetization() {
+        let problem = coarse_box_problem(true);
+        let z_magnetization = vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes];
+        let x_magnetization = vec![[1.0, 0.0, 0.0]; problem.topology.n_nodes];
+
+        let (_z_field, z_energy) = problem
+            .demag_observables_from_vectors(&z_magnetization)
+            .expect("populate z demag cache");
+        let (_x_field, expected_x_energy) = problem
+            .robin_demag_observables_from_vectors(&x_magnetization)
+            .expect("direct x demag solve");
+        assert!(
+            (z_energy - expected_x_energy).abs()
+                > z_energy.abs().max(expected_x_energy.abs()).max(1e-30) * 1e-3,
+            "fixture must distinguish cached and requested demag energies"
+        );
+
+        let mut state = problem
+            .new_state(z_magnetization)
+            .expect("initial state");
+        state
+            .set_magnetization(x_magnetization)
+            .expect("external magnetization update");
+
+        let evaluation = problem
+            .evaluate_rhs_summary_from_vectors(state.magnetization())
+            .expect("rhs summary after external magnetization update");
+
+        let tolerance = expected_x_energy.abs().max(1.0) * 1e-10;
+        assert!(
+            (evaluation.demag_energy_joules - expected_x_energy).abs() <= tolerance,
+            "demag cache must be invalidated or bypassed when magnetization changes; \
+             got={:.6e}, expected={:.6e}, stale={:.6e}",
+            evaluation.demag_energy_joules,
+            expected_x_energy,
+            z_energy
+        );
+    }
+
+    #[test]
     fn out_of_plane_box_demag_energy_exceeds_in_plane_energy() {
         let problem = coarse_box_problem(true);
         let z_state = problem
@@ -4475,6 +4536,50 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn total_energy_includes_interfacial_and_bulk_dmi_energy() {
+        let mut problem = unit_tet_problem();
+        problem.terms.exchange = false;
+        problem.terms.demag = false;
+        problem.terms.interfacial_dmi = Some(3.0e-3);
+        problem.terms.bulk_dmi = Some(2.0e-3);
+        problem.set_dmi_interface_normal([0.0, 0.0, 1.0]);
+        let magnetization = vec![
+            normalized([1.0, 0.1, 0.2]).expect("nonzero m0"),
+            normalized([0.7, 0.4, 0.1]).expect("nonzero m1"),
+            normalized([0.2, 0.9, 0.3]).expect("nonzero m2"),
+            normalized([0.1, 0.3, 0.95]).expect("nonzero m3"),
+        ];
+        let state = problem.new_state(magnetization).expect("state");
+
+        let expected_dmi_energy = interfacial_dmi_energy_on_free_tet(
+            &problem,
+            state.magnetization(),
+        ) + bulk_dmi_energy_on_free_tet(&problem, state.magnetization());
+        assert!(
+            expected_dmi_energy.abs() > 0.0,
+            "fixture must have non-zero DMI energy"
+        );
+
+        let observables = problem.observe(&state).expect("observables");
+        let report = problem
+            .step_report_from_vectors(state.magnetization(), 0.0, 0.0, false, None)
+            .expect("step report");
+        let tolerance = expected_dmi_energy.abs().max(1.0) * 1e-12;
+        assert!(
+            (observables.total_energy_joules - expected_dmi_energy).abs() <= tolerance,
+            "observe total energy must include DMI energy: got={:.6e}, expected={:.6e}",
+            observables.total_energy_joules,
+            expected_dmi_energy
+        );
+        assert!(
+            (report.total_energy_joules - expected_dmi_energy).abs() <= tolerance,
+            "step report total energy must include DMI energy: got={:.6e}, expected={:.6e}",
+            report.total_energy_joules,
+            expected_dmi_energy
+        );
     }
 
     fn p1_gradient_for_vectors(problem: &FemLlgProblem, field: &[Vector3]) -> [[f64; 3]; 3] {

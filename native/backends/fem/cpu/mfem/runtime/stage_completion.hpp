@@ -29,9 +29,9 @@ void set_stage_completion(
  * Update relaxation stop state from the latest public step statistics.
  *
  * The function accumulates pseudo-time from non-negative `dt_seconds`, tracks
- * previous total energy for energy-delta criteria, and checks stop criteria in
- * the historical native FEM priority order: energy+torque, torque-only,
- * physical time, pseudo-time, then max steps.
+ * a 50 accepted-step total-energy window for plateau criteria, and checks stop
+ * criteria in the native FEM priority order: energy plateau + torque,
+ * torque-only, physical time, pseudo-time, then max steps.
  */
 void update_stage_completion_from_stats(
     Context &ctx,

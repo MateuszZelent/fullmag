@@ -1,6 +1,8 @@
 import {
   DATA_FIELDS_PATH,
   DATA_SCALARS_PATH,
+  DIAGNOSTICS_ENGINE_LOG_PATH,
+  DIAGNOSTICS_SOLVER_PROFILE_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -29,6 +31,7 @@ import type {
   CurrentRunResource,
   RuntimeCommandPrecondition,
   RuntimeCommandTarget,
+  SolverProfileResource,
   SolverStatusResource,
   StageExecutionResource,
 } from "../api/apiTypes";
@@ -52,6 +55,10 @@ import {
 } from "./studyRuntimeCommandAdapters";
 
 type JsonRecord = Record<string, unknown>;
+type SolverProfileCommandRequest = Extract<
+  StructuredCommandRequest,
+  { kind: "set_solver_profile" }
+>;
 
 const DEFAULT_RELAX_STAGE: JsonObject = {
   entrypoint_kind: "relax",
@@ -347,6 +354,33 @@ function resourceData<T>(context: CommandContext, key: string): T | null {
   return (context.resourceData?.[key] as T | null | undefined) ?? null;
 }
 
+function solverProfileDisabledReason(context: CommandContext): string | null {
+  const apiReason = disabledWithoutApi(context);
+  if (apiReason) return apiReason;
+
+  const status = resourceData<LiveStatusResource>(
+    context,
+    SESSION_STATUS_RESOURCE_KEY,
+  );
+  return status ? null : "Session status is unavailable.";
+}
+
+function solverProfileResource(context: CommandContext): SolverProfileResource | null {
+  return resourceData<SolverProfileResource>(
+    context,
+    DIAGNOSTICS_SOLVER_PROFILE_PATH,
+  );
+}
+
+function solverProfileEnabled(context: CommandContext): boolean {
+  const profile = solverProfileResource(context);
+  return (
+    profile?.config.enabled === true ||
+    profile?.state === "active" ||
+    profile?.state === "enabled"
+  );
+}
+
 function isRuntimeCommandActive(
   context: CommandContext,
   kind: SimpleStudyRuntimeCommandKind,
@@ -494,6 +528,46 @@ function buildRuntimeCommandFromContext(
   });
 }
 
+function buildSolverProfileCommand(
+  context: CommandContext,
+): SolverProfileCommandRequest {
+  const requestedEnabled =
+    typeof context.input === "boolean"
+      ? context.input
+      : !solverProfileEnabled(context);
+  const current = solverProfileResource(context);
+  const maxSamples = requestedEnabled
+    ? Math.max(current?.config.max_samples ?? 4096, 4096)
+    : current?.config.max_samples ?? 4096;
+  const sampleEvery = current?.config.sample_every ?? 1;
+  const reason = requestedEnabled
+    ? "enable_solver_profile"
+    : "disable_solver_profile";
+
+  return {
+    client_intent_id: createSolverProfileClientIntentId(reason),
+    kind: "set_solver_profile",
+    profile: {
+      emit_engine_log: requestedEnabled,
+      enabled: requestedEnabled,
+      max_samples: maxSamples,
+      persist_artifact: requestedEnabled,
+      sample_every: sampleEvery,
+    },
+    reason,
+    requested_at_unix_ms: Date.now(),
+    target: { kind: "study" },
+  };
+}
+
+function createSolverProfileClientIntentId(reason: string): string {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `diagnostics:solver-profiler:${reason}:${Date.now()}:${random}`;
+}
+
 function commandRevision(response: { command_id?: string | null }, fallback: string): string {
   return response.command_id ?? `${fallback}:${Date.now()}`;
 }
@@ -509,6 +583,16 @@ function invalidateRuntimeResources(
   context.resources?.invalidate(SIMULATION_SOLVER_STATUS_PATH, revision);
   context.resources?.invalidate(DATA_SCALARS_PATH, revision);
   context.resources?.invalidatePrefix(DATA_SCALARS_PATH, revision);
+}
+
+function invalidateSolverProfileResources(
+  context: CommandContext,
+  revision: string | number,
+): void {
+  context.resources?.invalidate(SIMULATION_COMMANDS_PATH, revision);
+  context.resources?.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
+  context.resources?.invalidate(DIAGNOSTICS_SOLVER_PROFILE_PATH, revision);
+  context.resources?.invalidate(DIAGNOSTICS_ENGINE_LOG_PATH, revision);
 }
 
 function invalidateEnergyResources(
@@ -763,6 +847,45 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     DEFAULT_RUN_STAGE,
     "Run stage added.",
   ),
+  {
+    id: "diagnostics.toggle-solver-profiler",
+    title: "Solver Profiler",
+    category: "Tools",
+    group: "diagnostics",
+    scope: "runtime",
+    isEnabled: (context) => solverProfileDisabledReason(context) === null,
+    disabledReason: solverProfileDisabledReason,
+    isActive: solverProfileEnabled,
+    run: async (context) => {
+      if (!context.api) {
+        return { message: "Control-room API is unavailable.", status: "failed" };
+      }
+
+      const command = buildSolverProfileCommand(context);
+      const response = await context.api.commands.submit(command);
+      const enabled = command.profile.enabled === true;
+      if (!response.accepted) {
+        return {
+          message:
+            response.error ??
+            `Solver profiler ${enabled ? "enable" : "disable"} command rejected.`,
+          status: "failed",
+        };
+      }
+
+      invalidateSolverProfileResources(
+        context,
+        commandRevision(response, "diagnostics:solver-profiler"),
+      );
+
+      return {
+        message: enabled
+          ? "Solver profiler enabled."
+          : "Solver profiler disabled.",
+        status: "completed",
+      };
+    },
+  },
   runtimeCommand(
     "study.run",
     "Compute Study",

@@ -8,6 +8,52 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+void reset_relax_energy_window(Context &ctx)
+{
+    ctx.relax_energy_window_j = {};
+    ctx.relax_energy_window_count = 0;
+    ctx.relax_energy_window_next = 0;
+}
+
+void record_relax_energy_sample(Context &ctx, double total_energy_joules)
+{
+    if (!std::isfinite(total_energy_joules)) {
+        reset_relax_energy_window(ctx);
+        ctx.relax_previous_total_energy_j = 0.0;
+        ctx.relax_previous_total_energy_valid = false;
+        return;
+    }
+
+    ctx.relax_energy_window_j[ctx.relax_energy_window_next] = total_energy_joules;
+    ctx.relax_energy_window_next =
+        (ctx.relax_energy_window_next + 1) % RELAX_ENERGY_PLATEAU_WINDOW_STEPS;
+    ctx.relax_energy_window_count = std::min<uint32_t>(
+        ctx.relax_energy_window_count + 1,
+        RELAX_ENERGY_PLATEAU_WINDOW_STEPS);
+    ctx.relax_previous_total_energy_j = total_energy_joules;
+    ctx.relax_previous_total_energy_valid = true;
+}
+
+bool relax_energy_plateau_range(const Context &ctx, double &range_joules)
+{
+    if (ctx.relax_energy_window_count < RELAX_ENERGY_PLATEAU_WINDOW_STEPS) {
+        return false;
+    }
+
+    double min_energy = ctx.relax_energy_window_j[0];
+    double max_energy = ctx.relax_energy_window_j[0];
+    for (uint32_t i = 1; i < ctx.relax_energy_window_count; ++i) {
+        min_energy = std::min(min_energy, ctx.relax_energy_window_j[i]);
+        max_energy = std::max(max_energy, ctx.relax_energy_window_j[i]);
+    }
+    range_joules = max_energy - min_energy;
+    return std::isfinite(range_joules);
+}
+
+} // namespace
+
 bool has_relax_stop_criteria(const Context &ctx)
 {
     return ctx.relax_stop.has_torque_tolerance_apm != 0
@@ -50,25 +96,23 @@ void update_stage_completion_from_stats(
         return;
     }
 
-    const double previous_energy = ctx.relax_previous_total_energy_j;
-    const bool has_previous_energy = ctx.relax_previous_total_energy_valid;
-    ctx.relax_previous_total_energy_j = stats.total_energy_joules;
-    ctx.relax_previous_total_energy_valid = true;
+    record_relax_energy_sample(ctx, stats.total_energy_joules);
     ctx.relax_pseudotime_s += std::max(stats.dt_seconds, 0.0);
 
     const bool torque_ok =
         ctx.relax_stop.has_torque_tolerance_apm == 0 ||
         stats.max_torque_Apm <= ctx.relax_stop.torque_tolerance_apm;
 
-    if (ctx.relax_stop.has_energy_tolerance_j != 0 && has_previous_energy) {
-        const double delta_energy =
-            std::abs(stats.total_energy_joules - previous_energy);
-        if (torque_ok && delta_energy <= ctx.relax_stop.energy_tolerance_j) {
+    if (ctx.relax_stop.has_energy_tolerance_j != 0) {
+        double energy_plateau_range_j = 0.0;
+        if (relax_energy_plateau_range(ctx, energy_plateau_range_j) &&
+            torque_ok &&
+            energy_plateau_range_j <= ctx.relax_stop.energy_tolerance_j) {
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
-                "delta_total_energy_J",
-                delta_energy,
+                "total_energy_plateau_range_J",
+                energy_plateau_range_j,
                 ctx.relax_stop.energy_tolerance_j);
             return;
         }

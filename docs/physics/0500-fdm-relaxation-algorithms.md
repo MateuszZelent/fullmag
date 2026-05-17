@@ -203,7 +203,7 @@ where $\Delta t_{\mathrm{seed}}$ is taken from:
 
 This seed-time rule is only a runtime-control convention. It must not be
 confused with a physical stopping criterion, and it must not override the
-canonical convergence test based on torque and optional energy delta.
+canonical convergence test based on torque and optional 50-step energy plateau.
 
 **Convergence criterion**: the runner monitors the approximate maximum torque
 derived from the pure-damping right-hand side:
@@ -217,14 +217,18 @@ $$
 
 This estimate is exact for the continuous pure-damping LLG form above. The
 discrete-time integrator still introduces the usual $O(\Delta t)$ step error.
+Here $\gamma$ is the reduced `gamma_mu0` in `m/(A s)`; using the electron
+gyromagnetic ratio in `rad/(T s)` would make the reconstructed torque wrong by
+the missing $\mu_0$ factor.
 
 Shared product semantics for stop contracts and demag refresh cadence now live
 in `0530-shared-relaxation-stop-and-field-refresh-semantics.md`. The FDM note
 below describes the executable algorithm details on top of that shared contract.
 
-**Stop criteria** (implemented in `relaxation_converged`):
+**Stop criteria** (implemented in runtime convergence checks):
 1. $\tau_{\max} \le \epsilon_\tau$ (torque tolerance),
-2. optionally $|E_{n} - E_{n-1}| \le \epsilon_E$ (energy tolerance),
+2. optionally $\max(E)-\min(E) \le \epsilon_E$ over the last 50 accepted
+   relaxation steps (energy plateau tolerance),
 3. hard cap on iteration count.
 
 The canonical public unit for `torque_tolerance` is **A/m** because the
@@ -419,7 +423,7 @@ implementations of the torque check):
 | Criterion | Formula | Required? | Default |
 |-----------|---------|-----------|---------|
 | Torque tolerance | $\tau_{\max} \le \epsilon_\tau$ | Yes | $10^{-4}$ A/m |
-| Energy tolerance | $\|E_n - E_{n-1}\| \le \epsilon_E$ | Optional | None |
+| Energy tolerance | $\max(E)-\min(E) \le \epsilon_E$ over the last 50 accepted relaxation steps | Optional | None |
 | Max iterations | $n \ge n_{\max}$ | Yes (hard cap) | 50000 |
 
 For LLG overdamped, the torque is estimated from the RHS norm (see §3.1.1).
