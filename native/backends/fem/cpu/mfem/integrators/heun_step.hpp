@@ -9,7 +9,7 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Advance the native MFEM CPU state by one fixed-size Heun RK2 step.
+ * Advance one native FEM Heun predictor-corrector step.
  *
  * The module owns the top-level Heun predictor/corrector flow: initial and
  * predicted effective-field assembly, two LLG RHS evaluations with direct STT

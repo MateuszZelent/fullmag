@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "cpu/mfem/interactions/demag_poisson_solve.hpp"
 
 #include "fullmag_fem.h"
 

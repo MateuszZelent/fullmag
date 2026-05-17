@@ -45,6 +45,8 @@ std::filesystem::path fem_source_root() {
 void stage_completion_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
     const std::string stage =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "stage_completion.cpp");
     const std::string context = read_text_file(root / "src" / "context.cpp");
@@ -68,6 +70,20 @@ void stage_completion_is_owned_by_runtime_module() {
             "stage completion helper must be defined in stage_completion.cpp");
     }
     check(
+        context_header.find("void context_update_stage_completion_from_stats(") ==
+            std::string::npos,
+        "stage completion update declaration must not live in context.hpp");
+    check(
+        api.find("void set_stage_completion_reason(") == std::string::npos,
+        "C ABI API must not own a local stage-completion setter");
+    check(
+        api.find("fullmag::fem::set_stage_completion(") != std::string::npos,
+        "C ABI API must use the runtime stage-completion setter");
+    check(
+        context_header.find("constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS") ==
+            std::string::npos,
+        "stage completion plateau-window size must not be defined in context.hpp");
+    check(
         context.find("ctx.relax_stop = plan.relax_stop;") == std::string::npos,
         "Context construction must delegate relaxation stop state initialization");
     check(
@@ -84,6 +100,14 @@ void stage_completion_is_owned_by_runtime_module() {
         stage_header.find("Validate native FEM relaxation stop configuration") !=
             std::string::npos,
         "stage completion header must document validation ownership");
+    check(
+        stage_header.find("Relaxation energy plateau sample window size") !=
+            std::string::npos,
+        "stage completion header must document plateau-window ownership");
+    check(
+        stage_header.find("constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;") !=
+            std::string::npos,
+        "stage completion header must define the plateau-window size");
 }
 
 void relax_stop_validation_rejects_invalid_thresholds() {

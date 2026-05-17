@@ -2,11 +2,22 @@
 
 #include "fullmag_fem.h"
 
+#include <cstdint>
 #include <string>
 
 namespace fullmag::fem {
 
 struct Context;
+
+/*
+ * Relaxation energy plateau sample window size.
+ *
+ * Stage-completion owns the policy that an energy plateau requires a complete
+ * 50 accepted-step window before comparing the total-energy range against the
+ * ABI tolerance. Context stores the ring-buffer state for ABI compatibility,
+ * but this runtime module owns the window-size policy.
+ */
+constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;
 
 /*
  * Validate native FEM relaxation stop configuration.

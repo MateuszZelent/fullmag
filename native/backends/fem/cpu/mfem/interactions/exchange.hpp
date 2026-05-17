@@ -14,9 +14,10 @@ struct Context;
 /*
  * Initialize native FEM exchange plan fields.
  *
- * Copies the ABI plan's exchange enable flag into Context compatibility
- * storage. Operator assembly, mass projection, field computation, and runtime
- * refresh remain in the dedicated Exchange modules included here.
+ * Copies the ABI plan's exchange enable flag and, when the MFEM stack is
+ * active, the consistent-mass exchange projection policy into Context
+ * compatibility storage. Operator assembly, mass projection, field computation,
+ * and runtime refresh remain in the dedicated Exchange modules included here.
  */
 void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
 

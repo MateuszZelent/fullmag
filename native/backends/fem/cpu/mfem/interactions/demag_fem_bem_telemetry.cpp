@@ -4,6 +4,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_telemetry.hpp"
+#include "cpu/mfem/runtime/phase_timings.hpp"
 
 #include <algorithm>
 

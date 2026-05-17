@@ -7,6 +7,8 @@
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 #include "cpu/mfem/interactions/demag_poisson_telemetry.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/phase_timings.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -92,7 +94,8 @@ bool context_compute_demag_poisson(
         return false;
     }
 
-    if (ctx.demag_periodic_enabled() && ctx.poisson_periodic_reduced_ready) {
+    if (demag_periodic_poisson_reduction_requested(ctx) &&
+        ctx.poisson_periodic_reduced_ready) {
         mfem::Vector *full_solution = nullptr;
         uint64_t solve_wall_time_ns_pbc = 0;
         if (!solve_demag_periodic_poisson_reduced(

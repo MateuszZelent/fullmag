@@ -17,18 +17,26 @@ can be treated as production-quality. It complements the module contracts under
 |---|---|---|
 | ABI/native create | `fem_contract_validation` | availability lanes, `fe_order = 1`, adaptive config sanity |
 | Interaction docs | `fem_interaction_docs_contract` | required release docs and per-interaction docs exist |
-| Explicit RK | `fem_rk_explicit_contract` | tableau type/dispatch ownership, RK workspace storage/allocation ownership, stage RHS ownership, explicit RK step ownership |
+| Explicit RK | `fem_rk_explicit_contract` | tableau type/dispatch ownership, RK workspace storage/allocation ownership, stage RHS ownership, explicit RK step ownership, and Context no longer declaring RK helpers |
+| Fixed-step Heun | `fem_heun_step_contract` | Heun predictor-corrector ownership and Context no longer declaring the Heun step entrypoint |
 | Adaptive DT | `fem_adaptive_dt_contract` | adaptive config validation/import ownership, PI controller ownership, and componentwise AoS error norm |
 | MFEM device | `fem_mfem_device_contract` | MFEM device-string/GPU-index plan import ownership, device-info cache ownership, and CPU/GPU device classification |
-| Stage completion | `fem_stage_completion_contract` | relaxation-stop validation/state initialization, plateau tracking, and stop-reason ownership |
+| GPU state runtime | `fem_gpu_state_runtime_contract` | GPU-state bootstrap/upload ownership, host-resident no-CUDA metadata initialization, and Context no longer owning startup residency mechanics |
+| State I/O runtime | `fem_state_io_contract` | magnetization readback/upload ownership, observable field copy semantics, runtime cache invalidation, and Context no longer owning C ABI state I/O |
+| Interrupt runtime | `fem_interrupt_contract` | cooperative interrupt polling ownership and Context no longer defining the inline polling helper |
+| Snapshot runtime | `fem_snapshot_contract` | scalar snapshot/statistics ownership and Context no longer declaring the snapshot entrypoint |
+| Step metrics | `fem_step_metrics_contract` | common step-stat aggregation, average/field norm helpers, demag solver stat publication, and PhaseTimings ownership outside Context |
+| Stage completion | `fem_stage_completion_contract` | relaxation-stop validation/state initialization, plateau-window policy/tracking, stop-reason ownership including C ABI error/cancel paths, and Context no longer declaring the update wrapper |
 | Field refresh | `fem_field_refresh_contract` | field-refresh policy validation/import ownership and demag frozen-cache reset ownership |
+| FEM base plan fields | `fem_plan_fields_contract` | base ABI plan validation, runtime scalar import, mesh cardinality import, and Context no longer owning those checks |
 | FEM mesh core | `fem_mesh_contract` | mesh plan-field import ownership, magnetic mask ownership, periodic topology/helper ownership, periodic compatibility gate ownership, nodal-volume helper ownership, and Context no longer owning static AoS periodic projection |
 | FEM state | `fem_state_contract` | initial magnetization validation/copy ownership, static periodic projection, and time/step reset ownership |
-| FEM material fields | `fem_material_fields_contract` | per-node material field import/validation ownership and scalar material convention validation |
+| FEM material fields | `fem_material_fields_contract` | scalar and per-node material field import/validation ownership and scalar material convention validation |
 | FEM field buffers | `fem_field_buffers_contract` | nodal field-buffer sizing/zeroing ownership and external-field seeding of `H_eff` |
-| Exchange | `fem_exchange_contract` | no-MFEM behavior, plan-field initialization ownership, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and source ownership |
+| Exchange | `fem_exchange_contract` | no-MFEM behavior, plan-field initialization ownership including consistent-mass projection policy, operator/field/runtime/fallback ownership, mass projection ownership, legacy GPU upload ownership, and Context no longer declaring the runtime refresh wrapper |
+| Effective field | `fem_effective_field_contract` | field/direct-torque gate ownership, top-level H_eff composition ownership, eager initial effective-field refresh policy ownership, and Context no longer declaring the composition entrypoint |
 | Demag dispatcher | `fem_demag_contract` | plan-field initialization ownership, cached/Poisson/FEM-BEM dispatch decision |
-| Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, ready/lifecycle/solve ownership |
+| Demag Poisson | `fem_demag_poisson_contract` | energy, cache, telemetry, visual field, periodic-reduction predicate, ready/lifecycle/solve ownership, and Context no longer declaring Poisson lifecycle/solve entrypoints |
 | Demag FEM/BEM | `fem_demag_fem_bem_contract` | boundary extraction, dense BEM sanity, energy sign, energy/solve ownership |
 | DMI | `fem_dmi_contract` | DMI disabled/error contracts, interfacial-DMI ownership, bulk-DMI ownership, workspace ownership, plan-field/normal initialization ownership, and module ownership |
 | Thermal | `fem_thermal_brown_contract` | Brown sigma, seed/cache, field addition, plan-field initialization ownership, module ownership, nonmagnetic zeroing |

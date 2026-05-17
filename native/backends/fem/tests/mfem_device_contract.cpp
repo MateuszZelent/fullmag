@@ -44,6 +44,7 @@ std::filesystem::path fem_source_root() {
 void mfem_device_plan_import_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string mfem_device =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_device.cpp");
     const std::string mfem_device_header =
@@ -62,6 +63,15 @@ void mfem_device_plan_import_is_owned_by_runtime_module() {
     check(
         context.find("void context_populate_device_info(") == std::string::npos,
         "Context must not define MFEM device-info population");
+    check(
+        context_header.find("configured_mfem_device_string") == std::string::npos,
+        "MFEM device string declarations must not live in context.hpp");
+    check(
+        context_header.find("is_gpu_device_string") == std::string::npos,
+        "MFEM GPU device classifier declaration must not live in context.hpp");
+    check(
+        context_header.find("mfem_device_requests_gpu") == std::string::npos,
+        "MFEM GPU request declarations must not live in context.hpp");
     check(
         mfem_device.find("void context_populate_device_info(") != std::string::npos,
         "MFEM device-info population must be defined in mfem_device.cpp");

@@ -7,11 +7,14 @@
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/exchange_runtime.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/thermal_brown.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/phase_timings.hpp"
 
 #include <chrono>
 
@@ -71,6 +74,20 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
 }
 
 #if FULLMAG_HAS_MFEM_STACK
+bool refresh_initial_effective_field_from_plan(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error)
+{
+    if (plan.eager_initial_effective_field == 0) {
+        return true;
+    }
+    if (!ctx.enable_exchange && !ctx.enable_demag) {
+        return true;
+    }
+    return context_refresh_exchange_field_mfem(ctx, error);
+}
+
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

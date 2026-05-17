@@ -2,6 +2,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 
 #include <cstdio>
 #include <cstdlib>

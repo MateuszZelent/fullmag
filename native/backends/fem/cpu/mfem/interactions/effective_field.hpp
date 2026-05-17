@@ -1,5 +1,7 @@
 #pragma once
 
+#include "fullmag_fem.h"
+
 #include <string>
 #include <vector>
 
@@ -28,6 +30,19 @@ bool has_any_field_or_direct_torque_term(const Context &ctx);
  * fields, optional interrupt polling, and phase timing accumulation.
  */
 #if FULLMAG_HAS_MFEM_STACK
+/*
+ * Refresh initial native FEM effective-field buffers when the ABI plan asks for
+ * eager startup observables.
+ *
+ * This plan-time policy belongs with top-level effective-field composition. It
+ * skips work when no exchange or demag field can be refreshed and otherwise
+ * delegates to the extracted exchange/effective-field runtime refresh wrapper.
+ */
+bool refresh_initial_effective_field_from_plan(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
+
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,

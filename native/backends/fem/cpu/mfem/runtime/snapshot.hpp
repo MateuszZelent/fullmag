@@ -9,7 +9,7 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Refresh native FEM fields and fill a public step-stats snapshot.
+ * Capture native FEM scalar statistics and fill a public step-stats snapshot.
  *
  * This runtime path synchronizes the current magnetization to host, evaluates
  * the active effective-field stack without advancing time, computes the current

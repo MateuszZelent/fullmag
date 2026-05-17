@@ -9,6 +9,7 @@
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/integrators/rk_stage_rhs.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "gpu_rk.hpp"

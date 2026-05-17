@@ -5,6 +5,8 @@
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <chrono>

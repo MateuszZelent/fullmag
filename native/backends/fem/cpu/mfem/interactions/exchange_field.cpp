@@ -1,6 +1,7 @@
 #include "cpu/mfem/interactions/exchange_field.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "transfer_audit.hpp"

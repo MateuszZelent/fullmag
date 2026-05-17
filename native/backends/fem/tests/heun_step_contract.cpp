@@ -40,15 +40,25 @@ std::filesystem::path fem_source_root() {
 void heun_step_is_owned_by_integrator_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string heun_step =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "heun_step.cpp");
+    const std::string heun_step_header =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "heun_step.hpp");
 
     check(
         bridge.find("bool context_step_exchange_heun_mfem(") == std::string::npos,
         "Heun exchange step must not be defined in mfem_bridge.cpp");
     check(
+        context_header.find("bool context_step_exchange_heun_mfem(") == std::string::npos,
+        "Heun exchange step declaration must not live in context.hpp");
+    check(
         heun_step.find("bool context_step_exchange_heun_mfem(") != std::string::npos,
         "Heun exchange step must be defined in integrators/heun_step.cpp");
+    check(
+        heun_step_header.find("Advance one native FEM Heun predictor-corrector step") !=
+            std::string::npos,
+        "Heun step header must document its time-integration contract");
 }
 
 } // namespace

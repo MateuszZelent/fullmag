@@ -40,15 +40,24 @@ std::filesystem::path fem_source_root() {
 void snapshot_stats_are_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string snapshot =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
+    const std::string snapshot_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.hpp");
 
     check(
         bridge.find("bool context_snapshot_stats_mfem(") == std::string::npos,
         "MFEM snapshot stats must not be defined in mfem_bridge.cpp");
     check(
+        context_header.find("bool context_snapshot_stats_mfem(") == std::string::npos,
+        "MFEM snapshot stats declaration must not live in context.hpp");
+    check(
         snapshot.find("bool context_snapshot_stats_mfem(") != std::string::npos,
         "MFEM snapshot stats must be defined in runtime/snapshot.cpp");
+    check(
+        snapshot_header.find("Capture native FEM scalar statistics") != std::string::npos,
+        "snapshot header must document scalar snapshot ownership");
 }
 
 } // namespace

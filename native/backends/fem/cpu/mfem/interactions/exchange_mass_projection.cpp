@@ -1,6 +1,7 @@
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
 #include "transfer_audit.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK

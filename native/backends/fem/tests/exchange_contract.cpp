@@ -48,6 +48,7 @@ std::filesystem::path fem_source_root() {
 void exchange_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange.cpp");
@@ -99,9 +100,22 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
             std::string::npos,
         "exchange aggregate header must document plan import ownership");
     check(
+        aggregate_header.find("consistent-mass exchange projection policy") !=
+            std::string::npos,
+        "exchange aggregate header must document consistent-mass plan ownership");
+    check(
         context.find("ctx.enable_exchange = plan.enable_exchange != 0;") ==
             std::string::npos,
         "context_from_plan must delegate exchange enable import to exchange.cpp");
+    check(
+        context.find("plan.use_consistent_mass") == std::string::npos,
+        "context_from_plan must delegate exchange consistent-mass import to exchange.cpp");
+    check(
+        context.find("consistent_mass_requested") == std::string::npos,
+        "context_from_plan must not keep local exchange consistent-mass state");
+    check(
+        aggregate.find("plan.use_consistent_mass") != std::string::npos,
+        "exchange plan import must own the consistent-mass exchange projection flag");
     check(
         operator_module.find(init_symbol) != std::string::npos,
         "exchange operator assembly must be defined in exchange_operator.cpp");
@@ -111,6 +125,9 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
     check(
         runtime_module.find(refresh_symbol) != std::string::npos,
         "exchange runtime wrapper must be defined in exchange_runtime.cpp");
+    check(
+        context_header.find(refresh_symbol) == std::string::npos,
+        "exchange runtime declaration must not live in context.hpp");
     check(
         fallback_module.find(fallback_error) != std::string::npos,
         "exchange no-MFEM fallback must be defined in exchange_fallback.cpp");
@@ -221,6 +238,16 @@ void exchange_plan_fields_are_imported_by_aggregate() {
     plan.enable_exchange = 0;
     fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
     check(!ctx.enable_exchange, "exchange plan import disables exchange");
+
+#if FULLMAG_HAS_MFEM_STACK
+    plan.use_consistent_mass = 1;
+    fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
+    check(ctx.use_consistent_mass, "exchange plan import enables consistent-mass projection");
+
+    plan.use_consistent_mass = 0;
+    fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
+    check(!ctx.use_consistent_mass, "exchange plan import disables consistent-mass projection");
+#endif
 }
 
 #if !FULLMAG_HAS_MFEM_STACK

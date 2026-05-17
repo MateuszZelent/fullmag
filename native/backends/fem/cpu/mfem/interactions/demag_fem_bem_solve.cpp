@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_telemetry.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
 #include "cpu/mfem/interactions/demag_poisson_recovery.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
 
 #include <chrono>
 

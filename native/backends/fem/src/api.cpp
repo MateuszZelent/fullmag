@@ -1,6 +1,13 @@
 #include "fullmag_fem.h"
 
 #include "context.hpp"
+#include "cpu/mfem/integrators/heun_step.hpp"
+#include "cpu/mfem/integrators/rk_explicit.hpp"
+#include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/snapshot.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu_rk.hpp"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -103,31 +110,6 @@ void finalize_availability(fullmag_fem_availability_info &info) {
     } else if (info.reason_cpu[0] != '\0') {
         set_reason(info, info.reason_cpu);
     }
-}
-
-void set_stage_completion_reason(
-    fullmag::fem::Context &ctx,
-    fullmag_fem_stage_stop_reason reason,
-    const char *metric_name = nullptr,
-    double metric_value = 0.0,
-    double threshold = 0.0)
-{
-    if (ctx.stage_completion.has_reason != 0) {
-        return;
-    }
-    ctx.stage_completion = {};
-    ctx.stage_completion.has_reason = 1;
-    ctx.stage_completion.reason = reason;
-    if (metric_name != nullptr && metric_name[0] != '\0') {
-        ctx.stage_completion.has_metric_name = 1;
-        std::snprintf(
-            ctx.stage_completion.metric_name,
-            sizeof(ctx.stage_completion.metric_name),
-            "%s",
-            metric_name);
-    }
-    ctx.stage_completion.metric_value = metric_value;
-    ctx.stage_completion.threshold = threshold;
 }
 
 bool mfem_device_request_needs_ceed() {
@@ -318,40 +300,55 @@ int fullmag_fem_backend_step(
             ctx, tab, dt_seconds, *out_stats, handle->last_error);
     }
     if (ctx.transfer_audit.hot_loop_violation) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(
             handle,
             ctx.transfer_audit.hot_loop_violation_message);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!ok) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (!fullmag::fem::gpu_rk_finalize_step_stats(ctx, *out_stats, handle->last_error)) {
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
         fullmag_fem_set_handle_error(handle, handle->last_error);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (ctx.step_interrupted) {
         if (!fullmag::fem::context_snapshot_stats_mfem(
                 ctx, *out_stats, handle->last_error)) {
-            set_stage_completion_reason(
+            fullmag::fem::set_stage_completion(
                 ctx,
-                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR);
+                FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr,
+                0.0,
+                0.0);
             fullmag_fem_set_handle_error(handle, handle->last_error);
             return FULLMAG_FEM_ERR_UNAVAILABLE;
         }
-        set_stage_completion_reason(
+        fullmag::fem::set_stage_completion(
             ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED);
+            FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
+            nullptr,
+            0.0,
+            0.0);
         out_stats->dt_seconds = 0.0;
         return FULLMAG_FEM_ERR_INTERRUPTED;
     }

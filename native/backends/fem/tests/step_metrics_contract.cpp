@@ -60,6 +60,9 @@ std::filesystem::path fem_source_root() {
 void step_metrics_are_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string phase_timings_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "phase_timings.hpp");
     const std::string metrics =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "step_metrics.cpp");
 
@@ -78,6 +81,16 @@ void step_metrics_are_owned_by_runtime_module() {
             metrics.find(symbol) != std::string::npos,
             "step metric helper must be defined in step_metrics.cpp");
     }
+    check(
+        context_header.find("struct PhaseTimings {") == std::string::npos,
+        "PhaseTimings definition must not live in context.hpp");
+    check(
+        phase_timings_header.find("struct PhaseTimings {") != std::string::npos,
+        "PhaseTimings definition must live in runtime/phase_timings.hpp");
+    check(
+        phase_timings_header.find("Native FEM per-phase wall-clock timings") !=
+            std::string::npos,
+        "PhaseTimings header must document phase telemetry ownership");
 }
 
 void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {

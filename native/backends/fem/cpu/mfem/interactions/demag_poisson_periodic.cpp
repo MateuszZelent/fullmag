@@ -13,6 +13,11 @@
 
 namespace fullmag::fem {
 
+bool demag_periodic_poisson_reduction_requested(const Context &ctx)
+{
+    return ctx.enable_demag && !ctx.periodic_node_pairs.empty();
+}
+
 #if FULLMAG_HAS_MFEM_STACK
 namespace {
 
@@ -98,7 +103,8 @@ bool initialize_demag_periodic_poisson_reduction(
     Context &ctx,
     std::string &error)
 {
-    if (!ctx.demag_periodic_enabled() || ctx.periodic_reduced_node_count == 0) {
+    if (!demag_periodic_poisson_reduction_requested(ctx) ||
+        ctx.periodic_reduced_node_count == 0) {
         return true;
     }
 

@@ -1,6 +1,7 @@
 #include "gpu_rk.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
 #include "gpu_state.hpp"
 #include "kernels.h"
 #include "transfer_audit.hpp"

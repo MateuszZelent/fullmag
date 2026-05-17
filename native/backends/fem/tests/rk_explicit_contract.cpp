@@ -62,6 +62,16 @@ void rk_workspace_is_owned_by_integrator_module() {
         context_header.find("struct ExplicitTableau {") == std::string::npos,
         "ExplicitTableau definition must not live in context.hpp");
     check(
+        context_header.find("const ExplicitTableau &tableau_for_integrator(") ==
+            std::string::npos,
+        "RK tableau selector declaration must not live in context.hpp");
+    check(
+        context_header.find("void stepper_workspace_allocate(") == std::string::npos,
+        "RK workspace allocation declaration must not live in context.hpp");
+    check(
+        context_header.find("bool context_step_explicit_rk_mfem(") == std::string::npos,
+        "explicit RK step declaration must not live in context.hpp");
+    check(
         rk_tableau.find("struct ExplicitTableau {") != std::string::npos,
         "ExplicitTableau definition must live in rk_tableau.hpp");
     check(

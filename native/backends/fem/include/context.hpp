@@ -1,7 +1,7 @@
 #pragma once
 
-#include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/integrators/rk_stepper_workspace.hpp"
+#include "cpu/mfem/runtime/stage_completion.hpp"
 #include "fullmag_fem.h"
 #include "gpu_state.hpp"
 #include "transfer_audit.hpp"
@@ -13,8 +13,6 @@
 #include <vector>
 
 namespace fullmag::fem {
-
-constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;
 
 struct Context {
     uint32_t n_nodes = 0;
@@ -128,11 +126,6 @@ struct Context {
     // These faces are excluded from the Robin boundary mass integrator so that
     // the open-boundary Robin condition does not apply on periodic seams.
     std::unordered_set<uint32_t> periodic_boundary_marker_set;
-
-    // Returns true when demag PBC via algebraic P^T A P reduction is active.
-    bool demag_periodic_enabled() const {
-        return enable_demag && !periodic_node_pairs.empty();
-    }
 
     std::vector<uint8_t> magnetic_element_mask;
     std::vector<uint8_t> magnetic_node_mask;
@@ -302,7 +295,7 @@ struct Context {
     void  *mfem_boundary_mass = nullptr; // mfem::BilinearForm* for ∫_Γ φᵢφⱼ dS
 
     // ── Periodic demag: algebraic P^T A P reduced Poisson system ──
-    // Assembled once in context_initialize_poisson when demag_periodic_enabled().
+    // Assembled once when periodic demag reduction is requested.
     // The reduced system has periodic_reduced_node_count DOFs.
     void *mfem_periodic_poisson_matrix = nullptr;    // mfem::SparseMatrix* (P^T A_open P)
     void *mfem_periodic_poisson_rhs = nullptr;       // mfem::Vector* (work: b_p)
@@ -352,91 +345,6 @@ struct Context {
 };
 
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
-bool context_sync_gpu_magnetization_to_host(Context &ctx, std::string &error);
-int context_copy_field_f64(
-    const Context &ctx,
-    fullmag_fem_observable observable,
-    double *out_xyz,
-    uint64_t out_len,
-    std::string &error);
-int context_upload_magnetization_f64(
-    Context &ctx,
-    const double *m_xyz,
-    uint64_t len,
-    std::string &error);
-#if FULLMAG_HAS_MFEM_STACK
-bool context_initialize_mfem(Context &ctx, std::string &error);
-bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error);
-void context_destroy_mfem(Context &ctx);
-bool context_refresh_exchange_field_mfem(Context &ctx, std::string &error);
-bool context_step_exchange_heun_mfem(
-    Context &ctx,
-    double dt_seconds,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-bool context_step_explicit_rk_mfem(
-    Context &ctx,
-    const ExplicitTableau &tab,
-    double dt_seconds,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-bool context_snapshot_stats_mfem(
-    Context &ctx,
-    fullmag_fem_step_stats &stats,
-    std::string &error);
-void context_update_stage_completion_from_stats(
-    Context &ctx,
-    const fullmag_fem_step_stats &stats);
-const ExplicitTableau &tableau_for_integrator(fullmag_fem_integrator integrator);
-void stepper_workspace_allocate(StepperWorkspace &ws, size_t dof_len, int stages);
-bool context_initialize_poisson(Context &ctx, std::string &error);
-void context_destroy_poisson(Context &ctx);
-struct PhaseTimings {
-    uint64_t exchange_wall_time_ns = 0;
-    DemagPoissonPhaseTimings demag;
-    uint64_t rhs_wall_time_ns = 0;
-    uint64_t extra_energy_wall_time_ns = 0;
-    uint64_t snapshot_wall_time_ns = 0;
-};
-
-// MFEM device classification helpers (defined in cpu/mfem/runtime/mfem_device.cpp)
-const char *configured_mfem_device_string();
-const char *configured_mfem_device_string(const Context &ctx);
-bool is_gpu_device_string(const char *device);
-bool mfem_device_requests_gpu();
-bool mfem_device_requests_gpu(const Context &ctx);
-
-bool context_compute_demag_poisson(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_demag_xyz,
-    double &demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error);
-bool compute_effective_fields_for_magnetization(
-    Context &ctx,
-    const std::vector<double> &m_xyz,
-    std::vector<double> &h_ex_xyz,
-    std::vector<double> &h_demag_xyz,
-    std::vector<double> &h_eff_xyz,
-    double *exchange_energy,
-    double *demag_energy,
-    bool allow_interrupt,
-    PhaseTimings *timings,
-    std::string &error);
-#endif
-
-inline bool poll_interrupt(Context &ctx) {
-    if (ctx.interrupt_poll == nullptr) {
-        return false;
-    }
-    if (ctx.interrupt_poll(ctx.interrupt_poll_user_data) == 0) {
-        return false;
-    }
-    ctx.step_interrupted = true;
-    return true;
-}
 
 } // namespace fullmag::fem
 

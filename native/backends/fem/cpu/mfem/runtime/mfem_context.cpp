@@ -5,6 +5,7 @@
 #if FULLMAG_HAS_MFEM_STACK
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
+#include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"

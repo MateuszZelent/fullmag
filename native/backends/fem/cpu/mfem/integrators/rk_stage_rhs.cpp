@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
+#include "cpu/mfem/runtime/phase_timings.hpp"
 
 #include <chrono>
 

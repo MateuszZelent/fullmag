@@ -67,6 +67,7 @@ std::filesystem::path fem_source_root() {
 void poisson_runtime_wrappers_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
     const std::string ready =
@@ -108,6 +109,15 @@ void poisson_runtime_wrappers_are_owned_by_separate_modules() {
     check(
         solve.find(symbols[3]) != std::string::npos,
         "Poisson demag solve must be defined in demag_poisson_solve.cpp");
+    check(
+        context_header.find(symbols[1]) == std::string::npos,
+        "Poisson demag init declaration must not live in context.hpp");
+    check(
+        context_header.find(symbols[2]) == std::string::npos,
+        "Poisson demag destroy declaration must not live in context.hpp");
+    check(
+        context_header.find(symbols[3]) == std::string::npos,
+        "Poisson demag solve declaration must not live in context.hpp");
     check(
         ready_header.find("Validate whether the native Poisson-demag operator") !=
             std::string::npos,
@@ -391,8 +401,11 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
 
 void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
     const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string poisson =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson.cpp");
+    const std::string periodic_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_periodic.hpp");
     const std::string periodic =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_periodic.cpp");
 
@@ -413,6 +426,22 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             periodic.find(symbol) != std::string::npos,
             "Poisson demag periodic reduction must be defined in demag_poisson_periodic.cpp");
     }
+    check(
+        context_header.find("demag_periodic_enabled() const") == std::string::npos,
+        "Context must not own the periodic-demag enablement predicate");
+    check(
+        periodic_header.find("Poisson demag periodic-reduction enablement predicate") !=
+            std::string::npos,
+        "Poisson periodic header must document the periodic-demag predicate");
+    check(
+        periodic_header.find(
+            "bool demag_periodic_poisson_reduction_requested(const Context &ctx);") !=
+            std::string::npos,
+        "Poisson periodic header must declare the periodic-demag predicate");
+    check(
+        periodic.find("return ctx.enable_demag && !ctx.periodic_node_pairs.empty();") !=
+            std::string::npos,
+        "Poisson periodic module must define the periodic-demag predicate semantics");
 }
 
 void demag_hypre_solve_is_owned_by_poisson_hypre_module() {

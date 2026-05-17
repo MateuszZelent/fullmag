@@ -40,8 +40,11 @@ std::filesystem::path fem_source_root() {
 void mfem_context_lifecycle_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.cpp");
+    const std::string runtime_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "mfem_context.hpp");
 
     check(
         bridge.find("bool context_initialize_mfem(") == std::string::npos,
@@ -61,6 +64,19 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
     check(
         runtime.find("bool context_upload_mfem_exchange_to_gpu_state(") != std::string::npos,
         "MFEM legacy sparse upload wrapper must be defined in runtime/mfem_context.cpp");
+    check(
+        context_header.find("context_initialize_mfem") == std::string::npos,
+        "MFEM context initialization declaration must not live in context.hpp");
+    check(
+        context_header.find("context_destroy_mfem") == std::string::npos,
+        "MFEM context destruction declaration must not live in context.hpp");
+    check(
+        context_header.find("context_upload_mfem_exchange_to_gpu_state") == std::string::npos,
+        "MFEM legacy sparse upload declaration must not live in context.hpp");
+    check(
+        runtime_header.find("Initialize, publish, and destroy the native MFEM runtime context") !=
+            std::string::npos,
+        "mfem_context header must document lifecycle ownership");
 }
 
 } // namespace

@@ -104,10 +104,16 @@ waveguide.mesh.size_field(core_relaxation["kind"], **core_relaxation["params"])
 # Energy terms
 study.b_ext(0.0, 0.0, B_EXT_T)
 study.demag(realization="poisson_robin")
+
+# Demag solver tuning: rtol=1e-6 is sufficient for relaxation (tol=1e-4).
+# AMG preconditioner gives O(1) CG iterations; print_level=1 logs convergence.
+fm.fem_demag_solver(rtol=1e-6, max_iterations=200, print_level=1)
+
 study.build_domain_mesh()
 
-# Solver
-study.solver(integrator="rk45", max_error=1e-6, gamma=GAMMA)
+# Solver — max_error=1e-4 is adequate for relaxation where the physical
+# convergence criterion (torque < tol) dominates over integrator accuracy.
+study.solver(integrator="rk45", max_error=1e-4, gamma=GAMMA)
 
 # Outputs
 study.tableautosave(10e-12)
