@@ -826,7 +826,11 @@ pub(crate) fn sync_current_live_delta(
         sync_current_live_session_frame(session_id, payload)?;
     }
 
-    if payload.live_state.is_some() || payload.engine_log.is_some() || payload.fem_mesh.is_some() {
+    if payload.live_state.is_some()
+        || payload.engine_log.is_some()
+        || payload.solver_profile.is_some()
+        || payload.fem_mesh.is_some()
+    {
         sync_current_live_runtime_frame(session_id, payload)?;
     }
 

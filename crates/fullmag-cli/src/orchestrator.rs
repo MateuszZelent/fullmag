@@ -1155,8 +1155,9 @@ fn mesh_build_pipeline_status_json(
                     if let Some(duration_ms) = active_elapsed_ms {
                         phase["duration_ms"] = serde_json::json!(duration_ms);
                     }
-                } else if let Some((_, duration_ms)) =
-                    phase_durations_ms.iter().find(|(phase_id, _)| phase_id == id)
+                } else if let Some((_, duration_ms)) = phase_durations_ms
+                    .iter()
+                    .find(|(phase_id, _)| phase_id == id)
                 {
                     phase["duration_ms"] = serde_json::json!(duration_ms);
                 }

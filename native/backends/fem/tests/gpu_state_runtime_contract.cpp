@@ -64,34 +64,39 @@ std::string extract_function_body(const std::string &source, const std::string &
 
 void gpu_state_bootstrap_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
-    const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_builder =
+        read_text_file(root / "core" / "fem_context_builder.cpp");
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string runtime =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
     const std::string runtime_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.hpp");
-    const std::string context_from_plan = extract_function_body(
-        context,
-        "bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error)");
+    const std::string build_context_from_plan = extract_function_body(
+        context_builder,
+        "bool build_context_from_plan(");
 
     check(
-        context_from_plan.find("initialize_context_gpu_state(ctx, error)") != std::string::npos,
-        "context_from_plan must delegate GPU-state bootstrap to gpu_state_runtime.cpp");
+        build_context_from_plan.find("initialize_context_gpu_state(ctx, error)") !=
+            std::string::npos,
+        "Context builder must delegate GPU-state bootstrap to gpu_state_runtime.cpp");
     check(
-        context_from_plan.find("gpu_state_initialize(") == std::string::npos,
-        "context_from_plan must not own GPU-state allocation");
+        build_context_from_plan.find("gpu_state_initialize(") == std::string::npos,
+        "Context builder must not own GPU-state allocation");
     check(
-        context_from_plan.find("gpu_state_upload_runtime_coefficients(") == std::string::npos,
-        "context_from_plan must not own runtime coefficient GPU upload");
+        build_context_from_plan.find("gpu_state_upload_runtime_coefficients(") ==
+            std::string::npos,
+        "Context builder must not own runtime coefficient GPU upload");
     check(
-        context_from_plan.find("gpu_state_upload_mesh_geometry(") == std::string::npos,
-        "context_from_plan must not own mesh geometry GPU upload");
+        build_context_from_plan.find("gpu_state_upload_mesh_geometry(") == std::string::npos,
+        "Context builder must not own mesh geometry GPU upload");
     check(
-        context_from_plan.find("gpu_state_upload_effective_fields_aos(") == std::string::npos,
-        "context_from_plan must not own effective-field GPU upload");
+        build_context_from_plan.find("gpu_state_upload_effective_fields_aos(") ==
+            std::string::npos,
+        "Context builder must not own effective-field GPU upload");
     check(
-        context_from_plan.find("gpu_state_upload_local_vector_fields_aos(") == std::string::npos,
-        "context_from_plan must not own local vector field GPU upload");
+        build_context_from_plan.find("gpu_state_upload_local_vector_fields_aos(") ==
+            std::string::npos,
+        "Context builder must not own local vector field GPU upload");
     check(
         runtime.find("bool initialize_context_gpu_state(") != std::string::npos,
         "GPU-state bootstrap must be defined in gpu_state_runtime.cpp");

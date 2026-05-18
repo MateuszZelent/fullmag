@@ -292,9 +292,7 @@ fn current_live_realtime_changes(
             revision: realtime_state.revisions.solver_profile_revision,
             resource_id: Some("solver-profile".to_string()),
             domain_generation_id: None,
-            recommended_fetch: Some(
-                "/v2/sessions/current/diagnostics/solver-profile".to_string(),
-            ),
+            recommended_fetch: Some("/v2/sessions/current/diagnostics/solver-profile".to_string()),
         });
     }
     for recommended_fetch in &realtime_state.field_vector_fetches {

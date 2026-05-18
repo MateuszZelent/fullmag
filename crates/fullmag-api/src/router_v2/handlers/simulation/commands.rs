@@ -995,7 +995,8 @@ fn command_from_structured(
             let mut command =
                 new_session_command(command_id, "set_solver_profile", created_at_unix_ms);
             apply_command_intent(&mut command, intent, RuntimeCommandTarget::Study);
-            command.profile = Some(serde_json::to_value(profile).unwrap_or(serde_json::Value::Null));
+            command.profile =
+                Some(serde_json::to_value(profile).unwrap_or(serde_json::Value::Null));
             command
         }
     }
@@ -1038,15 +1039,24 @@ mod tests {
         assert_eq!(command.kind, "set_solver_profile");
         assert_eq!(command.command_id, "cmd-profile");
         assert_eq!(
-            command.profile.as_ref().and_then(|value| value.get("enabled")),
+            command
+                .profile
+                .as_ref()
+                .and_then(|value| value.get("enabled")),
             Some(&serde_json::Value::Bool(true))
         );
         assert_eq!(
-            command.profile.as_ref().and_then(|value| value.get("sample_every")),
+            command
+                .profile
+                .as_ref()
+                .and_then(|value| value.get("sample_every")),
             Some(&serde_json::json!(2))
         );
         assert_eq!(
-            command.profile.as_ref().and_then(|value| value.get("max_samples")),
+            command
+                .profile
+                .as_ref()
+                .and_then(|value| value.get("max_samples")),
             Some(&serde_json::json!(7))
         );
     }

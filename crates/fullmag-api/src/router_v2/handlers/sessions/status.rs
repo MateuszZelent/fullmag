@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::State;
+use axum::Json;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;

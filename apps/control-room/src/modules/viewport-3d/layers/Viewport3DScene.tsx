@@ -4,7 +4,12 @@ import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { OrthographicCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
-import type { AxesHelper, GridHelper, Material } from "three";
+import type {
+  AxesHelper,
+  GridHelper,
+  Material,
+  OrthographicCamera as ThreeOrthographicCamera,
+} from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -174,6 +179,22 @@ export function resolveViewport3DOrthographicZoom(
   return clamp(2 / (span * 1.6), 1e-3, 1e12);
 }
 
+export function applyViewport3DOrthographicCameraPose(
+  camera: ThreeOrthographicCamera,
+  cameraState: Viewport3DCameraState,
+  near: number,
+  far: number,
+): void {
+  camera.up.set(...cameraState.up);
+  camera.position.set(...cameraState.position);
+  camera.lookAt(...cameraState.target);
+  camera.near = near;
+  camera.far = far;
+  camera.updateProjectionMatrix();
+  camera.updateMatrix();
+  camera.updateMatrixWorld();
+}
+
 function niceGridStep(value: number): number {
   const exponent = Math.floor(Math.log10(Math.max(value, 1e-18)));
   const base = 10 ** exponent;
@@ -289,6 +310,14 @@ export function Viewport3DScene({
           far={cameraFit.far}
           position={cameraState.position}
           up={VIEWPORT_3D_WORLD_UP}
+          onUpdate={(camera) =>
+            applyViewport3DOrthographicCameraPose(
+              camera,
+              cameraState,
+              cameraFit.near,
+              cameraFit.far,
+            )
+          }
         />
       )}
       <DomainBoxLayer

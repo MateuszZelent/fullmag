@@ -39,7 +39,8 @@
   animation: fm-palette-in 150ms ease-out both;
 }
 
-.fm-command-palette__title {
+.fm-command-palette__title,
+.fm-command-palette__description {
   position: absolute;
   width: 1px;
   height: 1px;

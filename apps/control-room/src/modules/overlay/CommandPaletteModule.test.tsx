@@ -42,6 +42,9 @@ describe("CommandPaletteModule", () => {
       />,
     );
 
+    expect(html).toContain("fm-command-palette__title");
+    expect(html).toContain("fm-command-palette__description");
+    expect(html).toContain("Search and run workspace commands.");
     expect(html).toContain("Command palette");
     expect(html).toContain("Command Palette");
     expect(html).toContain("Expand Explorer");

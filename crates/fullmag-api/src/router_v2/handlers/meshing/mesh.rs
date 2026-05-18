@@ -567,9 +567,7 @@ pub async fn get_mesh_shared_domain_quality_data(
         "mesh-shared-domain-quality-data:{}:{path}:{byte_size}:{element_count}",
         snapshot.mesh_revision
     ));
-    Ok(crate::router_v2::handlers::shared::conditional_binary_response(
-        &headers, &etag, bytes,
-    ))
+    Ok(crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, bytes))
 }
 
 #[utoipa::path(

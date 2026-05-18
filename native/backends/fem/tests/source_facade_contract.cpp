@@ -49,6 +49,10 @@ void source_facades_document_module_boundaries() {
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string backend_handle_header =
         read_text_file(root / "include" / "backend_handle.hpp");
+    const std::string context_builder =
+        read_text_file(root / "core" / "fem_context_builder.cpp");
+    const std::string context_builder_header =
+        read_text_file(root / "core" / "fem_context_builder.hpp");
     const std::string dmi =
         read_text_file(root / "src" / "dmi_weak_residual.cpp");
     const std::string error = read_text_file(root / "src" / "error.cpp");
@@ -136,6 +140,36 @@ void source_facades_document_module_boundaries() {
     check(
         context.find("does not own base/core import helpers, runtime lifecycle, device policy, integrator stage mechanics, or interaction physics") != std::string::npos,
         "context source file must document its non-owning module boundary");
+    check(
+        context.find("return build_context_from_plan(ctx, plan, error);") !=
+            std::string::npos,
+        "context source file must delegate plan construction to Context builder");
+    check(
+        context.find("initialize_base_plan_fields(ctx, plan, error)") ==
+            std::string::npos &&
+            context.find("initialize_exchange_plan_fields(ctx, plan)") ==
+                std::string::npos &&
+            context.find("context_initialize_mfem(ctx, error)") == std::string::npos &&
+            context.find("initialize_context_gpu_state(ctx, error)") == std::string::npos,
+        "context source file must not own Context construction sequencing");
+    check(
+        context_builder_header.find("Build native FEM Context runtime state from a validated C ABI plan") !=
+            std::string::npos,
+        "Context builder header must document plan-construction ownership");
+    check(
+        context_builder.find("FEM Context builder source contract") != std::string::npos,
+        "Context builder source file must document its source contract");
+    check(
+        context_builder.find("bool build_context_from_plan(") != std::string::npos,
+        "Context builder source must own the plan-construction helper");
+    check(
+        context_builder.find("initialize_base_plan_fields(ctx, plan, error)") !=
+            std::string::npos &&
+            context_builder.find("initialize_exchange_plan_fields(ctx, plan)") !=
+                std::string::npos &&
+            context_builder.find("initialize_context_gpu_state(ctx, error)") !=
+                std::string::npos,
+        "Context builder source must own Context construction sequencing");
     check(
         context_header.find("struct fullmag_fem_backend") == std::string::npos,
         "Context header must not define the C ABI backend handle");

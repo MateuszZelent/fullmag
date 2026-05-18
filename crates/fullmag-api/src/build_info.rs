@@ -13,10 +13,9 @@ mod tests {
         assert_eq!(date.len(), 10);
         assert_eq!(&date[4..5], "-");
         assert_eq!(&date[7..8], "-");
-        assert!(
-            date.bytes()
-                .enumerate()
-                .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
-        );
+        assert!(date
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit()));
     }
 }

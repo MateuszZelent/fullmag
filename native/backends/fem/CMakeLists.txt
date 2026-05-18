@@ -12,6 +12,7 @@ set(FEM_PUBLIC_HEADERS
 
 set(FEM_SOURCES
     core/fem_field_buffers.cpp
+    core/fem_context_builder.cpp
     core/fem_material_fields.cpp
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp

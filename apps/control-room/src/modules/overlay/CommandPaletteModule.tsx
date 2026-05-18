@@ -152,6 +152,9 @@ export function CommandPaletteView({
         <Dialog.Title className="fm-command-palette__title">
           Command palette
         </Dialog.Title>
+        <Dialog.Description className="fm-command-palette__description">
+          Search and run workspace commands.
+        </Dialog.Description>
         <Command shouldFilter={false}>
           <CommandInput
             ref={inputRef}
