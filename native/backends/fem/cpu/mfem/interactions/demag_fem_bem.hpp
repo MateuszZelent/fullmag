@@ -18,6 +18,8 @@ namespace fullmag::fem {
 /*
  * Aggregated include surface for native Fredkin-Koehler FEM/BEM demag modules.
  *
+ * This umbrella owns only the stable include surface for open-boundary
+ * Fredkin-Koehler demag.
  * This umbrella header keeps a stable include target for open-boundary demag,
  * but it does not define surface extraction, BEM operator assembly, sparse
  * solves, potential transfer, recovery, energy, or telemetry. Those

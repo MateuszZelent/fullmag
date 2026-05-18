@@ -1077,6 +1077,17 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("response body is not valid JSON")
 }
 
+fn is_iso_calendar_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+}
+
 // ─── system endpoints ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1372,6 +1383,17 @@ async fn status_returns_200_with_live_session() {
 
     let json = body_json(response).await;
     assert_eq!(json["api_contract_version"], "1.0.0");
+    assert_ne!(
+        json["runtime_bundle_version"], "1.0.0",
+        "runtime_bundle_version must describe the backend build, not the API/session protocol"
+    );
+    let runtime_bundle = json["runtime_bundle_version"]
+        .as_str()
+        .expect("runtime_bundle_version should be a string");
+    assert!(
+        is_iso_calendar_date(runtime_bundle),
+        "runtime_bundle_version should expose the backend build date as YYYY-MM-DD, got {runtime_bundle}"
+    );
     assert!(json["session"].is_object());
     assert_eq!(json["session"]["session_id"], "test-session");
     assert!(json["solver"].is_object());

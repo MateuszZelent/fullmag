@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::Json;
+use axum::extract::State;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::visualization::display::build_display_selection_response;
@@ -82,7 +82,8 @@ pub(crate) fn build_live_status(
             stage_count: stage_exec.map(|se| se.total_stages as u32).unwrap_or(0),
             started_at: snapshot.session.started_at_unix_ms.to_string(),
             solver_steps: r.total_steps as u64,
-            solver_time: r.final_time
+            solver_time: r
+                .final_time
                 .or_else(|| snapshot.live_state.as_ref().map(|ls| ls.latest_step.time))
                 .unwrap_or(0.0),
         }
@@ -192,15 +193,12 @@ pub(crate) fn build_live_status(
 
     // Compute instantaneous steps/s from the solver profiler's per-step wall
     // time when available, falling back to the lifetime average.
-    let steps_per_second = instantaneous_steps_per_second(&snapshot.solver_profile)
-        .or_else(|| {
-            latest
-                .and_then(|step| {
-                    (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9)
-                })
-                .filter(|elapsed| *elapsed > 0.0)
-                .map(|elapsed| total_steps as f64 / elapsed)
-        });
+    let steps_per_second = instantaneous_steps_per_second(&snapshot.solver_profile).or_else(|| {
+        latest
+            .and_then(|step| (step.wall_time_ns > 0).then_some(step.wall_time_ns as f64 / 1.0e9))
+            .filter(|elapsed| *elapsed > 0.0)
+            .map(|elapsed| total_steps as f64 / elapsed)
+    });
     let metrics = MetricsSummary {
         uptime_seconds: uptime,
         total_steps,
@@ -209,7 +207,7 @@ pub(crate) fn build_live_status(
 
     LiveStatus {
         api_contract_version: "1.0.0".into(),
-        runtime_bundle_version: snapshot.session_protocol_version.clone(),
+        runtime_bundle_version: crate::build_info::backend_build_date().to_string(),
         session,
         run,
         solver,

@@ -5,7 +5,7 @@ use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -95,7 +95,7 @@ fn infer_dispatched_command_completion(
     snapshot: &SessionStateResponse,
 ) -> Option<CommandCompletionState> {
     match record.command.kind.as_str() {
-        "compute_fields" if snapshot.latest_fields.len() > 0 => {
+        "compute_fields" if snapshot_has_field_readback(snapshot) => {
             Some(CommandCompletionState::Completed)
         }
         "compute_energies" if !snapshot.scalar_rows.is_empty() => {
@@ -113,6 +113,10 @@ fn infer_dispatched_command_completion(
         }
         _ => None,
     }
+}
+
+fn snapshot_has_field_readback(snapshot: &SessionStateResponse) -> bool {
+    snapshot.latest_fields.len() > 0 || snapshot.preview_cache.iter().next().is_some()
 }
 
 fn snapshot_runtime_is(snapshot: &SessionStateResponse, expected: RuntimeLifecycleState) -> bool {
@@ -1067,6 +1071,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_reconciliation_marks_compute_fields_terminal_from_preview_cache() {
+        let mut current = test_current_snapshot();
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+
+        let mut ledger = VecDeque::from([tracked_command("cmd-fields", "compute_fields")]);
+
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        let record = ledger.front().expect("ledger record should remain");
+        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(
+            record.completion_status,
+            Some(CommandCompletionState::Completed)
+        );
+        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    #[test]
     fn snapshot_reconciliation_marks_runtime_control_commands_terminal() {
         let mut paused = test_current_snapshot();
         paused.stage_execution = Some(test_stage_execution(
@@ -1239,10 +1265,12 @@ mod tests {
             Some("cp-000041")
         );
         assert_eq!(record.state_transition.as_deref(), Some("restored"));
-        assert!(record
-            .artifact_refs
-            .iter()
-            .any(|artifact_ref| artifact_ref == "cp-common-state"));
+        assert!(
+            record
+                .artifact_refs
+                .iter()
+                .any(|artifact_ref| artifact_ref == "cp-common-state")
+        );
     }
 
     fn session_command(command_id: &str, kind: &str) -> SessionCommand {
@@ -1288,6 +1316,27 @@ mod tests {
             completed_at_unix_ms: None,
             completion_status: None,
             error: None,
+        }
+    }
+
+    fn preview_field(quantity: &str) -> LivePreviewField {
+        LivePreviewField {
+            active_mask: None,
+            applied_layer_stride: 1,
+            applied_x_chosen_size: 1,
+            applied_y_chosen_size: 1,
+            auto_downscale_message: None,
+            auto_downscaled: false,
+            config_revision: 1,
+            original_grid: [1, 1, 1],
+            preview_grid: [1, 1, 1],
+            quantity: quantity.to_string(),
+            quantity_domain: "cell".to_string(),
+            spatial_kind: "vector".to_string(),
+            unit: "A/m".to_string(),
+            vector_field_values: vec![1.0, 0.0, 0.0],
+            x_chosen_size: 1,
+            y_chosen_size: 1,
         }
     }
 

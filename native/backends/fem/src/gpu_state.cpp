@@ -8,6 +8,8 @@
 
 #include "gpu_state.hpp"
 
+#include "context.hpp"
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "kernels.h"
 #endif
@@ -1101,6 +1103,11 @@ fullmag_fem_gpu_state_info gpu_state_info(const FemGpuState &state)
     info.reduction_workspace_bytes = state.reduction_workspace_bytes;
     info.source_of_truth = state.source_of_truth;
     return info;
+}
+
+fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx)
+{
+    return gpu_state_info(ctx.gpu_state);
 }
 
 } // namespace fullmag::fem

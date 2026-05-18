@@ -97,6 +97,7 @@ function remoteVisualizationTargetPatch(
   const remotePatch = { ...patch };
   delete remotePatch.vectorCenteringEnabled;
   delete remotePatch.vectorSurfaceOffsetEnabled;
+  delete remotePatch.vectorSurfaceOffsetScale;
   return remotePatch;
 }
 
@@ -250,7 +251,7 @@ function VisualizationVectorsSection({
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
-    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorThickness",
+    field: "vectorAlphaPercent" | "vectorBudget" | "vectorLengthScale" | "vectorSurfaceOffsetScale" | "vectorThickness",
     value: number,
   ) => void;
   pending: boolean;
@@ -301,6 +302,9 @@ function VisualizationVectorsSection({
           }
         />
       </div>
+      {settings.vectorSurfaceOffsetEnabled ? (
+        <NumberField disabled={pending || sectionDisabled("vectors")} label="Surface lift amount" max={1} min={0.01} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
+      ) : null}
       <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
         {GEOMETRY_SCOPES.map((scope) => (
           <Button
@@ -550,6 +554,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       | "vectorAlphaPercent"
       | "vectorBudget"
       | "vectorLengthScale"
+      | "vectorSurfaceOffsetScale"
       | "vectorThickness"
       | "wireframeOpacityPercent",
     value: number,
@@ -564,6 +569,10 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     }
     if (field === "vectorLengthScale") {
       void patch({ vectorLengthScale: value });
+      return;
+    }
+    if (field === "vectorSurfaceOffsetScale") {
+      void patch({ vectorSurfaceOffsetScale: value });
       return;
     }
     if (field === "vectorThickness") {

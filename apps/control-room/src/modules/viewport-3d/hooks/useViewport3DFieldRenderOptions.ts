@@ -82,7 +82,7 @@ export function useViewport3DFieldRenderOptions({
           partVectorAnchorModes.set(partId, "tail");
         }
         if (settings.vectorSurfaceOffsetEnabled) {
-          partVectorSurfaceOffsetScales.set(partId, 0.1);
+          partVectorSurfaceOffsetScales.set(partId, settings.vectorSurfaceOffsetScale);
         }
         if (visible && settings.vectorBudget > 0) {
           partVectorBudgets.set(partId, settings.vectorBudget);
@@ -112,7 +112,7 @@ export function useViewport3DFieldRenderOptions({
         ? "center"
         : "tail";
       fullVectorSurfaceOffsetScale =
-        fallbackSettings.vectorSurfaceOffsetEnabled ? 0.1 : 0;
+        fallbackSettings.vectorSurfaceOffsetEnabled ? fallbackSettings.vectorSurfaceOffsetScale : 0;
       if (fallbackVisible) {
         fullVectorBudget = fallbackSettings.vectorBudget;
       }
@@ -134,7 +134,7 @@ export function useViewport3DFieldRenderOptions({
         partVectorAnchorModes.set(partId, "tail");
       }
       if (airboxSettings.vectorSurfaceOffsetEnabled) {
-        partVectorSurfaceOffsetScales.set(partId, 0.1);
+        partVectorSurfaceOffsetScales.set(partId, airboxSettings.vectorSurfaceOffsetScale);
       }
       const airboxVisible =
         airboxVectorsAllowed &&
@@ -170,6 +170,7 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.vectorCenteringEnabled,
     airboxSettings.vectorLengthScale,
     airboxSettings.vectorSurfaceOffsetEnabled,
+    airboxSettings.vectorSurfaceOffsetScale,
     airboxSettings.vectorsVisible,
     airboxSettings.geometryScope,
     airboxSettings.surfaceColorSource,
@@ -180,6 +181,7 @@ export function useViewport3DFieldRenderOptions({
     fallbackSettings.vectorBudget,
     fallbackSettings.vectorCenteringEnabled,
     fallbackSettings.vectorSurfaceOffsetEnabled,
+    fallbackSettings.vectorSurfaceOffsetScale,
     fallbackSettings.vectorsVisible,
     fallbackSettings.visible,
     getPartSettings,

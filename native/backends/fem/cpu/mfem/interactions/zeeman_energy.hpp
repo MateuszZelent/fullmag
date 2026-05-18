@@ -9,6 +9,8 @@ struct Context;
 /*
  * Compute Zeeman energy from the current H_ext buffer.
  *
+ * This module owns Zeeman energy integration for an already prepared H_ext
+ * buffer.
  * The reported convention is
  *
  *   E_Z = -mu0 integral_Omega Ms m.H_ext dV,

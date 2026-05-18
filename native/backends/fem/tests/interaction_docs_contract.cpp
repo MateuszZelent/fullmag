@@ -194,6 +194,26 @@ void validation_matrix_names_mfem_stack_fixture_statuses() {
         "validation matrix must name the missing MFEM runtime include blocker");
 }
 
+void interaction_headers_declare_ownership_boundaries() {
+    const std::filesystem::path interactions =
+        repo_root() / "native" / "backends" / "fem" / "cpu" / "mfem" / "interactions";
+
+    for (const auto &entry : std::filesystem::directory_iterator(interactions)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".hpp") {
+            continue;
+        }
+        const std::string text = read_text_file(entry.path());
+        if (text.find("owns") == std::string::npos &&
+            text.find("does not own") == std::string::npos) {
+            std::fprintf(
+                stderr,
+                "FAIL: interaction header %s must declare ownership boundaries\n",
+                entry.path().string().c_str());
+            std::exit(1);
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -203,5 +223,6 @@ int main() {
     validation_matrix_names_closed_fixture_owners();
     validation_matrix_names_leaf_header_gate_rows();
     validation_matrix_names_mfem_stack_fixture_statuses();
+    interaction_headers_declare_ownership_boundaries();
     return 0;
 }

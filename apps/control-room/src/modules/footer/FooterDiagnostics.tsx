@@ -25,6 +25,7 @@ interface SolverProfilePhaseBar {
 interface SolverProfileRow {
   demag: string;
   exchange: string;
+  id: string;
   missing: string;
   phases: SolverProfilePhaseBar[];
   rhs: string;
@@ -126,7 +127,7 @@ export function FooterDiagnostics() {
                 <div
                   className="fm-footer-diagnostics__profile-row"
                   role="row"
-                  key={row.step}
+                  key={row.id}
                 >
                   <span role="cell">{row.step}</span>
                   <span role="cell">{row.total}</span>
@@ -202,7 +203,15 @@ export function FooterDiagnostics() {
 export function buildSolverProfilePanelModel(
   profile: SolverProfileResource | null | undefined,
 ): SolverProfilePanelModel {
-  const rows = (profile?.latest_samples ?? []).slice(-5).reverse().map((sample) => {
+  const latestSamples = profile?.latest_samples ?? [];
+  const visibleSamples = latestSamples
+    .slice(-5)
+    .map((sample, index, samples) => ({
+      sample,
+      sourceIndex: latestSamples.length - samples.length + index,
+    }))
+    .reverse();
+  const rows = visibleSamples.map(({ sample, sourceIndex }) => {
     const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
     const phases = sample.phases.reduce<SolverProfilePhaseBar[]>((items, phase) => {
       if (phase.wall_time_ns > 0) {
@@ -217,6 +226,7 @@ export function buildSolverProfilePanelModel(
     return {
       demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
       exchange: formatNs(phaseById.get("exchange")?.wall_time_ns ?? 0),
+      id: `${sample.step}:${sample.time}:${sourceIndex}`,
       missing: formatNs(sample.missing_ns),
       phases,
       rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),

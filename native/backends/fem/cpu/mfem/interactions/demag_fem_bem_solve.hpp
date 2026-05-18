@@ -12,6 +12,8 @@ struct PhaseTimings;
 /*
  * Compute one Fredkin-Koehler FEM/BEM demag field.
  *
+ * This module owns active Fredkin-Koehler solve orchestration across the
+ * extracted FEM/BEM leaf modules.
  * The active MFEM path solves the Neumann volume potential u1, applies the dense
  * BEM boundary operator for u2 boundary data, solves the Dirichlet correction,
  * recovers H_demag, and reports energy using the common demag convention.

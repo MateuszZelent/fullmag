@@ -181,7 +181,12 @@ bool context_compute_demag_poisson(
 
     const auto solve_wall_start = FemSteadyClock::now();
     debug_checkpoint("context_compute_demag_poisson:solve_enter_hypre");
-    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, error)) {
+    const mfem::Vector *solved_solution = nullptr;
+    if (!solve_demag_poisson_hypre(ctx, *rhs, *solution, solved_solution, error)) {
+        return false;
+    }
+    if (solved_solution == nullptr) {
+        error = "Poisson Hypre solve returned a null solved vector";
         return false;
     }
     debug_checkpoint("context_compute_demag_poisson:solve_done_hypre");
@@ -196,7 +201,7 @@ bool context_compute_demag_poisson(
     debug_checkpoint("context_compute_demag_poisson:recover_enter");
     if (!recover_demag_poisson_field(
             ctx,
-            *solution,
+            *solved_solution,
             h_demag_xyz,
             demag_energy,
             m_xyz,
@@ -214,7 +219,7 @@ bool context_compute_demag_poisson(
         return false;
     }
 
-    gf_potential->SetFromTrueDofs(*solution);
+    gf_potential->SetFromTrueDofs(*solved_solution);
     log_demag_poisson_call_profile(
         ctx,
         demag_call_index,

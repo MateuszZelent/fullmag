@@ -84,6 +84,7 @@ set(FEM_SOURCES
     cpu/mfem/integrators/rk45.cpp
     cpu/mfem/runtime/aos_field.cpp
     cpu/mfem/runtime/availability.cpp
+    cpu/mfem/runtime/backend_lifecycle.cpp
     cpu/mfem/runtime/backend_step.cpp
     cpu/mfem/runtime/cpu_threads.cpp
     cpu/mfem/runtime/eigen_dense.cpp

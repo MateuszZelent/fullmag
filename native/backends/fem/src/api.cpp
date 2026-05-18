@@ -8,12 +8,14 @@
 
 #include "fullmag_fem.h"
 
+#include "backend_handle.hpp"
 #include "context.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/runtime/availability.hpp"
+#include "cpu/mfem/runtime/backend_lifecycle.hpp"
 #include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/eigen_dense.hpp"
-#include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -68,13 +70,12 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
     }
 
     std::string error;
-    if (!fullmag::fem::context_from_plan(handle->context, *plan, error)) {
+    if (!fullmag::fem::initialize_backend_runtime(handle->context, *plan, error)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;
         return nullptr;
     }
-    fullmag::fem::configure_transfer_audit_from_env(handle->context.transfer_audit);
 
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
@@ -115,8 +116,7 @@ int fullmag_fem_backend_set_interrupt_poll(
         fullmag_fem_set_global_error("fullmag_fem_backend_set_interrupt_poll received null handle");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    handle->context.interrupt.poll = poll_fn;
-    handle->context.interrupt.user_data = user_data;
+    fullmag::fem::set_interrupt_poll(handle->context, poll_fn, user_data);
     return FULLMAG_FEM_OK;
 }
 
@@ -241,7 +241,7 @@ int fullmag_fem_backend_get_transfer_audit(
         fullmag_fem_set_global_error("fullmag_fem_backend_get_transfer_audit received null handle");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    *out_audit = fullmag::fem::transfer_audit_snapshot(handle->context.transfer_audit);
+    *out_audit = fullmag::fem::transfer_audit_snapshot(handle->context);
     return FULLMAG_FEM_OK;
 }
 
@@ -259,7 +259,7 @@ int fullmag_fem_backend_get_gpu_state_info(
         fullmag_fem_set_global_error("fullmag_fem_backend_get_gpu_state_info received null handle");
         return FULLMAG_FEM_ERR_INVALID;
     }
-    *out_info = fullmag::fem::gpu_state_info(handle->context.gpu_state);
+    *out_info = fullmag::fem::gpu_state_info(handle->context);
     return FULLMAG_FEM_OK;
 }
 
@@ -306,13 +306,8 @@ const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle) {
 
 void fullmag_fem_backend_destroy(fullmag_fem_backend *handle) {
     if (handle != nullptr) {
-        fullmag::fem::gpu_state_destroy(handle->context.gpu_state);
+        fullmag::fem::destroy_backend_runtime(handle->context);
     }
-#if FULLMAG_HAS_MFEM_STACK
-    if (handle != nullptr) {
-        fullmag::fem::context_destroy_mfem(handle->context);
-    }
-#endif
     delete handle;
 }
 

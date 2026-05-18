@@ -46,6 +46,9 @@ void source_facades_document_module_boundaries() {
     const std::filesystem::path root = fem_source_root();
     const std::string api = read_text_file(root / "src" / "api.cpp");
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string backend_handle_header =
+        read_text_file(root / "include" / "backend_handle.hpp");
     const std::string dmi =
         read_text_file(root / "src" / "dmi_weak_residual.cpp");
     const std::string error = read_text_file(root / "src" / "error.cpp");
@@ -54,13 +57,21 @@ void source_facades_document_module_boundaries() {
     const std::string gpu_rk = read_text_file(root / "src" / "gpu_rk.cpp");
     const std::string gpu_state =
         read_text_file(root / "src" / "gpu_state.cpp");
+    const std::string gpu_state_header =
+        read_text_file(root / "include" / "gpu_state.hpp");
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string transfer =
         read_text_file(root / "src" / "transfer_audit.cpp");
+    const std::string transfer_header =
+        read_text_file(root / "include" / "transfer_audit.hpp");
     const std::string backend_step =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
     const std::string backend_step_header =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.hpp");
+    const std::string backend_lifecycle =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_lifecycle.cpp");
+    const std::string backend_lifecycle_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_lifecycle.hpp");
     const std::string eigen_dense =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "eigen_dense.cpp");
     const std::string eigen_dense_header =
@@ -91,11 +102,53 @@ void source_facades_document_module_boundaries() {
         api.find("fullmag::fem::run_backend_step(") != std::string::npos,
         "api source file must delegate backend step orchestration to runtime module");
     check(
+        api.find("context_from_plan(handle->context") == std::string::npos &&
+            api.find("configure_transfer_audit_from_env(handle->context.transfer_audit)") ==
+                std::string::npos,
+        "api source file must not own backend runtime initialization");
+    check(
+        api.find("fullmag::fem::initialize_backend_runtime(") != std::string::npos,
+        "api source file must delegate backend runtime initialization to runtime module");
+    check(
+        api.find("gpu_state_destroy(handle->context.gpu_state)") == std::string::npos &&
+            api.find("context_destroy_mfem(handle->context)") == std::string::npos,
+        "api source file must not own backend runtime teardown");
+    check(
+        api.find("fullmag::fem::destroy_backend_runtime(") != std::string::npos,
+        "api source file must delegate backend runtime teardown to runtime module");
+    check(
+        api.find("transfer_audit_snapshot(handle->context.transfer_audit)") ==
+            std::string::npos,
+        "api source file must not read transfer-audit runtime state directly");
+    check(
+        api.find("fullmag::fem::transfer_audit_snapshot(handle->context)") !=
+            std::string::npos,
+        "api source file must delegate transfer-audit snapshot through owning module");
+    check(
+        api.find("gpu_state_info(handle->context.gpu_state)") == std::string::npos,
+        "api source file must not read GPU runtime state directly");
+    check(
+        api.find("fullmag::fem::gpu_state_info(handle->context)") != std::string::npos,
+        "api source file must delegate GPU-state info through owning module");
+    check(
         context.find("FEM Context facade source contract") != std::string::npos,
         "context source file must document its source contract");
     check(
         context.find("does not own base/core import helpers, runtime lifecycle, device policy, integrator stage mechanics, or interaction physics") != std::string::npos,
         "context source file must document its non-owning module boundary");
+    check(
+        context_header.find("struct fullmag_fem_backend") == std::string::npos,
+        "Context header must not define the C ABI backend handle");
+    check(
+        backend_handle_header.find("Native FEM C ABI backend handle storage") !=
+            std::string::npos,
+        "backend handle header must document private C ABI handle storage ownership");
+    check(
+        backend_handle_header.find("struct fullmag_fem_backend") != std::string::npos &&
+            backend_handle_header.find("fullmag::fem::Context context;") !=
+                std::string::npos &&
+            backend_handle_header.find("std::string last_error;") != std::string::npos,
+        "backend handle header must own Context and last-error storage");
     check(
         dmi.find("DMI weak-residual facade source contract") != std::string::npos,
         "DMI weak-residual source file must document its source contract");
@@ -127,6 +180,13 @@ void source_facades_document_module_boundaries() {
         gpu_state.find("does not own MFEM device selection, Context construction, exchange operator assembly, integrator execution, or C ABI entrypoints") != std::string::npos,
         "GPU state source file must document its non-owning module boundary");
     check(
+        gpu_state.find("gpu_state_info(ctx.gpu_state)") != std::string::npos,
+        "GPU state source file must own Context-backed GPU info snapshot access");
+    check(
+        gpu_state_header.find("fullmag_fem_gpu_state_info gpu_state_info(const Context &ctx);") !=
+            std::string::npos,
+        "GPU state header must declare Context-backed GPU info snapshot access");
+    check(
         bridge.find("Legacy MFEM bridge facade source contract") != std::string::npos,
         "legacy MFEM bridge source file must document its source contract");
     check(
@@ -138,6 +198,14 @@ void source_facades_document_module_boundaries() {
     check(
         transfer.find("does not own C ABI calls, Context construction, MFEM device policy, interaction physics, or integrator execution") != std::string::npos,
         "transfer-audit source file must document its non-owning module boundary");
+    check(
+        transfer.find("transfer_audit_snapshot(ctx.transfer_audit)") !=
+            std::string::npos,
+        "transfer-audit source file must own Context-backed snapshot access");
+    check(
+        transfer_header.find("fullmag_fem_transfer_audit transfer_audit_snapshot(const Context &ctx);") !=
+            std::string::npos,
+        "transfer-audit header must declare Context-backed snapshot access");
     check(
         backend_step.find("FEM backend step runtime source contract") != std::string::npos,
         "backend step runtime source file must document its source contract");
@@ -157,6 +225,37 @@ void source_facades_document_module_boundaries() {
         backend_step_header.find("does not own exported fullmag_fem_backend_step") !=
             std::string::npos,
         "backend step runtime header must document its non-owning C ABI boundary");
+    check(
+        backend_lifecycle.find("FEM backend lifecycle runtime source contract") !=
+            std::string::npos,
+        "backend lifecycle runtime source file must document its source contract");
+    check(
+        backend_lifecycle.find("bool initialize_backend_runtime(") != std::string::npos,
+        "backend lifecycle runtime source must own runtime initialization helper");
+    check(
+        backend_lifecycle.find("context_from_plan(ctx, plan, error)") != std::string::npos &&
+            backend_lifecycle.find("configure_transfer_audit_from_env(ctx.transfer_audit)") !=
+                std::string::npos,
+        "backend lifecycle runtime source must own Context construction delegation and transfer-audit env import");
+    check(
+        backend_lifecycle.find("void destroy_backend_runtime(") != std::string::npos,
+        "backend lifecycle runtime source must own runtime teardown helper");
+    check(
+        backend_lifecycle.find("gpu_state_destroy(ctx.gpu_state)") != std::string::npos &&
+            backend_lifecycle.find("context_destroy_mfem(ctx)") != std::string::npos,
+        "backend lifecycle runtime source must own GPU and MFEM runtime teardown calls");
+    check(
+        backend_lifecycle_header.find("Destroy native FEM backend runtime resources behind the C ABI facade") !=
+            std::string::npos,
+        "backend lifecycle runtime header must document its contract");
+    check(
+        backend_lifecycle_header.find("Initialize native FEM backend runtime resources behind the C ABI facade") !=
+            std::string::npos,
+        "backend lifecycle runtime header must document its initialization contract");
+    check(
+        backend_lifecycle_header.find("does not own exported fullmag_fem_backend_destroy") !=
+            std::string::npos,
+        "backend lifecycle runtime header must document its non-owning C ABI boundary");
     check(
         eigen_dense.find("Dense generalized eigensolver runtime source contract") !=
             std::string::npos,

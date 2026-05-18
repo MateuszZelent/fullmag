@@ -177,6 +177,7 @@ export default function Viewport3DModule({
       onCameraChange={saveCameraState}
       captureRevision={commandState.captureRevision}
       resetCameraRevision={commandState.resetCameraRevision}
+      rotationMode={commandState.widgets.rotationMode}
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}

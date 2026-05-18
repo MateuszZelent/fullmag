@@ -9,7 +9,7 @@ struct Context;
 /*
  * Runtime state owned by the prescribed-strain magnetoelastic evaluator.
  *
- * Owns plan-level enablement, B1/B2 coupling constants, strain mode and
+ * This state owns plan-level enablement, B1/B2 coupling constants, strain mode and
  * Voigt strain storage, the computed AoS-3 H_mel field, and conservative
  * coupling energy from the last evaluation.
  */
@@ -26,6 +26,8 @@ struct MagnetoelasticRuntimeState {
 /*
  * Compute prescribed-strain magnetoelastic effective field and energy.
  *
+ * This module owns prescribed-strain magnetoelastic H_mel and energy
+ * evaluation from the current magnetization.
  * The strain buffer uses Voigt engineering-shear order
  * `[e11, e22, e33, 2e23, 2e13, 2e12]`. The field contribution is returned in
  * A/m and stored in `ctx.magnetoelastic.h_xyz`; the conservative coupling

@@ -8,6 +8,8 @@
 
 #include "transfer_audit.hpp"
 
+#include "context.hpp"
+
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
@@ -201,6 +203,11 @@ void record_mfem_host_read_write(uint64_t bytes)
 fullmag_fem_transfer_audit transfer_audit_snapshot(const TransferAudit &audit)
 {
     return audit.counters;
+}
+
+fullmag_fem_transfer_audit transfer_audit_snapshot(const Context &ctx)
+{
+    return transfer_audit_snapshot(ctx.transfer_audit);
 }
 
 void configure_transfer_audit_from_env(TransferAudit &audit)

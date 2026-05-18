@@ -20,6 +20,18 @@ struct InterruptRuntimeState {
 };
 
 /*
+ * Install the native FEM cooperative interrupt hook.
+ *
+ * C ABI entrypoints pass the callback pointer and opaque user data through this
+ * runtime helper so callback storage remains owned by InterruptRuntimeState
+ * rather than by facade code.
+ */
+void set_interrupt_poll(
+    Context &ctx,
+    fullmag_fem_interrupt_poll_fn poll_fn,
+    void *user_data);
+
+/*
  * Poll the native FEM cooperative interrupt hook.
  *
  * Interactive and managed-runtime paths install an optional C ABI callback on

@@ -253,7 +253,7 @@ Content:
 ```markdown
 # Native Backends
 
-This directory contains native execuction implementations for Fullmag solver families.
+This directory contains native execution implementations for Fullmag solver families.
 
 Directory rules:
 

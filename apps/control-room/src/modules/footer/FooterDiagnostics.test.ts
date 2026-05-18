@@ -95,6 +95,28 @@ describe("FooterDiagnostics", () => {
     });
   });
 
+  it("uses unique row identities when profiler samples share the same step", () => {
+    const duplicateStepProfile: SolverProfileResource = {
+      ...profile,
+      aggregates: {
+        ...profile.aggregates,
+        sample_count: 2,
+      },
+      latest_samples: [
+        profile.latest_samples[0],
+        {
+          ...profile.latest_samples[0],
+          time: 2e-12,
+          total_ns: 6_000_000,
+        },
+      ],
+    };
+    const model = buildSolverProfilePanelModel(duplicateStepProfile);
+
+    expect(model.rows.map((row) => row.step)).toEqual(["12", "12"]);
+    expect(new Set(model.rows.map((row) => row.id)).size).toBe(2);
+  });
+
   it("keeps the profiler panel idle when the resource is missing", () => {
     const model = buildSolverProfilePanelModel(null);
 

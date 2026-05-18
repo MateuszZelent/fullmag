@@ -50,6 +50,7 @@ export interface VisualizationTargetSettings {
   vectorLengthScale: number;
   vectorMonoColor: string;
   vectorSurfaceOffsetEnabled: boolean;
+  vectorSurfaceOffsetScale: number;
   vectorThickness: number;
   vectorsVisible: boolean;
   visible: boolean;
@@ -110,6 +111,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
   vectorSurfaceOffsetEnabled: false,
+  vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -135,6 +137,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorLengthScale: 1,
   vectorMonoColor: "var(--fm-accent)",
   vectorSurfaceOffsetEnabled: false,
+  vectorSurfaceOffsetScale: 0.1,
   vectorThickness: 1,
   vectorsVisible: false,
   visible: true,
@@ -917,6 +920,9 @@ export function airboxLocalVisualizationPatchFromTargetPatch(
     ...(patch.vectorSurfaceOffsetEnabled === undefined
       ? {}
       : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
+    ...(patch.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
     ...(patch.wireframeColor === undefined
       ? {}
       : { wireframeColor: patch.wireframeColor }),

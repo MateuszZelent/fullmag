@@ -200,8 +200,8 @@ def build_fem_sphere_study(
         size=(uni_span, uni_span, uni_span),
         center=(0.0, 0.0, 0.0),
         padding=(0.0, 0.0, 0.0),
-        airbox_hmax=hmax * airbox_hmax_factor,
     )
+    study.universe.mesh(maximum_element_size=hmax * airbox_hmax_factor)
     study.interactive(True)
 
     body = study.geometry(
@@ -211,9 +211,9 @@ def build_fem_sphere_study(
     body.Ms = float(ms)
     body.Aex = float(aex)
     body.alpha = float(alpha)
-    body.m = fm.uniform(m_direction)
+    body.m = fm.texture.uniform(m_direction)
 
-    study.object_mesh_defaults(
+    study.objects.mesh.defaults(
         algorithm_2d=6,
         algorithm_3d=1,
         size_factor=1,
@@ -225,7 +225,7 @@ def build_fem_sphere_study(
         per_element_quality=False,
     )
     body.mesh(
-        hmax=float(hmax),
+        maximum_element_size=float(hmax),
         order=1,
         algorithm_2d=1,
         algorithm_3d=1,
@@ -272,8 +272,8 @@ def build_fem_ellipsoid_study(
         size=(uni_span, uni_span, uni_span),
         center=(0.0, 0.0, 0.0),
         padding=(0.0, 0.0, 0.0),
-        airbox_hmax=hmax * airbox_hmax_factor,
     )
+    study.universe.mesh(maximum_element_size=hmax * airbox_hmax_factor)
     study.interactive(True)
 
     body = study.geometry(
@@ -283,9 +283,9 @@ def build_fem_ellipsoid_study(
     body.Ms = float(ms)
     body.Aex = float(aex)
     body.alpha = float(alpha)
-    body.m = fm.uniform(m_direction)
+    body.m = fm.texture.uniform(m_direction)
 
-    study.object_mesh_defaults(
+    study.objects.mesh.defaults(
         algorithm_2d=6,
         algorithm_3d=1,
         size_factor=1,
@@ -297,7 +297,7 @@ def build_fem_ellipsoid_study(
         per_element_quality=False,
     )
     body.mesh(
-        hmax=float(hmax),
+        maximum_element_size=float(hmax),
         order=1,
         algorithm_2d=1,
         algorithm_3d=1,

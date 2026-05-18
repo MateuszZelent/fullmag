@@ -134,9 +134,11 @@ void destroy_demag_poisson_hypre_workspace(Context &ctx)
 bool solve_demag_poisson_hypre(
     Context &ctx,
     const mfem::Vector &rhs,
-    mfem::Vector &solution,
+    const mfem::Vector &warm_start_solution,
+    const mfem::Vector *&solved_solution,
     std::string &error)
 {
+    solved_solution = nullptr;
 #ifdef MFEM_USE_MPI
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_apply_wall_time_ns = 0;
@@ -262,7 +264,7 @@ bool solve_demag_poisson_hypre(
 
     mfem::HypreParVector &b_par = poisson_hypre_workspace->b_par;
     mfem::HypreParVector &x_par = poisson_hypre_workspace->x_par;
-    if (b_par.Size() != rhs_bc.Size() || x_par.Size() != solution.Size()) {
+    if (b_par.Size() != rhs_bc.Size() || x_par.Size() != warm_start_solution.Size()) {
         error = "Hypre vector size mismatch during Poisson solve";
         return false;
     }
@@ -272,9 +274,9 @@ bool solve_demag_poisson_hypre(
         b_host[i] = rhs_host[i];
     }
     if (!poisson_hypre_workspace->x_par_contains_solution) {
-        const double *sol_host = audited_host_read(solution);
+        const double *sol_host = audited_host_read(warm_start_solution);
         double *x_host = audited_host_write(x_par);
-        for (int i = 0; i < solution.Size(); ++i) {
+        for (int i = 0; i < warm_start_solution.Size(); ++i) {
             x_host[i] = sol_host[i];
         }
     }
@@ -283,11 +285,8 @@ bool solve_demag_poisson_hypre(
     solver->Mult(b_par, x_par);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = elapsed_ns(solver_apply_wall_start);
 
-    const double *x_solved = audited_host_read(x_par);
-    double *solution_host = audited_host_write(solution);
-    for (int i = 0; i < solution.Size(); ++i) {
-        solution_host[i] = x_solved[i];
-    }
+    zero_poisson_essential_values(ctx, x_par);
+    solved_solution = &x_par;
     poisson_hypre_workspace->x_par_contains_solution = true;
 
     mfem::real_t final_residual = 0.0;
@@ -313,12 +312,11 @@ bool solve_demag_poisson_hypre(
     ctx.poisson_demag.last_iterations = iterations;
     ctx.poisson_demag.last_residual = static_cast<double>(final_residual);
 
-    zero_poisson_essential_values(ctx, solution);
     return true;
 #else
     (void)ctx;
     (void)rhs;
-    (void)solution;
+    (void)warm_start_solution;
     error =
         "Poisson demag requires an MPI/Hypre-enabled MFEM runtime; legacy CPU-native fallback solvers were removed";
     return false;

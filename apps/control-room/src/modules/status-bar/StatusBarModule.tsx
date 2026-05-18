@@ -5,7 +5,10 @@ import { useSyncExternalStore } from "react";
 import { useCurrentRunResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
 
-import { buildStatusBarEngineModel } from "./statusBarModel";
+import {
+  buildStatusBarEngineModel,
+  formatRuntimeBundleVersionLabel,
+} from "./statusBarModel";
 
 function readString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.length > 0 ? value : fallback;
@@ -40,7 +43,9 @@ export default function StatusBarModule() {
     ? readString(status.data?.session.name, "session unavailable")
     : "—";
   const runtimeVersion = mounted
-    ? readString(status.data?.runtime_bundle_version, "runtime unavailable")
+    ? formatRuntimeBundleVersionLabel(
+        readString(status.data?.runtime_bundle_version, "runtime unavailable"),
+      )
     : "—";
   const dotStatus = mounted ? status.status : "loading";
 

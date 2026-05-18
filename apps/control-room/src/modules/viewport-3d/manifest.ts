@@ -127,14 +127,17 @@ export const viewport3dManifest: ModuleManifest = {
                 "orthographic";
         },
         run: async (context) => {
-          const current =
-            visualizationStateFromContext(context) ??
-            (context.api ? await context.api.visualization.state() : null);
+          // Determine current projection synchronously — use resource data when
+          // available, fall back to the local store. Do NOT await the API here:
+          // the session endpoint may be unavailable and would throw before the
+          // store update, silently breaking the toggle.
           const currentProjection =
-            current?.camera?.projection ??
+            visualizationStateFromContext(context)?.camera?.projection ??
             viewport3dStore.getSnapshot().widgets.cameraProjection;
           const nextProjection =
             currentProjection === "orthographic" ? "perspective" : "orthographic";
+          // Update the local store immediately so the viewport responds without
+          // waiting for the backend round-trip.
           viewport3dStore.setCameraProjection(nextProjection);
           if (context.visualizationSync) {
             context.visualizationSync.queuePatch({
@@ -145,8 +148,6 @@ export const viewport3dManifest: ModuleManifest = {
               camera: { projection: nextProjection },
             });
             context.resources?.invalidate(VISUALIZATION_STATE_PATH, state.revision);
-          } else {
-            viewport3dStore.toggleCameraProjection();
           }
           return { status: "completed" };
         },
@@ -187,6 +188,32 @@ export const viewport3dManifest: ModuleManifest = {
           viewport3dStore.getSnapshot().widgets.hslReferenceMode === "off",
         run: () => {
           viewport3dStore.setHslReferenceMode("off");
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.rotation-camera",
+        title: "Use Free Camera Rotation",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.rotationMode === "camera",
+        run: () => {
+          viewport3dStore.setRotationMode("camera");
+          return { status: "completed" };
+        },
+      },
+      {
+        id: "viewport-3d.rotation-object",
+        title: "Use Object-Bound Rotation",
+        group: "viewport-3d",
+        category: "Viewport",
+        scope: "viewport",
+        isActive: () =>
+          viewport3dStore.getSnapshot().widgets.rotationMode === "object",
+        run: () => {
+          viewport3dStore.setRotationMode("object");
           return { status: "completed" };
         },
       },

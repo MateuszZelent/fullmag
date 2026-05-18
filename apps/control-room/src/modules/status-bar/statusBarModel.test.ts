@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { buildStatusBarEngineModel } from "./statusBarModel";
+import {
+  buildStatusBarEngineModel,
+  formatRuntimeBundleVersionLabel,
+} from "./statusBarModel";
 
 describe("statusBarModel", () => {
   it("labels the managed native FEM CPU engine as MFEM/hypre", () => {
@@ -28,8 +31,21 @@ describe("statusBarModel", () => {
     });
 
     expect(model).toMatchObject({
-      detail: "unresolved runtime",
+      detail: "resolution pending",
       label: "FEM GPU",
+      state: "pending",
+    });
+  });
+
+  it("shows auto runtime selection as pending instead of AUTO AUTO unresolved runtime", () => {
+    const model = buildStatusBarEngineModel({
+      requested_backend: "auto",
+      requested_device: "auto",
+    });
+
+    expect(model).toMatchObject({
+      detail: "selection pending",
+      label: "Runtime auto",
       state: "pending",
     });
   });
@@ -42,5 +58,11 @@ describe("statusBarModel", () => {
       label: "Engine pending",
       state: "pending",
     });
+  });
+
+  it("labels backend build dates explicitly", () => {
+    expect(formatRuntimeBundleVersionLabel("2026-05-18")).toBe(
+      "Backend built 2026-05-18",
+    );
   });
 });

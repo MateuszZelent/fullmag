@@ -141,6 +141,7 @@ export function buildVisualizationPanelSections({
         { id: "vectorBudget", kind: "number", label: "Arrow budget" },
         { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
         { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Surface lift" },
+        { id: "vectorSurfaceOffsetScale", kind: "number", label: "Surface lift amount" },
         { id: "geometryScope", kind: "mode", label: "Arrow extent" },
       ],
       id: "vectors",

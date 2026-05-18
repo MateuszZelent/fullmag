@@ -149,6 +149,9 @@ export function CommandPaletteView({
     }}>
       <Dialog.Overlay className="fm-command-palette__overlay" />
       <Dialog.Content className="fm-command-palette" aria-label="Command palette">
+        <Dialog.Title className="fm-command-palette__title">
+          Command palette
+        </Dialog.Title>
         <Command shouldFilter={false}>
           <CommandInput
             ref={inputRef}

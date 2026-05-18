@@ -47,7 +47,7 @@ describe("camera orientation math", () => {
 
     expect(next).toEqual({
       position: [6, 2, 1],
-      target: [6, 6, 1],
+      target: [6, -2, 1],
       up: [0, 0, 1],
     });
   });

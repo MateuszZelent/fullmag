@@ -88,6 +88,11 @@ still in `mfem_bridge.cpp`.
   helpers.
 - Non-periodic demag uses the extracted Hypre-backed solve helper when the MFEM
   runtime is MPI/Hypre-enabled.
+- The Hypre solve helper returns the solved workspace vector directly to
+  recovery and potential-cache update, avoiding the previous final host copy
+  from `x_par` back into the generic solution buffer. RHS transfer into
+  `b_par` and first-use warm-start transfer into `x_par` remain explicit,
+  audited host transfers.
 - Field recovery uses the extracted `recover_demag_poisson_field(...)` helper
   for both periodic lifted potentials and non-periodic Hypre solutions.
 - Recovered periodic demag fields are finalized by

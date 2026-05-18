@@ -21,6 +21,7 @@ namespace fullmag::fem {
 /*
  * Aggregated include surface for native Poisson-demag responsibilities.
  *
+ * This umbrella owns only the stable include surface for Poisson demag.
  * This umbrella header exists for compatibility with callers that need the
  * complete Poisson-demag surface, but it does not define RHS assembly,
  * boundary policy, solve, recovery, energy, cache, or telemetry. It also does

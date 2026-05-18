@@ -9,6 +9,8 @@ struct Context;
 /*
  * Add the Zeeman field contribution to an effective-field buffer in-place.
  *
+ * This module owns additive H_eff insertion for the prepared Zeeman H_ext
+ * buffer.
  * The output buffer remains in A/m. This is a local additive field term and has
  * no FEM assembly, solver, or boundary condition.
  *

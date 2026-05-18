@@ -36,22 +36,36 @@ export function buildStatusBarEngineModel(
   const heading = formatBackendDevice(backend, device);
   const engine = engineId ? describeEngine(engineId) : null;
   const family = normalizeToken(run.resolved_runtime_family);
+  const hasResolvedRuntime =
+    Boolean(engineId) || Boolean(family) || Boolean(resolvedBackend) || Boolean(resolvedDevice);
   const detail =
-    engine?.detail ?? (family ? humanizeToken(family) : "unresolved runtime");
-  const state =
-    engineId || family || resolvedBackend || resolvedDevice ? "resolved" : "pending";
+    engine?.detail ??
+    (family
+      ? humanizeToken(family)
+      : hasResolvedRuntime
+        ? "runtime resolved"
+        : pendingRuntimeDetail(requestedBackend, requestedDevice));
+  const state = hasResolvedRuntime ? "resolved" : "pending";
 
   return {
     detail,
     label: heading,
     state,
     title: [
+      `requested_backend=${requestedBackend ?? "unresolved"}`,
+      `requested_device=${requestedDevice ?? "unresolved"}`,
       `resolved_backend=${resolvedBackend ?? "unresolved"}`,
       `resolved_device=${resolvedDevice ?? "unresolved"}`,
       `resolved_engine_id=${engineId ?? "unresolved"}`,
       `resolved_runtime_family=${family ?? "unresolved"}`,
     ].join("\n"),
   };
+}
+
+export function formatRuntimeBundleVersionLabel(value: string): string {
+  const token = normalizeToken(value);
+  if (!token) return "runtime unavailable";
+  return isIsoCalendarDate(token) ? `Backend built ${token}` : token;
 }
 
 function describeEngine(engineId: string): { detail: string } | null {
@@ -79,10 +93,16 @@ function formatBackendDevice(
   backend: string | null,
   device: string | null,
 ): string {
-  const backendLabel = backend ? backend.toUpperCase() : "Runtime";
-  const deviceLabel = device ? device.toUpperCase() : null;
+  if (isAutoToken(backend) && isAutoToken(device)) return "Runtime auto";
 
-  return deviceLabel ? `${backendLabel} ${deviceLabel}` : backendLabel;
+  const backendLabel = backend && !isAutoToken(backend) ? backend.toUpperCase() : "Runtime";
+  const deviceLabel = device && !isAutoToken(device) ? device.toUpperCase() : null;
+
+  return deviceLabel
+    ? `${backendLabel} ${deviceLabel}`
+    : isAutoToken(device)
+      ? `${backendLabel} auto`
+      : backendLabel;
 }
 
 function normalizeToken(value: unknown): string | null {
@@ -93,4 +113,21 @@ function normalizeToken(value: unknown): string | null {
 
 function humanizeToken(value: string): string {
   return value.replaceAll(/[-_]+/g, " ");
+}
+
+function pendingRuntimeDetail(
+  requestedBackend: string | null,
+  requestedDevice: string | null,
+): string {
+  return isAutoToken(requestedBackend) && isAutoToken(requestedDevice)
+    ? "selection pending"
+    : "resolution pending";
+}
+
+function isAutoToken(value: string | null): boolean {
+  return value?.toLowerCase() === "auto";
+}
+
+function isIsoCalendarDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }

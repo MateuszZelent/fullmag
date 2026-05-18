@@ -42,6 +42,7 @@ describe("CommandPaletteModule", () => {
       />,
     );
 
+    expect(html).toContain("Command palette");
     expect(html).toContain("Command Palette");
     expect(html).toContain("Expand Explorer");
     expect(html).toContain("Ctrl+Shift+P");

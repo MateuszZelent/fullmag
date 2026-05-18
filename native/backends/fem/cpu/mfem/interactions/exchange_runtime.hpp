@@ -10,6 +10,8 @@ struct Context;
 /*
  * Refresh the current Context exchange/effective-field buffers from MFEM state.
  *
+ * This module owns Context-level exchange-field refresh orchestration for the
+ * active MFEM path.
  * This runtime wrapper synchronizes GPU magnetization back to host storage,
  * invokes the extracted effective-field composition path, records exchange
  * readiness, and keeps debug startup checkpoints out of the exchange operator

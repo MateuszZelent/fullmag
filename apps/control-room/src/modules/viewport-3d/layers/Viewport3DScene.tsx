@@ -30,6 +30,7 @@ import type {
 import type {
   Viewport3DCameraProjection,
   Viewport3DCameraState,
+  Viewport3DRotationMode,
 } from "../viewport3dStore";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
@@ -93,6 +94,7 @@ interface Viewport3DSceneProps {
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   resourceFrameKey: string;
+  rotationMode: Viewport3DRotationMode;
   selectionBounds: Viewport3DBounds | null;
   tracker: Viewport3DResourceTracker;
   topologyFreshness: Viewport3DTopologyFreshness;
@@ -219,6 +221,7 @@ export function Viewport3DScene({
   primitiveModel,
   resetCameraRevision,
   resourceFrameKey,
+  rotationMode,
   selectionBounds,
   tracker,
   topologyFreshness,
@@ -364,12 +367,14 @@ export function Viewport3DScene({
       <OrbitCameraControls
         cameraState={cameraState}
         onCameraChange={onCameraChange}
+        rotationMode={rotationMode}
         tracker={tracker}
       />
       <OrientationHudLayer
         colors={colors}
         hslReferenceVisible={hslReferenceVisible}
         onCameraChange={onCameraChange}
+        rotationMode={rotationMode}
         viewCubeVisible={viewCubeVisible}
       />
       <PostProcessingLayer />

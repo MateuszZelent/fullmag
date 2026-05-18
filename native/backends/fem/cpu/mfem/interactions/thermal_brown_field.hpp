@@ -9,6 +9,8 @@ struct Context;
 /*
  * Add the current Brown thermal field to an effective-field buffer in-place.
  *
+ * This module owns additive H_eff insertion for a previously sampled Brown
+ * thermal field.
  * The sampled field is already an H contribution in A/m. No torque, gamma,
  * damping, or mu0 conversion is applied here.
  * It does not sample RNG state or compute Brown sigma.

@@ -30,6 +30,7 @@ use fullmag_runner::LivePreviewField;
 
 mod artifacts;
 mod assets;
+mod build_info;
 mod error;
 mod feature_flags;
 mod fem_slice;

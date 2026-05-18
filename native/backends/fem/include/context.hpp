@@ -116,8 +116,3 @@ struct Context {
 bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
 
 } // namespace fullmag::fem
-
-struct fullmag_fem_backend {
-    fullmag::fem::Context context;
-    std::string last_error;
-};
