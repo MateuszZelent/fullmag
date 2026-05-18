@@ -91,6 +91,15 @@ type SectionDisabled = (
   id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
 ) => boolean;
 
+function remoteVisualizationTargetPatch(
+  patch: VisualizationTargetPatch,
+): VisualizationTargetPatch {
+  const remotePatch = { ...patch };
+  delete remotePatch.vectorCenteringEnabled;
+  delete remotePatch.vectorSurfaceOffsetEnabled;
+  return remotePatch;
+}
+
 function VisualizationDisplayPassesSection({
   displaySettings,
   passControlsDisabled,
@@ -269,6 +278,29 @@ function VisualizationVectorsSection({
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow budget" max={4096} min={8} step={8} value={settings.vectorBudget} onChange={(value) => patchNumber("vectorBudget", value)} />
+      <div className="fm-visualization-toggle-grid">
+        <ToggleButton
+          active={settings.vectorCenteringEnabled}
+          disabled={pending || sectionDisabled("vectors")}
+          label="Centered arrows"
+          onClick={() =>
+            void patch({
+              vectorCenteringEnabled: !settings.vectorCenteringEnabled,
+            })
+          }
+        />
+        <ToggleButton
+          active={settings.vectorSurfaceOffsetEnabled}
+          disabled={pending || sectionDisabled("vectors")}
+          label="Surface lift"
+          onClick={() =>
+            void patch({
+              vectorSurfaceOffsetEnabled:
+                !settings.vectorSurfaceOffsetEnabled,
+            })
+          }
+        />
+      </div>
       <div className="fm-visualization-segments" role="group" aria-label="Arrow extent">
         {GEOMETRY_SCOPES.map((scope) => (
           <Button
@@ -448,13 +480,16 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
       return;
     }
 
-    visualizationSync.queuePatch({
-      overrides: mergeVisualizationStateTargetOverride(
-        visualizationState.data.overrides ?? [],
-        target,
-        patchValue,
-      ),
-    });
+    const remotePatch = remoteVisualizationTargetPatch(patchValue);
+    if (Object.keys(remotePatch).length > 0) {
+      visualizationSync.queuePatch({
+        overrides: mergeVisualizationStateTargetOverride(
+          visualizationState.data.overrides ?? [],
+          target,
+          remotePatch,
+        ),
+      });
+    }
     // Keep the patch locally for immediate inspector/ribbon feedback until the
     // revision-driven resource refetch lands.
     visualization.patchTarget(target, patchValue);

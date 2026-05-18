@@ -1185,21 +1185,42 @@ describe("ribbon structure", () => {
       (node) =>
         node.type === "radio-group" && node.id === "vectors:geometry-scope",
     );
+    const placementNode = vectorsAction?.menu?.find(
+      (node) => node.type === "submenu" && node.id === "vectors:placement",
+    );
+    const centeringNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:centered-anchor",
+        )
+      : undefined;
+    const surfaceOffsetNode = placementNode?.type === "submenu"
+      ? placementNode.nodes.find(
+          (node) =>
+            node.type === "checkbox" && node.id === "vectors:surface-offset",
+        )
+      : undefined;
 
     expect(visibleNode).toMatchObject({ checked: false });
     expect(densityNode).toMatchObject({ value: 58 });
     expect(scopeNode).toMatchObject({ value: "full" });
+    expect(centeringNode).toMatchObject({ checked: true });
+    expect(surfaceOffsetNode).toMatchObject({ checked: false });
     if (
       visibleNode?.type !== "checkbox" ||
       densityNode?.type !== "slider" ||
-      scopeNode?.type !== "radio-group"
+      scopeNode?.type !== "radio-group" ||
+      centeringNode?.type !== "checkbox" ||
+      surfaceOffsetNode?.type !== "checkbox"
     ) {
-      throw new Error("Expected vector visibility, density and scope controls");
+      throw new Error("Expected vector visibility, density, scope and placement controls");
     }
 
     await runRibbonNode(visibleNode, true, context);
     await runRibbonNode(densityNode, 2048, context);
     await runRibbonNode(scopeNode, "surface", context);
+    await runRibbonNode(centeringNode, false, context);
+    await runRibbonNode(surfaceOffsetNode, true, context);
 
     expect(patches).toEqual([
       {
@@ -1214,9 +1235,13 @@ describe("ribbon structure", () => {
     ]);
     expect(context.visualization.getDefaultSettings("object")).toMatchObject({
       geometryScope: "surface",
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
     });
     expect(context.visualization.getDefaultSettings("part")).toMatchObject({
       geometryScope: "surface",
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
     });
   });
 
@@ -1508,7 +1533,7 @@ describe("ribbon structure", () => {
     });
   });
 
-  it("exposes compute fields through the Study control group command", () => {
+  it("exposes study compute commands through the Study control group", () => {
     const commands = new CommandRegistry();
     for (const command of STUDY_RUNTIME_COMMANDS) {
       commands.register(command);
@@ -1559,11 +1584,20 @@ describe("ribbon structure", () => {
     const computeFieldsAction = content?.groups
       .find((group) => group.id === "control")
       ?.actions.find((action) => action.id === "study.compute-fields");
+    const computeAction = content?.groups
+      .find((group) => group.id === "control")
+      ?.actions.find((action) => action.id === "study.run");
 
     expect(computeFieldsAction).toMatchObject({
       disabled: false,
       label: "Compute Fields",
     });
+    expect(computeAction).toMatchObject({
+      disabled: false,
+      label: "Compute",
+    });
+    expect(computeAction?.splitButton).toBeUndefined();
+    expect(computeAction?.menu).toBeUndefined();
   });
 
   it("marks active study runtime commands in the Study control group", () => {

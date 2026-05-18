@@ -8,8 +8,8 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
-#include <chrono>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -22,7 +22,7 @@ namespace fullmag::fem {
 
 bool demag_periodic_poisson_reduction_requested(const Context &ctx)
 {
-    return ctx.enable_demag && !ctx.mesh.periodic_node_pairs.empty();
+    return ctx.demag.enabled && !ctx.mesh.periodic_node_pairs.empty();
 }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -46,15 +46,6 @@ struct PeriodicPoissonReducedWorkspace {
 };
 
 namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
 
 mfem::SparseMatrix *reduce_sparse_matrix_by_periodic_classes(
     const mfem::SparseMatrix &A,
@@ -86,7 +77,7 @@ void reduce_vector_by_periodic_classes(
 {
     reduced.SetSize(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
     reduced = 0.0;
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const uint32_t r = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         reduced[static_cast<int>(r)] += full[static_cast<int>(node)];
     }
@@ -97,8 +88,8 @@ void lift_vector_by_periodic_classes(
     const mfem::Vector &reduced,
     mfem::Vector &full)
 {
-    full.SetSize(static_cast<int>(ctx.n_nodes));
-    for (uint32_t node = 0; node < ctx.n_nodes; ++node) {
+    full.SetSize(static_cast<int>(ctx.mesh.n_nodes));
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
         const uint32_t r = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
         full[static_cast<int>(node)] = reduced[static_cast<int>(r)];
     }
@@ -115,25 +106,25 @@ bool initialize_demag_periodic_poisson_reduction(
         return true;
     }
 
-    auto *A_full = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    auto *A_full = static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);
     if (A_full == nullptr) {
         error = "Poisson BC operator is null when building periodic reduced system";
         return false;
     }
 
     try {
-        ctx.mfem_periodic_poisson_matrix =
+        ctx.poisson_demag.periodic_matrix =
             reduce_sparse_matrix_by_periodic_classes(*A_full, ctx);
-        ctx.mfem_periodic_poisson_rhs =
+        ctx.poisson_demag.periodic_rhs =
             new mfem::Vector(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
         auto *periodic_solution =
             new mfem::Vector(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
         *periodic_solution = 0.0;
-        ctx.mfem_periodic_poisson_solution = periodic_solution;
-        ctx.mfem_periodic_poisson_workspace =
+        ctx.poisson_demag.periodic_solution = periodic_solution;
+        ctx.poisson_demag.periodic_workspace =
             new PeriodicPoissonReducedWorkspace(
-                *static_cast<mfem::SparseMatrix *>(ctx.mfem_periodic_poisson_matrix));
-        ctx.poisson_periodic_reduced_ready = true;
+                *static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix));
+        ctx.poisson_demag.periodic_reduced_ready = true;
         return true;
     } catch (const std::exception &ex) {
         error = std::string("Periodic Poisson reduced-system initialization failed: ") + ex.what();
@@ -146,15 +137,15 @@ bool initialize_demag_periodic_poisson_reduction(
 
 void destroy_demag_periodic_poisson_reduction(Context &ctx)
 {
-    delete static_cast<PeriodicPoissonReducedWorkspace *>(ctx.mfem_periodic_poisson_workspace);
-    ctx.mfem_periodic_poisson_workspace = nullptr;
-    delete static_cast<mfem::SparseMatrix *>(ctx.mfem_periodic_poisson_matrix);
-    ctx.mfem_periodic_poisson_matrix = nullptr;
-    delete static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_rhs);
-    ctx.mfem_periodic_poisson_rhs = nullptr;
-    delete static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_solution);
-    ctx.mfem_periodic_poisson_solution = nullptr;
-    ctx.poisson_periodic_reduced_ready = false;
+    delete static_cast<PeriodicPoissonReducedWorkspace *>(ctx.poisson_demag.periodic_workspace);
+    ctx.poisson_demag.periodic_workspace = nullptr;
+    delete static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
+    ctx.poisson_demag.periodic_matrix = nullptr;
+    delete static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_rhs);
+    ctx.poisson_demag.periodic_rhs = nullptr;
+    delete static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_solution);
+    ctx.poisson_demag.periodic_solution = nullptr;
+    ctx.poisson_demag.periodic_reduced_ready = false;
 }
 
 bool solve_demag_periodic_poisson_reduced(
@@ -166,11 +157,11 @@ bool solve_demag_periodic_poisson_reduced(
 {
     full_solution = nullptr;
     solve_wall_time_ns = 0;
-    auto *rhs_p = static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_rhs);
-    auto *x_p = static_cast<mfem::Vector *>(ctx.mfem_periodic_poisson_solution);
+    auto *rhs_p = static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_rhs);
+    auto *x_p = static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_solution);
     auto *periodic_workspace =
-        static_cast<PeriodicPoissonReducedWorkspace *>(ctx.mfem_periodic_poisson_workspace);
-    if (ctx.mfem_periodic_poisson_matrix == nullptr ||
+        static_cast<PeriodicPoissonReducedWorkspace *>(ctx.poisson_demag.periodic_workspace);
+    if (ctx.poisson_demag.periodic_matrix == nullptr ||
         rhs_p == nullptr ||
         x_p == nullptr ||
         periodic_workspace == nullptr) {
@@ -178,24 +169,24 @@ bool solve_demag_periodic_poisson_reduced(
         return false;
     }
 
-    const auto solve_wall_start = SteadyClock::now();
+    const auto solve_wall_start = FemSteadyClock::now();
     reduce_vector_by_periodic_classes(ctx, rhs, *rhs_p);
 
-    const double rel_tol = ctx.demag_solver.relative_tolerance > 0.0
-                               ? ctx.demag_solver.relative_tolerance
+    const double rel_tol = ctx.demag.solver.relative_tolerance > 0.0
+                               ? ctx.demag.solver.relative_tolerance
                                : 1e-10;
-    const int max_iter = ctx.demag_solver.max_iterations > 0
-                             ? static_cast<int>(ctx.demag_solver.max_iterations)
+    const int max_iter = ctx.demag.solver.max_iterations > 0
+                             ? static_cast<int>(ctx.demag.solver.max_iterations)
                              : 1000;
     periodic_workspace->configure(rel_tol, max_iter);
-    ctx.poisson_last_setup_wall_time_ns = 0;
-    ctx.poisson_last_solver_setup_reused = true;
-    const auto solver_apply_wall_start = SteadyClock::now();
+    ctx.poisson_demag.last_setup_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_setup_reused = true;
+    const auto solver_apply_wall_start = FemSteadyClock::now();
     periodic_workspace->solver.Mult(*rhs_p, *x_p);
-    ctx.poisson_last_solver_apply_wall_time_ns =
+    ctx.poisson_demag.last_solver_apply_wall_time_ns =
         elapsed_ns(solver_apply_wall_start);
-    ctx.poisson_last_iterations = 0;
-    ctx.poisson_last_residual = 0.0;
+    ctx.poisson_demag.last_iterations = 0;
+    ctx.poisson_demag.last_residual = 0.0;
 
     mfem::Vector &lifted_solution = periodic_workspace->full_solution;
     lift_vector_by_periodic_classes(ctx, *x_p, lifted_solution);

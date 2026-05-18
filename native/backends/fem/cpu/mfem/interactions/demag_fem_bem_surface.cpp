@@ -101,13 +101,13 @@ bool face_references_valid_nodes(
     const Context &ctx,
     const std::array<uint32_t, 3> &face)
 {
-    return face[0] < ctx.n_nodes && face[1] < ctx.n_nodes && face[2] < ctx.n_nodes;
+    return face[0] < ctx.mesh.n_nodes && face[1] < ctx.mesh.n_nodes && face[2] < ctx.mesh.n_nodes;
 }
 
 bool build_face_records(const Context &ctx, std::vector<FaceRecord> &records, std::string &error) {
     records.clear();
-    records.reserve(static_cast<size_t>(ctx.n_elements) * 4u);
-    for (uint32_t elem = 0; elem < ctx.n_elements; ++elem) {
+    records.reserve(static_cast<size_t>(ctx.mesh.n_elements) * 4u);
+    for (uint32_t elem = 0; elem < ctx.mesh.n_elements; ++elem) {
         if (!ctx.mesh.magnetic_element_mask.empty() &&
             ctx.mesh.magnetic_element_mask[static_cast<size_t>(elem)] == 0u) {
             continue;
@@ -120,7 +120,7 @@ bool build_face_records(const Context &ctx, std::vector<FaceRecord> &records, st
             ctx.mesh.elements[base + 3u],
         };
         for (uint32_t node : tet) {
-            if (node >= ctx.n_nodes) {
+            if (node >= ctx.mesh.n_nodes) {
                 error = "FEM/BEM demag boundary extraction found an element node outside the mesh";
                 return false;
             }
@@ -172,7 +172,7 @@ bool add_oriented_boundary_face(
     DemagBoundarySurface &surface,
     std::string &error)
 {
-    if (!face_references_valid_nodes(ctx, input_tri) || opposite >= ctx.n_nodes) {
+    if (!face_references_valid_nodes(ctx, input_tri) || opposite >= ctx.mesh.n_nodes) {
         error = "FEM/BEM demag boundary face references a node outside the mesh";
         return false;
     }
@@ -217,9 +217,9 @@ bool build_demag_boundary_surface(
     std::string &error)
 {
     surface = {};
-    surface.global_to_boundary.assign(static_cast<size_t>(ctx.n_nodes), -1);
+    surface.global_to_boundary.assign(static_cast<size_t>(ctx.mesh.n_nodes), -1);
 
-    if (ctx.n_nodes == 0 || ctx.n_elements == 0) {
+    if (ctx.mesh.n_nodes == 0 || ctx.mesh.n_elements == 0) {
         error = "FEM/BEM demag requires a non-empty magnetic tetrahedral mesh";
         return false;
     }

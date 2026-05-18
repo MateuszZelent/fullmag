@@ -71,6 +71,12 @@ void dmi_workspace_is_owned_by_workspace_module() {
         workspace_header.find(workspace_type) != std::string::npos,
         "DMI element workspace type must be declared in dmi_workspace.hpp");
     check(
+        workspace_header.find("DmiRuntimeState::workspace") != std::string::npos,
+        "DMI workspace header must document runtime-state workspace ownership");
+    check(
+        workspace_header.find("Context::mfem_dmi_workspace") == std::string::npos,
+        "DMI workspace header must not document flat Context workspace ownership");
+    check(
         workspace_impl.find(workspace_getter) != std::string::npos,
         "DMI workspace getter must be defined in dmi_workspace.cpp");
     check(
@@ -87,7 +93,7 @@ void dmi_plan_fields_are_owned_by_dmi_module() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi.hpp");
 
     check(
-        context.find("ctx.enable_dmi = plan.has_interfacial_dmi") == std::string::npos,
+        context.find("ctx.dmi.interfacial_enabled = plan.has_interfacial_dmi") == std::string::npos,
         "Context must not own DMI plan flag import");
     check(
         context.find("plan.dmi_interface_normal") == std::string::npos,
@@ -229,6 +235,24 @@ void dmi_runtime_state_is_owned_by_aggregate_module() {
         dmi_header.find("double energy_joules") != std::string::npos,
         "DMI runtime state must own the combined DMI energy diagnostic");
     check(
+        dmi_header.find("bool interfacial_enabled") != std::string::npos,
+        "DMI runtime state must own the interfacial DMI enable flag");
+    check(
+        dmi_header.find("double interfacial_D") != std::string::npos,
+        "DMI runtime state must own the interfacial DMI constant");
+    check(
+        dmi_header.find("std::array<double, 3> interface_normal") != std::string::npos,
+        "DMI runtime state must own the normalized interfacial normal");
+    check(
+        dmi_header.find("bool bulk_enabled") != std::string::npos,
+        "DMI runtime state must own the bulk DMI enable flag");
+    check(
+        dmi_header.find("double bulk_D") != std::string::npos,
+        "DMI runtime state must own the bulk DMI constant");
+    check(
+        dmi_header.find("DmiElementWorkspace *workspace") != std::string::npos,
+        "DMI runtime state must own reusable MFEM element-loop scratch");
+    check(
         context_header.find("DmiRuntimeState dmi") != std::string::npos,
         "Context must store DMI runtime output through the DMI owner");
     check(
@@ -240,6 +264,24 @@ void dmi_runtime_state_is_owned_by_aggregate_module() {
     check(
         context_header.find("last_dmi_energy_joules") == std::string::npos,
         "Context must not own flat DMI energy state");
+    check(
+        context_header.find("mfem_dmi_workspace") == std::string::npos,
+        "Context must not own flat DMI workspace scratch");
+    check(
+        context_header.find("bool enable_dmi") == std::string::npos,
+        "Context must not own a flat interfacial DMI enable flag");
+    check(
+        context_header.find("double dmi_D") == std::string::npos,
+        "Context must not own a flat interfacial DMI constant");
+    check(
+        context_header.find("std::array<double, 3> dmi_n_hat") == std::string::npos,
+        "Context must not own a flat DMI interface normal");
+    check(
+        context_header.find("bool enable_bulk_dmi") == std::string::npos,
+        "Context must not own a flat bulk DMI enable flag");
+    check(
+        context_header.find("double bulk_dmi_D") == std::string::npos,
+        "Context must not own a flat bulk DMI constant");
 }
 
 void bulk_dmi_is_owned_by_bulk_module() {
@@ -325,14 +367,14 @@ void check_zero_field(const std::vector<double> &field, const char *label) {
 
 fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 2;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     return ctx;
 }
 
 void disabled_interfacial_dmi_is_zero() {
     auto ctx = make_context();
-    ctx.enable_dmi = false;
+    ctx.dmi.interfacial_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -352,7 +394,7 @@ void disabled_interfacial_dmi_is_zero() {
 
 void disabled_bulk_dmi_is_zero() {
     auto ctx = make_context();
-    ctx.enable_bulk_dmi = false;
+    ctx.dmi.bulk_enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -372,8 +414,8 @@ void disabled_bulk_dmi_is_zero() {
 
 void active_dmi_reports_mfem_requirement_without_stack() {
     auto ctx = make_context();
-    ctx.enable_dmi = true;
-    ctx.dmi_D = 1.0e-3;
+    ctx.dmi.interfacial_enabled = true;
+    ctx.dmi.interfacial_D = 1.0e-3;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -398,8 +440,8 @@ void active_dmi_reports_mfem_requirement_without_stack() {
 
 void active_bulk_dmi_reports_mfem_requirement_without_stack() {
     auto ctx = make_context();
-    ctx.enable_bulk_dmi = true;
-    ctx.bulk_dmi_D = 1.0e-3;
+    ctx.dmi.bulk_enabled = true;
+    ctx.dmi.bulk_D = 1.0e-3;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -435,19 +477,19 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
 
     fullmag::fem::initialize_dmi_plan_fields(ctx, plan);
 
-    check(ctx.enable_dmi, "interfacial DMI flag copied");
-    check(ctx.dmi_D == 1.25e-3, "interfacial DMI constant copied");
-    check(ctx.enable_bulk_dmi, "bulk DMI flag copied");
-    check(ctx.bulk_dmi_D == 2.5e-3, "bulk DMI constant copied");
-    check(ctx.dmi_n_hat[0] == 0.0, "DMI normal x normalized");
-    check(ctx.dmi_n_hat[1] == 0.0, "DMI normal y normalized");
-    check(ctx.dmi_n_hat[2] == 1.0, "DMI normal z normalized");
+    check(ctx.dmi.interfacial_enabled, "interfacial DMI flag copied");
+    check(ctx.dmi.interfacial_D == 1.25e-3, "interfacial DMI constant copied");
+    check(ctx.dmi.bulk_enabled, "bulk DMI flag copied");
+    check(ctx.dmi.bulk_D == 2.5e-3, "bulk DMI constant copied");
+    check(ctx.dmi.interface_normal[0] == 0.0, "DMI normal x normalized");
+    check(ctx.dmi.interface_normal[1] == 0.0, "DMI normal y normalized");
+    check(ctx.dmi.interface_normal[2] == 1.0, "DMI normal z normalized");
 
     fullmag_fem_plan_desc zero_normal_plan{};
     fullmag::fem::initialize_dmi_plan_fields(ctx, zero_normal_plan);
-    check(ctx.dmi_n_hat[0] == 0.0, "zero DMI normal defaults x");
-    check(ctx.dmi_n_hat[1] == 0.0, "zero DMI normal defaults y");
-    check(ctx.dmi_n_hat[2] == 1.0, "zero DMI normal defaults z");
+    check(ctx.dmi.interface_normal[0] == 0.0, "zero DMI normal defaults x");
+    check(ctx.dmi.interface_normal[1] == 0.0, "zero DMI normal defaults y");
+    check(ctx.dmi.interface_normal[2] == 1.0, "zero DMI normal defaults z");
 }
 
 } // namespace

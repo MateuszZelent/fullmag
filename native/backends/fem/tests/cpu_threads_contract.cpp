@@ -139,20 +139,20 @@ void fullmag_auto_mode_overrides_manual_omp() {
 
 void auto_thread_cap_scales_by_context_size() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 5000;
-    ctx.n_elements = 1000;
+    ctx.mesh.n_nodes = 5000;
+    ctx.mesh.n_elements = 1000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 8,
         "small FEM contexts cap auto CPU threads at 8");
 
-    ctx.n_nodes = 20000;
-    ctx.n_elements = 100000;
+    ctx.mesh.n_nodes = 20000;
+    ctx.mesh.n_elements = 100000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 16,
         "medium FEM contexts cap auto CPU threads at 16");
 
-    ctx.n_nodes = 100000;
-    ctx.n_elements = 500000;
+    ctx.mesh.n_nodes = 100000;
+    ctx.mesh.n_elements = 500000;
     check(
         fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 32,
         "large FEM contexts keep requested auto CPU threads");

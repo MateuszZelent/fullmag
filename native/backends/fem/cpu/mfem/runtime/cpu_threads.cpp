@@ -86,8 +86,8 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads)
     if (requested_threads <= 1 || mfem_device_requests_gpu(ctx)) {
         return std::max(1, requested_threads);
     }
-    const uint32_t node_count = ctx.n_nodes;
-    const uint32_t element_count = ctx.n_elements;
+    const uint32_t node_count = ctx.mesh.n_nodes;
+    const uint32_t element_count = ctx.mesh.n_elements;
     if (node_count <= 10000u || element_count <= 75000u) {
         return std::min(requested_threads, 8);
     }
@@ -123,13 +123,13 @@ void log_cpu_runtime_selection(const Context &ctx)
     std::fprintf(
         stderr,
         "[fullmag-fem] cpu runtime: poisson_solver=%s preconditioner=%s cpu_threads=%s requested_omp_threads=%d effective_omp_threads=%d mesh_nodes=%u elements=%u\n",
-        demag_poisson_linear_solver_name(ctx.demag_solver.solver),
-        demag_poisson_preconditioner_name(ctx.demag_solver.preconditioner),
+        demag_poisson_linear_solver_name(ctx.demag.solver.solver),
+        demag_poisson_preconditioner_name(ctx.demag.solver.preconditioner),
         thread_mode,
         ctx.cpu_threads.requested_omp_threads,
         ctx.cpu_threads.effective_omp_threads,
-        ctx.n_nodes,
-        ctx.n_elements);
+        ctx.mesh.n_nodes,
+        ctx.mesh.n_elements);
 }
 
 } // namespace fullmag::fem

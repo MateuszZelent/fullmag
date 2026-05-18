@@ -468,6 +468,15 @@ const viewTab: RibbonTabContent = {
             { type: "label",    id: "vectors:header",   label: "Field arrows",                badge: "off" },
             { type: "checkbox", id: "vectors:visible",  label: "Show vectors / field arrows", checked: false },
             { type: "slider",   id: "vectors:density",  label: "Vector glyph budget",         value: 1200, min: 8, max: 4096, step: 8 },
+            {
+              type: "submenu",
+              id: "vectors:placement",
+              label: "Arrow placement",
+              nodes: [
+                { type: "checkbox", id: "vectors:centered-anchor", label: "Center arrows on mesh nodes", checked: true },
+                { type: "checkbox", id: "vectors:surface-offset",  label: "Lift surface arrows",         checked: false },
+              ],
+            },
             { type: "radio-group", id: "vectors:component", label: "Vector component", value: "3D", items: VECTOR_COMPONENT_ITEMS },
             {
               type: "submenu",
@@ -1422,7 +1431,7 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Evaluate active fields for the current magnetization" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Evaluate current energies without changing magnetization" },
-        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, splitButton: true, iconColor: C.green, menu: [...statusMenu("study-runtime", "Runtime", "Idle"), separator("study-runtime-sep"), ...radioMenu("study-exec-mode", "Execution mode", "strict", [["strict", "Strict"], ["extended", "Extended"], ["hybrid", "Hybrid"]])] },
+        { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Submit the study solve command" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },
         { id: "study.save-checkpoint", icon: icon(Save), label: "Save Checkpoint", iconColor: C.blue },
@@ -2528,6 +2537,36 @@ function buildVectorsAction(
           visualizationDefaultsCommandInput({
             geometryScope: value as VisualizationGeometryScope,
           }),
+      },
+      {
+        type: "submenu",
+        id: "vectors:placement",
+        label: "Arrow placement",
+        disabled: !context.api,
+        nodes: [
+          {
+            type: "checkbox",
+            id: "vectors:centered-anchor",
+            label: "Center arrows on mesh nodes",
+            checked: objectVectorSettings.vectorCenteringEnabled,
+            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            commandInput: (checked: boolean) =>
+              visualizationDefaultsCommandInput({
+                vectorCenteringEnabled: checked,
+              }),
+          },
+          {
+            type: "checkbox",
+            id: "vectors:surface-offset",
+            label: "Lift surface arrows",
+            checked: objectVectorSettings.vectorSurfaceOffsetEnabled,
+            commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
+            commandInput: (checked: boolean) =>
+              visualizationDefaultsCommandInput({
+                vectorSurfaceOffsetEnabled: checked,
+              }),
+          },
+        ],
       },
       {
         type: "radio-group",

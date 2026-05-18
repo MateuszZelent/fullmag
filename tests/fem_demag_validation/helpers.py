@@ -16,6 +16,89 @@ import fullmag as fm
 MU0 = 4.0e-7 * math.pi
 
 
+class ValidationFailure(RuntimeError):
+    """Raised when a demag validation run does not meet acceptance criteria."""
+
+
+def _row_label(row: dict, label_key: str | None, index: int) -> str:
+    if label_key and label_key in row:
+        return str(row[label_key])
+    return f"row {index}"
+
+
+def require_finite_metrics(
+    rows: Sequence[dict],
+    metric_keys: Sequence[str],
+    *,
+    label_key: str | None = None,
+) -> None:
+    """Fail validation when any required metric is missing, nonnumeric, or NaN."""
+    if not rows:
+        raise ValidationFailure("validation produced no rows")
+    for index, row in enumerate(rows):
+        label = _row_label(row, label_key, index)
+        for key in metric_keys:
+            value = row.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValidationFailure(f"{label}: {key} is not finite")
+
+
+def require_relative_error_below(
+    row: dict,
+    *,
+    error_key: str,
+    threshold: float,
+    label: str,
+) -> None:
+    """Fail validation when one selected relative-error metric exceeds a bound."""
+    value = row.get(error_key)
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise ValidationFailure(f"{label}: {error_key} is not finite")
+    if float(value) >= threshold:
+        raise ValidationFailure(
+            f"{label}: {error_key}={float(value) * 100:.2f}% exceeds "
+            f"{threshold * 100:.2f}%"
+        )
+
+
+def require_grouped_error_improvement(
+    rows: Sequence[dict],
+    *,
+    group_key: str,
+    order_key: str,
+    error_key: str,
+) -> None:
+    """Fail validation when each group does not improve from first to last row."""
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        group = str(row.get(group_key, "unknown"))
+        grouped.setdefault(group, []).append(row)
+
+    if not grouped:
+        raise ValidationFailure("validation produced no convergence groups")
+
+    for group, group_rows in grouped.items():
+        finite_rows = [
+            row
+            for row in group_rows
+            if isinstance(row.get(order_key), (int, float))
+            and isinstance(row.get(error_key), (int, float))
+            and math.isfinite(float(row[order_key]))
+            and math.isfinite(float(row[error_key]))
+        ]
+        finite_rows.sort(key=lambda row: float(row[order_key]))
+        if len(finite_rows) < 2:
+            raise ValidationFailure(f"{group}: not enough finite rows for convergence")
+
+        first_error = float(finite_rows[0][error_key])
+        last_error = float(finite_rows[-1][error_key])
+        if last_error >= first_error:
+            raise ValidationFailure(
+                f"{group}: not convergent ({first_error * 100:.2f}% -> "
+                f"{last_error * 100:.2f}%)"
+            )
+
+
 # ── Analytical references ───────────────────────────────────────────────
 
 

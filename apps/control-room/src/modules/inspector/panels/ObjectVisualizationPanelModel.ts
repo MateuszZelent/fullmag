@@ -139,6 +139,8 @@ export function buildVisualizationPanelSections({
         { id: "vectorThickness", kind: "number", label: "Vector thickness" },
         { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
         { id: "vectorBudget", kind: "number", label: "Arrow budget" },
+        { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
+        { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Surface lift" },
         { id: "geometryScope", kind: "mode", label: "Arrow extent" },
       ],
       id: "vectors",

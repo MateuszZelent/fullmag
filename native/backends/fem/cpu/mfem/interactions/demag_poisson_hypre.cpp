@@ -8,10 +8,10 @@
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 #include "transfer_audit.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -42,15 +42,6 @@ struct PoissonHypreWorkspace {
 
 namespace {
 
-using SteadyClock = std::chrono::steady_clock;
-
-uint64_t elapsed_ns(const SteadyClock::time_point &start) {
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            SteadyClock::now() - start)
-            .count());
-}
-
 uint64_t vector_bytes(const mfem::Vector &vector) {
     return static_cast<uint64_t>(std::max(vector.Size(), 0)) * sizeof(double);
 }
@@ -66,7 +57,7 @@ double *audited_host_write(mfem::Vector &vector) {
 }
 
 void zero_poisson_essential_values(const Context &ctx, mfem::Vector &vec) {
-    for (const int tdof : ctx.poisson_ess_tdof_list) {
+    for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
         vec(tdof) = 0.0;
     }
 }
@@ -88,7 +79,7 @@ bool demag_poisson_hypre_has_warm_start(const Context &ctx)
 {
 #ifdef MFEM_USE_MPI
     auto *workspace =
-        static_cast<PoissonHypreWorkspace *>(ctx.mfem_poisson_hypre_workspace);
+        static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
     return workspace != nullptr && workspace->x_par_contains_solution;
 #else
     (void)ctx;
@@ -99,45 +90,45 @@ bool demag_poisson_hypre_has_warm_start(const Context &ctx)
 void destroy_demag_poisson_hypre_workspace(Context &ctx)
 {
 #ifdef MFEM_USE_MPI
-    delete static_cast<PoissonHypreWorkspace *>(ctx.mfem_poisson_hypre_workspace);
-    ctx.mfem_poisson_hypre_workspace = nullptr;
-    switch (ctx.demag_solver.solver) {
+    delete static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
+    ctx.poisson_demag.hypre_workspace = nullptr;
+    switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG:
-        delete static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_solver);
+        delete static_cast<mfem::HyprePCG *>(ctx.poisson_demag.cached_hypre_solver);
         break;
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES:
-        delete static_cast<mfem::HypreGMRES *>(ctx.mfem_cached_hypre_solver);
+        delete static_cast<mfem::HypreGMRES *>(ctx.poisson_demag.cached_hypre_solver);
         break;
     default:
         break;
     }
-    ctx.mfem_cached_hypre_solver = nullptr;
-    switch (ctx.demag_solver.preconditioner) {
+    ctx.poisson_demag.cached_hypre_solver = nullptr;
+    switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG:
-        delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_preconditioner);
+        delete static_cast<mfem::HypreBoomerAMG *>(ctx.poisson_demag.cached_hypre_preconditioner);
         break;
     case FULLMAG_FEM_PRECONDITIONER_JACOBI:
-        delete static_cast<mfem::HypreDiagScale *>(ctx.mfem_cached_hypre_preconditioner);
+        delete static_cast<mfem::HypreDiagScale *>(ctx.poisson_demag.cached_hypre_preconditioner);
         break;
     case FULLMAG_FEM_PRECONDITIONER_NONE:
-        delete static_cast<mfem::HypreIdentity *>(ctx.mfem_cached_hypre_preconditioner);
+        delete static_cast<mfem::HypreIdentity *>(ctx.poisson_demag.cached_hypre_preconditioner);
         break;
     default:
         break;
     }
-    ctx.mfem_cached_hypre_preconditioner = nullptr;
-    delete static_cast<mfem::HypreParMatrix *>(ctx.mfem_cached_hypre_par);
-    ctx.mfem_cached_hypre_par = nullptr;
+    ctx.poisson_demag.cached_hypre_preconditioner = nullptr;
+    delete static_cast<mfem::HypreParMatrix *>(ctx.poisson_demag.cached_hypre_par);
+    ctx.poisson_demag.cached_hypre_par = nullptr;
 #else
-    ctx.mfem_poisson_hypre_workspace = nullptr;
-    ctx.mfem_cached_hypre_solver = nullptr;
-    ctx.mfem_cached_hypre_preconditioner = nullptr;
-    ctx.mfem_cached_hypre_par = nullptr;
+    ctx.poisson_demag.hypre_workspace = nullptr;
+    ctx.poisson_demag.cached_hypre_solver = nullptr;
+    ctx.poisson_demag.cached_hypre_preconditioner = nullptr;
+    ctx.poisson_demag.cached_hypre_par = nullptr;
 #endif
-    ctx.poisson_solver_setup = false;
-    ctx.poisson_last_setup_wall_time_ns = 0;
-    ctx.poisson_last_solver_apply_wall_time_ns = 0;
-    ctx.poisson_last_solver_setup_reused = false;
+    ctx.poisson_demag.solver_setup = false;
+    ctx.poisson_demag.last_setup_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_apply_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_setup_reused = false;
 }
 
 bool solve_demag_poisson_hypre(
@@ -147,10 +138,10 @@ bool solve_demag_poisson_hypre(
     std::string &error)
 {
 #ifdef MFEM_USE_MPI
-    ctx.poisson_last_setup_wall_time_ns = 0;
-    ctx.poisson_last_solver_apply_wall_time_ns = 0;
-    ctx.poisson_last_solver_setup_reused = ctx.poisson_solver_setup;
-    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.mfem_poisson_bc_op);
+    ctx.poisson_demag.last_setup_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_apply_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_setup_reused = ctx.poisson_demag.solver_setup;
+    auto *A_bc = static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.poisson_bc_op);
     if (A_bc == nullptr) {
         error = "Poisson BC-eliminated operator is null during Hypre solve";
         return false;
@@ -162,11 +153,11 @@ bool solve_demag_poisson_hypre(
     HYPRE_BigInt row_starts[2] = {0, glob_size};
 
     auto *poisson_hypre_workspace =
-        static_cast<PoissonHypreWorkspace *>(ctx.mfem_poisson_hypre_workspace);
+        static_cast<PoissonHypreWorkspace *>(ctx.poisson_demag.hypre_workspace);
     if (poisson_hypre_workspace == nullptr) {
         poisson_hypre_workspace =
             new PoissonHypreWorkspace(MPI_COMM_WORLD, glob_size, row_starts);
-        ctx.mfem_poisson_hypre_workspace = poisson_hypre_workspace;
+        ctx.poisson_demag.hypre_workspace = poisson_hypre_workspace;
     }
 
     mfem::Vector &rhs_bc = poisson_hypre_workspace->rhs_bc;
@@ -174,16 +165,16 @@ bool solve_demag_poisson_hypre(
     rhs_bc = rhs;
     zero_poisson_essential_values(ctx, rhs_bc);
 
-    if (!ctx.poisson_solver_setup) {
-        const auto setup_wall_start = SteadyClock::now();
+    if (!ctx.poisson_demag.solver_setup) {
+        const auto setup_wall_start = FemSteadyClock::now();
         auto *A_par = new mfem::HypreParMatrix(MPI_COMM_WORLD, glob_size, row_starts, A_bc);
-        ctx.mfem_cached_hypre_par = A_par;
+        ctx.poisson_demag.cached_hypre_par = A_par;
 
         mfem::HypreSolver *preconditioner = nullptr;
-        switch (ctx.demag_solver.preconditioner) {
+        switch (ctx.demag.solver.preconditioner) {
         case FULLMAG_FEM_PRECONDITIONER_AMG: {
             auto *amg = new mfem::HypreBoomerAMG(*A_par);
-            amg->SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+            amg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
             amg->SetRelaxType(18);
             amg->SetCoarsening(8);
             amg->SetInterpolation(6);
@@ -203,23 +194,23 @@ bool solve_demag_poisson_hypre(
         default:
             error = "Unsupported native FEM demag preconditioner enum";
             delete A_par;
-            ctx.mfem_cached_hypre_par = nullptr;
+            ctx.poisson_demag.cached_hypre_par = nullptr;
             return false;
         }
-        ctx.mfem_cached_hypre_preconditioner = preconditioner;
+        ctx.poisson_demag.cached_hypre_preconditioner = preconditioner;
 
         mfem::HypreSolver *solver = nullptr;
-        switch (ctx.demag_solver.solver) {
+        switch (ctx.demag.solver.solver) {
         case FULLMAG_FEM_LINEAR_SOLVER_CG: {
             auto *pcg = new mfem::HyprePCG(MPI_COMM_WORLD);
             pcg->iterative_mode = true;
-            pcg->SetTol(ctx.demag_solver.relative_tolerance);
-            if (ctx.demag_solver.has_absolute_tolerance &&
-                ctx.demag_solver.absolute_tolerance > 0.0) {
-                pcg->SetAbsTol(ctx.demag_solver.absolute_tolerance);
+            pcg->SetTol(ctx.demag.solver.relative_tolerance);
+            if (ctx.demag.solver.has_absolute_tolerance &&
+                ctx.demag.solver.absolute_tolerance > 0.0) {
+                pcg->SetAbsTol(ctx.demag.solver.absolute_tolerance);
             }
-            pcg->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
-            pcg->SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+            pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
+            pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
             pcg->SetOperator(*A_par);
             pcg->SetPreconditioner(*preconditioner);
             solver = pcg;
@@ -228,14 +219,14 @@ bool solve_demag_poisson_hypre(
         case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
             auto *gmres = new mfem::HypreGMRES(MPI_COMM_WORLD);
             gmres->iterative_mode = true;
-            gmres->SetTol(ctx.demag_solver.relative_tolerance);
-            if (ctx.demag_solver.has_absolute_tolerance &&
-                ctx.demag_solver.absolute_tolerance > 0.0) {
-                gmres->SetAbsTol(ctx.demag_solver.absolute_tolerance);
+            gmres->SetTol(ctx.demag.solver.relative_tolerance);
+            if (ctx.demag.solver.has_absolute_tolerance &&
+                ctx.demag.solver.absolute_tolerance > 0.0) {
+                gmres->SetAbsTol(ctx.demag.solver.absolute_tolerance);
             }
-            gmres->SetMaxIter(static_cast<int>(ctx.demag_solver.max_iterations));
+            gmres->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
             gmres->SetKDim(50);
-            gmres->SetPrintLevel(static_cast<int>(ctx.demag_solver.print_level));
+            gmres->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
             gmres->SetOperator(*A_par);
             gmres->SetPreconditioner(*preconditioner);
             solver = gmres;
@@ -243,31 +234,31 @@ bool solve_demag_poisson_hypre(
         }
         default:
             error = "Unsupported native FEM demag linear solver enum";
-            switch (ctx.demag_solver.preconditioner) {
+            switch (ctx.demag.solver.preconditioner) {
             case FULLMAG_FEM_PRECONDITIONER_AMG:
-                delete static_cast<mfem::HypreBoomerAMG *>(ctx.mfem_cached_hypre_preconditioner);
+                delete static_cast<mfem::HypreBoomerAMG *>(ctx.poisson_demag.cached_hypre_preconditioner);
                 break;
             case FULLMAG_FEM_PRECONDITIONER_JACOBI:
-                delete static_cast<mfem::HypreDiagScale *>(ctx.mfem_cached_hypre_preconditioner);
+                delete static_cast<mfem::HypreDiagScale *>(ctx.poisson_demag.cached_hypre_preconditioner);
                 break;
             case FULLMAG_FEM_PRECONDITIONER_NONE:
-                delete static_cast<mfem::HypreIdentity *>(ctx.mfem_cached_hypre_preconditioner);
+                delete static_cast<mfem::HypreIdentity *>(ctx.poisson_demag.cached_hypre_preconditioner);
                 break;
             default:
                 break;
             }
-            ctx.mfem_cached_hypre_preconditioner = nullptr;
+            ctx.poisson_demag.cached_hypre_preconditioner = nullptr;
             delete A_par;
-            ctx.mfem_cached_hypre_par = nullptr;
+            ctx.poisson_demag.cached_hypre_par = nullptr;
             return false;
         }
-        ctx.mfem_cached_hypre_solver = solver;
+        ctx.poisson_demag.cached_hypre_solver = solver;
 
-        ctx.poisson_solver_setup = true;
-        ctx.poisson_last_setup_wall_time_ns = elapsed_ns(setup_wall_start);
+        ctx.poisson_demag.solver_setup = true;
+        ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_wall_start);
     }
 
-    auto *solver = static_cast<mfem::HypreSolver *>(ctx.mfem_cached_hypre_solver);
+    auto *solver = static_cast<mfem::HypreSolver *>(ctx.poisson_demag.cached_hypre_solver);
 
     mfem::HypreParVector &b_par = poisson_hypre_workspace->b_par;
     mfem::HypreParVector &x_par = poisson_hypre_workspace->x_par;
@@ -288,9 +279,9 @@ bool solve_demag_poisson_hypre(
         }
     }
 
-    const auto solver_apply_wall_start = SteadyClock::now();
+    const auto solver_apply_wall_start = FemSteadyClock::now();
     solver->Mult(b_par, x_par);
-    ctx.poisson_last_solver_apply_wall_time_ns = elapsed_ns(solver_apply_wall_start);
+    ctx.poisson_demag.last_solver_apply_wall_time_ns = elapsed_ns(solver_apply_wall_start);
 
     const double *x_solved = audited_host_read(x_par);
     double *solution_host = audited_host_write(solution);
@@ -301,15 +292,15 @@ bool solve_demag_poisson_hypre(
 
     mfem::real_t final_residual = 0.0;
     int iterations = 0;
-    switch (ctx.demag_solver.solver) {
+    switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
-        auto *pcg = static_cast<mfem::HyprePCG *>(ctx.mfem_cached_hypre_solver);
+        auto *pcg = static_cast<mfem::HyprePCG *>(ctx.poisson_demag.cached_hypre_solver);
         pcg->GetNumIterations(iterations);
         pcg->GetFinalResidualNorm(final_residual);
         break;
     }
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
-        auto *gmres = static_cast<mfem::HypreGMRES *>(ctx.mfem_cached_hypre_solver);
+        auto *gmres = static_cast<mfem::HypreGMRES *>(ctx.poisson_demag.cached_hypre_solver);
         gmres->GetNumIterations(iterations);
         gmres->GetFinalResidualNorm(final_residual);
         break;
@@ -319,8 +310,8 @@ bool solve_demag_poisson_hypre(
         final_residual = 0.0;
         break;
     }
-    ctx.poisson_last_iterations = iterations;
-    ctx.poisson_last_residual = static_cast<double>(final_residual);
+    ctx.poisson_demag.last_iterations = iterations;
+    ctx.poisson_demag.last_residual = static_cast<double>(final_residual);
 
     zero_poisson_essential_values(ctx, solution);
     return true;

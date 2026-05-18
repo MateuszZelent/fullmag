@@ -17,7 +17,7 @@ struct Context;
  * Interfacial and bulk DMI share the same per-element MFEM work buffers:
  * signed scalar component values, shape gradients, basis values, residual
  * accumulation, and an optional periodic-projected magnetization input. This
- * module owns scratch lifetime on `Context::mfem_dmi_workspace`.
+ * module owns scratch lifetime for `DmiRuntimeState::workspace`.
  *
  * It does not own interfacial or bulk DMI physics, field projection, energy accumulation, or effective-field composition.
  */

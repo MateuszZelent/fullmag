@@ -48,9 +48,9 @@ bool context_snapshot_stats_mfem(
     const auto wall_start = FemSteadyClock::now();
     PhaseTimings timings;
     stats = {};
-    ctx.demag_solves_current_step = 0;
+    ctx.poisson_demag.solves_current_step = 0;
 
-    if (!ctx.mfem_ready) {
+    if (!ctx.mfem_context.ready) {
         error = "MFEM snapshot requested before MFEM context initialization";
         return false;
     }
@@ -96,8 +96,8 @@ bool context_snapshot_stats_mfem(
         llg_rhs_aos(
             ctx.state.m_xyz,
             ctx.effective_field.h_xyz,
-            ctx.material.gyromagnetic_ratio,
-            ctx.material.damping,
+            ctx.material_fields.material.gyromagnetic_ratio,
+            ctx.material_fields.material.damping,
             ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
             rhs_current,
             max_rhs_current);
@@ -106,8 +106,8 @@ bool context_snapshot_stats_mfem(
         max_rhs_current = max_norm_aos(rhs_current);
     }
 
-    stats.step = ctx.step_count;
-    stats.time_seconds = ctx.current_time;
+    stats.step = ctx.state.step_count;
+    stats.time_seconds = ctx.state.current_time;
     stats.dt_seconds = 0.0;
     stats.exchange_energy_joules = exchange_energy;
     stats.demag_energy_joules = demag_energy;

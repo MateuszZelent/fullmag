@@ -112,6 +112,11 @@ void fem_mesh_topology_helpers_are_owned_by_core_module() {
         fem_mesh_header.find("struct FemMeshRuntimeState") != std::string::npos,
         "FemMesh header must declare the runtime mesh owner");
     check(
+        fem_mesh_header.find("uint32_t n_nodes") != std::string::npos &&
+            fem_mesh_header.find("uint32_t n_elements") != std::string::npos &&
+            fem_mesh_header.find("uint32_t n_boundary_faces") != std::string::npos,
+        "FemMesh runtime state must own mesh cardinalities");
+    check(
         fem_mesh_header.find("std::vector<double> nodes_xyz") != std::string::npos,
         "FemMesh runtime state must own node coordinates");
     check(
@@ -131,6 +136,11 @@ void fem_mesh_topology_helpers_are_owned_by_core_module() {
     check(
         context_header.find("FemMeshRuntimeState mesh{}") != std::string::npos,
         "Context must store FEM mesh runtime state as mesh");
+    check(
+        context_header.find("uint32_t n_nodes") == std::string::npos &&
+            context_header.find("uint32_t n_elements") == std::string::npos &&
+            context_header.find("uint32_t n_boundary_faces") == std::string::npos,
+        "Context must not own flat mesh cardinalities");
     check(
         context_header.find("std::vector<double> nodes_xyz;") == std::string::npos &&
             context_header.find("std::vector<uint32_t> elements;") == std::string::npos &&
@@ -158,9 +168,9 @@ void fem_mesh_topology_helpers_are_owned_by_core_module() {
 
 void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 3;
-    ctx.n_elements = 1;
-    ctx.n_boundary_faces = 1;
+    ctx.mesh.n_nodes = 3;
+    ctx.mesh.n_elements = 1;
+    ctx.mesh.n_boundary_faces = 1;
 
     const double nodes[] = {
         0.0, 0.0, 0.0,
@@ -176,12 +186,12 @@ void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
 
     fullmag_fem_mesh_desc mesh{};
     mesh.nodes_xyz = nodes;
-    mesh.n_nodes = ctx.n_nodes;
+    mesh.n_nodes = ctx.mesh.n_nodes;
     mesh.elements = elements;
-    mesh.n_elements = ctx.n_elements;
+    mesh.n_elements = ctx.mesh.n_elements;
     mesh.element_markers = element_markers;
     mesh.boundary_faces = boundary_faces;
-    mesh.n_boundary_faces = ctx.n_boundary_faces;
+    mesh.n_boundary_faces = ctx.mesh.n_boundary_faces;
     mesh.boundary_markers = boundary_markers;
     mesh.periodic_node_pairs = periodic_node_pairs;
     mesh.n_periodic_node_pairs = 1;
@@ -212,8 +222,8 @@ void mesh_plan_import_copies_geometry_markers_and_periodic_pairs() {
 
 void magnetic_masks_follow_shared_marker_policy() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 5;
-    ctx.n_elements = 2;
+    ctx.mesh.n_nodes = 5;
+    ctx.mesh.n_elements = 2;
     ctx.mesh.elements = {
         0u, 1u, 2u, 3u,
         1u, 2u, 3u, 4u,
@@ -244,13 +254,13 @@ void magnetic_masks_follow_shared_marker_policy() {
 
 void periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.n_elements = 1;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.n_elements = 1;
     ctx.mesh.periodic_node_pairs = {0u, 1u};
     ctx.mesh.periodic_reduced_node = {0u, 0u};
     ctx.mesh.periodic_representative_nodes = {0u};
     ctx.mesh.periodic_reduced_node_count = 1u;
-    ctx.enable_exchange = true;
+    ctx.exchange.enabled = true;
     ctx.material_fields.Ms_field = {800e3, 800e3};
     ctx.material_fields.A_field = {1.0e-11, 1.0e-11};
     ctx.material_fields.alpha_field = {0.02, 0.02};
@@ -260,7 +270,7 @@ void periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields
         fullmag::fem::validate_periodic_plan_compatibility(ctx, error),
         error.c_str());
 
-    ctx.enable_magnetoelastic = true;
+    ctx.magnetoelastic.enabled = true;
     check(
         !fullmag::fem::validate_periodic_plan_compatibility(ctx, error),
         "periodic plan rejects magnetoelastic without reduced operator");
@@ -268,7 +278,7 @@ void periodic_plan_compatibility_rejects_unsupported_terms_and_mismatched_fields
         error.find("periodic_node_pairs currently support only") != std::string::npos,
         "periodic unsupported-term error string");
 
-    ctx.enable_magnetoelastic = false;
+    ctx.magnetoelastic.enabled = false;
     ctx.material_fields.Ms_field = {800e3, 900e3};
     check(
         !fullmag::fem::validate_periodic_plan_compatibility(ctx, error),

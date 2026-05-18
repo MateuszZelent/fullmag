@@ -7,13 +7,18 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Runtime output owned by the prescribed-strain magnetoelastic evaluator.
+ * Runtime state owned by the prescribed-strain magnetoelastic evaluator.
  *
- * Plan-level enable/coupling/strain inputs stay in Context compatibility
- * storage, while this state tracks the computed AoS-3 H_mel field and
- * conservative coupling energy from the last evaluation.
+ * Owns plan-level enablement, B1/B2 coupling constants, strain mode and
+ * Voigt strain storage, the computed AoS-3 H_mel field, and conservative
+ * coupling energy from the last evaluation.
  */
 struct MagnetoelasticRuntimeState {
+    bool enabled = false;
+    double b1 = 0.0;
+    double b2 = 0.0;
+    bool uniform_strain = true;
+    std::vector<double> strain_voigt;
     std::vector<double> h_xyz;
     double energy_joules = 0.0;
 };

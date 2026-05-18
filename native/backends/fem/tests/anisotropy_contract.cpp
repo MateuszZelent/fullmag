@@ -110,11 +110,11 @@ void anisotropy_families_are_owned_by_separate_modules() {
         aggregate_header.find("anisotropy_cubic.*") != std::string::npos,
         "aggregate anisotropy header must name the cubic owner");
     check(
-        context.find("ctx.enable_anisotropy = plan.has_uniaxial_anisotropy != 0;") ==
+        context.find("ctx.anisotropy.uniaxial_enabled = plan.has_uniaxial_anisotropy != 0;") ==
             std::string::npos,
         "context_from_plan must delegate uniaxial anisotropy import to anisotropy.cpp");
     check(
-        context.find("ctx.enable_cubic_anisotropy = plan.has_cubic_anisotropy != 0;") ==
+        context.find("ctx.anisotropy.cubic_enabled = plan.has_cubic_anisotropy != 0;") ==
             std::string::npos,
         "context_from_plan must delegate cubic anisotropy import to anisotropy.cpp");
     check(
@@ -176,9 +176,61 @@ void anisotropy_runtime_state_is_owned_by_aggregate_module() {
     const std::string aggregate_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "anisotropy.hpp");
 
+    fullmag::fem::AnisotropyRuntimeState runtime;
+    runtime.uniaxial_enabled = true;
+    runtime.uniaxial_Ku = 1.0;
+    runtime.uniaxial_Ku2 = 2.0;
+    runtime.uniaxial_axis = {0.0, 0.0, 1.0};
+    runtime.cubic_enabled = true;
+    runtime.cubic_Kc1 = 3.0;
+    runtime.cubic_Kc2 = 4.0;
+    runtime.cubic_Kc3 = 5.0;
+    runtime.cubic_axis1 = {1.0, 0.0, 0.0};
+    runtime.cubic_axis2 = {0.0, 1.0, 0.0};
+    check(runtime.uniaxial_enabled, "anisotropy runtime state owns uniaxial enablement");
+    check(runtime.uniaxial_Ku == 1.0, "anisotropy runtime state owns uniaxial Ku");
+    check(runtime.uniaxial_Ku2 == 2.0, "anisotropy runtime state owns uniaxial Ku2");
+    check(runtime.uniaxial_axis[2] == 1.0, "anisotropy runtime state owns uniaxial axis");
+    check(runtime.cubic_enabled, "anisotropy runtime state owns cubic enablement");
+    check(runtime.cubic_Kc1 == 3.0, "anisotropy runtime state owns cubic Kc1");
+    check(runtime.cubic_Kc2 == 4.0, "anisotropy runtime state owns cubic Kc2");
+    check(runtime.cubic_Kc3 == 5.0, "anisotropy runtime state owns cubic Kc3");
+    check(runtime.cubic_axis1[0] == 1.0, "anisotropy runtime state owns cubic axis1");
+    check(runtime.cubic_axis2[1] == 1.0, "anisotropy runtime state owns cubic axis2");
+
     check(
         aggregate_header.find("struct AnisotropyRuntimeState") != std::string::npos,
         "anisotropy runtime state must be declared by anisotropy.hpp");
+    check(
+        aggregate_header.find("bool uniaxial_enabled") != std::string::npos,
+        "anisotropy runtime state must own uniaxial enablement");
+    check(
+        aggregate_header.find("double uniaxial_Ku") != std::string::npos,
+        "anisotropy runtime state must own uniaxial Ku");
+    check(
+        aggregate_header.find("double uniaxial_Ku2") != std::string::npos,
+        "anisotropy runtime state must own uniaxial Ku2");
+    check(
+        aggregate_header.find("std::array<double, 3> uniaxial_axis") != std::string::npos,
+        "anisotropy runtime state must own uniaxial axis");
+    check(
+        aggregate_header.find("bool cubic_enabled") != std::string::npos,
+        "anisotropy runtime state must own cubic enablement");
+    check(
+        aggregate_header.find("double cubic_Kc1") != std::string::npos,
+        "anisotropy runtime state must own cubic Kc1");
+    check(
+        aggregate_header.find("double cubic_Kc2") != std::string::npos,
+        "anisotropy runtime state must own cubic Kc2");
+    check(
+        aggregate_header.find("double cubic_Kc3") != std::string::npos,
+        "anisotropy runtime state must own cubic Kc3");
+    check(
+        aggregate_header.find("std::array<double, 3> cubic_axis1") != std::string::npos,
+        "anisotropy runtime state must own cubic axis1");
+    check(
+        aggregate_header.find("std::array<double, 3> cubic_axis2") != std::string::npos,
+        "anisotropy runtime state must own cubic axis2");
     check(
         aggregate_header.find("std::vector<double> h_uniaxial_xyz") != std::string::npos,
         "anisotropy runtime state must own the uniaxial H field buffer");
@@ -191,6 +243,36 @@ void anisotropy_runtime_state_is_owned_by_aggregate_module() {
     check(
         context_header.find("AnisotropyRuntimeState anisotropy") != std::string::npos,
         "Context must store anisotropy runtime output through the anisotropy owner");
+    check(
+        context_header.find("bool enable_anisotropy") == std::string::npos,
+        "Context must not own flat uniaxial anisotropy enablement");
+    check(
+        context_header.find("double anisotropy_Ku") == std::string::npos,
+        "Context must not own flat uniaxial Ku");
+    check(
+        context_header.find("double anisotropy_Ku2") == std::string::npos,
+        "Context must not own flat uniaxial Ku2");
+    check(
+        context_header.find("std::array<double, 3> anisotropy_axis") == std::string::npos,
+        "Context must not own flat uniaxial axis");
+    check(
+        context_header.find("bool enable_cubic_anisotropy") == std::string::npos,
+        "Context must not own flat cubic anisotropy enablement");
+    check(
+        context_header.find("double cubic_Kc1") == std::string::npos,
+        "Context must not own flat cubic Kc1");
+    check(
+        context_header.find("double cubic_Kc2") == std::string::npos,
+        "Context must not own flat cubic Kc2");
+    check(
+        context_header.find("double cubic_Kc3") == std::string::npos,
+        "Context must not own flat cubic Kc3");
+    check(
+        context_header.find("std::array<double, 3> cubic_axis1") == std::string::npos,
+        "Context must not own flat cubic axis1");
+    check(
+        context_header.find("std::array<double, 3> cubic_axis2") == std::string::npos,
+        "Context must not own flat cubic axis2");
     check(
         context_header.find("h_ani_xyz") == std::string::npos,
         "Context must not own a flat uniaxial anisotropy field buffer");
@@ -216,8 +298,8 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 fullmag::fem::Context make_base_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 3;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 3;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
     return ctx;
@@ -246,30 +328,30 @@ void anisotropy_plan_fields_are_imported_by_aggregate() {
 
     fullmag::fem::initialize_anisotropy_plan_fields(ctx, plan);
 
-    check(ctx.enable_anisotropy, "uniaxial anisotropy plan enable import");
-    check_near(ctx.anisotropy_Ku, 1.2e5, 0.0, "uniaxial Ku plan import");
-    check_near(ctx.anisotropy_Ku2, 3.4e4, 0.0, "uniaxial Ku2 plan import");
-    check_near(ctx.anisotropy_axis[0], 1.0, 0.0, "uniaxial axis x plan import");
-    check_near(ctx.anisotropy_axis[1], 2.0, 0.0, "uniaxial axis y plan import");
-    check_near(ctx.anisotropy_axis[2], 3.0, 0.0, "uniaxial axis z plan import");
-    check(ctx.enable_cubic_anisotropy, "cubic anisotropy plan enable import");
-    check_near(ctx.cubic_Kc1, 4.0e4, 0.0, "cubic Kc1 plan import");
-    check_near(ctx.cubic_Kc2, 5.0e4, 0.0, "cubic Kc2 plan import");
-    check_near(ctx.cubic_Kc3, 6.0e4, 0.0, "cubic Kc3 plan import");
-    check_near(ctx.cubic_axis1[0], 7.0, 0.0, "cubic axis1 x plan import");
-    check_near(ctx.cubic_axis1[1], 8.0, 0.0, "cubic axis1 y plan import");
-    check_near(ctx.cubic_axis1[2], 9.0, 0.0, "cubic axis1 z plan import");
-    check_near(ctx.cubic_axis2[0], 10.0, 0.0, "cubic axis2 x plan import");
-    check_near(ctx.cubic_axis2[1], 11.0, 0.0, "cubic axis2 y plan import");
-    check_near(ctx.cubic_axis2[2], 12.0, 0.0, "cubic axis2 z plan import");
+    check(ctx.anisotropy.uniaxial_enabled, "uniaxial anisotropy plan enable import");
+    check_near(ctx.anisotropy.uniaxial_Ku, 1.2e5, 0.0, "uniaxial Ku plan import");
+    check_near(ctx.anisotropy.uniaxial_Ku2, 3.4e4, 0.0, "uniaxial Ku2 plan import");
+    check_near(ctx.anisotropy.uniaxial_axis[0], 1.0, 0.0, "uniaxial axis x plan import");
+    check_near(ctx.anisotropy.uniaxial_axis[1], 2.0, 0.0, "uniaxial axis y plan import");
+    check_near(ctx.anisotropy.uniaxial_axis[2], 3.0, 0.0, "uniaxial axis z plan import");
+    check(ctx.anisotropy.cubic_enabled, "cubic anisotropy plan enable import");
+    check_near(ctx.anisotropy.cubic_Kc1, 4.0e4, 0.0, "cubic Kc1 plan import");
+    check_near(ctx.anisotropy.cubic_Kc2, 5.0e4, 0.0, "cubic Kc2 plan import");
+    check_near(ctx.anisotropy.cubic_Kc3, 6.0e4, 0.0, "cubic Kc3 plan import");
+    check_near(ctx.anisotropy.cubic_axis1[0], 7.0, 0.0, "cubic axis1 x plan import");
+    check_near(ctx.anisotropy.cubic_axis1[1], 8.0, 0.0, "cubic axis1 y plan import");
+    check_near(ctx.anisotropy.cubic_axis1[2], 9.0, 0.0, "cubic axis1 z plan import");
+    check_near(ctx.anisotropy.cubic_axis2[0], 10.0, 0.0, "cubic axis2 x plan import");
+    check_near(ctx.anisotropy.cubic_axis2[1], 11.0, 0.0, "cubic axis2 y plan import");
+    check_near(ctx.anisotropy.cubic_axis2[2], 12.0, 0.0, "cubic axis2 z plan import");
 }
 
 void uniaxial_uses_per_node_terms_and_energy_convention() {
     auto ctx = make_base_context();
-    ctx.enable_anisotropy = true;
-    ctx.anisotropy_axis = {0.0, 0.0, 1.0};
-    ctx.anisotropy_Ku = 0.0;
-    ctx.anisotropy_Ku2 = 0.0;
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 1.0};
+    ctx.anisotropy.uniaxial_Ku = 0.0;
+    ctx.anisotropy.uniaxial_Ku2 = 0.0;
     ctx.material_fields.Ku_field = {1.2e5, 2.0e5, 9.0e5};
     ctx.material_fields.Ku2_field = {0.0, 0.5e5, 9.0e5};
     ctx.material_fields.Ms_field = {800e3, 1.0e6, 800e3};
@@ -312,12 +394,12 @@ void uniaxial_uses_per_node_terms_and_energy_convention() {
 
 void cubic_reports_energy_and_field_in_crystal_frame() {
     auto ctx = make_base_context();
-    ctx.enable_cubic_anisotropy = true;
-    ctx.cubic_axis1 = {1.0, 0.0, 0.0};
-    ctx.cubic_axis2 = {0.0, 1.0, 0.0};
-    ctx.cubic_Kc1 = 4.0e4;
-    ctx.cubic_Kc2 = 2.0e4;
-    ctx.cubic_Kc3 = 1.0e4;
+    ctx.anisotropy.cubic_enabled = true;
+    ctx.anisotropy.cubic_axis1 = {1.0, 0.0, 0.0};
+    ctx.anisotropy.cubic_axis2 = {0.0, 1.0, 0.0};
+    ctx.anisotropy.cubic_Kc1 = 4.0e4;
+    ctx.anisotropy.cubic_Kc2 = 2.0e4;
+    ctx.anisotropy.cubic_Kc3 = 1.0e4;
 
     const double inv_sqrt3 = 1.0 / std::sqrt(3.0);
     const std::vector<double> m = {
@@ -354,20 +436,20 @@ void cubic_reports_energy_and_field_in_crystal_frame() {
 
 void anisotropy_axis_plan_values_are_normalized_and_validated() {
     fullmag::fem::Context ctx;
-    ctx.enable_anisotropy = true;
-    ctx.anisotropy_axis = {0.0, 0.0, 4.0};
-    ctx.enable_cubic_anisotropy = true;
-    ctx.cubic_axis1 = {2.0, 0.0, 0.0};
-    ctx.cubic_axis2 = {0.0, 3.0, 0.0};
+    ctx.anisotropy.uniaxial_enabled = true;
+    ctx.anisotropy.uniaxial_axis = {0.0, 0.0, 4.0};
+    ctx.anisotropy.cubic_enabled = true;
+    ctx.anisotropy.cubic_axis1 = {2.0, 0.0, 0.0};
+    ctx.anisotropy.cubic_axis2 = {0.0, 3.0, 0.0};
 
     std::string error;
     check(fullmag::fem::normalize_anisotropy_axes(ctx, error), error.c_str());
-    check_near(ctx.anisotropy_axis[2], 1.0, 1e-12, "uniaxial axis normalized");
-    check_near(ctx.cubic_axis1[0], 1.0, 1e-12, "cubic axis1 normalized");
-    check_near(ctx.cubic_axis2[1], 1.0, 1e-12, "cubic axis2 normalized");
+    check_near(ctx.anisotropy.uniaxial_axis[2], 1.0, 1e-12, "uniaxial axis normalized");
+    check_near(ctx.anisotropy.cubic_axis1[0], 1.0, 1e-12, "cubic axis1 normalized");
+    check_near(ctx.anisotropy.cubic_axis2[1], 1.0, 1e-12, "cubic axis2 normalized");
 
-    ctx.cubic_axis1 = {1.0, 0.0, 0.0};
-    ctx.cubic_axis2 = {2.0, 0.0, 0.0};
+    ctx.anisotropy.cubic_axis1 = {1.0, 0.0, 0.0};
+    ctx.anisotropy.cubic_axis2 = {2.0, 0.0, 0.0};
     check(
         !fullmag::fem::normalize_anisotropy_axes(ctx, error),
         "parallel cubic axes must fail validation");

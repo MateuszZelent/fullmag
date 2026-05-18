@@ -20,6 +20,7 @@ import type {
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatus } from "@/kernel/resources/useSessionStatus";
+import { useSelection } from "@/kernel/selection/useSelection";
 import { FullmagMark } from "@/shared/brand/FullmagLogo";
 
 const INTEGER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
@@ -30,7 +31,11 @@ const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
 export function FooterTelemetry() {
   const { data: status } = useSessionStatus();
   const scene = useSceneResource();
-  const objectId = useMemo(() => resolvePrimaryTelemetryObjectId(scene.data), [scene.data]);
+  const { selection } = useSelection("footer");
+  const objectId = useMemo(
+    () => resolvePrimaryTelemetryObjectId(scene.data, selection.objectId),
+    [scene.data, selection.objectId],
+  );
   const objectMetrics = useObjectMetricsResource(objectId);
   const telemetry = buildFooterTelemetryModel(status, objectMetrics.data);
 
@@ -259,10 +264,19 @@ export function buildFooterTelemetryModel(
 
 export function resolvePrimaryTelemetryObjectId(
   scene: SceneResource | null | undefined,
+  selectedObjectId?: string | null,
 ): string | null {
   const sceneRecord = asRecord(scene);
   const objects = sceneRecord?.objects;
   if (!Array.isArray(objects)) return null;
+
+  if (selectedObjectId) {
+    for (const object of objects) {
+      if (asString(asRecord(object)?.id) === selectedObjectId) {
+        return selectedObjectId;
+      }
+    }
+  }
 
   for (const object of objects) {
     const objectId = asString(asRecord(object)?.id);

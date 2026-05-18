@@ -68,10 +68,10 @@ bool initialize_adaptive_dt_plan_fields(
     ctx.adaptive_dt.enabled = true;
     ctx.adaptive_dt.atol = adaptive.atol;
     ctx.adaptive_dt.rtol = adaptive.rtol;
-    ctx.dt_seconds = adaptive.dt_initial > 0.0
+    ctx.base_plan.dt_seconds = adaptive.dt_initial > 0.0
                          ? adaptive.dt_initial
                          : plan.dt_seconds;
-    ctx.current_dt = ctx.dt_seconds;
+    ctx.adaptive_dt.current_dt = ctx.base_plan.dt_seconds;
     ctx.adaptive_dt.dt_min = adaptive.dt_min;
     ctx.adaptive_dt.dt_max = adaptive.dt_max;
     ctx.adaptive_dt.safety_factor = adaptive.safety;
@@ -104,7 +104,7 @@ double compute_adaptive_error_norm(
 AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm)
 {
     if (!ctx.adaptive_dt.enabled || error_norm <= 0.0) {
-        return {true, ctx.dt_seconds};
+        return {true, ctx.base_plan.dt_seconds};
     }
 
     const double clamped_error = std::max(error_norm, 1e-15);
@@ -116,7 +116,7 @@ AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm)
         ratio = std::min(ratio, ctx.adaptive_dt.dt_grow_max);
         ratio = std::max(ratio, 1.0);
 
-        const double dt_new = std::min(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
+        const double dt_new = std::min(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
         ctx.adaptive_dt.prev_error_norm = clamped_error;
         return {true, dt_new};
     }
@@ -125,7 +125,7 @@ AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm)
                    std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha);
     ratio = std::max(ratio, ctx.adaptive_dt.dt_shrink_min);
 
-    const double dt_new = std::max(ctx.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
+    const double dt_new = std::max(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
     ctx.adaptive_dt.rejected_steps += 1;
     return {false, dt_new};
 }

@@ -52,6 +52,7 @@ std::filesystem::path fem_source_root() {
 void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
     const std::string aggregate =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic.cpp");
     const std::string aggregate_header =
@@ -68,6 +69,7 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     const char *compute_symbol = "void compute_magnetoelastic_field(";
     const char *add_symbol = "void add_magnetoelastic_field(";
     const char *plan_symbol = "void initialize_magnetoelastic_plan_fields(";
+    const char *upload_symbol = "bool upload_magnetoelastic_strain(";
 
     check(
         aggregate.find(compute_symbol) == std::string::npos,
@@ -76,7 +78,7 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
         aggregate.find(add_symbol) == std::string::npos,
         "magnetoelastic H_eff addition must not be defined in magnetoelastic.cpp");
     check(
-        context.find("ctx.enable_magnetoelastic = plan.has_magnetoelastic") == std::string::npos,
+        context.find("ctx.magnetoelastic.enabled = plan.has_magnetoelastic") == std::string::npos,
         "Context must not own magnetoelastic flag plan import");
     check(
         context.find("plan.mel_strain_voigt") == std::string::npos,
@@ -84,6 +86,21 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
     check(
         aggregate.find(plan_symbol) != std::string::npos,
         "magnetoelastic plan import must be defined in magnetoelastic.cpp");
+    check(
+        aggregate.find(upload_symbol) != std::string::npos,
+        "magnetoelastic strain upload must be defined in magnetoelastic.cpp");
+    check(
+        api.find("ctx.magnetoelastic.uniform_strain = uniform != 0") == std::string::npos,
+        "C ABI facade must not own magnetoelastic strain mode mutation");
+    check(
+        api.find("ctx.magnetoelastic.strain_voigt.assign") == std::string::npos,
+        "C ABI facade must not own magnetoelastic strain buffer mutation");
+    check(
+        api.find("gpu_state_upload_magnetoelastic_strain") == std::string::npos,
+        "C ABI facade must not own magnetoelastic GPU strain upload");
+    check(
+        api.find("compute_magnetoelastic_field(ctx") == std::string::npos,
+        "C ABI facade must not own magnetoelastic field recompute after strain upload");
     check(
         prescribed.find(compute_symbol) != std::string::npos,
         "magnetoelastic field/energy compute must be defined in magnetoelastic_prescribed_strain.cpp");
@@ -109,6 +126,9 @@ void magnetoelastic_responsibilities_are_owned_by_separate_modules() {
         aggregate_header.find("Initialize prescribed-strain magnetoelastic plan fields") !=
             std::string::npos,
         "magnetoelastic aggregate header must document plan-field initialization ownership");
+    check(
+        aggregate_header.find("Upload prescribed magnetoelastic strain") != std::string::npos,
+        "magnetoelastic aggregate header must document runtime strain-upload ownership");
     check(
         aggregate_header.find("does not compute B1/B2 H_mel/energy or add H_mel to H_eff") !=
             std::string::npos,
@@ -160,9 +180,36 @@ void magnetoelastic_runtime_state_is_owned_by_prescribed_strain_module() {
     const std::string prescribed_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "magnetoelastic_prescribed_strain.hpp");
 
+    fullmag::fem::MagnetoelasticRuntimeState runtime;
+    runtime.enabled = true;
+    runtime.b1 = 1.0;
+    runtime.b2 = 2.0;
+    runtime.uniform_strain = false;
+    runtime.strain_voigt = {0.1, 0.2, 0.3, 0.04, 0.05, 0.06};
+    check(runtime.enabled, "magnetoelastic runtime state owns enablement");
+    check(runtime.b1 == 1.0, "magnetoelastic runtime state owns B1");
+    check(runtime.b2 == 2.0, "magnetoelastic runtime state owns B2");
+    check(!runtime.uniform_strain, "magnetoelastic runtime state owns strain mode");
+    check(runtime.strain_voigt.size() == 6u, "magnetoelastic runtime state owns strain buffer");
+
     check(
         prescribed_header.find("struct MagnetoelasticRuntimeState") != std::string::npos,
         "magnetoelastic runtime state must be declared by magnetoelastic_prescribed_strain.hpp");
+    check(
+        prescribed_header.find("bool enabled") != std::string::npos,
+        "magnetoelastic runtime state must own enablement");
+    check(
+        prescribed_header.find("double b1") != std::string::npos,
+        "magnetoelastic runtime state must own B1");
+    check(
+        prescribed_header.find("double b2") != std::string::npos,
+        "magnetoelastic runtime state must own B2");
+    check(
+        prescribed_header.find("bool uniform_strain") != std::string::npos,
+        "magnetoelastic runtime state must own strain mode");
+    check(
+        prescribed_header.find("std::vector<double> strain_voigt") != std::string::npos,
+        "magnetoelastic runtime state must own strain buffer");
     check(
         prescribed_header.find("std::vector<double> h_xyz") != std::string::npos,
         "magnetoelastic runtime state must own the H_mel field buffer");
@@ -172,6 +219,21 @@ void magnetoelastic_runtime_state_is_owned_by_prescribed_strain_module() {
     check(
         context_header.find("MagnetoelasticRuntimeState magnetoelastic") != std::string::npos,
         "Context must store magnetoelastic runtime state through the prescribed-strain owner");
+    check(
+        context_header.find("bool enable_magnetoelastic") == std::string::npos,
+        "Context must not own flat magnetoelastic enablement");
+    check(
+        context_header.find("double mel_b1") == std::string::npos,
+        "Context must not own flat magnetoelastic B1");
+    check(
+        context_header.find("double mel_b2") == std::string::npos,
+        "Context must not own flat magnetoelastic B2");
+    check(
+        context_header.find("bool mel_uniform_strain") == std::string::npos,
+        "Context must not own flat magnetoelastic strain mode");
+    check(
+        context_header.find("std::vector<double> mel_strain_voigt") == std::string::npos,
+        "Context must not own flat magnetoelastic strain buffer");
     check(
         context_header.find("h_mel_xyz") == std::string::npos,
         "Context must not own a flat magnetoelastic H field buffer");
@@ -197,13 +259,13 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.enable_magnetoelastic = true;
-    ctx.mel_b1 = 1.0e6;
-    ctx.mel_b2 = 2.0e6;
-    ctx.mel_uniform_strain = true;
-    ctx.mel_strain_voigt = {0.1, 0.2, 0.3, 0.04, 0.06, 0.08};
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 2;
+    ctx.magnetoelastic.enabled = true;
+    ctx.magnetoelastic.b1 = 1.0e6;
+    ctx.magnetoelastic.b2 = 2.0e6;
+    ctx.magnetoelastic.uniform_strain = true;
+    ctx.magnetoelastic.strain_voigt = {0.1, 0.2, 0.3, 0.04, 0.06, 0.08};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {5.0e-27, 7.0e-27};
     return ctx;
 }
@@ -223,28 +285,28 @@ void uniform_strain_field_and_energy_follow_b1_b2_contract() {
     const double e23 = 0.02;
     const double e13 = 0.03;
     const double e12 = 0.04;
-    const double inv_mu0_ms = -1.0 / (kMu0Test * ctx.material.saturation_magnetisation);
+    const double inv_mu0_ms = -1.0 / (kMu0Test * ctx.material_fields.material.saturation_magnetisation);
 
     check_near(
         ctx.magnetoelastic.h_xyz[0],
-        inv_mu0_ms * (2.0 * ctx.mel_b1 * 1.0 * e11 + 2.0 * ctx.mel_b2 * (2.0 * e12 + 3.0 * e13)),
+        inv_mu0_ms * (2.0 * ctx.magnetoelastic.b1 * 1.0 * e11 + 2.0 * ctx.magnetoelastic.b2 * (2.0 * e12 + 3.0 * e13)),
         1e-6,
         "magnetoelastic Hx");
     check_near(
         ctx.magnetoelastic.h_xyz[1],
-        inv_mu0_ms * (2.0 * ctx.mel_b1 * 2.0 * e22 + 2.0 * ctx.mel_b2 * (1.0 * e12 + 3.0 * e23)),
+        inv_mu0_ms * (2.0 * ctx.magnetoelastic.b1 * 2.0 * e22 + 2.0 * ctx.magnetoelastic.b2 * (1.0 * e12 + 3.0 * e23)),
         1e-6,
         "magnetoelastic Hy");
     check_near(
         ctx.magnetoelastic.h_xyz[2],
-        inv_mu0_ms * (2.0 * ctx.mel_b1 * 3.0 * e33 + 2.0 * ctx.mel_b2 * (1.0 * e13 + 2.0 * e23)),
+        inv_mu0_ms * (2.0 * ctx.magnetoelastic.b1 * 3.0 * e33 + 2.0 * ctx.magnetoelastic.b2 * (1.0 * e13 + 2.0 * e23)),
         1e-6,
         "magnetoelastic Hz");
 
     const double e_density0 =
-        ctx.mel_b1 * (1.0 * 1.0 * e11 + 2.0 * 2.0 * e22 + 3.0 * 3.0 * e33) +
-        2.0 * ctx.mel_b2 * (1.0 * 2.0 * e12 + 1.0 * 3.0 * e13 + 2.0 * 3.0 * e23);
-    const double e_density1 = ctx.mel_b1 * e22;
+        ctx.magnetoelastic.b1 * (1.0 * 1.0 * e11 + 2.0 * 2.0 * e22 + 3.0 * 3.0 * e33) +
+        2.0 * ctx.magnetoelastic.b2 * (1.0 * 2.0 * e12 + 1.0 * 3.0 * e13 + 2.0 * 3.0 * e23);
+    const double e_density1 = ctx.magnetoelastic.b1 * e22;
     const double expected_energy =
         e_density0 * ctx.integration_weights.mfem_lumped_mass[0] +
         e_density1 * ctx.integration_weights.mfem_lumped_mass[1];
@@ -257,8 +319,8 @@ void uniform_strain_field_and_energy_follow_b1_b2_contract() {
 
 void per_node_strain_and_masking_are_respected() {
     auto ctx = make_context();
-    ctx.mel_uniform_strain = false;
-    ctx.mel_strain_voigt = {
+    ctx.magnetoelastic.uniform_strain = false;
+    ctx.magnetoelastic.strain_voigt = {
         0.1, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.0, 0.2, 0.0, 0.0, 0.0, 0.0,
     };
@@ -272,7 +334,7 @@ void per_node_strain_and_masking_are_respected() {
     fullmag::fem::compute_magnetoelastic_field(ctx, m);
 
     const double expected_hx =
-        -1.0 / (kMu0Test * ctx.material_fields.Ms_field[0]) * (2.0 * ctx.mel_b1 * 0.1);
+        -1.0 / (kMu0Test * ctx.material_fields.Ms_field[0]) * (2.0 * ctx.magnetoelastic.b1 * 0.1);
     check_near(ctx.magnetoelastic.h_xyz[0], expected_hx, 1e-6, "per-node magnetoelastic Hx");
     check_near(ctx.magnetoelastic.h_xyz[3], 0.0, 0.0, "masked magnetoelastic Hx");
     check_near(ctx.magnetoelastic.h_xyz[4], 0.0, 0.0, "masked magnetoelastic Hy");
@@ -281,7 +343,7 @@ void per_node_strain_and_masking_are_respected() {
 
 void add_magnetoelastic_field_is_additive() {
     fullmag::fem::Context ctx;
-    ctx.enable_magnetoelastic = true;
+    ctx.magnetoelastic.enabled = true;
     ctx.magnetoelastic.h_xyz = {1.0, 2.0, 3.0};
 
     std::vector<double> h_eff = {10.0, 20.0, 30.0};
@@ -306,13 +368,46 @@ void magnetoelastic_plan_import_copies_coupling_and_strain() {
 
     fullmag::fem::initialize_magnetoelastic_plan_fields(ctx, plan);
 
-    check(ctx.enable_magnetoelastic, "magnetoelastic flag copied from plan");
-    check_near(ctx.mel_b1, 1.5e6, 0.0, "magnetoelastic B1 copied");
-    check_near(ctx.mel_b2, -2.5e6, 0.0, "magnetoelastic B2 copied");
-    check(ctx.mel_uniform_strain, "magnetoelastic uniform strain flag copied");
-    check(ctx.mel_strain_voigt == std::vector<double>({0.1, 0.2, 0.3, 0.04, 0.05, 0.06}),
+    check(ctx.magnetoelastic.enabled, "magnetoelastic flag copied from plan");
+    check_near(ctx.magnetoelastic.b1, 1.5e6, 0.0, "magnetoelastic B1 copied");
+    check_near(ctx.magnetoelastic.b2, -2.5e6, 0.0, "magnetoelastic B2 copied");
+    check(ctx.magnetoelastic.uniform_strain, "magnetoelastic uniform strain flag copied");
+    check(ctx.magnetoelastic.strain_voigt == std::vector<double>({0.1, 0.2, 0.3, 0.04, 0.05, 0.06}),
           "magnetoelastic strain copied from plan");
     check_near(ctx.magnetoelastic.energy_joules, 0.0, 0.0, "magnetoelastic energy reset on plan import");
+}
+
+void magnetoelastic_runtime_upload_updates_strain_and_recomputes_field() {
+    auto ctx = make_context();
+    ctx.magnetoelastic.uniform_strain = true;
+    ctx.magnetoelastic.strain_voigt.clear();
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const double strain[] = {
+        0.1, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.2, 0.0, 0.0, 0.0, 0.0,
+    };
+    std::string error;
+
+    check(
+        fullmag::fem::upload_magnetoelastic_strain(ctx, strain, 12, false, error),
+        error.c_str());
+
+    check(!ctx.magnetoelastic.uniform_strain, "runtime strain upload updates strain mode");
+    check(ctx.magnetoelastic.strain_voigt == std::vector<double>(strain, strain + 12),
+          "runtime strain upload updates strain buffer");
+    check_near(ctx.magnetoelastic.h_xyz[0], -2.0 * ctx.magnetoelastic.b1 * 0.1 /
+                                             (kMu0Test * ctx.material_fields.material.saturation_magnetisation),
+               1e-6, "runtime strain upload recomputes H_mel");
+
+    check(
+        !fullmag::fem::upload_magnetoelastic_strain(ctx, nullptr, 0, true, error),
+        "runtime strain upload rejects null/empty strain");
+    check(
+        error.find("strain data pointer is null or length is zero") != std::string::npos,
+        "runtime strain upload reports invalid strain input");
 }
 
 } // namespace
@@ -325,5 +420,6 @@ int main() {
     per_node_strain_and_masking_are_respected();
     add_magnetoelastic_field_is_additive();
     magnetoelastic_plan_import_copies_coupling_and_strain();
+    magnetoelastic_runtime_upload_updates_strain_and_recomputes_field();
     return 0;
 }

@@ -15,7 +15,7 @@ namespace fullmag::fem {
 
 void add_zeeman_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if (!ctx.has_external_field || ctx.zeeman.h_ext_xyz.empty()) {
+    if (!ctx.zeeman.has_external_field || ctx.zeeman.h_ext_xyz.empty()) {
         return;
     }
     const size_t count = std::min(h_eff_xyz.size(), ctx.zeeman.h_ext_xyz.size());

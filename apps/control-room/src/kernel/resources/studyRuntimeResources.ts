@@ -402,6 +402,7 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
   );
 
   return useResource<ObjectMetricsResource | null>({
+    enabled: Boolean(objectId),
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,

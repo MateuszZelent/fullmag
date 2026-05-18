@@ -134,6 +134,8 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
         "exchange aggregate header must name the legacy GPU upload owner");
     check(
         context.find("ctx.enable_exchange = plan.enable_exchange != 0;") ==
+            std::string::npos &&
+        context.find("ctx.exchange.enabled = plan.enable_exchange != 0;") ==
             std::string::npos,
         "context_from_plan must delegate exchange enable import to exchange.cpp");
     check(
@@ -142,6 +144,10 @@ void exchange_responsibilities_are_owned_by_separate_modules() {
     check(
         context.find("consistent_mass_requested") == std::string::npos,
         "context_from_plan must not keep local exchange consistent-mass state");
+    check(
+        aggregate.find("ctx.exchange.enabled = plan.enable_exchange != 0;") !=
+            std::string::npos,
+        "exchange plan import must own the exchange enable flag");
     check(
         aggregate.find("plan.use_consistent_mass") != std::string::npos,
         "exchange plan import must own the consistent-mass exchange projection flag");
@@ -199,6 +205,9 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
         exchange_header.find("struct ExchangeRuntimeState") != std::string::npos,
         "exchange runtime state must be declared by exchange.hpp");
     check(
+        exchange_header.find("bool enabled") != std::string::npos,
+        "exchange runtime state must own exchange enablement");
+    check(
         exchange_header.find("std::vector<double> h_xyz") != std::string::npos,
         "exchange runtime state must own the H_ex field buffer");
     check(
@@ -208,6 +217,9 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
         context_header.find("std::vector<double> h_ex_xyz") == std::string::npos,
         "Context must not own a flat exchange field buffer");
     check(
+        context_header.find("bool enable_exchange") == std::string::npos,
+        "Context must not own flat exchange enablement");
+    check(
         exchange_header.find("struct ExchangeMfemRuntimeState") != std::string::npos,
         "exchange runtime state must declare the MFEM exchange workspace owner");
     check(
@@ -215,15 +227,24 @@ void exchange_runtime_state_is_owned_by_aggregate_module() {
             exchange_header.find("std::vector<double> h_x") != std::string::npos &&
             exchange_header.find("std::vector<double> h_y") != std::string::npos &&
             exchange_header.find("std::vector<double> h_z") != std::string::npos &&
-            exchange_header.find("void *exchange_form") != std::string::npos &&
-            exchange_header.find("void *mass_form") != std::string::npos &&
-            exchange_header.find("void *mass_ones") != std::string::npos &&
-            exchange_header.find("void *mass_lumped") != std::string::npos &&
-            exchange_header.find("void *inv_lumped_mass") != std::string::npos &&
-            exchange_header.find("void *tmp_vec") != std::string::npos &&
-            exchange_header.find("void *out_vec") != std::string::npos &&
+            exchange_header.find("mfem::BilinearForm *exchange_form") != std::string::npos &&
+            exchange_header.find("mfem::BilinearForm *mass_form") != std::string::npos &&
+            exchange_header.find("mfem::Vector *mass_ones") != std::string::npos &&
+            exchange_header.find("mfem::Vector *mass_lumped") != std::string::npos &&
+            exchange_header.find("mfem::Vector *inv_lumped_mass") != std::string::npos &&
+            exchange_header.find("mfem::Vector *tmp_vec") != std::string::npos &&
+            exchange_header.find("mfem::Vector *out_vec") != std::string::npos &&
             exchange_header.find("bool ready") != std::string::npos,
         "exchange MFEM runtime state must own forms, mass vectors, component buffers, readiness, and consistent-mass policy");
+    check(
+        exchange_header.find("void *exchange_form") == std::string::npos &&
+            exchange_header.find("void *mass_form") == std::string::npos &&
+            exchange_header.find("void *mass_ones") == std::string::npos &&
+            exchange_header.find("void *mass_lumped") == std::string::npos &&
+            exchange_header.find("void *inv_lumped_mass") == std::string::npos &&
+            exchange_header.find("void *tmp_vec") == std::string::npos &&
+            exchange_header.find("void *out_vec") == std::string::npos,
+        "exchange MFEM runtime state must use typed MFEM pointers, not void pointers");
     check(
         exchange_header.find("ExchangeMfemRuntimeState mfem{}") != std::string::npos,
         "exchange runtime state must store MFEM exchange workspace under exchange.mfem");
@@ -382,9 +403,9 @@ void check_zero_field(const std::vector<double> &field, const char *label) {
 
 fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.material.exchange_stiffness = 1.3e-11;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 2;
+    ctx.material_fields.material.exchange_stiffness = 1.3e-11;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     return ctx;
 }
 
@@ -394,11 +415,11 @@ void exchange_plan_fields_are_imported_by_aggregate() {
     fullmag_fem_plan_desc plan{};
     plan.enable_exchange = 1;
     fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
-    check(ctx.enable_exchange, "exchange plan import enables exchange");
+    check(ctx.exchange.enabled, "exchange plan import enables exchange");
 
     plan.enable_exchange = 0;
     fullmag::fem::initialize_exchange_plan_fields(ctx, plan);
-    check(!ctx.enable_exchange, "exchange plan import disables exchange");
+    check(!ctx.exchange.enabled, "exchange plan import disables exchange");
 
 #if FULLMAG_HAS_MFEM_STACK
     plan.use_consistent_mass = 1;
@@ -418,7 +439,7 @@ void exchange_plan_fields_are_imported_by_aggregate() {
 #if !FULLMAG_HAS_MFEM_STACK
 void disabled_exchange_is_zero_without_mfem_stack() {
     auto ctx = make_context();
-    ctx.enable_exchange = false;
+    ctx.exchange.enabled = false;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -442,7 +463,7 @@ void disabled_exchange_is_zero_without_mfem_stack() {
 
 void active_exchange_reports_mfem_requirement_without_stack() {
     auto ctx = make_context();
-    ctx.enable_exchange = true;
+    ctx.exchange.enabled = true;
     const std::vector<double> m = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,

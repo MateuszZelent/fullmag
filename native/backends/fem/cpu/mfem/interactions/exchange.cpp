@@ -12,7 +12,7 @@ namespace fullmag::fem {
 
 void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
-    ctx.enable_exchange = plan.enable_exchange != 0;
+    ctx.exchange.enabled = plan.enable_exchange != 0;
 #if FULLMAG_HAS_MFEM_STACK
     ctx.exchange.mfem.use_consistent_mass = plan.use_consistent_mass != 0;
 #endif

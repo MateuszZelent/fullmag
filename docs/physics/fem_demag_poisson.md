@@ -139,12 +139,20 @@ Current gate:
 - Local non-MFEM builds compile the public energy contract. The MFEM RHS,
   boundary-policy, periodic-reduction, Hypre-solve, and recovery code are
   guarded by `FULLMAG_HAS_MFEM_STACK`.
+- `tests/fem_demag_validation/sphere_validation.py` is the scripted MFEM-stack
+  gate for the uniformly magnetized sphere reference. It writes
+  `tests/fem_demag_validation/results/sphere_convergence.csv` and exits
+  nonzero if any required metric is non-finite or the finest Robin run exceeds
+  5% relative error in the effective demag factor.
+- `tests/fem_demag_validation/airbox_convergence.py` is the scripted MFEM-stack
+  gate for airbox convergence. It writes
+  `tests/fem_demag_validation/results/airbox_convergence.csv` and exits
+  nonzero if any required metric is non-finite or any boundary-condition group
+  fails to improve from the smallest to largest airbox scale.
 
 Required before production qualification:
 
-- sphere `H=-M/3`;
 - ellipsoid or rectangular-prism reference;
-- airbox convergence;
 - Robin vs Dirichlet comparison;
 - RHS assembly fixture for magnetic/nonmagnetic element masks;
 - boundary marker fixture for Dirichlet/Robin/seam exclusion;

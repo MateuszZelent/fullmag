@@ -129,11 +129,11 @@ export default function FooterModule({ kernel }: ModuleProps) {
       </TabsContent>
 
       <TabsContent value="telemetry" className="fm-footer__content">
-        <FooterTelemetry />
+        {activeTab === "telemetry" ? <FooterTelemetry /> : null}
       </TabsContent>
 
       <TabsContent value="engine" className="fm-footer__content">
-        <FooterDiagnostics />
+        {activeTab === "engine" ? <FooterDiagnostics /> : null}
       </TabsContent>
     </Tabs>
   );

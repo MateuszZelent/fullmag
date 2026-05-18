@@ -107,18 +107,18 @@ void context_populate_device_info(Context &ctx) {
 
     std::string backend_name;
     if (ctx.exchange.mfem.ready) {
-        if (!ctx.enable_demag) {
+        if (!ctx.demag.enabled) {
             backend_name = std::string("mfem_") + dev_tag + "_exchange_ready";
-        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET) {
+        } else if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET) {
             backend_name = std::string("mfem_") + dev_tag + "_native_poisson_dirichlet_demag";
-        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
+        } else if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN) {
             backend_name = std::string("mfem_") + dev_tag + "_native_poisson_robin_demag";
-        } else if (ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+        } else if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
             backend_name = std::string("mfem_") + dev_tag + "_native_fem_bem_demag";
         } else {
             backend_name = std::string("mfem_") + dev_tag + "_unknown_demag_realization";
         }
-    } else if (ctx.mfem_ready) {
+    } else if (ctx.mfem_context.ready) {
         backend_name = std::string("mfem_") + dev_tag + "_mesh_ready";
     } else {
         backend_name = "mfem_stack_uninitialized";

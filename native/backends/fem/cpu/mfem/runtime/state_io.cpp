@@ -50,7 +50,7 @@ int context_copy_field_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
-    const uint64_t expected_len = static_cast<uint64_t>(ctx.n_nodes) * 3ull;
+    const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
     if (out_len != expected_len) {
         error = "output field length mismatch";
         return FULLMAG_FEM_ERR_INVALID;
@@ -140,7 +140,7 @@ int context_upload_magnetization_f64(
         return FULLMAG_FEM_ERR_INVALID;
     }
 
-    const uint64_t expected_len = static_cast<uint64_t>(ctx.n_nodes) * 3ull;
+    const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
     if (len != expected_len) {
         error = "input magnetization length mismatch";
         return FULLMAG_FEM_ERR_INVALID;
@@ -187,14 +187,14 @@ int context_upload_magnetization_f64(
         }
     }
 #else
-    if (!ctx.enable_exchange) {
-        fill_zero_vector_field(ctx.exchange.h_xyz, ctx.n_nodes);
+    if (!ctx.exchange.enabled) {
+        fill_zero_vector_field(ctx.exchange.h_xyz, ctx.mesh.n_nodes);
     }
-    if (!ctx.enable_demag) {
-        fill_zero_vector_field(ctx.demag.h_xyz, ctx.n_nodes);
+    if (!ctx.demag.enabled) {
+        fill_zero_vector_field(ctx.demag.h_xyz, ctx.mesh.n_nodes);
     }
     // Non-MFEM fallback: compose H_eff from available cached fields.
-    if (ctx.has_external_field) {
+    if (ctx.zeeman.has_external_field) {
         ctx.effective_field.h_xyz = ctx.zeeman.h_ext_xyz;
         for (size_t i = 0; i < ctx.effective_field.h_xyz.size(); ++i) {
             ctx.effective_field.h_xyz[i] += ctx.exchange.h_xyz[i] + ctx.demag.h_xyz[i];

@@ -49,7 +49,7 @@ double demag_poisson_energy_from_field(
         const double ms_i = scalar_field_value(
             ctx.material_fields.Ms_field,
             node,
-            ctx.material.saturation_magnetisation);
+            ctx.material_fields.material.saturation_magnetisation);
         demag_energy += -0.5 * kMu0 * ms_i * mdoth * ctx.integration_weights.mfem_lumped_mass[node];
     }
     return demag_energy;

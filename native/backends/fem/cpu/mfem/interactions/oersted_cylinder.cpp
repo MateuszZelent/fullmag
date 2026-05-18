@@ -9,6 +9,7 @@
 #include "cpu/mfem/interactions/oersted_cylinder.hpp"
 
 #include "context.hpp"
+#include "fem_common.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,27 +17,26 @@
 namespace fullmag::fem {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr double kZeroThreshold = 1e-30;
 
 } // namespace
 
 bool normalize_oersted_cylinder_axis(Context &ctx, std::string &error)
 {
-    if (!ctx.has_oersted_cylinder) {
+    if (!ctx.oersted.has_cylinder) {
         return true;
     }
 
     const double axis_norm = std::sqrt(
-        ctx.oersted_axis[0] * ctx.oersted_axis[0] +
-        ctx.oersted_axis[1] * ctx.oersted_axis[1] +
-        ctx.oersted_axis[2] * ctx.oersted_axis[2]);
+        ctx.oersted.axis[0] * ctx.oersted.axis[0] +
+        ctx.oersted.axis[1] * ctx.oersted.axis[1] +
+        ctx.oersted.axis[2] * ctx.oersted.axis[2]);
     if (!(axis_norm > kZeroThreshold) || !std::isfinite(axis_norm)) {
         error = "oersted_axis must be finite and non-zero";
         return false;
     }
 
-    for (double &value : ctx.oersted_axis) {
+    for (double &value : ctx.oersted.axis) {
         value /= axis_norm;
     }
     return true;
@@ -45,23 +45,23 @@ bool normalize_oersted_cylinder_axis(Context &ctx, std::string &error)
 bool initialize_oersted_cylinder_field(Context &ctx, std::string &error)
 {
     (void) error;
-    if (!ctx.has_oersted_cylinder || !(ctx.oersted_radius > 0.0)) {
+    if (!ctx.oersted.has_cylinder || !(ctx.oersted.radius > 0.0)) {
         return true;
     }
 
     const double inv_2pi = 1.0 / (2.0 * kPi);
-    const double radius = ctx.oersted_radius;
+    const double radius = ctx.oersted.radius;
     const double radius_sq = radius * radius;
-    const double cx = ctx.oersted_center[0];
-    const double cy = ctx.oersted_center[1];
-    const double cz = ctx.oersted_center[2];
-    const double ax = ctx.oersted_axis[0];
-    const double ay = ctx.oersted_axis[1];
-    const double az = ctx.oersted_axis[2];
+    const double cx = ctx.oersted.center[0];
+    const double cy = ctx.oersted.center[1];
+    const double cz = ctx.oersted.center[2];
+    const double ax = ctx.oersted.axis[0];
+    const double ay = ctx.oersted.axis[1];
+    const double az = ctx.oersted.axis[2];
 
-    ctx.oersted.h_xyz.assign(static_cast<size_t>(ctx.n_nodes) * 3u, 0.0);
+    ctx.oersted.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
     const size_t available_nodes = std::min(
-        static_cast<size_t>(ctx.n_nodes),
+        static_cast<size_t>(ctx.mesh.n_nodes),
         ctx.mesh.nodes_xyz.size() / 3u);
     for (size_t i = 0; i < available_nodes; ++i) {
         const size_t base = i * 3u;
@@ -98,21 +98,21 @@ bool initialize_oersted_cylinder_field(Context &ctx, std::string &error)
 
 double oersted_current_scale(const Context &ctx)
 {
-    if (!ctx.has_oersted_cylinder) {
+    if (!ctx.oersted.has_cylinder) {
         return 1.0;
     }
 
-    double scale = ctx.oersted_current;
-    switch (ctx.oersted_time_dep_kind) {
+    double scale = ctx.oersted.current;
+    switch (ctx.oersted.time_dep_kind) {
         case 1:
             scale *= std::sin(
-                         2.0 * kPi * ctx.oersted_time_dep_freq * ctx.current_time +
-                         ctx.oersted_time_dep_phase) +
-                     ctx.oersted_time_dep_offset;
+                         2.0 * kPi * ctx.oersted.time_dep_freq * ctx.state.current_time +
+                         ctx.oersted.time_dep_phase) +
+                     ctx.oersted.time_dep_offset;
             break;
         case 2:
-            scale *= (ctx.current_time >= ctx.oersted_time_dep_t_on &&
-                      ctx.current_time < ctx.oersted_time_dep_t_off)
+            scale *= (ctx.state.current_time >= ctx.oersted.time_dep_t_on &&
+                      ctx.state.current_time < ctx.oersted.time_dep_t_off)
                          ? 1.0
                          : 0.0;
             break;
@@ -124,7 +124,7 @@ double oersted_current_scale(const Context &ctx)
 
 void add_oersted_cylinder_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if (!ctx.has_oersted_cylinder || ctx.oersted.h_xyz.empty()) {
+    if (!ctx.oersted.has_cylinder || ctx.oersted.h_xyz.empty()) {
         return;
     }
 

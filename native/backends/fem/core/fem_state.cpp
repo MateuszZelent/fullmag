@@ -22,14 +22,14 @@ bool initialize_state_plan_fields(
         error = "initial magnetization pointer is null";
         return false;
     }
-    const uint64_t expected_m_len = static_cast<uint64_t>(ctx.n_nodes) * 3ull;
+    const uint64_t expected_m_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
     if (plan.initial_magnetization_len != expected_m_len) {
         error = "initial magnetization length mismatch";
         return false;
     }
 
-    ctx.step_count = 0;
-    ctx.current_time = 0.0;
+    ctx.state.step_count = 0;
+    ctx.state.current_time = 0.0;
     ctx.state.m_xyz.assign(
         plan.initial_magnetization_xyz,
         plan.initial_magnetization_xyz + static_cast<size_t>(plan.initial_magnetization_len));

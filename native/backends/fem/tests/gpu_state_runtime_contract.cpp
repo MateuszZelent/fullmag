@@ -164,10 +164,62 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
     }
 }
 
+void gpu_state_audit04_memory_contracts_are_source_visible() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string gpu_state =
+        read_text_file(root / "src" / "gpu_state.cpp");
+    const std::string gpu_state_header =
+        read_text_file(root / "include" / "gpu_state.hpp");
+    const std::string runtime =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "gpu_state_runtime.cpp");
+
+    const std::string initialize_body =
+        extract_function_body(gpu_state, "bool gpu_state_initialize(");
+    check(
+        gpu_state_header.find("bool allocate_demag_workspace") != std::string::npos,
+        "gpu_state_initialize must accept an explicit demag-workspace allocation flag");
+    check(
+        runtime.find("ctx.demag.enabled") != std::string::npos,
+        "GPU-state runtime bootstrap must pass ctx.demag.enabled into gpu_state_initialize");
+    check(
+        initialize_body.find("if (allocate_demag_workspace") != std::string::npos,
+        "GPU-state initialization must conditionally allocate dead demag Poisson buffers");
+
+    const std::string upload_m_body =
+        extract_function_body(gpu_state, "bool gpu_state_upload_magnetization_aos(");
+    const std::string download_m_body =
+        extract_function_body(gpu_state, "bool gpu_state_download_magnetization_aos(");
+    const std::string upload_component_body =
+        extract_function_body(gpu_state, "bool gpu_state_upload_component_aos(");
+    check(
+        upload_m_body.find("std::vector<double> mx") == std::string::npos &&
+            upload_m_body.find("std::vector<double> my") == std::string::npos &&
+            upload_m_body.find("std::vector<double> mz") == std::string::npos,
+        "GPU magnetization upload must not allocate host AoS-to-SoA component vectors");
+    check(
+        download_m_body.find("std::vector<double> mx") == std::string::npos &&
+            download_m_body.find("std::vector<double> my") == std::string::npos &&
+            download_m_body.find("std::vector<double> mz") == std::string::npos,
+        "GPU magnetization download must not allocate host SoA-to-AoS component vectors");
+    check(
+        upload_component_body.find("std::vector<double> x") == std::string::npos &&
+            upload_component_body.find("std::vector<double> y") == std::string::npos &&
+            upload_component_body.find("std::vector<double> z") == std::string::npos,
+        "GPU component upload must not allocate host AoS-to-SoA component vectors");
+    check(
+        (upload_m_body.find("cudaMemcpy2D") != std::string::npos ||
+            upload_m_body.find("fullmag_cuda_upload_aos_to_soa") != std::string::npos) &&
+            (upload_component_body.find("cudaMemcpy2D") != std::string::npos ||
+                upload_component_body.find("fullmag_cuda_upload_aos_to_soa") != std::string::npos) &&
+            (download_m_body.find("cudaMemcpy2D") != std::string::npos ||
+                download_m_body.find("fullmag_cuda_download_soa_to_aos") != std::string::npos),
+        "GPU state transfers must use cudaMemcpy2D or device-side AoS/SoA transpose helpers");
+}
+
 void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 4;
-    ctx.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
+    ctx.mesh.n_nodes = 4;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_RK45_DP54;
     ctx.state.m_xyz = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -198,9 +250,9 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
     };
     ctx.mesh.elements = {0, 1, 2, 3};
     ctx.mesh.magnetic_element_mask.assign(1, 1);
-    ctx.material.saturation_magnetisation = 800e3;
-    ctx.material.exchange_stiffness = 13e-12;
-    ctx.material.damping = 0.1;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.exchange_stiffness = 13e-12;
+    ctx.material_fields.material.damping = 0.1;
     ctx.mfem_device.device_info_cache.is_gpu_enabled = 0;
     ctx.mfem_device.device_info_valid = true;
 
@@ -219,6 +271,7 @@ void no_cuda_bootstrap_initializes_host_resident_gpu_metadata() {
 
 int main() {
     gpu_state_bootstrap_is_owned_by_runtime_module();
+    gpu_state_audit04_memory_contracts_are_source_visible();
     no_cuda_bootstrap_initializes_host_resident_gpu_metadata();
     return 0;
 }

@@ -47,6 +47,8 @@ void stage_completion_is_owned_by_runtime_module() {
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string backend_step =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
     const std::string stage =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "stage_completion.cpp");
     const std::string context = read_text_file(root / "src" / "context.cpp");
@@ -77,8 +79,11 @@ void stage_completion_is_owned_by_runtime_module() {
         api.find("void set_stage_completion_reason(") == std::string::npos,
         "C ABI API must not own a local stage-completion setter");
     check(
-        api.find("fullmag::fem::set_stage_completion(") != std::string::npos,
-        "C ABI API must use the runtime stage-completion setter");
+        api.find("fullmag::fem::set_stage_completion(") == std::string::npos,
+        "C ABI API must not own backend-step stage-completion latching");
+    check(
+        backend_step.find("set_stage_completion(") != std::string::npos,
+        "backend step runtime must use the runtime stage-completion setter");
     check(
         api.find("*out_completion = handle->context.stage_completion;") ==
             std::string::npos,

@@ -85,7 +85,7 @@ void context_state_io_is_owned_by_runtime_module() {
 
 void observable_copy_prefers_visual_demag_and_effective_fields() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
+    ctx.mesh.n_nodes = 2;
     ctx.demag.h_xyz = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
     ctx.demag.h_visual_xyz = {11.0, 12.0, 13.0, 14.0, 15.0, 16.0};
     ctx.effective_field.h_xyz = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0};
@@ -120,10 +120,10 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
 
 void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
-    ctx.has_external_field = true;
-    ctx.enable_exchange = false;
-    ctx.enable_demag = false;
+    ctx.mesh.n_nodes = 2;
+    ctx.zeeman.has_external_field = true;
+    ctx.exchange.enabled = false;
+    ctx.demag.enabled = false;
     ctx.zeeman.h_ext_xyz = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0};
     ctx.exchange.h_xyz.assign(6, 9.0);
     ctx.demag.h_xyz.assign(6, 8.0);

@@ -34,37 +34,37 @@ bool initialize_stt_plan_fields(
         return false;
     }
 
-    ctx.has_zhang_li_stt = plan.has_zhang_li_stt != 0;
-    ctx.has_slonczewski_stt = plan.has_slonczewski_stt != 0;
-    ctx.stt_current_density_am2 = {
+    ctx.stt.zhang_li_enabled = plan.has_zhang_li_stt != 0;
+    ctx.stt.slonczewski_enabled = plan.has_slonczewski_stt != 0;
+    ctx.stt.current_density_am2 = {
         plan.stt_current_density_am2[0],
         plan.stt_current_density_am2[1],
         plan.stt_current_density_am2[2],
     };
-    ctx.stt_degree = plan.stt_degree;
-    ctx.stt_beta = plan.stt_beta;
-    ctx.stt_spin_polarization = {
+    ctx.stt.degree = plan.stt_degree;
+    ctx.stt.beta = plan.stt_beta;
+    ctx.stt.spin_polarization = {
         plan.stt_spin_polarization[0],
         plan.stt_spin_polarization[1],
         plan.stt_spin_polarization[2],
     };
-    ctx.stt_lambda = plan.stt_lambda;
-    ctx.stt_epsilon_prime = plan.stt_epsilon_prime;
-    ctx.stt_free_layer_thickness = plan.stt_free_layer_thickness;
-    ctx.stt_current_sign = plan.stt_current_sign;
+    ctx.stt.lambda = plan.stt_lambda;
+    ctx.stt.epsilon_prime = plan.stt_epsilon_prime;
+    ctx.stt.free_layer_thickness = plan.stt_free_layer_thickness;
+    ctx.stt.current_sign = plan.stt_current_sign;
 
-    if (ctx.has_slonczewski_stt) {
+    if (ctx.stt.slonczewski_enabled) {
         const double len = vector_norm3(
-            ctx.stt_spin_polarization[0],
-            ctx.stt_spin_polarization[1],
-            ctx.stt_spin_polarization[2]);
+            ctx.stt.spin_polarization[0],
+            ctx.stt.spin_polarization[1],
+            ctx.stt.spin_polarization[2]);
         if (!std::isfinite(len) || len <= 1e-30) {
             error = "stt_spin_polarization must be finite and non-zero";
             return false;
         }
-        ctx.stt_spin_polarization[0] /= len;
-        ctx.stt_spin_polarization[1] /= len;
-        ctx.stt_spin_polarization[2] /= len;
+        ctx.stt.spin_polarization[0] /= len;
+        ctx.stt.spin_polarization[1] /= len;
+        ctx.stt.spin_polarization[2] /= len;
     }
     return true;
 }
@@ -87,12 +87,12 @@ void add_stt_rhs_aos(
     double &max_rhs,
     SttWorkspace &workspace)
 {
-    if (!ctx.has_slonczewski_stt && !ctx.has_zhang_li_stt) {
+    if (!ctx.stt.slonczewski_enabled && !ctx.stt.zhang_li_enabled) {
         return;
     }
 
     add_slonczewski_stt_rhs_aos(ctx, m_xyz, rhs_xyz);
-    if (ctx.has_zhang_li_stt) {
+    if (ctx.stt.zhang_li_enabled) {
         add_zhang_li_stt_rhs_aos(ctx, m_xyz, rhs_xyz, workspace.zhang_li);
     }
 

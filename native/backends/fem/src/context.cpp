@@ -14,8 +14,6 @@
 #include "core/fem_state.hpp"
 #include "cpu/mfem/interactions/anisotropy.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
-#include "cpu/mfem/interactions/demag_fem_bem.hpp"
-#include "cpu/mfem/interactions/demag_poisson_lifecycle.hpp"
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
@@ -103,20 +101,7 @@ bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::str
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }
-    // Initialize the requested demag operator only after the shared MFEM mesh is ready.
-    if (ctx.enable_demag &&
-        (ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET ||
-         ctx.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN)) {
-        if (!context_initialize_poisson(ctx, error)) {
-            return false;
-        }
-    } else if (ctx.enable_demag &&
-               ctx.demag_realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
-        if (!context_initialize_demag_fem_bem(ctx, error)) {
-            return false;
-        }
-    } else if (ctx.enable_demag) {
-        error = "unsupported native FEM demag realization";
+    if (!initialize_demag_runtime(ctx, error)) {
         return false;
     }
     if (!refresh_initial_effective_field_from_plan(ctx, plan, error)) {

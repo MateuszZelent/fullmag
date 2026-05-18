@@ -133,60 +133,60 @@ void effective_field_source_file_documents_composition_boundary() {
 
 void field_or_torque_gate_covers_all_runtime_terms() {
     fullmag::fem::Context ctx;
-    ctx.enable_exchange = false;
+    ctx.exchange.enabled = false;
     check(!fullmag::fem::has_any_field_or_direct_torque_term(ctx), "empty context has no RHS terms");
 
-    ctx.enable_exchange = true;
+    ctx.exchange.enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "exchange counts as RHS term");
-    ctx.enable_exchange = false;
+    ctx.exchange.enabled = false;
 
-    ctx.enable_demag = true;
+    ctx.demag.enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "demag counts as RHS term");
-    ctx.enable_demag = false;
+    ctx.demag.enabled = false;
 
-    ctx.has_external_field = true;
+    ctx.zeeman.has_external_field = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "Zeeman field counts as RHS term");
-    ctx.has_external_field = false;
+    ctx.zeeman.has_external_field = false;
 
-    ctx.enable_anisotropy = true;
+    ctx.anisotropy.uniaxial_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "anisotropy counts as RHS term");
-    ctx.enable_anisotropy = false;
+    ctx.anisotropy.uniaxial_enabled = false;
 
-    ctx.enable_cubic_anisotropy = true;
+    ctx.anisotropy.cubic_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "cubic anisotropy counts as RHS term");
-    ctx.enable_cubic_anisotropy = false;
+    ctx.anisotropy.cubic_enabled = false;
 
-    ctx.enable_dmi = true;
+    ctx.dmi.interfacial_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "interfacial DMI counts as RHS term");
-    ctx.enable_dmi = false;
+    ctx.dmi.interfacial_enabled = false;
 
-    ctx.enable_bulk_dmi = true;
+    ctx.dmi.bulk_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "bulk DMI counts as RHS term");
-    ctx.enable_bulk_dmi = false;
+    ctx.dmi.bulk_enabled = false;
 
-    ctx.has_oersted_cylinder = true;
+    ctx.oersted.has_cylinder = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "Oersted cylinder counts as RHS term");
-    ctx.has_oersted_cylinder = false;
+    ctx.oersted.has_cylinder = false;
 
-    ctx.has_oersted_field = true;
+    ctx.oersted.has_explicit_field = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "Oersted nodal field counts as RHS term");
-    ctx.has_oersted_field = false;
+    ctx.oersted.has_explicit_field = false;
 
-    ctx.enable_magnetoelastic = true;
+    ctx.magnetoelastic.enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "magnetoelastic counts as RHS term");
-    ctx.enable_magnetoelastic = false;
+    ctx.magnetoelastic.enabled = false;
 
-    ctx.has_zhang_li_stt = true;
+    ctx.stt.zhang_li_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "Zhang-Li STT counts as direct torque term");
-    ctx.has_zhang_li_stt = false;
+    ctx.stt.zhang_li_enabled = false;
 
-    ctx.has_slonczewski_stt = true;
+    ctx.stt.slonczewski_enabled = true;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "Slonczewski STT counts as direct torque term");
-    ctx.has_slonczewski_stt = false;
+    ctx.stt.slonczewski_enabled = false;
 
-    ctx.temperature = 300.0;
+    ctx.thermal_brown.temperature = 300.0;
     check(fullmag::fem::has_any_field_or_direct_torque_term(ctx), "thermal field counts as RHS term");
-    ctx.temperature = 0.0;
+    ctx.thermal_brown.temperature = 0.0;
 
     check(!fullmag::fem::has_any_field_or_direct_torque_term(ctx), "cleared context has no RHS terms");
 }

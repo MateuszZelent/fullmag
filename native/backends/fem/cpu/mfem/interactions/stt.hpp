@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/stt_zhang_li.hpp"
 #include "fullmag_fem.h"
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -21,6 +22,27 @@ struct Context;
  * projection. Those responsibilities stay in the dedicated owner modules:
  * stt_slonczewski.* and stt_zhang_li.*.
  */
+
+/*
+ * STT runtime plan storage owned by the aggregate.
+ *
+ * Owns executable STT family enablement, shared current-density and
+ * polarization inputs, Zhang-Li CIP beta/degree, Slonczewski CPP
+ * lambda/field-like/free-layer/current-sign parameters, and normalized
+ * spin polarization after plan import.
+ */
+struct SttRuntimeState {
+    bool zhang_li_enabled = false;
+    bool slonczewski_enabled = false;
+    std::array<double, 3> current_density_am2{0.0, 0.0, 0.0};
+    double degree = 0.0;
+    double beta = 0.0;
+    std::array<double, 3> spin_polarization{0.0, 0.0, 1.0};
+    double lambda = 1.0;
+    double epsilon_prime = 0.0;
+    double free_layer_thickness = 0.0; // 0 = geometry-derived
+    double current_sign = 1.0;
+};
 
 /*
  * Reusable scratch for aggregate STT RHS assembly.
@@ -41,8 +63,8 @@ void prepare_stt_workspace(
 /*
  * Initialize executable STT plan fields.
  *
- * Copies Slonczewski CPP and Zhang-Li CIP plan parameters into Context
- * compatibility storage, enforces that only one executable STT family is
+ * Copies Slonczewski CPP and Zhang-Li CIP plan parameters into
+ * SttRuntimeState, enforces that only one executable STT family is
  * active, and normalizes the Slonczewski spin-polarization vector.
  */
 bool initialize_stt_plan_fields(

@@ -95,8 +95,8 @@ void step_metrics_are_owned_by_runtime_module() {
 
 void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 3;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 3;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.Ms_field = {800e3, 1.0e6, 500e3};
     ctx.integration_weights.mfem_lumped_mass = {1.0e-27, 2.0e-27, 3.0e-27};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
@@ -105,7 +105,7 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
     ctx.cpu_threads.effective_omp_threads = 3;
 #endif
 
-    ctx.has_external_field = true;
+    ctx.zeeman.has_external_field = true;
     ctx.zeeman.h_ext_xyz = {
         10.0, 0.0, 0.0,
         0.0, 20.0, 0.0,

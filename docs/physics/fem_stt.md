@@ -30,6 +30,12 @@ refresh. It does not define Slonczewski CPP torque, Zhang-Li CIP torque,
 CPP thickness/current physics, or CIP gradient projection; those semantics stay
 in `stt_slonczewski.hpp/.cpp` and `stt_zhang_li.hpp/.cpp`.
 
+Plan storage ownership: `SttRuntimeState` stores executable STT family
+enablement, shared current density, Zhang-Li `degree`/`beta`, Slonczewski spin
+polarization, asymmetry, field-like coefficient, free-layer thickness, and
+current sign. `Context` contains this owner as `ctx.stt` and does not own flat
+STT plan fields directly.
+
 ## Slonczewski CPP
 
 The Slonczewski path is local per node:
@@ -127,8 +133,9 @@ Current gate:
   current-sign handling, nonmagnetic-node masking, Slonczewski source-module
   ownership, Zhang-Li source-module ownership, Zhang-Li tetrahedral
   gradient/nodal projection, additive Zhang-Li behavior for an existing RHS,
-  aggregate-header non-ownership docstrings, reusable RK hot-path STT
-  workspace ownership, top-level source-contract docstrings for the aggregate,
+  aggregate-header non-ownership docstrings, `SttRuntimeState` plan-storage
+  ownership outside flat `Context`, reusable RK hot-path STT workspace
+  ownership, top-level source-contract docstrings for the aggregate,
   Slonczewski and Zhang-Li sources, and combined `max_rhs` updates.
 
 Required before production qualification:

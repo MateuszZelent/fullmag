@@ -142,7 +142,7 @@ describe("FooterTelemetry", () => {
     expect(byId.step?.value).toBe("99");
   });
 
-  it("uses the first scene object as the telemetry object source", () => {
+  it("uses the selected scene object as the telemetry object source", () => {
     const scene = {
       objects: [
         { id: "arch_waveguide", name: "Arch waveguide" },
@@ -151,7 +151,9 @@ describe("FooterTelemetry", () => {
       revision: 2,
     } satisfies SceneResource;
 
+    expect(resolvePrimaryTelemetryObjectId(scene, "free_layer")).toBe("free_layer");
     expect(resolvePrimaryTelemetryObjectId(scene)).toBe("arch_waveguide");
+    expect(resolvePrimaryTelemetryObjectId(scene, "missing")).toBe("arch_waveguide");
     expect(resolvePrimaryTelemetryObjectId({ objects: [], revision: 3 })).toBeNull();
   });
 });

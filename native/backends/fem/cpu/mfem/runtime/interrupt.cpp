@@ -13,13 +13,13 @@ namespace fullmag::fem {
 
 bool poll_interrupt(Context &ctx)
 {
-    if (ctx.interrupt_poll == nullptr) {
+    if (ctx.interrupt.poll == nullptr) {
         return false;
     }
-    if (ctx.interrupt_poll(ctx.interrupt_poll_user_data) == 0) {
+    if (ctx.interrupt.poll(ctx.interrupt.user_data) == 0) {
         return false;
     }
-    ctx.step_interrupted = true;
+    ctx.interrupt.step_interrupted = true;
     return true;
 }
 

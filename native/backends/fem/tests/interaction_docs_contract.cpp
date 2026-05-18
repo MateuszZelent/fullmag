@@ -163,12 +163,12 @@ void validation_matrix_names_leaf_header_gate_rows() {
         read_text_file(root / "docs" / "validation" / "fem_cpu_validation_matrix.md");
 
     check(
-        matrix.find("| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman plan-field initialization plus broadcast/field/energy module ownership and leaf/source-level docstrings, Zeeman runtime H_ext ownership, uniaxial/cubic module ownership and leaf/source-level docstrings, anisotropy runtime H_ani/H_cubic/energy ownership, aggregate/leaf-header non-ownership docstrings, and anisotropy plan-field initialization plus axis normalization/validation ownership |") !=
+        matrix.find("| Zeeman/anisotropy | `fem_zeeman_contract`, `fem_anisotropy_contract` | local field, energy, Zeeman plan-field initialization plus broadcast/field/energy module ownership and leaf/source-level docstrings, Zeeman runtime H_ext plus uniform external-field plan storage ownership, Context no longer owning flat Zeeman enable/field-vector fields, uniaxial/cubic module ownership and leaf/source-level docstrings, anisotropy runtime H_ani/H_cubic/energy plus uniaxial/cubic plan storage ownership, Context no longer owning flat anisotropy/cubic plan fields, aggregate/leaf-header non-ownership docstrings, and anisotropy plan-field initialization plus axis normalization/validation ownership |") !=
             std::string::npos,
         "validation matrix must map Zeeman/anisotropy to aggregate/leaf-header boundary coverage");
 }
 
-void validation_matrix_marks_mfem_stack_fixtures_runtime_open() {
+void validation_matrix_names_mfem_stack_fixture_statuses() {
     const std::filesystem::path root = repo_root();
     const std::string matrix =
         read_text_file(root / "docs" / "validation" / "fem_cpu_validation_matrix.md");
@@ -178,13 +178,13 @@ void validation_matrix_marks_mfem_stack_fixtures_runtime_open() {
             std::string::npos,
         "validation matrix must keep exchange sinusoidal fixture runtime-open until MFEM stack is available");
     check(
-        matrix.find("| Demag Poisson | uniformly magnetized sphere | `H_demag ~= -M/3` inside | runtime-open (requires MFEM stack) |") !=
+        matrix.find("| Demag Poisson | uniformly magnetized sphere | `H_demag ~= -M/3` inside | covered by `tests/fem_demag_validation/sphere_validation.py` (requires MFEM stack) |") !=
             std::string::npos,
-        "validation matrix must keep Poisson sphere fixture runtime-open until MFEM stack is available");
+        "validation matrix must map Poisson sphere fixture to the scripted runtime gate");
     check(
-        matrix.find("| Demag Poisson | airbox sweep | convergence with airbox size and boundary mode | runtime-open (requires MFEM stack) |") !=
+        matrix.find("| Demag Poisson | airbox sweep | convergence with airbox size and boundary mode | covered by `tests/fem_demag_validation/airbox_convergence.py` (requires MFEM stack) |") !=
             std::string::npos,
-        "validation matrix must keep Poisson airbox sweep fixture runtime-open until MFEM stack is available");
+        "validation matrix must map Poisson airbox sweep fixture to the scripted runtime gate");
     check(
         matrix.find("| Demag FEM/BEM | body-only sphere or ellipsoid | demag factor agreement | runtime-open (requires MFEM stack) |") !=
             std::string::npos,
@@ -202,6 +202,6 @@ int main() {
     required_release_gate_docs_exist();
     validation_matrix_names_closed_fixture_owners();
     validation_matrix_names_leaf_header_gate_rows();
-    validation_matrix_marks_mfem_stack_fixtures_runtime_open();
+    validation_matrix_names_mfem_stack_fixture_statuses();
     return 0;
 }

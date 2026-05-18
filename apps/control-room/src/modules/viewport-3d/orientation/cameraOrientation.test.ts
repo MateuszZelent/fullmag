@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  freeCameraTargetForDirection,
   normalizeDirection,
   orbitCameraAroundTarget,
+  resolveCameraUpForDirection,
   rotateCameraAroundCenter,
   snapCameraToDirection,
 } from "./cameraOrientation";
@@ -31,6 +33,29 @@ describe("camera orientation math", () => {
       target: [2, 2, 1],
       up: [0, 0, 1],
     });
+  });
+
+  it("snaps free camera view direction without moving the camera position", () => {
+    const next = freeCameraTargetForDirection(
+      {
+        position: [6, 2, 1],
+        target: [2, 2, 1],
+        up: [0, 0, 1],
+      },
+      [0, 1, 0],
+    );
+
+    expect(next).toEqual({
+      position: [6, 2, 1],
+      target: [6, 6, 1],
+      up: [0, 0, 1],
+    });
+  });
+
+  it("uses a non-collinear camera up vector for top and bottom free-camera snaps", () => {
+    expect(resolveCameraUpForDirection([0, 0, 1])).toEqual([0, 1, 0]);
+    expect(resolveCameraUpForDirection([0, 0, -1])).toEqual([0, 1, 0]);
+    expect(resolveCameraUpForDirection([1, 0, 0])).toEqual([0, 0, 1]);
   });
 
   it("rotates the camera around an explicit center on the physical Z axis", () => {

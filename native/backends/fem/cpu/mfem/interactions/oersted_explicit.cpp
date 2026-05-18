@@ -14,7 +14,7 @@ namespace fullmag::fem {
 
 void add_explicit_oersted_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if (!ctx.has_oersted_field || ctx.oersted.h_xyz.empty()) {
+    if (!ctx.oersted.has_explicit_field || ctx.oersted.h_xyz.empty()) {
         return;
     }
 

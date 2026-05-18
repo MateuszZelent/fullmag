@@ -62,6 +62,8 @@ describe("viewport3dManifest", () => {
     expect(registry.get("viewport-3d.hsl-reference-auto")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-on")).toBeDefined();
     expect(registry.get("viewport-3d.hsl-reference-off")).toBeDefined();
+    expect(registry.get("viewport-3d.rotation-camera")).toBeDefined();
+    expect(registry.get("viewport-3d.rotation-object")).toBeDefined();
     expect(registry.get("viewport-3d.profile-figure")).toBeDefined();
 
     await registry.execute("viewport-3d.toggle-viewcube", { source: "test" });
@@ -77,6 +79,13 @@ describe("viewport3dManifest", () => {
     await registry.execute("viewport-3d.hsl-reference-off", { source: "test" });
     expect(viewport3dStore.getSnapshot().widgets.hslReferenceMode).toBe("off");
     expect(registry.isActive("viewport-3d.hsl-reference-off", { source: "test" }))
+      .toBe(true);
+
+    expect(registry.isActive("viewport-3d.rotation-camera", { source: "test" }))
+      .toBe(true);
+    await registry.execute("viewport-3d.rotation-object", { source: "test" });
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
+    expect(registry.isActive("viewport-3d.rotation-object", { source: "test" }))
       .toBe(true);
   });
 

@@ -57,6 +57,14 @@ void source_facades_document_module_boundaries() {
     const std::string bridge = read_text_file(root / "src" / "mfem_bridge.cpp");
     const std::string transfer =
         read_text_file(root / "src" / "transfer_audit.cpp");
+    const std::string backend_step =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
+    const std::string backend_step_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "backend_step.hpp");
+    const std::string eigen_dense =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "eigen_dense.cpp");
+    const std::string eigen_dense_header =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "eigen_dense.hpp");
 
     check(
         api.find("FEM C ABI facade source contract") != std::string::npos,
@@ -64,6 +72,24 @@ void source_facades_document_module_boundaries() {
     check(
         api.find("does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy") != std::string::npos,
         "api source file must document its non-owning module boundary");
+    check(
+        api.find("cusolverDnDsygvd") == std::string::npos &&
+            api.find("cudaMalloc") == std::string::npos &&
+            api.find("cudaMemcpy") == std::string::npos,
+        "api source file must not own dense eigensolver CUDA/cuSolver implementation");
+    check(
+        api.find("return fullmag::fem::solve_dense_generalized_eigenproblem(desc);") !=
+            std::string::npos,
+        "api source file must delegate dense eigensolver implementation to runtime module");
+    check(
+        api.find("context_step_explicit_rk_mfem") == std::string::npos &&
+            api.find("TransferAuditScope hot_loop") == std::string::npos &&
+            api.find("gpu_rk_finalize_step_stats") == std::string::npos &&
+            api.find("set_stage_completion(") == std::string::npos,
+        "api source file must not own backend step runtime orchestration");
+    check(
+        api.find("fullmag::fem::run_backend_step(") != std::string::npos,
+        "api source file must delegate backend step orchestration to runtime module");
     check(
         context.find("FEM Context facade source contract") != std::string::npos,
         "context source file must document its source contract");
@@ -112,10 +138,48 @@ void source_facades_document_module_boundaries() {
     check(
         transfer.find("does not own C ABI calls, Context construction, MFEM device policy, interaction physics, or integrator execution") != std::string::npos,
         "transfer-audit source file must document its non-owning module boundary");
+    check(
+        backend_step.find("FEM backend step runtime source contract") != std::string::npos,
+        "backend step runtime source file must document its source contract");
+    check(
+        backend_step.find("int run_backend_step(") != std::string::npos,
+        "backend step runtime source must own the runtime step helper");
+    check(
+        backend_step.find("context_step_explicit_rk_mfem") != std::string::npos &&
+            backend_step.find("TransferAuditScope hot_loop") != std::string::npos &&
+            backend_step.find("gpu_rk_finalize_step_stats") != std::string::npos,
+        "backend step runtime source must own RK dispatch, transfer-audit scope, and GPU RK stats finalization");
+    check(
+        backend_step_header.find("Run one native FEM backend step behind the C ABI facade") !=
+            std::string::npos,
+        "backend step runtime header must document its contract");
+    check(
+        backend_step_header.find("does not own exported fullmag_fem_backend_step") !=
+            std::string::npos,
+        "backend step runtime header must document its non-owning C ABI boundary");
+    check(
+        eigen_dense.find("Dense generalized eigensolver runtime source contract") !=
+            std::string::npos,
+        "dense eigensolver runtime source file must document its source contract");
+    check(
+        eigen_dense.find("int solve_dense_generalized_eigenproblem(") != std::string::npos,
+        "dense eigensolver runtime source must own the implementation helper");
+    check(
+        eigen_dense.find("cusolverDnDsygvd") != std::string::npos,
+        "dense eigensolver runtime source must own cuSolver dispatch when available");
+    check(
+        eigen_dense_header.find("Solve the optional GPU dense generalized eigenproblem") !=
+            std::string::npos,
+        "dense eigensolver runtime header must document its contract");
+    check(
+        eigen_dense_header.find("does not own exported C ABI entrypoint plumbing") !=
+            std::string::npos,
+        "dense eigensolver runtime header must document its non-owning C ABI boundary");
 }
 
 void common_fem_utilities_have_single_header() {
     const std::filesystem::path root = fem_source_root();
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
     const std::string common = read_text_file(root / "include" / "fem_common.hpp");
     const std::string llg =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "llg_rhs.cpp");
@@ -156,6 +220,9 @@ void common_fem_utilities_have_single_header() {
     check(
         demag_energy.find("double scalar_field_value(") == std::string::npos,
         "Demag energy must use shared scalar helper instead of local copy");
+    check(
+        cmake.find("heun_step.cpp") == std::string::npos,
+        "FEM CMake source list must not reference removed Heun stepper files");
 }
 
 } // namespace

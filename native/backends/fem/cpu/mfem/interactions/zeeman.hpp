@@ -5,6 +5,7 @@
 #include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
 #include "fullmag_fem.h"
 
+#include <array>
 #include <vector>
 
 namespace fullmag::fem {
@@ -14,11 +15,14 @@ struct Context;
 /*
  * Runtime products emitted by the Zeeman interaction modules.
  *
- * The nodal external-field buffer is stored in AOS-3 order and is consumed by
- * H_eff composition, Zeeman energy integration, observable state I/O, and GPU
- * runtime bootstrap.
+ * The state owns the plan-provided uniform external H field and enable flag
+ * plus the nodal external-field buffer stored in AOS-3 order. The nodal buffer
+ * is consumed by H_eff composition, Zeeman energy integration, observable state
+ * I/O, and GPU runtime bootstrap.
  */
 struct ZeemanRuntimeState {
+    bool has_external_field = false;
+    std::array<double, 3> external_field_am{0.0, 0.0, 0.0};
     std::vector<double> h_ext_xyz;
 };
 
@@ -26,8 +30,8 @@ struct ZeemanRuntimeState {
  * Initialize native FEM Zeeman plan fields.
  *
  * Copies the ABI plan's uniform external H field in A/m and its enable flag
- * into Context compatibility storage. Uniform nodal broadcast, H_eff addition,
- * and energy integration remain in the dedicated Zeeman modules included here.
+ * into the Zeeman runtime owner. Uniform nodal broadcast, H_eff addition, and
+ * energy integration remain in the dedicated Zeeman modules included here.
  */
 void initialize_zeeman_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
 

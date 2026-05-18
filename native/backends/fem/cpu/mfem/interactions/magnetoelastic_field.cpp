@@ -14,7 +14,7 @@ namespace fullmag::fem {
 
 void add_magnetoelastic_field(const Context &ctx, std::vector<double> &h_eff_xyz)
 {
-    if (!ctx.enable_magnetoelastic || ctx.magnetoelastic.h_xyz.empty()) {
+    if (!ctx.magnetoelastic.enabled || ctx.magnetoelastic.h_xyz.empty()) {
         return;
     }
 

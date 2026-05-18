@@ -48,6 +48,7 @@ std::filesystem::path fem_source_root() {
 void base_plan_fields_are_owned_by_core_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string plan_fields = read_text_file(root / "core" / "fem_plan_fields.cpp");
     const std::string plan_header = read_text_file(root / "core" / "fem_plan_fields.hpp");
 
@@ -63,16 +64,16 @@ void base_plan_fields_are_owned_by_core_module() {
             std::string::npos,
         "Context must not own base integrator validation");
     check(
-        context.find("ctx.n_nodes = plan.mesh.n_nodes;") == std::string::npos,
+        context.find("ctx.mesh.n_nodes = plan.mesh.n_nodes;") == std::string::npos,
         "Context must not copy base mesh node count directly");
     check(
-        context.find("ctx.dt_seconds = plan.dt_seconds;") == std::string::npos,
+        context.find("ctx.base_plan.dt_seconds = plan.dt_seconds;") == std::string::npos,
         "Context must not copy base dt directly");
     check(
-        context.find("ctx.precision = plan.precision;") == std::string::npos,
+        context.find("ctx.base_plan.precision = plan.precision;") == std::string::npos,
         "Context must not copy precision directly");
     check(
-        context.find("ctx.integrator = plan.integrator;") == std::string::npos,
+        context.find("ctx.base_plan.integrator = plan.integrator;") == std::string::npos,
         "Context must not copy integrator directly");
     check(
         plan_fields.find("bool initialize_base_plan_fields(") != std::string::npos,
@@ -87,6 +88,35 @@ void base_plan_fields_are_owned_by_core_module() {
         plan_header.find("Own native FEM base plan validation and scalar runtime import") !=
             std::string::npos,
         "FemPlanFields header must document its contract");
+    check(
+        plan_header.find("mesh cardinalities into FemMeshRuntimeState") != std::string::npos,
+        "FemPlanFields header must document mesh cardinality ownership");
+    check(
+        plan_header.find("Context's compatibility facade") == std::string::npos,
+        "FemPlanFields header must not describe mesh cardinalities as flat Context facade state");
+    check(
+        plan_header.find("struct FemBasePlanRuntimeState") != std::string::npos,
+        "FemPlanFields header must declare the scalar base-plan runtime owner");
+    check(
+        plan_header.find("uint32_t fe_order") != std::string::npos &&
+            plan_header.find("double dt_seconds") != std::string::npos &&
+            plan_header.find("fullmag_fem_integrator integrator") != std::string::npos,
+        "FemBasePlan runtime state must own scalar base-plan settings");
+    check(
+        context_header.find("FemBasePlanRuntimeState base_plan{}") != std::string::npos,
+        "Context must store scalar base-plan fields under base_plan");
+    for (const char *flat_field : {
+             "uint32_t fe_order",
+             "double hmax",
+             "double dt_seconds",
+             "double air_box_factor",
+             "fullmag_fem_precision precision",
+             "fullmag_fem_integrator integrator",
+         }) {
+        check(
+            context_header.find(flat_field) == std::string::npos,
+            "Context must not own flat scalar base-plan fields");
+    }
     check(
         plan_header.find("It does not own mesh geometry, material fields, state") !=
                 std::string::npos &&
@@ -126,16 +156,16 @@ void base_plan_import_copies_runtime_scalars_and_counts() {
 
     std::string error;
     check(fullmag::fem::initialize_base_plan_fields(ctx, plan, error), error.c_str());
-    check(ctx.n_nodes == 4u, "base plan imports node count");
-    check(ctx.n_elements == 1u, "base plan imports element count");
-    check(ctx.n_boundary_faces == 0u, "base plan imports boundary face count");
-    check(ctx.fe_order == 1u, "base plan imports fe_order");
-    check(ctx.hmax == 4.0e-9, "base plan imports hmax");
-    check(ctx.dt_seconds == 2.0e-13, "base plan imports dt_seconds");
-    check(ctx.current_dt == 2.0e-13, "base plan initializes current_dt from dt_seconds");
-    check(ctx.air_box_factor == 3.5, "base plan imports air_box_factor");
-    check(ctx.precision == FULLMAG_FEM_PRECISION_SINGLE, "base plan imports precision");
-    check(ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54, "base plan imports integrator");
+    check(ctx.mesh.n_nodes == 4u, "base plan imports node count");
+    check(ctx.mesh.n_elements == 1u, "base plan imports element count");
+    check(ctx.mesh.n_boundary_faces == 0u, "base plan imports boundary face count");
+    check(ctx.base_plan.fe_order == 1u, "base plan imports fe_order");
+    check(ctx.base_plan.hmax == 4.0e-9, "base plan imports hmax");
+    check(ctx.base_plan.dt_seconds == 2.0e-13, "base plan imports dt_seconds");
+    check(ctx.adaptive_dt.current_dt == 2.0e-13, "base plan initializes current_dt from dt_seconds");
+    check(ctx.base_plan.air_box_factor == 3.5, "base plan imports air_box_factor");
+    check(ctx.base_plan.precision == FULLMAG_FEM_PRECISION_SINGLE, "base plan imports precision");
+    check(ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54, "base plan imports integrator");
 }
 
 void base_plan_validation_rejects_invalid_inputs() {

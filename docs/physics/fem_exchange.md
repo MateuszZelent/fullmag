@@ -92,6 +92,11 @@ Source ownership:
 - `exchange.hpp/.cpp` remains an aggregate include and compatibility
   translation unit.
 
+Plan/runtime storage ownership: `ExchangeRuntimeState` stores the exchange
+enablement flag, materialized `H_ex` buffer, and MFEM exchange workspace. The
+aggregate plan import writes `plan.enable_exchange` to `ctx.exchange.enabled`
+and the top-level `Context` does not own a flat `enable_exchange` field.
+
 ## Ograniczenia capability
 
 - Active exchange field assembly requires `FULLMAG_HAS_MFEM_STACK`.
@@ -116,7 +121,8 @@ ctest --test-dir native/build/backends/fem -R fem_exchange_contract --output-on-
 assembly, field computation, runtime refresh, fallback, mass projection, and
 legacy GPU upload. It also checks top-level source-contract docstrings for the
 aggregate, operator, field-compute, runtime-refresh, fallback, mass-projection,
-and legacy GPU upload sources.
+and legacy GPU upload sources, plus exchange enablement storage in
+`ExchangeRuntimeState` instead of flat `Context`.
 
 The full MFEM exchange branch still requires an environment with complete MFEM
 headers and libraries.

@@ -14,12 +14,15 @@ struct Context;
 /*
  * Runtime mesh state owned by the FEM mesh core module.
  *
- * The buffers hold imported topology, optional boundary/marker metadata,
- * static-periodic reduction maps, magnetic masks, and P1 nodal dual volumes.
- * They are geometry/topology data consumed by interactions and runtimes, not
- * interaction outputs or material overrides.
+ * The scalar counts and buffers hold imported topology, optional boundary/
+ * marker metadata, static-periodic reduction maps, magnetic masks, and P1
+ * nodal dual volumes. They are geometry/topology data consumed by interactions
+ * and runtimes, not interaction outputs or material overrides.
  */
 struct FemMeshRuntimeState {
+    uint32_t n_nodes = 0;
+    uint32_t n_elements = 0;
+    uint32_t n_boundary_faces = 0;
     std::vector<double> nodes_xyz;
     std::vector<uint32_t> elements;
     std::vector<uint32_t> element_markers;

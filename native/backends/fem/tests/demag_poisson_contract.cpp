@@ -294,8 +294,8 @@ void poisson_debug_env_gate_is_cached_on_hot_path() {
 
 void demag_energy_uses_half_factor_ms_mass_and_magnetic_mask() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 3;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 3;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.material_fields.Ms_field = {800e3, 1.0e6, 2.0e6};
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27, 3.0e-27, 5.0e-27};
     ctx.mesh.magnetic_node_mask = {1u, 1u, 0u};
@@ -329,8 +329,8 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
         fullmag::fem::demag_poisson_should_refresh_field(ctx),
         "demag refresh defaults to fresh solve");
 
-    ctx.field_refresh.has_demag_interval_s = 1;
-    ctx.field_refresh.demag_interval_s = 2.0;
+    ctx.demag.field_refresh.has_demag_interval_s = 1;
+    ctx.demag.field_refresh.demag_interval_s = 2.0;
     ctx.demag.cache_valid = false;
     check(
         fullmag::fem::demag_poisson_should_refresh_field(ctx),
@@ -338,17 +338,17 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
 
     ctx.demag.cache_valid = true;
     ctx.demag.last_refresh_time = 10.0;
-    ctx.current_time = 11.0;
+    ctx.state.current_time = 11.0;
     check(
         !fullmag::fem::demag_poisson_should_refresh_field(ctx),
         "demag cache reused before interval elapsed");
 
-    ctx.current_time = 12.0;
+    ctx.state.current_time = 12.0;
     check(
         fullmag::fem::demag_poisson_should_refresh_field(ctx),
         "demag refresh when interval elapsed");
 
-    ctx.field_refresh.demag_interval_s = 0.0;
+    ctx.demag.field_refresh.demag_interval_s = 0.0;
     check(
         fullmag::fem::demag_poisson_should_refresh_field(ctx),
         "demag refresh for non-positive interval");
@@ -356,8 +356,8 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
 
 void cached_demag_energy_includes_frozen_robin_boundary_term() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 1;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27};
     ctx.demag.cached_robin_boundary_energy = 7.0e-21;
 
@@ -426,13 +426,13 @@ void demag_cache_store_and_reuse_are_owned_by_poisson_module() {
         40.0, 50.0, 60.0,
     };
 
-    ctx.current_time = 4.5;
+    ctx.state.current_time = 4.5;
     ctx.demag.h_visual_xyz = visual;
     fullmag::fem::demag_poisson_store_refreshed_field_cache(ctx, field);
     check(!ctx.demag.cache_valid, "demag cache stays disabled without interval policy");
     check(ctx.demag.cached_xyz.empty(), "disabled demag cache leaves field empty");
 
-    ctx.field_refresh.has_demag_interval_s = 1;
+    ctx.demag.field_refresh.has_demag_interval_s = 1;
     fullmag::fem::demag_poisson_store_refreshed_field_cache(ctx, field);
     check(ctx.demag.cache_valid, "demag cache is marked valid after refresh");
     check(ctx.demag.last_refresh_time == 4.5, "demag cache refresh time is current time");
@@ -556,8 +556,11 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
 
     const char *symbols[] = {
         "bool initialize_demag_poisson_boundary_operator(",
-        "ctx.robin_effective_beta = c / R_star;",
-        "A_robin->Add(ctx.robin_effective_beta",
+        "ctx.poisson_demag.robin_beta_factor",
+        "ctx.poisson_demag.robin_beta_mode",
+        "ctx.poisson_demag.boundary_marker",
+        "ctx.poisson_demag.robin_effective_beta = c / R_star;",
+        "A_robin->Add(ctx.poisson_demag.robin_effective_beta",
         "A_bc->EliminateRowCol",
     };
     for (const char *symbol : symbols) {
@@ -610,7 +613,7 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             std::string::npos,
         "Poisson periodic header must declare the periodic-demag predicate");
     check(
-        periodic.find("return ctx.enable_demag && !ctx.mesh.periodic_node_pairs.empty();") !=
+        periodic.find("return ctx.demag.enabled && !ctx.mesh.periodic_node_pairs.empty();") !=
             std::string::npos,
         "Poisson periodic module must define the periodic-demag predicate semantics");
 }
@@ -644,6 +647,140 @@ void demag_hypre_solve_is_owned_by_poisson_hypre_module() {
     }
 }
 
+void demag_hypre_solve_returns_workspace_solution_without_final_host_copy() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string hypre_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.hpp");
+    const std::string hypre =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
+    const std::string solve =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_solve.cpp");
+
+    check(
+        hypre_header.find("const mfem::Vector *&solved_solution") != std::string::npos,
+        "Poisson demag Hypre solve must return the solved workspace vector by reference");
+    check(
+        hypre.find("solved_solution = &x_par;") != std::string::npos,
+        "Poisson demag Hypre solve must expose x_par as the solved vector");
+    check(
+        hypre.find("double *solution_host = audited_host_write(solution)") ==
+            std::string::npos,
+        "Poisson demag Hypre solve must not copy solved x_par back through a host solution buffer");
+    check(
+        solve.find("const mfem::Vector *solved_solution = nullptr;") !=
+            std::string::npos,
+        "Poisson demag orchestration must consume the returned solved Hypre vector");
+    check(
+        solve.find("*solved_solution,\n            h_demag_xyz") != std::string::npos,
+        "Poisson demag recovery must use the returned solved Hypre vector");
+    check(
+        solve.find("gf_potential->SetFromTrueDofs(*solved_solution);") !=
+            std::string::npos,
+        "Poisson demag potential cache must use the returned solved Hypre vector");
+}
+
+void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
+    const std::string runtime_header =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_runtime.hpp");
+
+    check(
+        runtime_header.find("Poisson demag runtime state") != std::string::npos,
+        "Poisson demag runtime state header must document its owner contract");
+    check(
+        runtime_header.find("struct PoissonDemagRuntimeState") != std::string::npos,
+        "Poisson demag runtime state must have a named owner struct");
+    check(
+        context_header.find("PoissonDemagRuntimeState poisson_demag{}") !=
+            std::string::npos,
+        "Context must store Poisson demag solver runtime state as one owned substate");
+
+    const char *runtime_fields[] = {
+        "mfem::H1_FECollection *potential_fec",
+        "mfem::FiniteElementSpace *potential_fes",
+        "mfem::GridFunction *gf_potential",
+        "mfem::BilinearForm *poisson_bilinear",
+        "mfem::SparseMatrix *poisson_matrix",
+        "mfem::SparseMatrix *poisson_bc_op",
+        "PoissonRhsWorkspace *rhs_workspace",
+        "mfem::LinearForm *rhs_form",
+        "mfem::Vector *rhs_vec",
+        "mfem::Vector *solution_vec",
+        "DemagRecoveryWorkspace *recovery_workspace",
+        "PoissonHypreWorkspace *hypre_workspace",
+        "mfem::SparseMatrix *periodic_matrix",
+        "mfem::Vector *periodic_rhs",
+        "mfem::Vector *periodic_solution",
+        "PeriodicPoissonReducedWorkspace *periodic_workspace",
+        "bool periodic_reduced_ready",
+        "int boundary_marker",
+        "int robin_beta_mode",
+        "double robin_beta_factor",
+        "double robin_effective_beta",
+        "mfem::BilinearForm *robin_boundary_mass",
+        "std::vector<int> ess_tdof_list",
+        "bool ready",
+        "int last_iterations",
+        "double last_residual",
+        "uint64_t last_setup_wall_time_ns",
+        "uint64_t last_solver_apply_wall_time_ns",
+        "bool last_solver_setup_reused",
+        "uint32_t solves_current_step",
+        "mfem::HypreParMatrix *cached_hypre_par",
+        "mfem::HypreSolver *cached_hypre_preconditioner",
+        "mfem::HypreSolver *cached_hypre_solver",
+        "bool solver_setup",
+    };
+    for (const char *field : runtime_fields) {
+        check(
+            runtime_header.find(field) != std::string::npos,
+            "Poisson demag runtime state must own solver readiness, telemetry, and Hypre cache fields");
+    }
+
+    const char *flat_fields[] = {
+        "mfem::H1_FECollection *mfem_potential_fec",
+        "mfem::FiniteElementSpace *mfem_potential_fes",
+        "mfem::GridFunction *mfem_gf_potential",
+        "mfem::BilinearForm *mfem_poisson_bilinear",
+        "mfem::SparseMatrix *mfem_poisson_matrix",
+        "mfem::SparseMatrix *mfem_poisson_bc_op",
+        "PoissonRhsWorkspace *mfem_poisson_rhs_workspace",
+        "mfem::LinearForm *mfem_poisson_rhs",
+        "mfem::Vector *mfem_poisson_rhs_vec",
+        "mfem::Vector *mfem_poisson_solution_vec",
+        "DemagRecoveryWorkspace *mfem_demag_recovery_workspace",
+        "PoissonHypreWorkspace *mfem_poisson_hypre_workspace",
+        "mfem::SparseMatrix *mfem_periodic_poisson_matrix",
+        "mfem::Vector *mfem_periodic_poisson_rhs",
+        "mfem::Vector *mfem_periodic_poisson_solution",
+        "PeriodicPoissonReducedWorkspace *mfem_periodic_poisson_workspace",
+        "bool poisson_periodic_reduced_ready",
+        "int poisson_boundary_marker",
+        "int    robin_beta_mode",
+        "double robin_beta_factor",
+        "double robin_effective_beta",
+        "mfem::BilinearForm *mfem_boundary_mass",
+        "std::vector<int> poisson_ess_tdof_list",
+        "bool poisson_ready",
+        "int poisson_last_iterations",
+        "double poisson_last_residual",
+        "uint64_t poisson_last_setup_wall_time_ns",
+        "uint64_t poisson_last_solver_apply_wall_time_ns",
+        "bool poisson_last_solver_setup_reused",
+        "uint32_t demag_solves_current_step",
+        "mfem::HypreParMatrix *mfem_cached_hypre_par",
+        "mfem::HypreSolver *mfem_cached_hypre_preconditioner",
+        "mfem::HypreSolver *mfem_cached_hypre_solver",
+        "bool poisson_solver_setup",
+    };
+    for (const char *field : flat_fields) {
+        check(
+            context_header.find(field) == std::string::npos,
+            "Context must not keep Poisson demag solver runtime fields flat");
+    }
+}
+
 void demag_recovery_is_owned_by_poisson_recovery_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string poisson =
@@ -672,6 +809,20 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
     }
 }
 
+void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string recovery =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_recovery.cpp");
+
+    check(
+        recovery.find("field_partials") == std::string::npos &&
+            recovery.find("weight_partials") == std::string::npos,
+        "Poisson demag recovery must not allocate one full nodal field/weight buffer per thread");
+    check(
+        recovery.find("#pragma omp atomic update") != std::string::npos,
+        "Poisson demag recovery parallel path must accumulate directly into shared nodal buffers");
+}
+
 void demag_solver_stats_are_filled_by_poisson_module() {
     fullmag::fem::Context ctx;
     fullmag_fem_step_stats stats{};
@@ -685,18 +836,18 @@ void demag_solver_stats_are_filled_by_poisson_module() {
     check(stats.demag_linear_residual == 0.0, "disabled demag residual is zero");
 
 #if FULLMAG_HAS_MFEM_STACK
-    ctx.enable_demag = true;
-    ctx.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
-    ctx.demag_solves_current_step = 3;
-    ctx.poisson_last_iterations = -4;
-    ctx.poisson_last_residual = 1.5e-7;
+    ctx.demag.enabled = true;
+    ctx.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
+    ctx.poisson_demag.solves_current_step = 3;
+    ctx.poisson_demag.last_iterations = -4;
+    ctx.poisson_demag.last_residual = 1.5e-7;
 
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
     check(stats.demag_solve_count == 3, "enabled demag solve count");
     check(stats.demag_linear_iterations == 0, "negative demag iterations clamp to zero");
     check(stats.demag_linear_residual == 1.5e-7, "enabled demag residual");
 
-    ctx.poisson_last_iterations = 12;
+    ctx.poisson_demag.last_iterations = 12;
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
     check(stats.demag_linear_iterations == 12, "positive demag iterations are reported");
 #endif
@@ -883,7 +1034,7 @@ void demag_visual_effective_field_preserves_full_domain_demag() {
 
 void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 3;
+    ctx.mesh.n_nodes = 3;
     ctx.mesh.periodic_reduced_node = {0u, 1u, 0u};
     ctx.mesh.periodic_representative_nodes = {2u, 1u};
     ctx.demag.h_visual_xyz = {1.0};
@@ -932,7 +1083,10 @@ int main() {
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
     demag_hypre_solve_is_owned_by_poisson_hypre_module();
+    demag_hypre_solve_returns_workspace_solution_without_final_host_copy();
+    demag_poisson_solver_runtime_state_is_owned_by_poisson_module();
     demag_recovery_is_owned_by_poisson_recovery_module();
+    demag_recovery_parallel_path_avoids_full_per_thread_node_buffers();
     demag_solver_stats_are_filled_by_poisson_module();
     demag_poisson_ready_contract_is_owned_by_poisson_module();
     demag_solver_telemetry_names_are_owned_by_poisson_module();

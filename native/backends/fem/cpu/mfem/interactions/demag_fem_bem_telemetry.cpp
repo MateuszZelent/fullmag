@@ -21,16 +21,16 @@ void publish_demag_fem_bem_solver_stats(
     Context &ctx,
     const DemagFemBemSolveTelemetry &solve)
 {
-    ctx.demag_solves_current_step += 2u;
-    ctx.poisson_last_iterations =
+    ctx.poisson_demag.solves_current_step += 2u;
+    ctx.poisson_demag.last_iterations =
         std::max(0, solve.u1_iterations) +
         std::max(0, solve.u2_iterations);
-    ctx.poisson_last_residual =
+    ctx.poisson_demag.last_residual =
         std::max(solve.u1_residual, solve.u2_residual);
-    ctx.poisson_last_setup_wall_time_ns = 0;
-    ctx.poisson_last_solver_apply_wall_time_ns =
+    ctx.poisson_demag.last_setup_wall_time_ns = 0;
+    ctx.poisson_demag.last_solver_apply_wall_time_ns =
         solve.u1_solve_wall_time_ns + solve.u2_solve_wall_time_ns;
-    ctx.poisson_last_solver_setup_reused = true;
+    ctx.poisson_demag.last_solver_setup_reused = true;
 }
 
 void accumulate_demag_fem_bem_phase_timings(

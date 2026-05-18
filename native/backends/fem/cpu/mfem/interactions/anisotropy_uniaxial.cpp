@@ -17,10 +17,10 @@ void compute_uniaxial_anisotropy_field(
     std::vector<double> &h_ani_xyz,
     double *anisotropy_energy)
 {
-    const size_t n = ctx.n_nodes;
+    const size_t n = ctx.mesh.n_nodes;
     h_ani_xyz.assign(n * 3u, 0.0);
-    if (!ctx.enable_anisotropy ||
-        (ctx.anisotropy_Ku == 0.0 && ctx.anisotropy_Ku2 == 0.0 &&
+    if (!ctx.anisotropy.uniaxial_enabled ||
+        (ctx.anisotropy.uniaxial_Ku == 0.0 && ctx.anisotropy.uniaxial_Ku2 == 0.0 &&
          ctx.material_fields.Ku_field.empty() && ctx.material_fields.Ku2_field.empty())) {
         if (anisotropy_energy != nullptr) {
             *anisotropy_energy = 0.0;
@@ -28,12 +28,12 @@ void compute_uniaxial_anisotropy_field(
         return;
     }
 
-    const double ux = ctx.anisotropy_axis[0];
-    const double uy = ctx.anisotropy_axis[1];
-    const double uz = ctx.anisotropy_axis[2];
-    const double uniform_Ms = ctx.material.saturation_magnetisation;
-    const double uniform_Ku = ctx.anisotropy_Ku;
-    const double uniform_Ku2 = ctx.anisotropy_Ku2;
+    const double ux = ctx.anisotropy.uniaxial_axis[0];
+    const double uy = ctx.anisotropy.uniaxial_axis[1];
+    const double uz = ctx.anisotropy.uniaxial_axis[2];
+    const double uniform_Ms = ctx.material_fields.material.saturation_magnetisation;
+    const double uniform_Ku = ctx.anisotropy.uniaxial_Ku;
+    const double uniform_Ku2 = ctx.anisotropy.uniaxial_Ku2;
     double energy = 0.0;
 
     for (size_t i = 0; i < n; ++i) {

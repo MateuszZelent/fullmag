@@ -35,9 +35,10 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
 #endif
     if (!gpu_state_initialize(
             ctx.gpu_state,
-            ctx.n_nodes,
-            ctx.integrator,
+            ctx.mesh.n_nodes,
+            ctx.base_plan.integrator,
             allocate_gpu_state,
+            ctx.demag.enabled,
             ctx.state.m_xyz.data(),
             static_cast<uint64_t>(ctx.state.m_xyz.size()),
             ctx.transfer_audit,
@@ -50,13 +51,13 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             static_cast<uint64_t>(ctx.mesh.node_volumes.size()),
             ctx.material_fields.Ms_field.data(),
             static_cast<uint64_t>(ctx.material_fields.Ms_field.size()),
-            ctx.material.saturation_magnetisation,
+            ctx.material_fields.material.saturation_magnetisation,
             ctx.material_fields.A_field.data(),
             static_cast<uint64_t>(ctx.material_fields.A_field.size()),
-            ctx.material.exchange_stiffness,
+            ctx.material_fields.material.exchange_stiffness,
             ctx.material_fields.alpha_field.data(),
             static_cast<uint64_t>(ctx.material_fields.alpha_field.size()),
-            ctx.material.damping,
+            ctx.material_fields.material.damping,
             ctx.material_fields.Ku_field.data(),
             static_cast<uint64_t>(ctx.material_fields.Ku_field.size()),
             ctx.material_fields.Ku2_field.data(),
@@ -81,11 +82,11 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
-    if (ctx.enable_magnetoelastic && !ctx.mel_uniform_strain) {
+    if (ctx.magnetoelastic.enabled && !ctx.magnetoelastic.uniform_strain) {
         if (!gpu_state_upload_magnetoelastic_strain(
                 ctx.gpu_state,
-                ctx.mel_strain_voigt.data(),
-                static_cast<uint64_t>(ctx.mel_strain_voigt.size()),
+                ctx.magnetoelastic.strain_voigt.data(),
+                static_cast<uint64_t>(ctx.magnetoelastic.strain_voigt.size()),
                 ctx.transfer_audit,
                 error)) {
             return gpu_bootstrap_failed(ctx);

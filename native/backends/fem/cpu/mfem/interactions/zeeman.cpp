@@ -15,8 +15,8 @@ namespace fullmag::fem {
 
 void initialize_zeeman_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
-    ctx.has_external_field = plan.has_external_field != 0;
-    ctx.external_field_am = {
+    ctx.zeeman.has_external_field = plan.has_external_field != 0;
+    ctx.zeeman.external_field_am = {
         plan.external_field_am[0],
         plan.external_field_am[1],
         plan.external_field_am[2],

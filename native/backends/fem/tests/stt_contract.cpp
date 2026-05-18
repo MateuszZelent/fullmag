@@ -128,10 +128,33 @@ void zhang_li_cip_is_owned_by_zhang_li_module() {
 void stt_plan_fields_are_owned_by_stt_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string context = read_text_file(root / "src" / "context.cpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
     const std::string stt =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
     const std::string stt_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.hpp");
+
+    fullmag::fem::SttRuntimeState runtime;
+    runtime.zhang_li_enabled = true;
+    runtime.slonczewski_enabled = false;
+    runtime.current_density_am2 = {1.0, 2.0, 3.0};
+    runtime.degree = 0.7;
+    runtime.beta = 0.2;
+    runtime.spin_polarization = {0.0, 0.0, 1.0};
+    runtime.lambda = 1.5;
+    runtime.epsilon_prime = 0.25;
+    runtime.free_layer_thickness = 2.0e-9;
+    runtime.current_sign = -1.0;
+    check(runtime.zhang_li_enabled, "STT runtime state owns Zhang-Li enablement");
+    check(!runtime.slonczewski_enabled, "STT runtime state owns Slonczewski enablement");
+    check(runtime.current_density_am2[2] == 3.0, "STT runtime state owns current density");
+    check(runtime.degree == 0.7, "STT runtime state owns degree");
+    check(runtime.beta == 0.2, "STT runtime state owns beta");
+    check(runtime.spin_polarization[2] == 1.0, "STT runtime state owns spin polarization");
+    check(runtime.lambda == 1.5, "STT runtime state owns lambda");
+    check(runtime.epsilon_prime == 0.25, "STT runtime state owns epsilon prime");
+    check(runtime.free_layer_thickness == 2.0e-9, "STT runtime state owns free-layer thickness");
+    check(runtime.current_sign == -1.0, "STT runtime state owns current sign");
 
     check(
         context.find("plan.has_zhang_li_stt") == std::string::npos,
@@ -145,6 +168,72 @@ void stt_plan_fields_are_owned_by_stt_module() {
     check(
         stt_header.find("Initialize executable STT plan fields") != std::string::npos,
         "STT aggregate header must document plan-field initialization ownership");
+    check(
+        stt_header.find("struct SttRuntimeState") != std::string::npos,
+        "STT aggregate header must declare STT runtime plan storage");
+    check(
+        stt_header.find("bool zhang_li_enabled") != std::string::npos,
+        "STT runtime state must own Zhang-Li enablement");
+    check(
+        stt_header.find("bool slonczewski_enabled") != std::string::npos,
+        "STT runtime state must own Slonczewski enablement");
+    check(
+        stt_header.find("std::array<double, 3> current_density_am2") != std::string::npos,
+        "STT runtime state must own current density");
+    check(
+        stt_header.find("double degree") != std::string::npos,
+        "STT runtime state must own degree");
+    check(
+        stt_header.find("double beta") != std::string::npos,
+        "STT runtime state must own beta");
+    check(
+        stt_header.find("std::array<double, 3> spin_polarization") != std::string::npos,
+        "STT runtime state must own spin polarization");
+    check(
+        stt_header.find("double lambda") != std::string::npos,
+        "STT runtime state must own lambda");
+    check(
+        stt_header.find("double epsilon_prime") != std::string::npos,
+        "STT runtime state must own epsilon prime");
+    check(
+        stt_header.find("double free_layer_thickness") != std::string::npos,
+        "STT runtime state must own free-layer thickness");
+    check(
+        stt_header.find("double current_sign") != std::string::npos,
+        "STT runtime state must own current sign");
+    check(
+        context_header.find("SttRuntimeState stt") != std::string::npos,
+        "Context must store STT plan storage through the STT owner");
+    check(
+        context_header.find("bool has_zhang_li_stt") == std::string::npos,
+        "Context must not own flat Zhang-Li enablement");
+    check(
+        context_header.find("bool has_slonczewski_stt") == std::string::npos,
+        "Context must not own flat Slonczewski enablement");
+    check(
+        context_header.find("std::array<double, 3> stt_current_density_am2") == std::string::npos,
+        "Context must not own flat STT current density");
+    check(
+        context_header.find("double stt_degree") == std::string::npos,
+        "Context must not own flat STT degree");
+    check(
+        context_header.find("double stt_beta") == std::string::npos,
+        "Context must not own flat STT beta");
+    check(
+        context_header.find("std::array<double, 3> stt_spin_polarization") == std::string::npos,
+        "Context must not own flat STT spin polarization");
+    check(
+        context_header.find("double stt_lambda") == std::string::npos,
+        "Context must not own flat STT lambda");
+    check(
+        context_header.find("double stt_epsilon_prime") == std::string::npos,
+        "Context must not own flat STT epsilon prime");
+    check(
+        context_header.find("double stt_free_layer_thickness") == std::string::npos,
+        "Context must not own flat STT free-layer thickness");
+    check(
+        context_header.find("double stt_current_sign") == std::string::npos,
+        "Context must not own flat STT current sign");
 }
 
 void stt_aggregate_header_documents_submodule_boundaries() {
@@ -186,6 +275,8 @@ void stt_rhs_hot_path_uses_reusable_workspace() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "stt.cpp");
     const std::string rk_stage_rhs =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
+    const std::string rk_explicit_step =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
     const std::string rk_workspace =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
 
@@ -202,6 +293,10 @@ void stt_rhs_hot_path_uses_reusable_workspace() {
         rk_stage_rhs.find("add_stt_rhs_aos(ctx, m_state, out_k, max_rhs, ws.stt)") !=
             std::string::npos,
         "RK stage RHS must pass reusable STT workspace into the aggregate");
+    check(
+        rk_explicit_step.find("add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt)") !=
+            std::string::npos,
+        "RK final RHS fallback must pass reusable STT workspace into the aggregate");
 }
 
 void stt_source_files_document_module_boundaries() {
@@ -267,16 +362,16 @@ void check_near(double actual, double expected, double tol, const char *msg) {
 
 fullmag::fem::Context make_slonczewski_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 1;
-    ctx.has_slonczewski_stt = true;
-    ctx.stt_current_density_am2 = {0.0, 0.0, 1.0e12};
-    ctx.stt_spin_polarization = {0.0, 0.0, 1.0};
-    ctx.stt_degree = 1.0;
-    ctx.stt_lambda = 1.0;
-    ctx.stt_epsilon_prime = 0.25;
-    ctx.stt_free_layer_thickness = 1.0e-9;
-    ctx.stt_current_sign = 1.0;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 1;
+    ctx.stt.slonczewski_enabled = true;
+    ctx.stt.current_density_am2 = {0.0, 0.0, 1.0e12};
+    ctx.stt.spin_polarization = {0.0, 0.0, 1.0};
+    ctx.stt.degree = 1.0;
+    ctx.stt.lambda = 1.0;
+    ctx.stt.epsilon_prime = 0.25;
+    ctx.stt.free_layer_thickness = 1.0e-9;
+    ctx.stt.current_sign = 1.0;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     return ctx;
 }
 
@@ -290,22 +385,22 @@ void slonczewski_cpp_rhs_uses_current_sign_and_field_like_term() {
     const double prefactor =
         (1.0e12 * kHbarTest) /
         (2.0 * kElectronChargeTest * kMu0Test *
-         ctx.material.saturation_magnetisation * ctx.stt_free_layer_thickness);
+         ctx.material_fields.material.saturation_magnetisation * ctx.stt.free_layer_thickness);
     const double beta_stt = prefactor * 0.5;
 
     check_near(rhs[0], 0.0, 0.0, "Slonczewski rhs x");
-    check_near(rhs[1], -ctx.stt_epsilon_prime * beta_stt, beta_stt * 1e-12, "Slonczewski field-like y");
+    check_near(rhs[1], -ctx.stt.epsilon_prime * beta_stt, beta_stt * 1e-12, "Slonczewski field-like y");
     check_near(rhs[2], -beta_stt, beta_stt * 1e-12, "Slonczewski damping-like z");
 
     std::vector<double> signed_rhs(3u, 0.0);
-    ctx.stt_current_sign = -1.0;
+    ctx.stt.current_sign = -1.0;
     fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, signed_rhs);
     check_near(signed_rhs[2], beta_stt, beta_stt * 1e-12, "Slonczewski current sign");
 }
 
 void macrospin_cpp_sign_and_precession_direction_match_reference() {
     auto ctx = make_slonczewski_context();
-    ctx.stt_epsilon_prime = 0.0;
+    ctx.stt.epsilon_prime = 0.0;
     const std::vector<double> m = {1.0, 0.0, 0.0};
     std::vector<double> rhs(3u, 0.0);
 
@@ -314,7 +409,7 @@ void macrospin_cpp_sign_and_precession_direction_match_reference() {
     const double prefactor =
         (1.0e12 * kHbarTest) /
         (2.0 * kElectronChargeTest * kMu0Test *
-         ctx.material.saturation_magnetisation * ctx.stt_free_layer_thickness);
+         ctx.material_fields.material.saturation_magnetisation * ctx.stt.free_layer_thickness);
     const double beta_stt = prefactor * 0.5;
 
     check_near(rhs[0], 0.0, 0.0, "macrospin CPP rhs x");
@@ -326,7 +421,7 @@ void macrospin_cpp_sign_and_precession_direction_match_reference() {
         "macrospin CPP positive current drives m x (m x p) toward -p");
 
     std::vector<double> reversed_rhs(3u, 0.0);
-    ctx.stt_current_sign = -1.0;
+    ctx.stt.current_sign = -1.0;
     fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, reversed_rhs);
     check_near(
         reversed_rhs[2],
@@ -350,13 +445,13 @@ void slonczewski_skips_nonmagnetic_nodes() {
 
 fullmag::fem::Context make_zhang_li_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 4;
-    ctx.n_elements = 1;
-    ctx.has_zhang_li_stt = true;
-    ctx.stt_current_density_am2 = {1.0e12, 0.0, 0.0};
-    ctx.stt_degree = 1.0;
-    ctx.stt_beta = 0.0;
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.n_elements = 1;
+    ctx.stt.zhang_li_enabled = true;
+    ctx.stt.current_density_am2 = {1.0e12, 0.0, 0.0};
+    ctx.stt.degree = 1.0;
+    ctx.stt.beta = 0.0;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -381,8 +476,8 @@ void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
     fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, rhs);
 
     const double u_x =
-        (ctx.stt_degree * kBohrMagnetonTest * ctx.stt_current_density_am2[0]) /
-        (kElectronChargeTest * ctx.material.saturation_magnetisation);
+        (ctx.stt.degree * kBohrMagnetonTest * ctx.stt.current_density_am2[0]) /
+        (kElectronChargeTest * ctx.material_fields.material.saturation_magnetisation);
 
     check_near(rhs[0], 0.0, 0.0, "Zhang-Li node0 rhs x");
     check_near(rhs[1], 0.0, 0.0, "Zhang-Li node0 rhs y");
@@ -404,8 +499,8 @@ void zhang_li_adds_torque_without_scaling_existing_rhs() {
     fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, rhs);
 
     const double u_x =
-        (ctx.stt_degree * kBohrMagnetonTest * ctx.stt_current_density_am2[0]) /
-        (kElectronChargeTest * ctx.material.saturation_magnetisation);
+        (ctx.stt.degree * kBohrMagnetonTest * ctx.stt.current_density_am2[0]) /
+        (kElectronChargeTest * ctx.material_fields.material.saturation_magnetisation);
 
     check_near(rhs[0], 10.0, 0.0, "Zhang-Li preserves existing rhs x");
     check_near(rhs[2], 10.0 + u_x, u_x * 1e-12, "Zhang-Li adds to existing rhs z");
@@ -441,16 +536,16 @@ void stt_plan_import_copies_parameters_and_validates_family() {
 
     std::string error;
     check(fullmag::fem::initialize_stt_plan_fields(ctx, plan, error), error.c_str());
-    check(ctx.has_slonczewski_stt, "Slonczewski flag copied");
-    check(!ctx.has_zhang_li_stt, "Zhang-Li flag copied");
-    check(ctx.stt_current_density_am2[2] == 3.0, "STT current density copied");
-    check(ctx.stt_degree == 0.7, "STT degree copied");
-    check(ctx.stt_beta == 0.2, "STT beta copied");
-    check(ctx.stt_spin_polarization[2] == 1.0, "STT spin polarization normalized");
-    check(ctx.stt_lambda == 1.5, "STT lambda copied");
-    check(ctx.stt_epsilon_prime == 0.25, "STT epsilon prime copied");
-    check(ctx.stt_free_layer_thickness == 2.0e-9, "STT free-layer thickness copied");
-    check(ctx.stt_current_sign == -1.0, "STT current sign copied");
+    check(ctx.stt.slonczewski_enabled, "Slonczewski flag copied");
+    check(!ctx.stt.zhang_li_enabled, "Zhang-Li flag copied");
+    check(ctx.stt.current_density_am2[2] == 3.0, "STT current density copied");
+    check(ctx.stt.degree == 0.7, "STT degree copied");
+    check(ctx.stt.beta == 0.2, "STT beta copied");
+    check(ctx.stt.spin_polarization[2] == 1.0, "STT spin polarization normalized");
+    check(ctx.stt.lambda == 1.5, "STT lambda copied");
+    check(ctx.stt.epsilon_prime == 0.25, "STT epsilon prime copied");
+    check(ctx.stt.free_layer_thickness == 2.0e-9, "STT free-layer thickness copied");
+    check(ctx.stt.current_sign == -1.0, "STT current sign copied");
 
     plan.has_zhang_li_stt = 1;
     check(

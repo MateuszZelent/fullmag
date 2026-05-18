@@ -188,6 +188,36 @@ describe("FdmCuboidLayer model", () => {
     ]);
   });
 
+  it("can anchor FDM vector glyph segments by their tail", () => {
+    const model = buildFdmCuboidInstanceModel(domainFixture());
+    const segments = buildFdmVectorSegments(
+      model,
+      vectorField([
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1,
+        0, 0, 1,
+        0, 1, 0,
+        0, 0, 1,
+        -1, 0, 0,
+        0, 0, 1,
+      ]),
+      2e-9,
+      1,
+      { anchorMode: "tail" },
+    );
+
+    expect(Array.from(segments ?? [])).toEqual([
+      expect.closeTo(0.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      expect.closeTo(2.5e-9),
+      expect.closeTo(1e-9),
+      expect.closeTo(1.5e-9),
+      1,
+    ]);
+  });
+
   it("caps rendered FDM vector glyph scale to the local voxel size", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,

@@ -34,9 +34,12 @@ RESULTS_DIR = SCRIPT_DIR / "results"
 
 from helpers import (
     MU0,
+    ValidationFailure,
     analytical_demag_energy_sphere,
     build_fem_sphere_study,
     extract_demag_from_result,
+    require_finite_metrics,
+    require_grouped_error_improvement,
     write_csv,
 )
 
@@ -165,7 +168,8 @@ for r in rows:
     e_err = r["e_demag_rel_error"] * 100 if not math.isnan(r["e_demag_rel_error"]) else float("nan")
     print(f"  {r['bc']:<22} {r['airbox_scale']:>5.1f}× {n_eff:>8.5f} {n_err:>7.2f}% {e_err:>7.2f}%")
 
-# Check convergence: last entry for each BC should be closer than first
+# Check convergence: last entry for each BC should be closer than first.
+validation_failed = False
 for bc in BC_VARIANTS:
     bc_rows = [r for r in rows if r["bc"] == bc and not math.isnan(r["n_rel_error"])]
     if len(bc_rows) >= 2:
@@ -175,5 +179,29 @@ for bc in BC_VARIANTS:
             print(f"\n  ✓ {bc}: convergent (error {first_err*100:.2f}% → {last_err*100:.2f}%)")
         else:
             print(f"\n  ✗ {bc}: NOT convergent (error {first_err*100:.2f}% → {last_err*100:.2f}%)")
+            validation_failed = True
+    else:
+        print(f"\n  ✗ {bc}: NOT convergent (not enough finite rows)")
+        validation_failed = True
 
 print(f"\n  Results: {csv_path}")
+
+try:
+    require_finite_metrics(
+        rows,
+        ["e_demag_J", "e_demag_rel_error", "n_effective", "n_rel_error"],
+        label_key="bc",
+    )
+    require_grouped_error_improvement(
+        rows,
+        group_key="bc",
+        order_key="airbox_scale",
+        error_key="n_rel_error",
+    )
+    if validation_failed:
+        raise ValidationFailure("airbox convergence summary reported failure")
+except ValidationFailure as exc:
+    print(f"  ✗ FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+else:
+    print("  ✓ PASS: all airbox convergence groups improved")

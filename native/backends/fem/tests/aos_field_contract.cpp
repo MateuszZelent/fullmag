@@ -93,7 +93,7 @@ void aos_pack_unpack_and_existing_resize_contract() {
 
 void periodic_projection_copies_representative_vectors() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 4;
+    ctx.mesh.n_nodes = 4;
     ctx.mesh.periodic_reduced_node = {0u, 1u, 0u, 1u};
     ctx.mesh.periodic_representative_nodes = {2u, 3u};
     std::vector<double> field = {

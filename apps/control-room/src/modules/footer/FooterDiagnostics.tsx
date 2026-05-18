@@ -122,11 +122,11 @@ export function FooterDiagnostics() {
                 <span role="columnheader">RHS</span>
                 <span role="columnheader">Missing</span>
               </div>
-              {profileModel.rows.map((row, index) => (
+              {profileModel.rows.map((row) => (
                 <div
                   className="fm-footer-diagnostics__profile-row"
                   role="row"
-                  key={index}
+                  key={row.step}
                 >
                   <span role="cell">{row.step}</span>
                   <span role="cell">{row.total}</span>

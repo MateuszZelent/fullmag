@@ -57,9 +57,9 @@ bool context_step_explicit_rk_mfem(
     const auto wall_start = FemSteadyClock::now();
     PhaseTimings timings;
     stats = {};
-    ctx.demag_solves_current_step = 0;
+    ctx.poisson_demag.solves_current_step = 0;
 
-    if (!ctx.mfem_ready) {
+    if (!ctx.mfem_context.ready) {
         error = "MFEM step requested before MFEM context initialization";
         return false;
     }
@@ -72,10 +72,10 @@ bool context_step_explicit_rk_mfem(
         return false;
     }
 
-    if ((ctx.integrator == FULLMAG_FEM_INTEGRATOR_HEUN && tab.stages == 2) ||
-        (ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK4 && tab.stages == 4) ||
-        (ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS && tab.stages == 4) ||
-        (ctx.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54 && tab.stages == 7)) {
+    if ((ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_HEUN && tab.stages == 2) ||
+        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK4 && tab.stages == 4) ||
+        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS && tab.stages == 4) ||
+        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54 && tab.stages == 7)) {
         std::string gpu_rk_reason;
         const auto gpu_rk_plan = gpu_rk_plan_exchange_only(ctx, gpu_rk_reason);
         if (gpu_rk_plan.enabled) {
@@ -88,7 +88,7 @@ bool context_step_explicit_rk_mfem(
         }
     }
 
-    ctx.current_dt = dt_seconds;
+    ctx.adaptive_dt.current_dt = dt_seconds;
 
     const size_t dof_len = ctx.state.m_xyz.size();
     stepper_workspace_allocate(ctx.stepper, dof_len, tab.stages);
@@ -104,7 +104,7 @@ bool context_step_explicit_rk_mfem(
     double demag_energy_final = 0.0;
 
     for (;;) {
-        ctx.current_dt = dt;
+        ctx.adaptive_dt.current_dt = dt;
         ws.m_backup = ctx.state.m_xyz;
         final_stage_cache_valid = false;
 
@@ -123,7 +123,7 @@ bool context_step_explicit_rk_mfem(
                     &demag_energy_s0,
                     &timings,
                     error)) {
-                if (ctx.step_interrupted) {
+                if (ctx.interrupt.step_interrupted) {
                     ctx.state.m_xyz = ws.m_backup;
                     ws.fsal_valid = false;
                     return true;
@@ -161,7 +161,7 @@ bool context_step_explicit_rk_mfem(
                                        stage_demag_energy,
                                        &timings,
                                        error)) {
-                if (ctx.step_interrupted) {
+                if (ctx.interrupt.step_interrupted) {
                     ctx.state.m_xyz = ws.m_backup;
                     ws.fsal_valid = false;
                     return true;
@@ -212,8 +212,8 @@ bool context_step_explicit_rk_mfem(
             if (!result.accepted) {
                 ctx.state.m_xyz = ws.m_backup;
                 dt = result.dt_next;
-                ctx.dt_seconds = dt;
-                ctx.current_dt = dt;
+                ctx.base_plan.dt_seconds = dt;
+                ctx.adaptive_dt.current_dt = dt;
                 ws.fsal_valid = false;
                 rejected += 1;
                 if (rejected > ctx.adaptive_dt.max_reject) {
@@ -229,7 +229,7 @@ bool context_step_explicit_rk_mfem(
             }
             stats.error_estimate = err_norm;
             stats.dt_suggested = result.dt_next;
-            ctx.dt_seconds = result.dt_next;
+            ctx.base_plan.dt_seconds = result.dt_next;
         } else {
             stats.error_estimate = 0.0;
             stats.dt_suggested = dt;
@@ -261,7 +261,7 @@ bool context_step_explicit_rk_mfem(
                 true,
                 &timings,
                 error)) {
-            if (ctx.step_interrupted) {
+            if (ctx.interrupt.step_interrupted) {
                 ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
                 return true;
@@ -272,8 +272,8 @@ bool context_step_explicit_rk_mfem(
         std::swap(ctx.demag.h_xyz, ws.h_demag_tmp);
         std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp);
     }
-    ctx.current_time += dt;
-    ctx.step_count += 1;
+    ctx.state.current_time += dt;
+    ctx.state.step_count += 1;
     ctx.exchange.mfem.ready = true;
 
     double max_rhs_final = 0.0;
@@ -282,17 +282,17 @@ bool context_step_explicit_rk_mfem(
     } else {
         ScopedPhaseTimer timer(&timings.rhs_wall_time_ns);
         llg_rhs_aos(ctx.state.m_xyz, ctx.effective_field.h_xyz,
-                    ctx.material.gyromagnetic_ratio, ctx.material.damping,
+                    ctx.material_fields.material.gyromagnetic_ratio, ctx.material_fields.material.damping,
                     ctx.material_fields.alpha_field.empty() ? nullptr : &ctx.material_fields.alpha_field,
                     ws.k[0], max_rhs_final);
-        add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final);
+        add_stt_rhs_aos(ctx, ctx.state.m_xyz, ws.k[0], max_rhs_final, ws.stt);
         zero_non_magnetic_nodes_aos(ws.k[0], ctx.mesh.magnetic_node_mask);
         max_rhs_final = max_norm_aos(ws.k[0]);
         total_rhs += 1;
     }
 
-    stats.step = ctx.step_count;
-    stats.time_seconds = ctx.current_time;
+    stats.step = ctx.state.step_count;
+    stats.time_seconds = ctx.state.current_time;
     stats.dt_seconds = dt;
     stats.exchange_energy_joules = exchange_energy_final;
     stats.demag_energy_joules = demag_energy_final;

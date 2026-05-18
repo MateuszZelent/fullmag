@@ -18,18 +18,18 @@ void fill_zero_vector_field(std::vector<double> &buffer, uint32_t n_nodes) {
 }
 
 void initialize_context_field_buffers(Context &ctx) {
-    fill_zero_vector_field(ctx.exchange.h_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.demag.h_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.anisotropy.h_uniaxial_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.dmi.h_interfacial_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.anisotropy.h_cubic_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.dmi.h_bulk_xyz, ctx.n_nodes);
-    fill_zero_vector_field(ctx.magnetoelastic.h_xyz, ctx.n_nodes);
+    fill_zero_vector_field(ctx.exchange.h_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.demag.h_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.anisotropy.h_uniaxial_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.dmi.h_interfacial_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.anisotropy.h_cubic_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.dmi.h_bulk_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.magnetoelastic.h_xyz, ctx.mesh.n_nodes);
 
-    if (ctx.has_external_field) {
+    if (ctx.zeeman.has_external_field) {
         ctx.effective_field.h_xyz = ctx.zeeman.h_ext_xyz;
     } else {
-        fill_zero_vector_field(ctx.effective_field.h_xyz, ctx.n_nodes);
+        fill_zero_vector_field(ctx.effective_field.h_xyz, ctx.mesh.n_nodes);
     }
 }
 

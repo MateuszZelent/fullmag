@@ -57,8 +57,8 @@ std::filesystem::path fem_source_root() {
 
 fullmag::fem::Context unit_tet_context() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 4;
-    ctx.n_elements = 1;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.n_elements = 1;
     ctx.mesh.nodes_xyz = {
         0.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
@@ -76,7 +76,7 @@ fullmag::fem::Context unit_tet_context() {
         1, 2, 3,
     };
     ctx.mesh.boundary_markers = {1, 1, 1, 1};
-    ctx.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
     return ctx;
 }
@@ -468,6 +468,7 @@ void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.cpp");
     const std::string workspace_header =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.hpp");
+    const std::string context_header = read_text_file(root / "include" / "context.hpp");
 
     check(
         fem_bem.find("struct DemagFemBemWorkspace") == std::string::npos,
@@ -475,6 +476,24 @@ void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
     check(
         workspace_header.find("struct DemagFemBemWorkspace") != std::string::npos,
         "FEM/BEM workspace struct must be declared in demag_fem_bem_workspace.hpp");
+    check(
+        workspace_header.find("struct DemagFemBemRuntimeState") != std::string::npos,
+        "FEM/BEM runtime state must be declared in demag_fem_bem_workspace.hpp");
+    check(
+        workspace_header.find("DemagFemBemWorkspace *workspace") != std::string::npos,
+        "FEM/BEM runtime state must own the workspace pointer");
+    check(
+        workspace_header.find("bool ready") != std::string::npos,
+        "FEM/BEM runtime state must own readiness");
+    check(
+        context_header.find("DemagFemBemRuntimeState demag_fem_bem") != std::string::npos,
+        "Context must store FEM/BEM demag runtime through its owner");
+    check(
+        context_header.find("mfem_demag_fem_bem_workspace") == std::string::npos,
+        "Context must not own flat FEM/BEM demag workspace pointer");
+    check(
+        context_header.find("bool demag_fem_bem_ready") == std::string::npos,
+        "Context must not own flat FEM/BEM demag readiness");
 
     const char *symbols[] = {
         "bool initialize_demag_fem_bem_workspace(",
@@ -484,7 +503,9 @@ void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
         "std::make_unique<mfem::H1_FECollection>",
         "AddDomainIntegrator(new mfem::DiffusionIntegrator())",
         "eliminate_row_col_zero(*workspace->dirichlet_op, tdof)",
-        "ctx.mfem_demag_fem_bem_workspace = workspace.release()",
+        "ctx.demag_fem_bem.workspace = workspace.release()",
+        "ctx.demag_fem_bem.ready = true",
+        "ctx.demag_fem_bem.ready = false",
     };
     for (const char *symbol : symbols) {
         check(
@@ -540,10 +561,10 @@ void fem_bem_telemetry_is_owned_by_telemetry_module() {
     const char *symbols[] = {
         "void publish_demag_fem_bem_solver_stats(",
         "void accumulate_demag_fem_bem_phase_timings(",
-        "ctx.demag_solves_current_step += 2u",
-        "ctx.poisson_last_iterations =",
-        "ctx.poisson_last_residual =",
-        "ctx.poisson_last_solver_apply_wall_time_ns =",
+        "ctx.poisson_demag.solves_current_step += 2u",
+        "ctx.poisson_demag.last_iterations =",
+        "ctx.poisson_demag.last_residual =",
+        "ctx.poisson_demag.last_solver_apply_wall_time_ns =",
         "accumulate_demag_poisson_phase_timings(",
     };
     for (const char *symbol : symbols) {

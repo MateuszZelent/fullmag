@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
@@ -9,11 +10,13 @@ struct Context;
 /*
  * Runtime cache and sampled field owned by the Brown thermal sampler.
  *
- * The plan-level inputs remain on Context (`temperature`, `thermal_seed`, and
- * `current_dt`), while this owner state tracks the derived sigma diagnostic,
- * last accepted refresh key, and AoS-3 sampled H field.
+ * The state owns the plan-level Brown temperature and RNG seed. `current_dt`
+ * remains shared step state on Context, while this owner tracks the derived
+ * sigma diagnostic, last accepted refresh key, and AoS-3 sampled H field.
  */
 struct ThermalBrownRuntimeState {
+    double temperature = 0.0;
+    uint64_t seed = 0;
     double sigma = 0.0;
     double last_refresh_time = -1.0;
     double last_refresh_dt = -1.0;

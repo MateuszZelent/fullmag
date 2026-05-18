@@ -38,10 +38,13 @@ RESULTS_DIR = SCRIPT_DIR / "results"
 
 from helpers import (
     MU0,
+    ValidationFailure,
     analytical_demag_energy_sphere,
     analytical_demag_field_sphere,
     build_fem_sphere_study,
     extract_demag_from_result,
+    require_finite_metrics,
+    require_relative_error_below,
     write_csv,
 )
 
@@ -203,9 +206,23 @@ print()
 
 # Acceptance criterion: finest mesh, Robin BC, < 5% error
 robin_finest = [r for r in rows if r["bc"] == "poisson_robin"]
-if robin_finest:
+try:
+    require_finite_metrics(
+        rows,
+        ["e_demag_J", "e_demag_rel_error", "n_effective", "n_rel_error"],
+        label_key="bc",
+    )
+    if not robin_finest:
+        raise ValidationFailure("missing poisson_robin validation rows")
     best = min(robin_finest, key=lambda r: r["hmax_m"])
-    if not math.isnan(best["n_rel_error"]) and best["n_rel_error"] < 0.05:
-        print("  ✓ PASS: Robin BC finest mesh within 5% of analytical N=1/3")
-    else:
-        print("  ✗ FAIL: Robin BC finest mesh exceeds 5% error threshold")
+    require_relative_error_below(
+        best,
+        error_key="n_rel_error",
+        threshold=0.05,
+        label="Robin BC finest mesh",
+    )
+except ValidationFailure as exc:
+    print(f"  ✗ FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1) from exc
+else:
+    print("  ✓ PASS: Robin BC finest mesh within 5% of analytical N=1/3")

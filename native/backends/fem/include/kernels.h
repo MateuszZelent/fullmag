@@ -20,6 +20,24 @@ static_assert(std::is_same_v<fem_real_t, double>,
     "fullmag FEM native kernels require double precision; "
     "single precision (float) is not implemented — set fem_real_t = double");
 
+/// Upload host AoS triples into device SoA component arrays.
+void fullmag_cuda_upload_aos_to_soa(
+    const fem_real_t *aos_xyz,
+    fem_real_t *x,
+    fem_real_t *y,
+    fem_real_t *z,
+    int N,
+    cudaStream_t stream = nullptr);
+
+/// Download device SoA component arrays into host AoS triples.
+void fullmag_cuda_download_soa_to_aos(
+    const fem_real_t *x,
+    const fem_real_t *y,
+    const fem_real_t *z,
+    fem_real_t *aos_xyz,
+    int N,
+    cudaStream_t stream = nullptr);
+
 /// Fused LLG RHS: dm/dt = -γ̄ (m×H + α m×(m×H)), per-block max reduction.
 /// Input/output: SoA layout (separate mx, my, mz arrays).
 void fullmag_cuda_llg_rhs_fused(
@@ -83,7 +101,7 @@ void fullmag_cuda_add_zhang_li_stt_rhs(
     cudaStream_t stream = nullptr);
 
 /// DMI weak-residual field projection and energy for linear tetrahedra.
-void fullmag_cuda_dmi_field_energy_serial(
+void fullmag_cuda_dmi_field_energy(
     const fem_real_t *nodes_xyz,
     const uint32_t *elements,
     const uint8_t *magnetic_element_mask,

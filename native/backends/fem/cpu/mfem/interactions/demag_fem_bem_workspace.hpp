@@ -9,7 +9,13 @@
 #include <string>
 #include <vector>
 
-#include <mfem.hpp>
+namespace mfem {
+class BilinearForm;
+class FiniteElementCollection;
+class FiniteElementSpace;
+class SparseMatrix;
+class Vector;
+}
 
 namespace fullmag::fem {
 
@@ -42,6 +48,18 @@ struct DemagFemBemWorkspace {
     int last_u2_iterations = 0;
     double last_u1_residual = 0.0;
     double last_u2_residual = 0.0;
+};
+
+/*
+ * Runtime ownership for Fredkin-Koehler FEM/BEM demag.
+ *
+ * The workspace module owns allocation/teardown and readiness for the
+ * body-only open-boundary solver. Per-step solve, potential transfer, field
+ * recovery, energy, and telemetry remain in the dedicated FEM/BEM modules.
+ */
+struct DemagFemBemRuntimeState {
+    DemagFemBemWorkspace *workspace = nullptr;
+    bool ready = false;
 };
 
 DemagFemBemWorkspace *demag_fem_bem_workspace(Context &ctx);

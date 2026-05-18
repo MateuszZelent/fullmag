@@ -103,9 +103,10 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
         "adaptive_dt header must declare the runtime PI-controller owner");
     check(
         adaptive_header.find("bool enabled") != std::string::npos &&
+            adaptive_header.find("double current_dt") != std::string::npos &&
             adaptive_header.find("double prev_error_norm") != std::string::npos &&
             adaptive_header.find("uint64_t rejected_steps") != std::string::npos,
-        "AdaptiveDt runtime state must own enabled flag, previous error, and reject counter");
+        "AdaptiveDt runtime state must own enabled flag, current dt, previous error, and reject counter");
     check(
         context_header.find("AdaptiveDtRuntimeState adaptive_dt{}") != std::string::npos,
         "Context must store adaptive dt controller state under adaptive_dt");
@@ -123,6 +124,7 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
              "uint32_t max_reject",
              "double prev_error_norm",
              "uint64_t rejected_steps",
+             "double current_dt",
          }) {
         check(
             context_header.find(flat_field) == std::string::npos,
@@ -133,7 +135,7 @@ void adaptive_dt_controller_is_owned_by_integrator_module() {
 fullmag::fem::Context make_context() {
     fullmag::fem::Context ctx;
     ctx.adaptive_dt.enabled = true;
-    ctx.dt_seconds = 1.0e-12;
+    ctx.base_plan.dt_seconds = 1.0e-12;
     ctx.adaptive_dt.dt_min = 1.0e-15;
     ctx.adaptive_dt.dt_max = 1.0e-10;
     ctx.adaptive_dt.pi_alpha = 1.0;
@@ -180,7 +182,7 @@ void rejected_error_shrinks_dt_and_counts_rejection() {
     check_near(ctx.adaptive_dt.prev_error_norm, 0.75, 0.0, "rejected step leaves previous error");
     check(ctx.adaptive_dt.rejected_steps == 1u, "rejected step increments counter");
 
-    ctx.dt_seconds = 1.0e-15;
+    ctx.base_plan.dt_seconds = 1.0e-15;
     const auto floor = fullmag::fem::adaptive_pi_step(ctx, 100.0);
     check_near(floor.dt_next, 1.0e-15, 0.0, "rejected dt respects minimum");
 }
@@ -211,7 +213,7 @@ void adaptive_error_norm_scales_each_aos_component() {
 
 void adaptive_plan_import_validates_and_copies_config() {
     fullmag::fem::Context ctx;
-    ctx.dt_seconds = 2.0e-12;
+    ctx.base_plan.dt_seconds = 2.0e-12;
     fullmag_fem_adaptive_config adaptive{};
     adaptive.atol = 1.0e-6;
     adaptive.rtol = 1.0e-4;
@@ -231,8 +233,8 @@ void adaptive_plan_import_validates_and_copies_config() {
     check(ctx.adaptive_dt.enabled, "adaptive plan import enables adaptive dt");
     check_near(ctx.adaptive_dt.atol, 1.0e-6, 0.0, "adaptive atol copied");
     check_near(ctx.adaptive_dt.rtol, 1.0e-4, 0.0, "adaptive rtol copied");
-    check_near(ctx.dt_seconds, 2.0e-12, 0.0, "adaptive dt_initial zero falls back to plan dt");
-    check_near(ctx.current_dt, 2.0e-12, 0.0, "adaptive current dt copied");
+    check_near(ctx.base_plan.dt_seconds, 2.0e-12, 0.0, "adaptive dt_initial zero falls back to plan dt");
+    check_near(ctx.adaptive_dt.current_dt, 2.0e-12, 0.0, "adaptive current dt copied");
     check_near(ctx.adaptive_dt.dt_min, 1.0e-15, 0.0, "adaptive dt_min copied");
     check_near(ctx.adaptive_dt.dt_max, 1.0e-10, 0.0, "adaptive dt_max copied");
     check_near(ctx.adaptive_dt.safety_factor, 0.9, 0.0, "adaptive safety copied");

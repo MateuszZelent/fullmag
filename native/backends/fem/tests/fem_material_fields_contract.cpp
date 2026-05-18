@@ -62,7 +62,7 @@ void material_field_helpers_are_owned_by_core_module() {
         context.find("auto validate_field_values = ") == std::string::npos,
         "Context must not define per-node material field value helper");
     check(
-        context.find("ctx.material = plan.material;") == std::string::npos,
+        context.find("ctx.material_fields.material = plan.material;") == std::string::npos,
         "Context must not copy scalar material fields directly");
     check(
         material_fields.find("void initialize_material_plan_fields(") != std::string::npos,
@@ -90,6 +90,9 @@ void material_field_helpers_are_owned_by_core_module() {
         material_header.find("std::vector<double> Ms_field") != std::string::npos,
         "FemMaterialFields runtime state must own the Ms per-node field");
     check(
+        material_header.find("fullmag_fem_material_desc material") != std::string::npos,
+        "FemMaterialFields runtime state must own scalar material constants");
+    check(
         context_header.find("FemMaterialFieldsRuntimeState material_fields{}") !=
             std::string::npos,
         "Context must store per-node material fields under material_fields");
@@ -110,6 +113,9 @@ void material_field_helpers_are_owned_by_core_module() {
             "Context must not own flat per-node material fields");
     }
     check(
+        context_header.find("fullmag_fem_material_desc material") == std::string::npos,
+        "Context must not own flat scalar material constants");
+    check(
         material_header.find(
             "It does not own mesh topology, magnetization initialization, field-buffer") !=
                 std::string::npos &&
@@ -121,7 +127,7 @@ void material_field_helpers_are_owned_by_core_module() {
 
 void material_plan_import_and_validation_contract() {
     fullmag::fem::Context ctx;
-    ctx.n_nodes = 2;
+    ctx.mesh.n_nodes = 2;
 
     const double ms[] = {800e3, 1.0e6};
     const double alpha[] = {0.1, 0.2};
@@ -136,10 +142,10 @@ void material_plan_import_and_validation_contract() {
     plan.alpha_field_len = 2;
 
     fullmag::fem::initialize_material_plan_fields(ctx, plan);
-    check(ctx.material.saturation_magnetisation == 800e3, "scalar Ms copied from plan");
-    check(ctx.material.exchange_stiffness == 13e-12, "scalar A copied from plan");
-    check(ctx.material.damping == 0.1, "scalar alpha copied from plan");
-    check(ctx.material.gyromagnetic_ratio == 2.211e5, "scalar gamma_mu0 copied from plan");
+    check(ctx.material_fields.material.saturation_magnetisation == 800e3, "scalar Ms copied from plan");
+    check(ctx.material_fields.material.exchange_stiffness == 13e-12, "scalar A copied from plan");
+    check(ctx.material_fields.material.damping == 0.1, "scalar alpha copied from plan");
+    check(ctx.material_fields.material.gyromagnetic_ratio == 2.211e5, "scalar gamma_mu0 copied from plan");
     check(ctx.material_fields.Ms_field == std::vector<double>({800e3, 1.0e6}), "Ms field copied from plan");
     check(ctx.material_fields.alpha_field == std::vector<double>({0.1, 0.2}), "alpha field copied from plan");
 
@@ -157,7 +163,7 @@ void material_plan_import_and_validation_contract() {
         "wrong length error should identify the material field");
 
     ctx.material_fields.Ms_field = {800e3, 1.0e6};
-    ctx.material.gyromagnetic_ratio = 0.0;
+    ctx.material_fields.material.gyromagnetic_ratio = 0.0;
     check(
         !fullmag::fem::validate_material_fields(ctx, error),
         "invalid gamma_mu0 must fail validation");

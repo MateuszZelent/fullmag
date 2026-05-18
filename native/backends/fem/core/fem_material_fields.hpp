@@ -10,12 +10,13 @@ namespace fullmag::fem {
 struct Context;
 
 /*
- * Runtime owner for optional per-node material fields.
+ * Runtime owner for scalar and optional per-node material fields.
  *
- * Empty vectors mean kernels should use scalar material constants from
- * `Context::material`; non-empty vectors must have one value per FEM node.
+ * The scalar material constants are the fallback values for empty per-node
+ * fields. Non-empty vectors must have one value per FEM node.
  */
 struct FemMaterialFieldsRuntimeState {
+    fullmag_fem_material_desc material{};
     std::vector<double> Ms_field;
     std::vector<double> A_field;
     std::vector<double> alpha_field;
@@ -32,10 +33,8 @@ struct FemMaterialFieldsRuntimeState {
  * Own FEM scalar and per-node material field import.
  *
  * The module copies scalar material constants and optional per-node material
- * arrays from the ABI plan into the module-owned material field state, then validates
- * both per-node fallback fields and scalar material constants. It is the
- * current home for the FemMaterialFields migration while Context remains the
- * compatibility facade.
+ * arrays from the ABI plan into the module-owned material field state, then
+ * validates both per-node fallback fields and scalar material constants.
  *
  * It does not own mesh topology, magnetization initialization, field-buffer
  * sizing, runtime device selection, or interaction field computation.

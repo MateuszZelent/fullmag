@@ -8197,7 +8197,7 @@ async fn gpu_telemetry_endpoint_returns_contract_shape() {
         .as_str()
         .expect("gpu telemetry status should be a string");
     assert!(
-        matches!(status, "ok" | "unavailable"),
+        matches!(status, "available" | "ok" | "unavailable"),
         "unexpected gpu telemetry status: {status}"
     );
     assert!(

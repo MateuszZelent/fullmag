@@ -51,6 +51,7 @@ describe("viewport3dStore", () => {
       effectAntialias: true,
       effectBloom: false,
       hslReferenceMode: "auto",
+      rotationMode: "camera",
       settingsDialogOpen: false,
       viewCubeVisible: true,
     });
@@ -69,9 +70,22 @@ describe("viewport3dStore", () => {
       effectAntialias: true,
       effectBloom: false,
       hslReferenceMode: "off",
+      rotationMode: "camera",
       settingsDialogOpen: false,
       viewCubeVisible: false,
     });
+  });
+
+  it("switches between free-camera and object-bound rotation modes", () => {
+    viewport3dStore.resetForTest();
+
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
+
+    viewport3dStore.setRotationMode("object");
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("object");
+
+    viewport3dStore.setRotationMode("camera");
+    expect(viewport3dStore.getSnapshot().widgets.rotationMode).toBe("camera");
   });
 
   it("opens and closes the camera dialog from module commands", () => {

@@ -23,6 +23,8 @@ const ZERO_THRESHOLD: f64 = 1e-30;
 const SPARSE_CG_TOL: f64 = 1e-10;
 /// Default maximum CG iterations for the sparse demag solver.
 const SPARSE_CG_MAX_ITER: usize = 1000;
+/// Maximum rejected attempts for one adaptive RK step before failing clearly.
+const MAX_ADAPTIVE_STEP_REJECTIONS: usize = 128;
 /// Tolerance for barycentric coordinate inclusion test.
 const BARYCENTRIC_INCLUSION_EPS: f64 = 1e-9;
 const CUBIC_AXIS_ORTHOGONALITY_DOT_TOL: f64 = 1e-3;
@@ -428,6 +430,16 @@ enum CgInitialGuess {
     Workspace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CgSolveStats {
+    pub iterations: usize,
+    pub abs_residual: f64,
+    pub rel_residual: f64,
+    pub rhs_norm: f64,
+    pub tolerance_abs: f64,
+    pub converged: bool,
+}
+
 /// Solve Ax = b using preconditioned CG with a reusable workspace and a
 /// pre-computed Jacobi preconditioner.  This is the zero-alloc hot path
 /// for the FEM Poisson/Robin demag solver.
@@ -439,13 +451,20 @@ fn solve_sparse_cg_cached(
     ws: &mut CgWorkspace,
     inv_diag: &[f64],
     initial_guess: CgInitialGuess,
-) -> Result<()> {
+) -> Result<CgSolveStats> {
     let n = matrix.n;
     if rhs.len() != n {
         return Err(EngineError::new("sparse CG: rhs length mismatch"));
     }
     if n == 0 {
-        return Ok(());
+        return Ok(CgSolveStats {
+            iterations: 0,
+            abs_residual: 0.0,
+            rel_residual: 0.0,
+            rhs_norm: 0.0,
+            tolerance_abs: 0.0,
+            converged: true,
+        });
     }
 
     ws.ensure_size(n);
@@ -472,9 +491,16 @@ fn solve_sparse_cg_cached(
 
     let b_norm: f64 = rhs.iter().map(|&v| v * v).sum::<f64>().sqrt();
     let tol_abs = tol * b_norm.max(ZERO_THRESHOLD);
-    let initial_r_norm: f64 = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
-    if initial_r_norm < tol_abs {
-        return Ok(());
+    let mut r_norm: f64 = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
+    if r_norm < tol_abs {
+        return Ok(CgSolveStats {
+            iterations: 0,
+            abs_residual: r_norm,
+            rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+            rhs_norm: b_norm,
+            tolerance_abs: tol_abs,
+            converged: true,
+        });
     }
 
     #[cfg(feature = "parallel")]
@@ -482,8 +508,10 @@ fn solve_sparse_cg_cached(
     #[cfg(not(feature = "parallel"))]
     let use_parallel = false;
 
-    for _iter in 0..max_iter {
+    let mut iterations = 0usize;
+    for iter in 0..max_iter {
         matrix.spmv_into(&ws.p[..n], &mut ws.ap[..n]);
+        iterations = iter + 1;
 
         if use_parallel {
             #[cfg(feature = "parallel")]
@@ -495,8 +523,20 @@ fn solve_sparse_cg_cached(
                     .zip(ws.ap[..n].par_iter())
                     .map(|(p, ap)| p * ap)
                     .sum();
-                if pap.abs() <= ZERO_THRESHOLD {
-                    break;
+                if !pap.is_finite() || pap <= 0.0 {
+                    return Err(EngineError::new(format!(
+                        "sparse CG breakdown: pAp={pap:.6e} at iteration {iterations}"
+                    )));
+                }
+                if pap <= ZERO_THRESHOLD {
+                    return Ok(CgSolveStats {
+                        iterations,
+                        abs_residual: r_norm,
+                        rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                        rhs_norm: b_norm,
+                        tolerance_abs: tol_abs,
+                        converged: false,
+                    });
                 }
                 let alpha = rz / pap;
 
@@ -512,13 +552,16 @@ fn solve_sparse_cg_cached(
                     .enumerate()
                     .for_each(|(i, ri)| *ri -= alpha * ap_slice[i]);
 
-                let r_norm: f64 = ws.r[..n]
-                    .par_iter()
-                    .map(|ri| ri * ri)
-                    .sum::<f64>()
-                    .sqrt();
+                r_norm = ws.r[..n].par_iter().map(|ri| ri * ri).sum::<f64>().sqrt();
                 if r_norm < tol_abs {
-                    break;
+                    return Ok(CgSolveStats {
+                        iterations,
+                        abs_residual: r_norm,
+                        rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                        rhs_norm: b_norm,
+                        tolerance_abs: tol_abs,
+                        converged: true,
+                    });
                 }
 
                 // z = r * inv_diag
@@ -533,7 +576,22 @@ fn solve_sparse_cg_cached(
                     .zip(ws.z[..n].par_iter())
                     .map(|(r, z)| r * z)
                     .sum();
-                let beta = rz_new / rz.max(ZERO_THRESHOLD);
+                if !rz_new.is_finite() || rz_new < 0.0 || !rz.is_finite() || rz < 0.0 {
+                    return Err(EngineError::new(format!(
+                        "sparse CG breakdown: rz={rz:.6e}, rz_new={rz_new:.6e} at iteration {iterations}"
+                    )));
+                }
+                if rz <= ZERO_THRESHOLD {
+                    return Ok(CgSolveStats {
+                        iterations,
+                        abs_residual: r_norm,
+                        rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                        rhs_norm: b_norm,
+                        tolerance_abs: tol_abs,
+                        converged: false,
+                    });
+                }
+                let beta = rz_new / rz;
 
                 // p = z + beta*p
                 let z_slice = &ws.z[..n];
@@ -546,23 +604,57 @@ fn solve_sparse_cg_cached(
             }
         } else {
             let pap: f64 = (0..n).map(|i| ws.p[i] * ws.ap[i]).sum();
-            if pap.abs() <= ZERO_THRESHOLD {
-                break;
+            if !pap.is_finite() || pap <= 0.0 {
+                return Err(EngineError::new(format!(
+                    "sparse CG breakdown: pAp={pap:.6e} at iteration {iterations}"
+                )));
+            }
+            if pap <= ZERO_THRESHOLD {
+                return Ok(CgSolveStats {
+                    iterations,
+                    abs_residual: r_norm,
+                    rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                    rhs_norm: b_norm,
+                    tolerance_abs: tol_abs,
+                    converged: false,
+                });
             }
             let alpha = rz / pap;
             for i in 0..n {
                 ws.x[i] += alpha * ws.p[i];
                 ws.r[i] -= alpha * ws.ap[i];
             }
-            let r_norm: f64 = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
+            r_norm = (0..n).map(|i| ws.r[i] * ws.r[i]).sum::<f64>().sqrt();
             if r_norm < tol_abs {
-                break;
+                return Ok(CgSolveStats {
+                    iterations,
+                    abs_residual: r_norm,
+                    rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                    rhs_norm: b_norm,
+                    tolerance_abs: tol_abs,
+                    converged: true,
+                });
             }
             for i in 0..n {
                 ws.z[i] = ws.r[i] * inv_diag[i];
             }
             let rz_new: f64 = (0..n).map(|i| ws.r[i] * ws.z[i]).sum();
-            let beta = rz_new / rz.max(ZERO_THRESHOLD);
+            if !rz_new.is_finite() || rz_new < 0.0 || !rz.is_finite() || rz < 0.0 {
+                return Err(EngineError::new(format!(
+                    "sparse CG breakdown: rz={rz:.6e}, rz_new={rz_new:.6e} at iteration {iterations}"
+                )));
+            }
+            if rz <= ZERO_THRESHOLD {
+                return Ok(CgSolveStats {
+                    iterations,
+                    abs_residual: r_norm,
+                    rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+                    rhs_norm: b_norm,
+                    tolerance_abs: tol_abs,
+                    converged: false,
+                });
+            }
+            let beta = rz_new / rz;
             for i in 0..n {
                 ws.p[i] = ws.z[i] + beta * ws.p[i];
             }
@@ -570,7 +662,14 @@ fn solve_sparse_cg_cached(
         }
     }
 
-    Ok(())
+    Ok(CgSolveStats {
+        iterations,
+        abs_residual: r_norm,
+        rel_residual: r_norm / b_norm.max(ZERO_THRESHOLD),
+        rhs_norm: b_norm,
+        tolerance_abs: tol_abs,
+        converged: false,
+    })
 }
 
 /// Reusable workspace for CG solver to avoid per-call allocations.
@@ -774,17 +873,39 @@ pub fn solve_sparse_cg_ws(
     max_iter: usize,
     ws: &mut CgWorkspace,
 ) -> Result<Vec<f64>> {
+    let (solution, _stats) = solve_sparse_cg_ws_with_stats(matrix, rhs, tol, max_iter, ws)?;
+    Ok(solution)
+}
+
+/// Solve Ax = b using preconditioned CG and return convergence telemetry.
+pub fn solve_sparse_cg_ws_with_stats(
+    matrix: &CsrMatrix,
+    rhs: &[f64],
+    tol: f64,
+    max_iter: usize,
+    ws: &mut CgWorkspace,
+) -> Result<(Vec<f64>, CgSolveStats)> {
     let n = matrix.n;
     if rhs.len() != n {
         return Err(EngineError::new("sparse CG: rhs length mismatch"));
     }
     if n == 0 {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            CgSolveStats {
+                iterations: 0,
+                abs_residual: 0.0,
+                rel_residual: 0.0,
+                rhs_norm: 0.0,
+                tolerance_abs: 0.0,
+                converged: true,
+            },
+        ));
     }
 
     ws.ensure_size(n);
     let inv_diag = compute_jacobi_inv_diag(matrix);
-    solve_sparse_cg_cached(
+    let stats = solve_sparse_cg_cached(
         matrix,
         rhs,
         tol,
@@ -794,7 +915,7 @@ pub fn solve_sparse_cg_ws(
         CgInitialGuess::Zero,
     )?;
 
-    Ok(ws.x[..n].to_vec())
+    Ok((ws.x[..n].to_vec(), stats))
 }
 
 /// Solve Ax = b using preconditioned Conjugate Gradient (Jacobi preconditioner).
@@ -804,17 +925,38 @@ pub fn solve_sparse_cg(
     tol: f64,
     max_iter: usize,
 ) -> Result<Vec<f64>> {
+    let (solution, _stats) = solve_sparse_cg_with_stats(matrix, rhs, tol, max_iter)?;
+    Ok(solution)
+}
+
+/// Solve Ax = b using preconditioned CG and return convergence telemetry.
+pub fn solve_sparse_cg_with_stats(
+    matrix: &CsrMatrix,
+    rhs: &[f64],
+    tol: f64,
+    max_iter: usize,
+) -> Result<(Vec<f64>, CgSolveStats)> {
     let n = matrix.n;
     if rhs.len() != n {
         return Err(EngineError::new("sparse CG: rhs length mismatch"));
     }
     if n == 0 {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            CgSolveStats {
+                iterations: 0,
+                abs_residual: 0.0,
+                rel_residual: 0.0,
+                rhs_norm: 0.0,
+                tolerance_abs: 0.0,
+                converged: true,
+            },
+        ));
     }
 
     let inv_diag = compute_jacobi_inv_diag(matrix);
     let mut ws = CgWorkspace::new(n);
-    solve_sparse_cg_cached(
+    let stats = solve_sparse_cg_cached(
         matrix,
         rhs,
         tol,
@@ -824,7 +966,7 @@ pub fn solve_sparse_cg(
         CgInitialGuess::Zero,
     )?;
 
-    Ok(ws.x[..n].to_vec())
+    Ok((ws.x[..n].to_vec(), stats))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1441,12 +1583,7 @@ impl FemLlgProblem {
     }
 
     pub fn set_dmi_interface_normal(&mut self, normal: Vector3) {
-        let n = norm(normal);
-        if n > ZERO_THRESHOLD && normal.iter().all(|component| component.is_finite()) {
-            self.dmi_interface_normal = scale(normal, 1.0 / n);
-        } else {
-            self.dmi_interface_normal = [0.0, 0.0, 1.0];
-        }
+        self.dmi_interface_normal = normalized_dmi_interface_normal(normal);
     }
 
     /// Which demag realization this problem will use at runtime.
@@ -1690,6 +1827,7 @@ impl FemLlgProblem {
         let n = state.magnetization.len();
         ws.m0[..n].copy_from_slice(&state.magnetization);
 
+        let mut rejected_attempts = 0usize;
         loop {
             self.llg_rhs_into(&ws.m0[..n], &mut ws.scratch, &mut ws.k[0])?;
 
@@ -1745,7 +1883,16 @@ impl FemLlgProblem {
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(1.0 / 3.0);
+            if !dt_new.is_finite() {
+                return Err(EngineError::new("adaptive RK23 produced a non-finite dt"));
+            }
             dt = dt_new.max(cfg.dt_min).min(cfg.dt_max);
+            rejected_attempts += 1;
+            if rejected_attempts >= MAX_ADAPTIVE_STEP_REJECTIONS {
+                return Err(EngineError::new(format!(
+                    "adaptive RK23 exceeded {MAX_ADAPTIVE_STEP_REJECTIONS} rejected step attempts"
+                )));
+            }
         }
     }
 
@@ -1760,6 +1907,7 @@ impl FemLlgProblem {
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
         ws.m0[..n].copy_from_slice(&state.magnetization);
+        let reuse_fsal = state.k_fsal.as_ref().is_some_and(|fsal| fsal.len() >= n);
 
         const A21: f64 = 1.0 / 5.0;
         const A31: f64 = 3.0 / 40.0;
@@ -1788,10 +1936,11 @@ impl FemLlgProblem {
         const E6: f64 = 22.0 / 525.0;
         const E7: f64 = -1.0 / 40.0;
 
+        let mut rejected_attempts = 0usize;
         loop {
-            if let Some(ref fsal) = state.k_fsal {
+            if reuse_fsal {
+                let fsal = state.k_fsal.as_ref().expect("validated FSAL cache");
                 ws.k[0][..n].copy_from_slice(&fsal[..n]);
-                state.k_fsal = None;
             } else {
                 self.llg_rhs_into(&ws.m0[..n], &mut ws.scratch, &mut ws.k[0])?;
             }
@@ -1903,7 +2052,16 @@ impl FemLlgProblem {
             }
 
             let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(0.2);
+            if !dt_new.is_finite() {
+                return Err(EngineError::new("adaptive RK45 produced a non-finite dt"));
+            }
             dt = dt_new.max(cfg.dt_min).min(cfg.dt_max);
+            rejected_attempts += 1;
+            if rejected_attempts >= MAX_ADAPTIVE_STEP_REJECTIONS {
+                return Err(EngineError::new(format!(
+                    "adaptive RK45 exceeded {MAX_ADAPTIVE_STEP_REJECTIONS} rejected step attempts"
+                )));
+            }
         }
     }
 
@@ -1974,462 +2132,32 @@ impl FemLlgProblem {
     // Public stepping now delegates to `step_with_workspace`.
     #[allow(dead_code)]
     fn heun_step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
-        let initial = state.magnetization.clone();
-        let k1 = self.llg_rhs_from_vectors(&initial)?;
-        #[cfg(feature = "parallel")]
-        let predicted = initial
-            .par_iter()
-            .zip(k1.par_iter())
-            .map(|(m, rhs)| normalized(add(*m, scale(*rhs, dt))))
-            .collect::<Result<Vec<_>>>()?;
-        #[cfg(not(feature = "parallel"))]
-        let predicted = initial
-            .iter()
-            .zip(k1.iter())
-            .map(|(m, rhs)| normalized(add(*m, scale(*rhs, dt))))
-            .collect::<Result<Vec<_>>>()?;
-        let k2 = self.llg_rhs_from_vectors(&predicted)?;
-        #[cfg(feature = "parallel")]
-        let corrected = initial
-            .par_iter()
-            .zip(k1.par_iter().zip(k2.par_iter()))
-            .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-        #[cfg(not(feature = "parallel"))]
-        let corrected = initial
-            .iter()
-            .zip(k1.iter().zip(k2.iter()))
-            .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-
-        state.magnetization = corrected;
-        state.time_seconds += dt;
-
-        self.step_report_from_vectors(state.magnetization(), state.time_seconds, dt, false, None)
+        let mut ws = FemIntegratorWorkspace::new(state.magnetization.len());
+        self.heun_step_ws(state, dt, &mut ws)
     }
 
-    // -----------------------------------------------------------------------
-    // RK4 (Classical Runge-Kutta, 4th order, fixed step)
-    // -----------------------------------------------------------------------
     #[allow(dead_code)]
     fn rk4_step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
-        let n = state.magnetization.len();
-        let m0 = state.magnetization.clone();
-
-        let k1 = self.llg_rhs_from_vectors(&m0)?;
-
-        #[cfg(feature = "parallel")]
-        let m1: Vec<Vector3> = m0
-            .par_iter()
-            .zip(k1.par_iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-        #[cfg(not(feature = "parallel"))]
-        let m1: Vec<Vector3> = m0
-            .iter()
-            .zip(k1.iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-        let k2 = self.llg_rhs_from_vectors(&m1)?;
-
-        #[cfg(feature = "parallel")]
-        let m2: Vec<Vector3> = m0
-            .par_iter()
-            .zip(k2.par_iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-        #[cfg(not(feature = "parallel"))]
-        let m2: Vec<Vector3> = m0
-            .iter()
-            .zip(k2.iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, 0.5 * dt))))
-            .collect::<Result<Vec<_>>>()?;
-        let k3 = self.llg_rhs_from_vectors(&m2)?;
-
-        #[cfg(feature = "parallel")]
-        let m3: Vec<Vector3> = m0
-            .par_iter()
-            .zip(k3.par_iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, dt))))
-            .collect::<Result<Vec<_>>>()?;
-        #[cfg(not(feature = "parallel"))]
-        let m3: Vec<Vector3> = m0
-            .iter()
-            .zip(k3.iter())
-            .map(|(m, k)| normalized(add(*m, scale(*k, dt))))
-            .collect::<Result<Vec<_>>>()?;
-        let k4 = self.llg_rhs_from_vectors(&m3)?;
-
-        #[cfg(feature = "parallel")]
-        {
-            state.magnetization = m0
-                .par_iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let delta = scale(
-                        add(add(k1[i], scale(k2[i], 2.0)), add(scale(k3[i], 2.0), k4[i])),
-                        dt / 6.0,
-                    );
-                    normalized(add(*m, delta))
-                })
-                .collect::<Result<Vec<_>>>()?;
-        }
-        #[cfg(not(feature = "parallel"))]
-        {
-            let delta: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(add(k1[i], scale(k2[i], 2.0)), add(scale(k3[i], 2.0), k4[i])),
-                        dt / 6.0,
-                    )
-                })
-                .collect();
-            state.magnetization = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-        }
-        let _ = n; // suppress unused warning in parallel path
-        state.time_seconds += dt;
-
-        self.step_report_from_vectors(state.magnetization(), state.time_seconds, dt, false, None)
+        let mut ws = FemIntegratorWorkspace::new(state.magnetization.len());
+        self.rk4_step_ws(state, dt, &mut ws)
     }
 
-    // -----------------------------------------------------------------------
-    // RK23 (Bogacki-Shampine 2(3), adaptive)
-    // -----------------------------------------------------------------------
     #[allow(dead_code)]
     fn rk23_step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
-        let cfg = self.dynamics.adaptive;
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
-        let n = state.magnetization.len();
-        let m0 = state.magnetization.clone();
-
-        loop {
-            let k1 = self.llg_rhs_from_vectors(&m0)?;
-
-            let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], 0.5 * dt)).collect();
-            let m1: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k2 = self.llg_rhs_from_vectors(&m1)?;
-
-            let delta: Vec<Vector3> = (0..n).map(|i| scale(k2[i], 0.75 * dt)).collect();
-            let m2: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k3 = self.llg_rhs_from_vectors(&m2)?;
-
-            // 3rd-order solution
-            let delta3: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(
-                            add(scale(k1[i], 2.0 / 9.0), scale(k2[i], 1.0 / 3.0)),
-                            scale(k3[i], 4.0 / 9.0),
-                        ),
-                        dt,
-                    )
-                })
-                .collect();
-            let y3: Vec<Vector3> = m0
-                .iter()
-                .zip(delta3.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-
-            let k4 = self.llg_rhs_from_vectors(&y3)?;
-
-            let error = Self::max_error_norm_fem(
-                &[
-                    (&k1, -5.0 / 72.0),
-                    (&k2, 1.0 / 12.0),
-                    (&k3, 1.0 / 9.0),
-                    (&k4, -1.0 / 8.0),
-                ],
-                dt,
-                n,
-            );
-
-            if error <= cfg.max_error || dt <= cfg.dt_min {
-                state.magnetization = y3;
-                state.time_seconds += dt;
-                let dt_next = (cfg.headroom
-                    * dt
-                    * (cfg.max_error / error.max(ZERO_THRESHOLD)).powf(1.0 / 3.0))
-                .max(cfg.dt_min)
-                .min(cfg.dt_max);
-                return self.step_report_from_vectors(
-                    state.magnetization(),
-                    state.time_seconds,
-                    dt,
-                    false,
-                    Some(dt_next),
-                );
-            }
-
-            let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(1.0 / 3.0);
-            dt = dt_new.max(cfg.dt_min).min(cfg.dt_max);
-        }
+        let mut ws = FemIntegratorWorkspace::new(state.magnetization.len());
+        self.rk23_step_ws(state, dt, &mut ws)
     }
 
-    // -----------------------------------------------------------------------
-    // RK45 (Dormand-Prince 4(5), adaptive) — mumax3 default
-    // -----------------------------------------------------------------------
     #[allow(dead_code)]
     fn rk45_step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
-        let cfg = self.dynamics.adaptive;
-        let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
-        let n = state.magnetization.len();
-        let m0 = state.magnetization.clone();
-
-        // Dormand-Prince coefficients
-        const A21: f64 = 1.0 / 5.0;
-        const A31: f64 = 3.0 / 40.0;
-        const A32: f64 = 9.0 / 40.0;
-        const A41: f64 = 44.0 / 45.0;
-        const A42: f64 = -56.0 / 15.0;
-        const A43: f64 = 32.0 / 9.0;
-        const A51: f64 = 19372.0 / 6561.0;
-        const A52: f64 = -25360.0 / 2187.0;
-        const A53: f64 = 64448.0 / 6561.0;
-        const A54: f64 = -212.0 / 729.0;
-        const A61: f64 = 9017.0 / 3168.0;
-        const A62: f64 = -355.0 / 33.0;
-        const A63: f64 = 46732.0 / 5247.0;
-        const A64: f64 = 49.0 / 176.0;
-        const A65: f64 = -5103.0 / 18656.0;
-        const B1: f64 = 35.0 / 384.0;
-        const B3: f64 = 500.0 / 1113.0;
-        const B4: f64 = 125.0 / 192.0;
-        const B5: f64 = -2187.0 / 6784.0;
-        const B6: f64 = 11.0 / 84.0;
-        const E1: f64 = 71.0 / 57600.0;
-        const E3: f64 = -71.0 / 16695.0;
-        const E4: f64 = 71.0 / 1920.0;
-        const E5: f64 = -17253.0 / 339200.0;
-        const E6: f64 = 22.0 / 525.0;
-        const E7: f64 = -1.0 / 40.0;
-
-        loop {
-            // Stage 1 — FSAL: reuse k7 from previous accepted step if available
-            let k1 = if let Some(fsal) = state.k_fsal.take() {
-                fsal
-            } else {
-                self.llg_rhs_from_vectors(&m0)?
-            };
-
-            // Stage 2
-            let delta: Vec<Vector3> = (0..n).map(|i| scale(k1[i], A21 * dt)).collect();
-            let ms: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k2 = self.llg_rhs_from_vectors(&ms)?;
-
-            // Stage 3
-            let delta: Vec<Vector3> = (0..n)
-                .map(|i| scale(add(scale(k1[i], A31), scale(k2[i], A32)), dt))
-                .collect();
-            let ms: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k3 = self.llg_rhs_from_vectors(&ms)?;
-
-            // Stage 4
-            let delta: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(add(scale(k1[i], A41), scale(k2[i], A42)), scale(k3[i], A43)),
-                        dt,
-                    )
-                })
-                .collect();
-            let ms: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k4 = self.llg_rhs_from_vectors(&ms)?;
-
-            // Stage 5
-            let delta: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(
-                            add(scale(k1[i], A51), scale(k2[i], A52)),
-                            add(scale(k3[i], A53), scale(k4[i], A54)),
-                        ),
-                        dt,
-                    )
-                })
-                .collect();
-            let ms: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k5 = self.llg_rhs_from_vectors(&ms)?;
-
-            // Stage 6
-            let delta: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(
-                            add(add(scale(k1[i], A61), scale(k2[i], A62)), scale(k3[i], A63)),
-                            add(scale(k4[i], A64), scale(k5[i], A65)),
-                        ),
-                        dt,
-                    )
-                })
-                .collect();
-            let ms: Vec<Vector3> = m0
-                .iter()
-                .zip(delta.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-            let k6 = self.llg_rhs_from_vectors(&ms)?;
-
-            // 5th-order solution
-            let delta5: Vec<Vector3> = (0..n)
-                .map(|i| {
-                    scale(
-                        add(
-                            add(add(scale(k1[i], B1), scale(k3[i], B3)), scale(k4[i], B4)),
-                            add(scale(k5[i], B5), scale(k6[i], B6)),
-                        ),
-                        dt,
-                    )
-                })
-                .collect();
-            let y5: Vec<Vector3> = m0
-                .iter()
-                .zip(delta5.iter())
-                .map(|(m, d)| normalized(add(*m, *d)))
-                .collect::<Result<Vec<_>>>()?;
-
-            // k7 for error estimate (FSAL)
-            let k7 = self.llg_rhs_from_vectors(&y5)?;
-
-            let error = Self::max_error_norm_fem(
-                &[
-                    (&k1, E1),
-                    (&k3, E3),
-                    (&k4, E4),
-                    (&k5, E5),
-                    (&k6, E6),
-                    (&k7, E7),
-                ],
-                dt,
-                n,
-            );
-
-            if error <= cfg.max_error || dt <= cfg.dt_min {
-                state.magnetization = y5;
-                state.time_seconds += dt;
-                store_fsal_cache(state, &k7);
-                let dt_next =
-                    (cfg.headroom * dt * (cfg.max_error / error.max(ZERO_THRESHOLD)).powf(0.2))
-                        .max(cfg.dt_min)
-                        .min(cfg.dt_max);
-                return self.step_report_from_vectors(
-                    state.magnetization(),
-                    state.time_seconds,
-                    dt,
-                    false,
-                    Some(dt_next),
-                );
-            }
-
-            let dt_new = cfg.headroom * dt * (cfg.max_error / error).powf(0.2);
-            dt = dt_new.max(cfg.dt_min).min(cfg.dt_max);
-        }
+        let mut ws = FemIntegratorWorkspace::new(state.magnetization.len());
+        self.rk45_step_ws(state, dt, &mut ws)
     }
 
-    // -----------------------------------------------------------------------
-    // ABM3 (Adams–Bashforth–Moulton 3rd order, multi-step)
-    //
-    // After 3 startup steps (Heun), uses only 1 RHS evaluation per step.
-    // -----------------------------------------------------------------------
     #[allow(dead_code)]
     fn abm3_step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
-        let n = state.magnetization.len();
-
-        // During startup, fall back to Heun to build history
-        if !state.abm_history.is_ready() {
-            let m0 = state.magnetization.clone();
-            let k1 = self.llg_rhs_from_vectors(&m0)?;
-            let predicted: Vec<Vector3> = m0
-                .iter()
-                .zip(k1.iter())
-                .map(|(m, rhs)| normalized(add(*m, scale(*rhs, dt))))
-                .collect::<Result<Vec<_>>>()?;
-            let k2 = self.llg_rhs_from_vectors(&predicted)?;
-            let corrected: Vec<Vector3> = m0
-                .iter()
-                .zip(k1.iter().zip(k2.iter()))
-                .map(|(m, (rhs1, rhs2))| normalized(add(*m, scale(add(*rhs1, *rhs2), 0.5 * dt))))
-                .collect::<Result<Vec<_>>>()?;
-
-            state.magnetization = corrected;
-            state.time_seconds += dt;
-
-            let f_accepted = self.llg_rhs_from_vectors(state.magnetization())?;
-            state.abm_history.push(f_accepted, dt);
-
-            return self.step_report_from_vectors(
-                state.magnetization(),
-                state.time_seconds,
-                dt,
-                false,
-                None,
-            );
-        }
-
-        // --- Full ABM3 step ---
-        let m0 = state.magnetization.clone();
-        let f_n = state.abm_history.f_n().unwrap();
-        let f_n1 = state.abm_history.f_n_minus_1().unwrap();
-        let f_n2 = state.abm_history.f_n_minus_2().unwrap();
-
-        // Adams–Bashforth predictor (3rd order, explicit)
-        let m_predicted: Vec<Vector3> = (0..n)
-            .map(|i| {
-                let pred = add(
-                    add(scale(f_n[i], 23.0 / 12.0), scale(f_n1[i], -16.0 / 12.0)),
-                    scale(f_n2[i], 5.0 / 12.0),
-                );
-                normalized(add(m0[i], scale(pred, dt)))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Evaluate RHS at predicted point — this is the ONLY new RHS eval
-        let f_star = self.llg_rhs_from_vectors(&m_predicted)?;
-
-        // Adams–Moulton corrector (3rd order, implicit one-step)
-        let m_corrected: Vec<Vector3> = (0..n)
-            .map(|i| {
-                let corr = add(
-                    add(scale(f_star[i], 5.0 / 12.0), scale(f_n[i], 8.0 / 12.0)),
-                    scale(f_n1[i], -1.0 / 12.0),
-                );
-                normalized(add(m0[i], scale(corr, dt)))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        state.magnetization = m_corrected;
-        state.time_seconds += dt;
-        state.abm_history.push(f_star, dt);
-
-        self.step_report_from_vectors(state.magnetization(), state.time_seconds, dt, false, None)
+        let mut ws = FemIntegratorWorkspace::new(state.magnetization.len());
+        self.abm3_step_ws(state, dt, &mut ws)
     }
 
     // -----------------------------------------------------------------------
@@ -3325,13 +3053,7 @@ impl FemLlgProblem {
 
         let ms = self.material.saturation_magnetisation.max(ZERO_THRESHOLD);
 
-        let mut n_hat = self.dmi_interface_normal;
-        if n_hat.iter().any(|component| !component.is_finite()) || norm(n_hat) <= ZERO_THRESHOLD {
-            n_hat = [0.0, 0.0, 1.0];
-        } else {
-            let inv_norm = norm(n_hat).recip();
-            n_hat = scale(n_hat, inv_norm);
-        }
+        let n_hat = normalized_dmi_interface_normal(self.dmi_interface_normal);
 
         // For static periodic PBC, enforce class continuity on the input so
         // that elements adjacent to periodic seam faces see consistent m values.
@@ -3477,12 +3199,7 @@ impl FemLlgProblem {
             return 0.0;
         }
 
-        let mut n_hat = self.dmi_interface_normal;
-        if n_hat.iter().any(|component| !component.is_finite()) || norm(n_hat) <= ZERO_THRESHOLD {
-            n_hat = [0.0, 0.0, 1.0];
-        } else {
-            n_hat = scale(n_hat, norm(n_hat).recip());
-        }
+        let n_hat = normalized_dmi_interface_normal(self.dmi_interface_normal);
 
         let m_ref: &[Vector3];
         let m_projected: Vec<Vector3>;
@@ -3726,35 +3443,7 @@ impl FemLlgProblem {
 }
 
 fn inverse_transpose_3x3(columns: [[f64; 3]; 3], det: f64) -> [[f64; 3]; 3] {
-    let a = columns[0][0];
-    let b = columns[1][0];
-    let c = columns[2][0];
-    let d = columns[0][1];
-    let e = columns[1][1];
-    let f = columns[2][1];
-    let g = columns[0][2];
-    let h = columns[1][2];
-    let i = columns[2][2];
-
-    let inv_det = 1.0 / det;
-    let inv = [
-        [
-            (e * i - f * h) * inv_det,
-            (c * h - b * i) * inv_det,
-            (b * f - c * e) * inv_det,
-        ],
-        [
-            (f * g - d * i) * inv_det,
-            (a * i - c * g) * inv_det,
-            (c * d - a * f) * inv_det,
-        ],
-        [
-            (d * h - e * g) * inv_det,
-            (b * g - a * h) * inv_det,
-            (a * e - b * d) * inv_det,
-        ],
-    ];
-
+    let inv = inverse_3x3_columns(columns, det);
     [
         [inv[0][0], inv[1][0], inv[2][0]],
         [inv[0][1], inv[1][1], inv[2][1]],
@@ -3896,6 +3585,15 @@ pub(crate) fn inverse_3x3_columns(columns: [[f64; 3]; 3], det: f64) -> [[f64; 3]
 
 fn max_norm(values: &[Vector3]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
+}
+
+fn normalized_dmi_interface_normal(normal: Vector3) -> Vector3 {
+    let n = norm(normal);
+    if n > ZERO_THRESHOLD && n.is_finite() && normal.iter().all(|component| component.is_finite()) {
+        scale(normal, 1.0 / n)
+    } else {
+        [0.0, 0.0, 1.0]
+    }
 }
 
 #[cfg(test)]
@@ -4135,6 +3833,146 @@ mod tests {
                 second
             );
         }
+    }
+
+    #[test]
+    fn sparse_cg_reports_convergence_stats() {
+        let matrix = CsrMatrix::from_dense(&[4.0, 1.0, 1.0, 3.0], 2);
+        let mut ws = CgWorkspace::new(0);
+
+        let (x, stats) = solve_sparse_cg_ws_with_stats(&matrix, &[1.0, 2.0], 1e-12, 20, &mut ws)
+            .expect("cg solve");
+
+        assert!(stats.converged, "CG should converge: {stats:?}");
+        assert!(stats.iterations > 0, "CG should report iterations");
+        assert!(stats.abs_residual <= 1e-12_f64.max(stats.rhs_norm * 1e-12) * 10.0);
+        assert!((x[0] - 1.0 / 11.0).abs() < 1e-12);
+        assert!((x[1] - 7.0 / 11.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn sparse_cg_reports_non_convergence_when_iteration_budget_is_zero() {
+        let matrix = CsrMatrix::from_dense(&[4.0, 1.0, 1.0, 3.0], 2);
+        let mut ws = CgWorkspace::new(0);
+
+        let (_x, stats) = solve_sparse_cg_ws_with_stats(&matrix, &[1.0, 2.0], 1e-12, 0, &mut ws)
+            .expect("zero-budget cg solve");
+
+        assert!(
+            !stats.converged,
+            "zero-budget CG must not report convergence"
+        );
+        assert_eq!(stats.iterations, 0);
+        assert!(stats.abs_residual > stats.tolerance_abs);
+    }
+
+    #[test]
+    fn sparse_cg_errors_on_operator_breakdown() {
+        let matrix = CsrMatrix::from_dense(&[0.0], 1);
+        let mut ws = CgWorkspace::new(0);
+
+        let err = solve_sparse_cg_ws_with_stats(&matrix, &[1.0], 1e-12, 10, &mut ws)
+            .expect_err("singular operator should trigger CG breakdown");
+
+        assert!(
+            err.to_string().contains("sparse CG breakdown"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn inverse_transpose_uses_canonical_inverse_3x3_columns() {
+        let source = include_str!("fem.rs");
+        let body = source_between(
+            source,
+            "fn inverse_transpose_3x3",
+            "fn build_robin_demag_csr",
+        );
+        assert!(
+            body.contains("inverse_3x3_columns"),
+            "inverse_transpose_3x3 must delegate cofactor computation to inverse_3x3_columns"
+        );
+
+        let columns = [[2.0, 0.5, 1.0], [0.0, 3.0, 0.25], [1.0, -0.5, 4.0]];
+        let det = dot(columns[0], cross(columns[1], columns[2]));
+        let inv = inverse_3x3_columns(columns, det);
+        let inv_t = inverse_transpose_3x3(columns, det);
+        for row in 0..3 {
+            for col in 0..3 {
+                assert!((inv_t[row][col] - inv[col][row]).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_rk_has_retry_caps_and_preserves_fsal_until_acceptance() {
+        let source = include_str!("fem.rs");
+        let rk23 = source_between(source, "fn rk23_step_ws", "// -- Workspace-aware RK45");
+        let rk45 = source_between(source, "fn rk45_step_ws", "// -- Workspace-aware ABM3");
+
+        assert!(
+            rk23.contains("MAX_ADAPTIVE_STEP_REJECTIONS"),
+            "RK23 adaptive retry loop must be bounded"
+        );
+        assert!(
+            rk45.contains("MAX_ADAPTIVE_STEP_REJECTIONS"),
+            "RK45 adaptive retry loop must be bounded"
+        );
+        assert!(
+            !rk45.contains("state.k_fsal = None") && !rk45.contains("state.k_fsal.take()"),
+            "RK45 must not consume the previous FSAL derivative until a step is accepted"
+        );
+    }
+
+    #[test]
+    fn compatibility_integrators_delegate_to_workspace_path() {
+        let source = include_str!("fem.rs");
+        let compatibility = source_between(
+            source,
+            "// Compatibility-only allocating path retained",
+            "    // -----------------------------------------------------------------------\n    // Error norm helper",
+        );
+
+        assert!(
+            !compatibility.contains("llg_rhs_from_vectors"),
+            "compatibility integrators must not duplicate allocating RHS logic"
+        );
+        for callee in [
+            "heun_step_ws",
+            "rk4_step_ws",
+            "rk23_step_ws",
+            "rk45_step_ws",
+            "abm3_step_ws",
+        ] {
+            assert!(
+                compatibility.contains(callee),
+                "compatibility integrators must delegate to {callee}"
+            );
+        }
+    }
+
+    #[test]
+    fn dmi_interface_normal_rejects_subnormal_and_nonfinite_input() {
+        assert_eq!(
+            normalized_dmi_interface_normal([1.0e-310, 0.0, 0.0]),
+            [0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            normalized_dmi_interface_normal([f64::INFINITY, 0.0, 0.0]),
+            [0.0, 0.0, 1.0]
+        );
+
+        let normalized = normalized_dmi_interface_normal([2.0, 0.0, 0.0]);
+        assert_eq!(normalized, [1.0, 0.0, 0.0]);
+    }
+
+    fn source_between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let start_index = source.find(start).expect("source start marker");
+        let end_index = source[start_index..]
+            .find(end)
+            .map(|relative| start_index + relative)
+            .expect("source end marker");
+        &source[start_index..end_index]
     }
 
     #[test]

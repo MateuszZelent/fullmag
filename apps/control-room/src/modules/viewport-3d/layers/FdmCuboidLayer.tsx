@@ -15,6 +15,7 @@ import {
   Vector3,
 } from "three";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
+import type { Viewport3DVectorAnchorMode } from "../viewport3dRenderModel";
 import {
   RENDER_POLICIES,
   resolveSurfacePolicy,
@@ -214,6 +215,7 @@ export function buildFdmVectorSegments(
   fieldVector: DecodedFieldVector | null | undefined,
   scale: number,
   maxVectors: number,
+  options: { anchorMode?: Viewport3DVectorAnchorMode } = {},
 ): Float32Array | null {
   if (
     !model ||
@@ -245,6 +247,7 @@ export function buildFdmVectorSegments(
 
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const halfScale = scale / 2;
+  const anchorMode = options.anchorMode ?? "center";
   const segments = new Float32Array(vectorCount * VECTOR_SEGMENT_STRIDE);
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
@@ -266,12 +269,21 @@ export function buildFdmVectorSegments(
     const uy = vy / length;
     const uz = vz / length;
 
-    segments[target] = x - ux * halfScale;
-    segments[target + 1] = y - uy * halfScale;
-    segments[target + 2] = z - uz * halfScale;
-    segments[target + 3] = x + ux * halfScale;
-    segments[target + 4] = y + uy * halfScale;
-    segments[target + 5] = z + uz * halfScale;
+    if (anchorMode === "tail") {
+      segments[target] = x;
+      segments[target + 1] = y;
+      segments[target + 2] = z;
+      segments[target + 3] = x + ux * scale;
+      segments[target + 4] = y + uy * scale;
+      segments[target + 5] = z + uz * scale;
+    } else {
+      segments[target] = x - ux * halfScale;
+      segments[target + 1] = y - uy * halfScale;
+      segments[target + 2] = z - uz * halfScale;
+      segments[target + 3] = x + ux * halfScale;
+      segments[target + 4] = y + uy * halfScale;
+      segments[target + 5] = z + uz * halfScale;
+    }
     segments[target + 6] = length / scaleMagnitude;
   }
 
@@ -353,8 +365,15 @@ export function FdmCuboidLayer({
         fieldVector,
         resolveFdmVectorGlyphScale(model, vectorScale),
         maxVectorGlyphs,
+        { anchorMode: settings.vectorCenteringEnabled ? "center" : "tail" },
       ),
-    [fieldVector, maxVectorGlyphs, model, vectorScale],
+    [
+      fieldVector,
+      maxVectorGlyphs,
+      model,
+      settings.vectorCenteringEnabled,
+      vectorScale,
+    ],
   );
   const surfaceOpacity = opacityFromSettings(settings);
   const surfacePolicy = resolveSurfacePolicy(surfaceOpacity);
